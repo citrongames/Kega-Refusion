@@ -1,0 +1,59 @@
+#pragma once
+#include <QByteArray>
+#include <QImage>
+#include <QLibrary>
+#include <QString>
+#include <map>
+#include <array>
+#include <functional>
+#include <memory>
+#include <libretro.h>
+
+// Own on exactly one emulation thread. One libretro instance per process.
+class LibretroHost final {
+public:
+    explicit LibretroHost(QString corePath, QString dataPath);
+    ~LibretroHost();
+    bool load(const QString& path, QString& error);
+    void unload();
+    void runFrame();
+    void reset();
+    bool saveState(int slot, QString& error);
+    bool loadState(int slot, QString& error);
+    QByteArray serialize() const;
+    bool unserialize(const QByteArray& state);
+    bool flushSaveRam(QString& error);
+    void setButtons(unsigned port, unsigned mask);
+    bool loaded() const { return loaded_; }
+    double fps() const { return av_.timing.fps; }
+    int sampleRate() const { return int(av_.timing.sample_rate); }
+    double aspectRatio() const;
+    const QImage& frame() const { return frame_; }
+    const QByteArray& audio() const { return audio_; }
+    QString gamePath() const { return gamePath_; }
+    std::function<void(const QString&)> message;
+private:
+    struct Api;
+    bool initialize(QString& error);
+    QString statePath(int slot) const;
+    bool restoreSaveRam(QString& error);
+    static bool environment(unsigned command, void* data);
+    static void video(const void* data, unsigned width, unsigned height, size_t pitch);
+    static void audioSample(int16_t left, int16_t right);
+    static size_t audioBatch(const int16_t* data, size_t frames);
+    static void inputPoll();
+    static int16_t inputState(unsigned port, unsigned device, unsigned index, unsigned id);
+    static thread_local LibretroHost* active_;
+    QLibrary library_;
+    std::unique_ptr<Api> api_;
+    QString dataPath_, gamePath_, gameKey_;
+    QByteArray systemPath_, savePath_, content_, encodedGamePath_, romHash_, coreHash_;
+    std::map<QByteArray,QByteArray> variables_;
+    std::array<unsigned,2> buttons_{};
+    std::array<size_t,2> saveMemorySizes_{};
+    retro_system_av_info av_{};
+    retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;
+    QImage frame_;
+    QByteArray audio_;
+    bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
+};

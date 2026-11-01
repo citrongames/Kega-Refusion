@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Copy a Qt/MinGW Windows build and its transitive DLLs into a test folder."""
+
+import argparse
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+
+def imports(binary: Path) -> set[str]:
+    result = subprocess.run(
+        ["x86_64-w64-mingw32-objdump", "-p", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return set(re.findall(r"^\s*DLL Name:\s*(\S+)", result.stdout, re.M))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--qt-root", type=Path, required=True)
+    parser.add_argument("--destination", type=Path, required=True)
+    args = parser.parse_args()
+
+    root = args.root.resolve()
+    qt_root = args.qt_root.resolve()
+    destination = args.destination.resolve()
+    build = root / "build" / "windows"
+    executable = build / "bin" / "KegaRefusion.exe"
+    core = build / "core" / "genesis_plus_gx_libretro.dll"
+    for source in (executable, core):
+        if not source.is_file():
+            raise SystemExit(f"Missing Windows build product: {source}")
+
+    # This staging directory belongs to the script; the deployed folder is never cleared.
+    stage = build / "package"
+    if stage.is_symlink() or stage.resolve().parent != build.resolve():
+        raise SystemExit(f"Refusing to replace unsafe package staging path: {stage}")
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
+
+    sources = {
+        Path("KegaRefusion.exe"): executable,
+        Path("cores/genesis_plus_gx_libretro.dll"): core,
+        Path("plugins/platforms/qwindows.dll"): qt_root / "plugins/platforms/qwindows.dll",
+        Path("plugins/multimedia/ffmpegmediaplugin.dll"): qt_root / "plugins/multimedia/ffmpegmediaplugin.dll",
+        Path("plugins/multimedia/windowsmediaplugin.dll"): qt_root / "plugins/multimedia/windowsmediaplugin.dll",
+    }
+
+    runtime = {path.name.lower(): path for path in (qt_root / "bin").glob("*.dll")}
+    # Prefer the exact compiler runtime. GCC 13.2 imports nanosleep64, which is
+    # absent from the older libwinpthread DLL included with Qt's GCC 13.1 kit.
+    for name in ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"):
+        result = subprocess.run(
+            ["x86_64-w64-mingw32-g++-posix", f"-print-file-name={name}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        candidate = Path(result.stdout.strip())
+        if not candidate.is_file():
+            raise SystemExit(f"Missing compiler runtime DLL: {name}")
+        runtime[name] = candidate
+
+    queue = list(sources.values())
+    visited = set()
+    while queue:
+        binary = queue.pop()
+        if binary in visited:
+            continue
+        visited.add(binary)
+        if not binary.is_file():
+            raise SystemExit(f"Missing runtime component: {binary}")
+        for name in imports(binary):
+            key = name.lower()
+            if key in runtime and Path(name) not in sources:
+                dependency = runtime[key]
+                sources[Path(dependency.name)] = dependency
+                queue.append(dependency)
+
+    for relative, source in sources.items():
+        output = stage / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, output)
+    (stage / "qt.conf").write_text("[Paths]\nPlugins = plugins\n", encoding="utf-8")
+
+    notices = stage / "licenses"
+    notices.mkdir()
+    shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
+    if (root / "README.md").is_file():
+        shutil.copy2(root / "README.md", stage / "README.md")
+    shutil.copy2(
+        root / "third_party/Genesis-Plus-GX-LICENSE.txt",
+        notices / "Genesis-Plus-GX-LICENSE.txt",
+    )
+    for source, name in (
+        (Path("/usr/share/common-licenses/LGPL-3"), "Qt-LGPL-3.txt"),
+        (Path("/usr/share/common-licenses/LGPL-2.1"), "FFmpeg-LGPL-2.1.txt"),
+    ):
+        if source.is_file():
+            shutil.copy2(source, notices / name)
+
+    destination.mkdir(parents=True, exist_ok=True)
+    for source in stage.rglob("*"):
+        if source.is_file():
+            target = destination / source.relative_to(stage)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    print(f"Packaged {len(sources)} binaries in {destination}")
+    print("Existing saves, ROMs, and other files in the destination were retained.")
+
+
+if __name__ == "__main__":
+    main()
