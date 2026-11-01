@@ -12,7 +12,7 @@ class EmulationSession final : public QThread {
 public:
     explicit EmulationSession(QString corePath, QString dataPath, QObject* parent = nullptr);
     ~EmulationSession() override;
-    void loadGame(const QString& path);
+    void loadGame(const QString& path, int archiveIndex = -1);
     void setPaused(bool paused);
     void resetGame();
     void saveState(int slot);
@@ -21,26 +21,36 @@ public:
     void setButtons(unsigned port, unsigned mask);
     void releaseButtons();
     void setFastForward(bool enabled);
+    void setFastForwardFactor(int factor);
+    void setRewind(bool enabled);
+    void setRewindSeconds(int seconds);
+    void setBackgroundPaused(bool paused);
+    void requestSlotStatus(int selected);
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
     void videoFrame(const QImage& frame, double aspectRatio);
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
-    void gameLoaded(const QString& path, double fps);
+    void gameLoaded(const QString& path, double fps, const QString& contentName);
     void pausedChanged(bool paused);
+    void effectivePauseChanged(bool paused);
+    void rewindingChanged(bool enabled);
+    void stateSlotsChanged(int selected, unsigned occupied);
     void notification(const QString& text);
     void actionCompleted(const QString& text);
     void errorOccurred(const QString& text);
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, Save, Restore };
+    enum class Type { Load, Pause, Reset, Save, Restore, Slots };
     struct Command { Type type; QString path; int value = 0; };
     void enqueue(Command command);
     QString corePath_, dataPath_;
     std::mutex mutex_;
     std::deque<Command> commands_;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
+    std::atomic<bool> rewind_{false}, backgroundPaused_{false};
+    std::atomic<int> fastForwardFactor_{4}, rewindSeconds_{30};
     std::atomic<unsigned> buttons_[2]{};
 };

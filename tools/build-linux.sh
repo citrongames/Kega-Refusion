@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+python3 "$root/tools/prepare-archive.py" --platform linux
 "$root/tools/build-core.sh" linux
 cmake -S "$root" -B "$root/build/linux" -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON \

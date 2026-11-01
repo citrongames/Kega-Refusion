@@ -2,6 +2,7 @@
 #include "AudioOutput.h"
 #include "ControlsDialog.h"
 #include "../core/EmulationSession.h"
+#include "../core/RomArchive.h"
 #include "../input/InputManager.h"
 
 #include <QAction>
@@ -14,6 +15,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
@@ -67,6 +69,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 
     recentPaths_ = settings_.value(QStringLiteral("recent/files")).toStringList();
     stateSlot_ = qBound(0, settings_.value(QStringLiteral("emulation/slot"), 0).toInt(), 9);
+    fastForwardFactor_ = settings_.value(QStringLiteral("emulation/fastForwardFactor"), 4).toInt();
+    if (!QList<int>{2,3,4,6,8}.contains(fastForwardFactor_)) fastForwardFactor_ = 4;
+    rewindSeconds_ = settings_.value(QStringLiteral("emulation/rewindSeconds"), 30).toInt();
+    if (!QList<int>{0,10,30,60}.contains(rewindSeconds_)) rewindSeconds_ = 30;
+    pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
+    session_.setFastForwardFactor(fastForwardFactor_);
+    session_.setRewindSeconds(rewindSeconds_);
+    view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
     const int aspect = settings_.value(QStringLiteral("view/aspect"), 0).toInt();
     view_->setAspectMode(aspect == 1 ? GameView::AspectMode::SquarePixels :
@@ -82,11 +92,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         audio_->play(pcm, rate);
     });
     connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear);
-    connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double) {
+    connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName) {
         loading_ = false;
         currentRom_ = path;
-        input_->setProfile(profileFor(QFileInfo(path)));
-        setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(displayName(path)));
+        input_->setProfile(profileFor(QFileInfo(contentName)));
+        setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(displayName(contentName)));
         recentPaths_.removeAll(path);
         recentPaths_.prepend(path);
         while (recentPaths_.size() > 10) recentPaths_.removeLast();
@@ -97,6 +107,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     connect(&session_, &EmulationSession::pausedChanged, this, [this](bool paused) {
         setPausedUi(paused);
+    });
+    connect(&session_, &EmulationSession::effectivePauseChanged, view_, &GameView::setPausedStatus);
+    connect(&session_, &EmulationSession::rewindingChanged, view_, &GameView::setRewindStatus);
+    connect(&session_, &EmulationSession::stateSlotsChanged, this, [this](int selected, unsigned occupied) {
+        occupiedSlots_ = occupied;
+        if (selected >= 0 && selected == stateSlot_ && session_.hasGame())
+            view_->showStateSlots(stateSlot_, occupiedSlots_);
     });
     connect(&session_, &EmulationSession::notification, this, [](const QString& text) {
         qWarning("%s", qPrintable(text));
@@ -131,7 +148,7 @@ void MainWindow::buildMenus() {
         const QString path = QFileDialog::getOpenFileName(
             this, QStringLiteral("Открыть игру"),
             settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
-            QStringLiteral("Игры Mega Drive и Master System (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k);;Все файлы (*)"));
+            QStringLiteral("Игры Mega Drive и Master System (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.zip *.7z);;Архивы (*.zip *.7z);;Все файлы (*)"));
         if (!path.isEmpty()) openRom(path);
     });
     recentMenu_ = fileMenu->addMenu(QStringLiteral("Недавние игры"));
@@ -165,6 +182,43 @@ void MainWindow::buildMenus() {
     fastForwardAction_->setCheckable(true);
     fastForwardAction_->setEnabled(false);
     connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
+    QMenu* speedMenu = emulationMenu->addMenu(QStringLiteral("Скорость ускорения"));
+    auto* speedGroup = new QActionGroup(this);
+    for (int factor : {2,3,4,6,8}) {
+        QAction* action = speedMenu->addAction(QStringLiteral("×%1").arg(factor));
+        action->setCheckable(true); action->setChecked(factor == fastForwardFactor_);
+        speedGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, factor] {
+            fastForwardFactor_ = factor;
+            settings_.setValue(QStringLiteral("emulation/fastForwardFactor"), factor);
+            session_.setFastForwardFactor(factor); view_->setFastForwardFactor(factor);
+        });
+    }
+    rewindAction_ = emulationMenu->addAction(QStringLiteral("Перемотка назад (R)"));
+    rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
+    connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
+    QMenu* historyMenu = emulationMenu->addMenu(QStringLiteral("История перемотки"));
+    auto* historyGroup = new QActionGroup(this);
+    for (int seconds : {0,10,30,60}) {
+        QAction* action = historyMenu->addAction(seconds ? QStringLiteral("%1 с").arg(seconds) : QStringLiteral("Выключена"));
+        action->setCheckable(true); action->setChecked(seconds == rewindSeconds_);
+        historyGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, seconds] {
+            rewindSeconds_ = seconds;
+            settings_.setValue(QStringLiteral("emulation/rewindSeconds"), seconds);
+            session_.setRewindSeconds(seconds);
+            if (!seconds) { rewindHeld_ = rewindPadHeld_ = false; rewindAction_->setChecked(false); }
+            rewindAction_->setEnabled(session_.hasGame() && seconds > 0);
+            updateRewind();
+        });
+    }
+    QAction* focusPause = emulationMenu->addAction(QStringLiteral("Пауза при потере фокуса"));
+    focusPause->setCheckable(true); focusPause->setChecked(pauseOnFocusLoss_);
+    connect(focusPause, &QAction::toggled, this, [this](bool enabled) {
+        pauseOnFocusLoss_ = enabled;
+        settings_.setValue(QStringLiteral("emulation/pauseOnFocusLoss"), enabled);
+        updateInputEnabled();
+    });
     emulationMenu->addSeparator();
     saveAction_ = emulationMenu->addAction(QStringLiteral("Сохранить состояние"));
     saveAction_->setShortcut(QKeySequence(QStringLiteral("F5")));
@@ -180,6 +234,7 @@ void MainWindow::buildMenus() {
     loadAction_->setEnabled(false);
     shortcut(loadAction_);
     connect(loadAction_, &QAction::triggered, this, [this] {
+        releaseInput();
         session_.loadState(stateSlot_);
     });
     QMenu* slotMenu = emulationMenu->addMenu(QStringLiteral("Слот сохранения"));
@@ -197,6 +252,7 @@ void MainWindow::buildMenus() {
         pauseAction_->setEnabled(true);
         resetAction_->setEnabled(true);
         fastForwardAction_->setEnabled(true);
+        rewindAction_->setEnabled(rewindSeconds_ > 0);
         saveAction_->setEnabled(true);
         loadAction_->setEnabled(true);
     });
@@ -283,7 +339,7 @@ void MainWindow::buildMenus() {
         QMessageBox::about(this, QStringLiteral("О Kega Refusion"),
             QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
             "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K. "
-            "Поддержка CD, 32X и ZIP пока не подготовлена.<br>"
+            "Поддерживаются архивы ZIP и 7z. CD и 32X пока не подготовлены.<br>"
             "Состояния сохраняются в выбранный слот от 0 до 9.<br>"
             "Клавиатуру и геймпады можно настроить в разделе «Управление»."));
     });
@@ -307,7 +363,7 @@ void MainWindow::setSlot(int slot) {
     stateSlot_ = (slot + 10) % 10;
     settings_.setValue(QStringLiteral("emulation/slot"), stateSlot_);
     if (stateSlot_ < slotActions_.size()) slotActions_[stateSlot_]->setChecked(true);
-    view_->showOsd(QStringLiteral("Слот: %1").arg(stateSlot_), 1800, QStringLiteral("action"));
+    if (session_.hasGame()) session_.requestSlotStatus(stateSlot_);
 }
 
 void MainWindow::openRom(const QString& path) {
@@ -318,9 +374,32 @@ void MainWindow::openRom(const QString& path) {
         return;
     }
     releaseInput();
+    int archiveIndex = -1;
+    if (RomArchive::isArchive(path)) {
+        QString error;
+        const auto entries = RomArchive::list(path, &error);
+        if (!error.isEmpty() || entries.isEmpty()) {
+            if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"),
+                error.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") : error);
+            // Let the session report the same failure to the smoke-test observer.
+            if (smokeTest_) session_.loadGame(path);
+            return;
+        }
+        if (entries.size() == 1) archiveIndex = entries.first().index;
+        else if (!smokeTest_) {
+            QStringList choices;
+            for (const auto& entry : entries)
+                choices.append(QStringLiteral("%1 (%2 КиБ) [%3]").arg(entry.name).arg((entry.size+1023)/1024).arg(entry.index));
+            bool accepted = false;
+            const QString choice = QInputDialog::getItem(this, QStringLiteral("Игра в архиве"),
+                QStringLiteral("Выберите ROM"), choices, 0, false, &accepted);
+            if (!accepted) { view_->setFocus(); return; }
+            archiveIndex = entries[choices.indexOf(choice)].index;
+        }
+    }
     loading_ = true;
     settings_.setValue(QStringLiteral("files/lastDirectory"), file.absolutePath());
-    session_.loadGame(file.absoluteFilePath());
+    session_.loadGame(file.absoluteFilePath(), archiveIndex);
 }
 
 void MainWindow::editControls() {
@@ -335,6 +414,9 @@ void MainWindow::editControls() {
 void MainWindow::releaseInput() {
     fastForwardHeld_ = false;
     fastForwardPadHeld_ = false;
+    rewindHeld_ = rewindPadHeld_ = false;
+    if (rewindAction_ && rewindAction_->isChecked()) rewindAction_->setChecked(false);
+    updateRewind();
     input_->releaseKeyboard();
     input_->setEnabled(false);
     if (fastForwardAction_ && fastForwardAction_->isChecked())
@@ -343,6 +425,8 @@ void MainWindow::releaseInput() {
 }
 
 void MainWindow::updateInputEnabled() {
+    session_.setBackgroundPaused(pauseOnFocusLoss_ &&
+        (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() && !loading_ &&
                          !QApplication::activeModalWidget() && !QApplication::activePopupWidget();
     input_->setEnabled(enabled);
@@ -352,11 +436,19 @@ void MainWindow::updateInputEnabled() {
 void MainWindow::updateFastForward() {
     const bool enabled = fastForwardHeld_ || fastForwardPadHeld_ ||
                          (fastForwardAction_ && fastForwardAction_->isChecked());
+    view_->setFastForwardStatus(enabled && !(rewindSeconds_ > 0 && (rewindHeld_ || rewindPadHeld_ ||
+        (rewindAction_ && rewindAction_->isChecked()))));
     if (fastForwardActive_ == enabled) return;
     fastForwardActive_ = enabled;
     if (enabled) audio_->clear();
     session_.setFastForward(enabled);
-    view_->setFastForwardStatus(enabled);
+}
+
+void MainWindow::updateRewind() {
+    const bool enabled = rewindSeconds_ > 0 && (rewindHeld_ || rewindPadHeld_ ||
+        (rewindAction_ && rewindAction_->isChecked()));
+    session_.setRewind(enabled);
+    updateFastForward();
 }
 
 void MainWindow::setPausedUi(bool paused) {
@@ -364,7 +456,6 @@ void MainWindow::setPausedUi(bool paused) {
         const QSignalBlocker blocker(pauseAction_);
         pauseAction_->setChecked(paused);
     }
-    view_->setPausedStatus(paused);
 }
 
 void MainWindow::setFullscreenMode(bool enabled) {
@@ -402,10 +493,11 @@ void MainWindow::toggleFullscreenMenu() {
 void MainWindow::showOsdDemo() {
     view_->setPausedStatus(true);
     view_->setFastForwardStatus(true);
-    view_->showOsd(QStringLiteral("Сохранено: слот 9"), 2000, QStringLiteral("action"));
+    view_->showStateSlots(3, (1u << 1) | (1u << 3) | (1u << 8), 4000);
 }
 
 void MainWindow::handleInputCommand(int command, bool pressed) {
+    if (command == RewindCommand) { rewindPadHeld_ = pressed; updateRewind(); return; }
     if (command == FastForwardCommand) {
         fastForwardPadHeld_ = pressed;
         updateFastForward();
@@ -456,6 +548,9 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     const bool shortcutOverride = event->type() == QEvent::ShortcutOverride;
     const Qt::KeyboardModifiers modifiers = keyEvent->modifiers() & ~Qt::KeypadModifier;
     const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+    if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() && key == Qt::Key_R && rewindHeld_) {
+        rewindHeld_ = false; updateRewind(); return true;
+    }
     // Claim these keys before Qt resolves the logical QAction shortcuts. A
     // shortcut and its physical counterpart must produce exactly one action.
     QAction* commandAction = nullptr;
@@ -491,6 +586,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (key >= Qt::Key_0 && key <= Qt::Key_9 && modifiers == Qt::NoModifier) {
         if (shortcutOverride) event->accept();
         else if (pressed && !keyEvent->isAutoRepeat()) setSlot(key - Qt::Key_0);
+        return true;
+    }
+    if (key == Qt::Key_R && (modifiers == Qt::NoModifier || (!pressed && rewindHeld_))) {
+        if (shortcutOverride) { event->accept(); return true; }
+        if (!keyEvent->isAutoRepeat()) { rewindHeld_ = pressed; updateRewind(); }
         return true;
     }
     if (key == Qt::Key_Tab) {

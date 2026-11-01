@@ -40,6 +40,7 @@ private:
     void releaseInput();
     void updateInputEnabled();
     void updateFastForward();
+    void updateRewind();
     void setPausedUi(bool paused);
     void setSlot(int slot);
     void toggleFullscreenMenu();
@@ -54,6 +55,7 @@ private:
     QMenu* recentMenu_ = nullptr;
     QAction* pauseAction_ = nullptr;
     QAction* fastForwardAction_ = nullptr;
+    QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* loadAction_ = nullptr;
@@ -64,6 +66,11 @@ private:
     QString currentRom_;
     QByteArray windowedGeometry_;
     int stateSlot_ = 0;
+    int fastForwardFactor_ = 4;
+    int rewindSeconds_ = 30;
+    unsigned occupiedSlots_ = 0;
+    bool pauseOnFocusLoss_ = true;
+    bool rewindHeld_ = false, rewindPadHeld_ = false;
     bool fastForwardHeld_ = false;
     bool fastForwardPadHeld_ = false;
     bool fastForwardActive_ = false;

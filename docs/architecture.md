@@ -10,7 +10,7 @@ Kega Refusion is a standalone C++17 / Qt6 Widgets application for Linux and Wind
 
 ## Timing and persistence
 
-Frames use the core-reported rate and a steady clock. Fast-forward currently targets 4x and suppresses audio. The first version uses a modest audio buffer; adaptive audio-clock synchronization and low-latency tuning remain follow-up work.
+Frames use the core-reported rate and a steady clock. Fast-forward targets the selected 2x/3x/4x/6x/8x rate and suppresses audio. The first version uses a modest audio buffer; adaptive audio-clock synchronization and low-latency tuning remain follow-up work.
 
 Battery RAM is saved atomically every five seconds, on game switch and clean shutdown. Save files are keyed by complete ROM SHA-256, independent of filenames. Invalid existing battery saves are preserved, with writes disabled for that session. Quick states include a format marker, ROM hash, core-binary hash, payload hash and length. Incompatible/truncated/corrupt states are rejected before reaching the core. Slots are 0 through 9. QSaveFile avoids partially overwritten save files.
 
@@ -18,7 +18,7 @@ Genesis Plus GX declares platform-dependent serialization. The first state forma
 
 ## Deferred scope
 
-32X/PicoDrive, Sega CD/BIOS and multidisc identity, archives, specialized peripherals, shaders/Blargg controls, manual region options, rewind, netplay, achievements, movies, recording, Lua and debugging tools are not part of the initial foundation. These will be added in testable steps. No promise of full ROM collection compatibility is made from the smoke ROM tests.
+32X/PicoDrive, Sega CD/BIOS and multidisc identity, specialized peripherals, shaders/Blargg controls, manual region options, netplay, achievements, movies, recording, Lua and debugging tools are not part of the initial foundation. These will be added in testable steps. No promise of full ROM collection compatibility is made from the smoke ROM tests.
 
 Normal core file-state restoration resets sound resampler history, so immediate PCM bytes after loading a state are not guaranteed identical. The core fast-savestate flag keeps audio history only in global process memory and must not be enabled for file states or assumed to support a history of multiple snapshots. A dedicated full-audio serialization solution is needed before claiming audio-exact rollback.
 
@@ -39,3 +39,13 @@ The chosen ImageGen KR icon is embedded both as a Qt resource and as the Windows
 Keyboard defaults and stored mappings use Qt key identifiers for US physical key positions. Windows Set-1 native scan codes and Linux XKB keycodes normalize printable keys before gameplay or shortcut dispatch; release uses the same identity even after a layout switch. Older Cyrillic key identifiers migrate to their corresponding positions. Non-text/keypad identities remain Qt keys. Controls capture uses the same normalization and displays canonical key labels.
 
 Digits 0–9 select state slots, including keypad digits with Num Lock enabled. They are reserved in the editor, mapping load/save and runtime input. Existing digit bindings cannot shadow slot selection. ShortcutOverride prevents Qt's logical shortcuts from competing with handled physical pause/mute/reset commands.
+
+## Archives, rewind and pause reasons (0.3)
+
+RomArchive lists and validates ZIP/7z entries, then returns the selected ROM bytes in memory. No member path is extracted. The GUI prompts only when multiple supported cartridges exist. LibretroHost exposes retro_game_info_ext during retro_load_game: Genesis Plus GX uses this interface to consume ROM bytes; the older retro_game_info.data alone is insufficient for this core. Archive member names determine the system profile, while save identity remains the SHA-256 of ROM bytes. A packed and unpacked copy therefore share states and SRAM. See docs/archive-support.md for dependency versions and resource bounds.
+
+RewindBuffer records every second emulated frame. Each checkpoint contains a compressed core state, full captured SRAM/RTC and a compressed RGB frame. Cached video corresponds to that checkpoint, so stepping backward restores state and displays the matching image without simulating a new forward frame. Rewind mutes audio and clears queued samples at both boundaries. Normal resume regenerates audio; byte-identical PCM rollback is not claimed. Restoring an older point discards its future. The oldest retained point remains frozen while the rewind control stays held. Load/reset/new ROM/history-option changes clear history. History is capped at 128 MiB plus temporary work buffers and at the selected 10/30/60 seconds; large checkpoints may shorten the duration. No periodic battery-file writes occur while rewinding.
+
+Manual pause and background pause are independent. Returning focus clears only background pause; manual pause is retained. A rewind request can inspect older frames during manual pause, but background pause blocks rewind. R is reserved for rewind and is normalized by physical key position. The command is appended to the gamepad command IDs to preserve saved bindings.
+
+The slot OSD follows FCEUX's filled-versus-empty ten-cell concept at the user's preferred upper-left location. The selected slot is outlined and labelled occupied/empty. The worker queries file presence on selection and refreshes the occupancy mask after successful saves. Occupied means a slot file exists, not that its contents have passed load validation. Slots disappear after two seconds and obey the global OSD switch. No save manager or permanent status panel is added.

@@ -13,7 +13,7 @@
 
 namespace {
 constexpr int playerCount = 2;
-constexpr int targetCount = 26;
+constexpr int targetCount = RewindCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
 
@@ -532,6 +532,7 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
     case NextSlotCommand: return QStringLiteral("Следующий слот");
     case PreviousSlotCommand: return QStringLiteral("Предыдущий слот");
     case MenuCommand: return QStringLiteral("Меню");
+    case RewindCommand: return QStringLiteral("Перемотка назад");
     default: return QStringLiteral("Кнопка %1").arg(target);
     }
 }
@@ -577,7 +578,7 @@ int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardSc
 bool InputManager::reservedKeyboardKey(int key) {
     return (key >= Qt::Key_0 && key <= Qt::Key_9) ||
            key == Qt::Key_Tab || key == Qt::Key_Escape ||
-           key == Qt::Key_P || key == Qt::Key_M ||
+           key == Qt::Key_P || key == Qt::Key_M || key == Qt::Key_R ||
            key == Qt::Key_F5 || key == Qt::Key_F8;
 }
 bool InputManager::keyEvent(int key, bool pressed) {

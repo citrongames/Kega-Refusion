@@ -8,3 +8,7 @@ No game ROMs or console BIOS files are distributed. Integration test ROMs are or
 
 - **SDL 2.32.10**: joystick and controller discovery/input, dynamically linked; https://github.com/libsdl-org/SDL/tree/release-2.32.10. License preserved in `third_party/SDL2-LICENSE.txt`. Windows official MinGW archive is pinned by SHA-256 in `tools/prepare-sdl-windows.py`.
 - **Press Start 2P**: pixel OSD typeface with Cyrillic by the Press Start 2P Project Authors; https://github.com/google/fonts/tree/main/ofl/pressstart2p. Font and SIL Open Font License are in `assets/fonts/`.
+
+- **libarchive 3.8.10**: in-memory ZIP and 7z archive reading, statically linked; https://www.libarchive.org/. BSD notices preserved in third_party/libarchive-LICENSE.txt. The pinned build applies allocation/decompression caps to ZIP and 7z readers; see docs/archive-support.md and tools/prepare-archive.py.
+- **XZ Utils / liblzma 5.8.4**: 7z LZMA/LZMA2 compression support, statically linked; https://tukaani.org/xz/. The linked liblzma is BSD Zero Clause licensed; notices preserved in third_party/liblzma-LICENSE.txt. XZ command-line tools are not bundled.
+- **zlib 1.3.2**: ZIP Deflate compression support, statically linked; https://zlib.net/. License preserved in third_party/zlib-LICENSE.txt.

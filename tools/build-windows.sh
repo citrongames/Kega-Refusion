@@ -13,6 +13,7 @@ fi
 
 python3 "$root/tools/prepare-sdl-windows.py"
 sdl_root="$root/build/deps/SDL2-2.32.10/x86_64-w64-mingw32"
+python3 "$root/tools/prepare-archive.py" --platform windows
 "$root/tools/build-core.sh" windows
 cmake -S "$root" -B "$build" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$root/cmake/mingw-w64-x86_64.cmake" \

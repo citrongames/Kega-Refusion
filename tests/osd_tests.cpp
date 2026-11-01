@@ -40,6 +40,20 @@ QRect changedBounds(const QImage& baseline, const QImage& actual) {
     return bounds;
 }
 
+QRect colorBounds(const QImage& image, const QColor& color) {
+    QRect bounds;
+    for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+            if (image.pixelColor(x, y) == color) bounds |= QRect(x, y, 1, 1);
+    return bounds;
+}
+
+void waitMs(int duration) {
+    QEventLoop loop;
+    QTimer::singleShot(duration, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
 void testGameBorders() {
     GameView view;
     view.resize(920, 620);
@@ -93,6 +107,18 @@ void testOnlyLatestAction() {
     actual.showOsd(QStringLiteral("Saved: slot 2"), 2600, QStringLiteral("second"));
     expected.showOsd(QStringLiteral("Saved: slot 2"), 2600, QStringLiteral("second"));
     require(render(actual) == render(expected), "previous action remains visible");
+    actual.showStateSlots(3, 1U << 2);
+    expected.showStateSlots(3, 1U << 2);
+    require(render(actual) == render(expected), "slot selection did not replace prior notice");
+    GameView slotOnly;
+    prepare(slotOnly);
+    slotOnly.showStateSlots(3, 1U << 2);
+    require(render(actual) == render(slotOnly), "slot selection left a prior action visible");
+    actual.showOsd(QStringLiteral("Saved: slot 3"));
+    GameView noticeOnly;
+    prepare(noticeOnly);
+    noticeOnly.showOsd(QStringLiteral("Saved: slot 3"));
+    require(render(actual) == render(noticeOnly), "notice did not replace the slot row");
 }
 
 void testStatusRelease() {
@@ -116,28 +142,136 @@ void testStatusRelease() {
     require(render(view) == baseline, "combined status release left an OSD message");
 }
 
+void testRewindAndSpeedStatus() {
+    GameView view, expected;
+    prepare(view);
+    prepare(expected);
+    const QImage baseline = render(view);
+    view.setFastForwardFactor(8);
+    require(render(view) == baseline, "inactive speed change displayed an OSD");
+    view.setFastForwardStatus(true);
+    const QImage speed8 = render(view);
+    require(speed8 != baseline, "configured fast-forward status did not render");
+    expected.setFastForwardStatus(true);
+    require(speed8 != render(expected), "configured speed still displays the default factor");
+    expected.setFastForwardFactor(8);
+    require(speed8 == render(expected), "active speed factor change did not repaint");
+    view.setFastForwardStatus(false);
+    require(render(view) == baseline, "configured fast-forward release left an OSD");
+    view.setRewindStatus(true);
+    const QImage rewind = render(view);
+    require(rewind != baseline, "rewind status did not render");
+    view.showStateSlots(9, 1U << 9);
+    require(render(view).copy(0, 0, view.width(), changedBounds(baseline, rewind).bottom() + 1)
+                == rewind.copy(0, 0, view.width(), changedBounds(baseline, rewind).bottom() + 1),
+            "slot row displaced the persistent rewind status");
+    view.showOsd(QStringLiteral("Latest action"));
+    expected.setFastForwardStatus(false);
+    expected.showOsd(QStringLiteral("Latest action"));
+    view.setRewindStatus(false);
+    require(render(view) == render(expected), "rewind release left text or removed the action");
+    view.setOsdEnabled(false);
+    view.setOsdEnabled(true);
+    view.setRewindStatus(true);
+    view.setRewindStatus(false);
+    require(render(view) == baseline, "rewind release displayed a transient notice");
+}
+
+void testStateSlots() {
+    // Include a narrow, tall window: slot font must fit independently of game height.
+    for (const QSize& size : std::array<QSize, 4>{{{400, 280}, {400, 1080},
+                                                 {920, 620}, {1920, 1080}}}) {
+        GameView view;
+        prepare(view, size);
+        const QImage baseline = render(view);
+        view.showStateSlots(0, 0);
+        const QImage empty = render(view);
+        const QRect panel = changedBounds(baseline, empty);
+        const int margin = qBound(6, size.width() / 65, 16);
+        require(panel.top() == margin && panel.left() == margin,
+                "slot OSD did not begin at upper-left margin");
+        require(panel.right() < size.width() - margin && panel.bottom() < size.height() / 2,
+                "slot OSD did not fit the compact upper-left area");
+        require(empty.copy(0, size.height() / 2, size.width(), size.height() / 2) ==
+                    baseline.copy(0, size.height() / 2, size.width(), size.height() / 2),
+                "slot OSD changed the bottom of the game image");
+
+        QRect previousSelection;
+        QRect previousOccupied;
+        for (int slot = 0; slot < 10; ++slot) {
+            view.showStateSlots(slot, 0);
+            const QImage selected = render(view);
+            const QRect highlight = colorBounds(selected, QColor(126, 224, 233));
+            require(highlight.width() >= 12 && highlight.height() >= 12,
+                    "selected slot has no visible cell outline");
+            require(panel.contains(highlight), "selected cell escaped the slot panel");
+            if (slot) {
+                require(highlight.left() > previousSelection.right() &&
+                            highlight.top() == previousSelection.top() &&
+                            highlight.size() == previousSelection.size(),
+                        "slot selection did not advance through ten distinct cells");
+            }
+            previousSelection = highlight;
+
+            // Select another slot so changing this bit cannot change the selected label.
+            view.showStateSlots((slot + 1) % 10, 0);
+            const QImage unoccupied = render(view);
+            view.showStateSlots((slot + 1) % 10, 1U << slot);
+            const QImage occupied = render(view);
+            const QRect changed = changedBounds(unoccupied, occupied);
+            require(changed.width() >= 10 && changed.height() >= 10 &&
+                        highlight.contains(changed),
+                    "occupied and empty slots do not have distinct cell fills");
+            require(!colorBounds(occupied, QColor(72, 84, 96)).isEmpty(),
+                    "occupied slot fill was not rendered");
+            if (slot)
+                require(changed.left() > previousOccupied.right(),
+                        "occupied bitmask did not address separate numbered cells");
+            previousOccupied = changed;
+        }
+        view.showStateSlots(0, 1);
+        const QImage selectedOccupied = render(view);
+        const QRect highlight = colorBounds(selectedOccupied, QColor(126, 224, 233));
+        require(selectedOccupied.copy(0, 0, size.width(), highlight.top()) !=
+                    empty.copy(0, 0, size.width(), highlight.top()),
+                "selected occupied/empty label did not change");
+        view.showStateSlots(9, 0x3ffU);
+        const QImage allOccupied = render(view);
+        view.showStateSlots(9, 0xffffffffU);
+        require(render(view) == allOccupied, "bits outside ten slots changed the row");
+    }
+}
+
 void testGlobalToggle() {
     GameView view;
     prepare(view);
     const QImage baseline = render(view);
     view.setPausedStatus(true);
     view.setFastForwardStatus(true);
+    view.setRewindStatus(true);
     const QImage activeStatuses = render(view);
     view.showOsd(QStringLiteral("Saved before disable"));
     require(render(view) != activeStatuses, "transient action did not render");
     view.setOsdEnabled(false);
     require(render(view) == baseline, "disabling OSD did not immediately hide all overlays");
     view.showOsd(QStringLiteral("Action while disabled"));
+    view.showStateSlots(8, 0x3ffU);
     view.setOsdEnabled(true);
     require(render(view) == activeStatuses,
             "re-enabling did not restore active statuses alone");
     view.setOsdEnabled(false);
     view.setPausedStatus(false);
     view.setFastForwardStatus(false);
+    view.setRewindStatus(false);
     view.showOsd(QStringLiteral("Another disabled action"));
     view.setOsdEnabled(true);
     require(render(view) == baseline,
             "disabled status changes or actions left a stale overlay");
+    view.showStateSlots(4, 1U << 4);
+    require(render(view) != baseline, "slot selection did not render before disable");
+    view.setOsdEnabled(false);
+    view.setOsdEnabled(true);
+    require(render(view) == baseline, "re-enabling restored a stale slot row");
     view.setOsdEnabled(false);
     view.setPausedStatus(true);
     require(render(view) == baseline, "status activated while disabled became visible");
@@ -161,6 +295,25 @@ void testNoticeExpiry() {
     prepare(clean);
     require(render(view) == render(clean), "notice expiry left pixels after status release");
 }
+void testStateSlotExpiry() {
+    GameView view;
+    prepare(view);
+    view.setRewindStatus(true);
+    const QImage rewind = render(view);
+    view.showOsd(QStringLiteral("Earlier short notice"), 500);
+    waitMs(350);
+    view.showStateSlots(2, 1U << 2);
+    const QImage slotRow = render(view);
+    require(slotRow != rewind, "timed slot row did not render");
+    waitMs(1500);
+    require(render(view) == slotRow, "slot row expired before its two-second duration");
+    waitMs(750);
+    require(render(view) == rewind, "slot row remained after expiry or removed rewind");
+    view.setRewindStatus(false);
+    GameView clean;
+    prepare(clean);
+    require(render(view) == render(clean), "slot/status expiry left pixels behind");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -170,8 +323,11 @@ int main(int argc, char** argv) {
         testUpperLeftBounds();
         testOnlyLatestAction();
         testStatusRelease();
+        testRewindAndSpeedStatus();
+        testStateSlots();
         testGlobalToggle();
         testNoticeExpiry();
+        testStateSlotExpiry();
         std::puts("OSD tests passed");
         return 0;
     } catch (const std::exception& e) {

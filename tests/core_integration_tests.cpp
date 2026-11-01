@@ -1,3 +1,6 @@
+#include <archive.h>
+#include <archive_entry.h>
+#include "core/RewindBuffer.h"
 #include "core/LibretroHost.h"
 
 #include <QCoreApplication>
@@ -316,6 +319,109 @@ void testSaveRam(const QString& corePath) {
     require(readFile(savePath) == oversized, "shutdown overwrote rejected SRAM");
 }
 
+QByteArray packedRom(bool sevenZip, const QByteArray& rom, bool multiple = false) {
+    QByteArray output(2*1024*1024, '\0'); size_t written=0;
+    archive* writer=archive_write_new();
+    require(writer, "archive writer allocation failed");
+    require((sevenZip ? archive_write_set_format_7zip(writer) : archive_write_set_format_zip(writer))==ARCHIVE_OK,
+            "archive writer format failed");
+    require(archive_write_open_memory(writer,output.data(),size_t(output.size()),&written)==ARCHIVE_OK,
+            "archive writer open failed");
+    for (int i=0;i<(multiple?2:1);++i) {
+        QByteArray content=rom;
+        if (i) content[0x125]=char(content[0x125]^1);
+        auto* entry=archive_entry_new();
+        archive_entry_set_pathname(entry,i ? "folder/second.md" : "folder/generated.md");
+        archive_entry_set_filetype(entry,AE_IFREG); archive_entry_set_perm(entry,0644);
+        archive_entry_set_size(entry,content.size());
+        require(archive_write_header(writer,entry)==ARCHIVE_OK,"archive writer header failed");
+        require(archive_write_data(writer,content.constData(),size_t(content.size()))==content.size(),"archive writer data failed");
+        archive_entry_free(entry);
+    }
+    require(archive_write_close(writer)==ARCHIVE_OK,"archive writer close failed");
+    archive_write_free(writer); output.resize(qsizetype(written)); return output;
+}
+void testArchiveCore(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(),"archive core temp failed");
+    const auto rom=makeTestRom(); const QString plain=temp.path()+"/plain.md";
+    writeFile(plain,rom);
+    LibretroHost host(corePath,temp.path()+"/data"); QString error;
+    require(host.load(plain,error),"plain archive reference did not load");
+    for (int i=0;i<8;++i) host.runFrame();
+    require(host.saveState(2,error),"archive shared save fixture failed");
+    host.runFrame(); const auto expected=host.frame();
+    for (bool sevenZip : {false,true}) {
+        const QString packed=temp.path()+(sevenZip?"/packed.7z":"/packed.zip");
+        writeFile(packed,packedRom(sevenZip,rom));
+        require(host.load(packed,error),"archived ROM did not load into actual core");
+        require(host.contentName()=="folder/generated.md" && host.gamePath()==packed,"archived identity incorrect");
+        require(host.occupiedStateSlots()==(1u<<2),"archive and plain ROM do not share state identity");
+        require(host.loadState(2,error),"archive could not restore plain ROM state");
+        host.runFrame(); require(host.frame()==expected,"archive restore video differs from plain ROM");
+    }
+    const QString multi=temp.path()+"/multiple.zip";
+    writeFile(multi,packedRom(false,rom,true));
+    require(!host.load(multi,error) && !error.isEmpty() && host.loaded(),"ambiguous archive silently selected ROM or destroyed active game");
+    require(host.load(multi,error,1) && host.contentName()=="folder/second.md","archive explicit member index failed");
+    require(host.occupiedStateSlots()==0,"different archive members shared save identity");
+    host.runFrame(); require(!host.frame().isNull(),"selected archive member did not produce video");
+}
+
+void testRewind(const QString& corePath) {
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create rewind test directory");
+    const auto rom = makeSaveRamRom();
+    const QString romPath = temp.path() + "/rewind.md";
+    writeFile(romPath, rom);
+    LibretroHost host(corePath, temp.path() + "/data");
+    QString error;
+    require(host.load(romPath, error), "rewind fixture did not load");
+    require(host.occupiedStateSlots() == 0, "empty slots reported occupied");
+    const auto initial = host.captureRewindState();
+    require(!initial.isEmpty(), "rewind snapshot missing");
+    require(!host.restoreRewindState(initial.left(initial.size()-1)), "truncated rewind snapshot accepted");
+    RewindBuffer history;
+    history.configure(30,30);
+    std::vector<QByteArray> states;
+    std::vector<QImage> frames;
+    for (int i=0;i<12;++i) {
+        host.runFrame();
+        states.push_back(host.captureRewindState()); frames.push_back(host.frame());
+        require(history.capture(states.back(),frames.back(),host.aspectRatio()), "rewind capture failed");
+    }
+    require(history.size()==12 && history.bytesUsed()>0, "rewind history not populated");
+    require(host.saveState(3,error) && host.occupiedStateSlots()==(1u<<3), "occupied slot mask incorrect");
+    require(host.saveState(9,error) && host.occupiedStateSlots()==((1u<<3)|(1u<<9)), "two slot mask incorrect");
+    for (int i=10;i>=5;--i) {
+        QByteArray state; QImage frame; double aspect=0;
+        require(history.stepBack(state,frame,aspect), "rewind step failed");
+        require(state==states[size_t(i)] && frame==frames[size_t(i)] && aspect>0, "rewind order or frame mismatch");
+        require(host.restoreRewindState(state), "core rejected rewind snapshot");
+    }
+    // Resuming from an older snapshot must reproduce subsequent video, not retain the discarded future.
+    host.runFrame();
+    require(host.frame()==frames[6] && !host.audio().isEmpty(), "rewind resume did not restore video/audio production");
+    require(history.capture(host.captureRewindState(),host.frame(),host.aspectRatio()), "rewind fork capture failed");
+    QByteArray state; QImage frame; double aspect=0;
+    require(history.stepBack(state,frame,aspect) && state==states[5], "rewind retained the discarded future");
+    require(host.flushSaveRam(error), "future SRAM flush failed");
+    require(host.restoreRewindState(initial), "could not rewind to original SRAM");
+    require(host.flushSaveRam(error), "rewound SRAM flush failed");
+    // Initial erased SRAM must replace a future save after restoring the checkpoint.
+    const QString key=QString::fromLatin1(QCryptographicHash::hash(rom,QCryptographicHash::Sha256).toHex());
+    const QString ram=temp.path()+"/data/saves/"+key+".srm";
+    if (QFile::exists(ram)) require(quint8(readFile(ram)[0])==0xff, "rewind retained future SRAM");
+    history.configure(1,2);
+    for (int i=0;i<10;++i) require(history.capture(states.back(),frames.back(),4.0/3.0), "bounded capture failed");
+    require(history.size()==3, "rewind duration limit failed");
+    RewindBuffer small(1);
+    small.configure(30,30);
+    require(!small.capture(states.back(),frames.back(),4.0/3.0) && small.bytesUsed()==0, "rewind memory cap failed");
+    history.clear(); require(history.size()==0 && history.bytesUsed()==0, "history clear leaked state");
+    history.configure(0,30);
+    require(history.capture(states.back(),frames.back(),4.0/3.0) && history.size()==0, "disabled rewind recorded history");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -327,6 +433,8 @@ int main(int argc, char** argv) {
     try {
         testCore(QString::fromLocal8Bit(argv[1]));
         testSaveRam(QString::fromLocal8Bit(argv[1]));
+        testRewind(QString::fromLocal8Bit(argv[1]));
+        testArchiveCore(QString::fromLocal8Bit(argv[1]));
         std::puts("core integration tests passed");
         return 0;
     } catch (const std::exception& exception) {

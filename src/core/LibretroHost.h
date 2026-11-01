@@ -14,7 +14,7 @@ class LibretroHost final {
 public:
     explicit LibretroHost(QString corePath, QString dataPath);
     ~LibretroHost();
-    bool load(const QString& path, QString& error);
+    bool load(const QString& path, QString& error, int archiveIndex = -1);
     void unload();
     void runFrame();
     void reset();
@@ -22,6 +22,9 @@ public:
     bool loadState(int slot, QString& error);
     QByteArray serialize() const;
     bool unserialize(const QByteArray& state);
+    unsigned occupiedStateSlots() const;
+    QByteArray captureRewindState() const;
+    bool restoreRewindState(const QByteArray& state);
     bool flushSaveRam(QString& error);
     void setButtons(unsigned port, unsigned mask);
     bool loaded() const { return loaded_; }
@@ -31,6 +34,7 @@ public:
     const QImage& frame() const { return frame_; }
     const QByteArray& audio() const { return audio_; }
     QString gamePath() const { return gamePath_; }
+    QString contentName() const { return contentName_; }
     std::function<void(const QString&)> message;
 private:
     struct Api;
@@ -46,8 +50,11 @@ private:
     static thread_local LibretroHost* active_;
     QLibrary library_;
     std::unique_ptr<Api> api_;
-    QString dataPath_, gamePath_, gameKey_;
+    QString dataPath_, gamePath_, gameKey_, contentName_;
     QByteArray systemPath_, savePath_, content_, encodedGamePath_, romHash_, coreHash_;
+    QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
+    retro_game_info_ext contentInfo_{};
+    bool contentInfoActive_ = false;
     std::map<QByteArray,QByteArray> variables_;
     std::array<unsigned,2> buttons_{};
     std::array<size_t,2> saveMemorySizes_{};

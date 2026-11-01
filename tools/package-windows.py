@@ -101,6 +101,9 @@ def main() -> None:
     )
     shutil.copy2(root / "assets/fonts/OFL.txt", notices / "PressStart2P-OFL.txt")
     shutil.copy2(root / "third_party/SDL2-LICENSE.txt", notices / "SDL2-LICENSE.txt")
+    for name in ("libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt"):
+        shutil.copy2(root / "third_party" / name, notices / name)
+
     for source, name in (
         (Path("/usr/share/common-licenses/LGPL-3"), "Qt-LGPL-3.txt"),
         (Path("/usr/share/common-licenses/LGPL-2.1"), "FFmpeg-LGPL-2.1.txt"),

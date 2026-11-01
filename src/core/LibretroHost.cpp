@@ -1,4 +1,5 @@
 #include "LibretroHost.h"
+#include "RomArchive.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -93,35 +94,74 @@ bool LibretroHost::initialize(QString& error) {
     initialized_ = true;
     return true;
 }
-bool LibretroHost::load(const QString& path, QString& error) {
+bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
+    error.clear();
     const QFileInfo info(path);
-    const auto ext = info.suffix().toLower();
+    QString name = info.fileName();
+    QByteArray content;
+    if (RomArchive::isArchive(path)) {
+        const auto entries = RomArchive::list(path, &error);
+        if (!error.isEmpty()) return false;
+        auto found = std::find_if(entries.begin(), entries.end(), [archiveIndex](const auto& e) {
+            return e.index == archiveIndex;
+        });
+        if (archiveIndex < 0 && entries.size() == 1) found = entries.begin();
+        if (found == entries.end()) {
+            error = entries.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") :
+                QStringLiteral("Выберите игру внутри архива.");
+            return false;
+        }
+        name = found->name;
+        content = RomArchive::extract(path, *found, &error);
+        if (!error.isEmpty()) return false;
+    } else {
+        QFile file(info.absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly)) { error = QStringLiteral("Не удалось открыть игру: %1").arg(file.errorString()); return false; }
+        if (file.size() < 512 || file.size() > 32 * 1024 * 1024) {
+            error = QStringLiteral("Некорректный размер ROM (ожидается от 512 байт до 32 МиБ)."); return false;
+        }
+        content = file.readAll();
+        if (content.size() != file.size()) { error = QStringLiteral("ROM прочитан не полностью."); return false; }
+    }
+    const auto ext = QFileInfo(name).suffix().toLower();
     const QStringList supported{"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k"};
-    if (!supported.contains(ext)) {
-        error = QStringLiteral("Эта сборка открывает картриджи MD, SMS, Game Gear и SG-1000. CD, 32X и архивы пока не поддерживаются."); return false;
+    if (!supported.contains(ext) || content.size() < 512 || content.size() > 32 * 1024 * 1024) {
+        error = QStringLiteral("Неподдерживаемый картридж или неверный размер ROM."); return false;
     }
-    QFile file(info.absoluteFilePath());
-    if (!file.open(QIODevice::ReadOnly)) { error = QStringLiteral("Не удалось открыть игру: %1").arg(file.errorString()); return false; }
-    if (file.size() < 512 || file.size() > 32 * 1024 * 1024) {
-        error = QStringLiteral("Некорректный размер ROM (ожидается от 512 байт до 32 МиБ)."); return false;
-    }
-    QByteArray content = file.readAll();
-    if (content.size() != file.size()) { error = QStringLiteral("ROM прочитан не полностью."); return false; }
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
-    if (encodedPath.size() >= 256) { error = QStringLiteral("Путь ROM слишком длинный для этого ядра (максимум 255 байт UTF-8)."); return false; }
     if (!initialize(error)) return false;
     // Preserve the previous game's battery saves before switching content.
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
     content_ = std::move(content);
     encodedGamePath_ = encodedPath;
+    contentDirectory_ = QDir::toNativeSeparators(info.absolutePath()).toUtf8();
+    contentBaseName_ = QFileInfo(name).completeBaseName().toUtf8();
+    contentExtension_ = ext.toUtf8();
+    archiveMember_ = name.toUtf8();
+    const bool archived = RomArchive::isArchive(path);
+    contentInfo_ = {};
+    contentInfo_.full_path = archived ? nullptr : encodedGamePath_.constData();
+    contentInfo_.archive_path = archived ? encodedGamePath_.constData() : nullptr;
+    contentInfo_.archive_file = archived ? archiveMember_.constData() : nullptr;
+    contentInfo_.dir = contentDirectory_.constData();
+    contentInfo_.name = contentBaseName_.constData();
+    contentInfo_.ext = contentExtension_.constData();
+    contentInfo_.data = content_.constData();
+    contentInfo_.size = size_t(content_.size());
+    contentInfo_.file_in_archive = archived;
+    contentInfo_.persistent_data = false;
     retro_game_info game{};
     game.path = encodedGamePath_.constData();
     game.data = content_.constData();
     game.size = size_t(content_.size());
-    if (!api_->load_game(&game)) { error = QStringLiteral("Genesis Plus GX не смог загрузить ROM."); content_.clear(); return false; }
+    contentInfoActive_ = true;
+    const bool accepted = api_->load_game(&game);
+    contentInfoActive_ = false;
+    if (!accepted) { error = QStringLiteral("Genesis Plus GX не смог загрузить ROM."); contentInfo_ = {}; content_.clear(); return false; }
     loaded_ = true;
     gamePath_ = info.absoluteFilePath();
+    contentName_ = name;
     romHash_ = digest(content_);
     gameKey_ = QString::fromLatin1(romHash_.toHex());
     api_->get_system_av_info(&av_);
@@ -147,7 +187,8 @@ void LibretroHost::unload() {
         api_->unload_game();
     }
     loaded_ = false;
-    content_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); romHash_.clear();
+    contentInfo_ = {}; contentInfoActive_ = false;
+    content_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
@@ -171,6 +212,50 @@ bool LibretroHost::unserialize(const QByteArray& state) {
     return loaded_ && size_t(state.size()) == api_->serialize_size() && api_->unserialize(state.constData(), size_t(state.size()));
 }
 QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + QStringLiteral(".slot%1.krs").arg(slot); }
+unsigned LibretroHost::occupiedStateSlots() const {
+    unsigned mask = 0;
+    if (loaded_) for (int slot = 0; slot < 10; ++slot)
+        if (QFileInfo(statePath(slot)).isFile()) mask |= 1u << slot;
+    return mask;
+}
+QByteArray LibretroHost::captureRewindState() const {
+    const auto core = serialize();
+    if (core.isEmpty()) return {};
+    QByteArray result("KRREW001", 8);
+    qsizetype total = core.size() + 20;
+    for (auto size : saveMemorySizes_) {
+        if (size > size_t(maxStateSize) || total + qsizetype(size) > maxStateSize) return {};
+        total += qsizetype(size);
+    }
+    for (quint32 size : {quint32(core.size()), quint32(saveMemorySizes_[0]), quint32(saveMemorySizes_[1])}) {
+        const quint32 encoded = qToBigEndian(size);
+        result.append(reinterpret_cast<const char*>(&encoded), 4);
+    }
+    result += core;
+    for (unsigned i = 0; i < 2; ++i) {
+        const auto size = saveMemorySizes_[i];
+        const void* data = api_->get_memory_data(i ? RETRO_MEMORY_RTC : RETRO_MEMORY_SAVE_RAM);
+        if (size && !data) return {};
+        if (size) result.append(static_cast<const char*>(data), qsizetype(size));
+    }
+    return result;
+}
+bool LibretroHost::restoreRewindState(const QByteArray& state) {
+    if (!loaded_ || state.size() < 20 || state.size() > maxStateSize || state.left(8) != "KRREW001") return false;
+    const auto coreSize = qFromBigEndian<quint32>(state.constData() + 8);
+    const auto ramSize = qFromBigEndian<quint32>(state.constData() + 12);
+    const auto rtcSize = qFromBigEndian<quint32>(state.constData() + 16);
+    if (coreSize != api_->serialize_size() || ramSize != saveMemorySizes_[0] || rtcSize != saveMemorySizes_[1] ||
+        quint64(coreSize) + ramSize + rtcSize + 20 != quint64(state.size())) return false;
+    void* ram = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    void* rtc = api_->get_memory_data(RETRO_MEMORY_RTC);
+    if ((ramSize && !ram) || (rtcSize && !rtc)) return false;
+    if (!unserialize(state.mid(20, coreSize))) return false;
+    if (ramSize) std::memcpy(ram, state.constData() + 20 + coreSize, ramSize);
+    if (rtcSize) std::memcpy(rtc, state.constData() + 20 + coreSize + ramSize, rtcSize);
+    audio_.clear();
+    return true;
+}
 bool LibretroHost::saveState(int slot, QString& error) {
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
     const auto payload = serialize();
@@ -241,6 +326,10 @@ bool LibretroHost::environment(unsigned command, void* data) {
     auto* h = active_;
     if (!h) return false;
     switch (command) {
+    case RETRO_ENVIRONMENT_GET_GAME_INFO_EXT:
+        if (!h->contentInfoActive_ || !data) return false;
+        *static_cast<const retro_game_info_ext**>(data) = &h->contentInfo_;
+        return true;
     case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: *static_cast<const char**>(data) = h->systemPath_.constData(); return true;
     case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: *static_cast<const char**>(data) = h->savePath_.constData(); return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {

@@ -77,6 +77,7 @@ void GameView::setIntegerScaling(bool enabled) {
 void GameView::showOsd(const QString& message, int durationMs,
                        const QString& category) {
     if (!osdEnabled_ || message.trimmed().isEmpty()) return;
+    stateSlots_.expiresAt = 0;
     const qint64 deadline = osdClock_.elapsed() + qBound(500, durationMs, 12000);
     for (int i = notices_.size() - 1; i >= 0; --i) {
         if ((!category.isEmpty() && notices_[i].category == category) ||
@@ -89,9 +90,19 @@ void GameView::showOsd(const QString& message, int durationMs,
     update();
 }
 
+void GameView::showStateSlots(int selected, unsigned occupiedMask, int durationMs) {
+    if (!osdEnabled_) return;
+    notices_.clear();
+    stateSlots_ = {qBound(0, selected, 9), occupiedMask & 0x3ffU,
+                   osdClock_.elapsed() + qBound(500, durationMs, 12000)};
+    if (!osdTimer_.isActive()) osdTimer_.start();
+    update();
+}
+
 void GameView::setOsdEnabled(bool enabled) {
     osdEnabled_ = enabled;
     notices_.clear();
+    stateSlots_.expiresAt = 0;
     osdTimer_.stop();
     update();
 }
@@ -108,6 +119,19 @@ void GameView::setFastForwardStatus(bool enabled) {
     update();
 }
 
+void GameView::setFastForwardFactor(int factor) {
+    factor = qMax(1, factor);
+    if (fastForwardFactor_ == factor) return;
+    fastForwardFactor_ = factor;
+    if (fastForward_) update();
+}
+
+void GameView::setRewindStatus(bool enabled) {
+    if (rewinding_ == enabled) return;
+    rewinding_ = enabled;
+    update();
+}
+
 void GameView::expireOsd() {
     const qint64 now = osdClock_.elapsed();
     const auto end = std::remove_if(notices_.begin(), notices_.end(),
@@ -116,11 +140,16 @@ void GameView::expireOsd() {
         notices_.erase(end, notices_.end());
         update();
     }
-    if (notices_.isEmpty()) osdTimer_.stop();
+    if (stateSlots_.expiresAt && stateSlots_.expiresAt <= now) {
+        stateSlots_.expiresAt = 0;
+        update();
+    }
+    if (notices_.isEmpty() && !stateSlots_.expiresAt) osdTimer_.stop();
 }
 
 void GameView::paintOsd(QPainter& painter) {
-    if (!osdEnabled_ || (notices_.isEmpty() && !paused_ && !fastForward_)) return;
+    if (!osdEnabled_ || (notices_.isEmpty() && !stateSlots_.expiresAt &&
+                         !paused_ && !fastForward_ && !rewinding_)) return;
     QFont osd(osdFamily_);
     osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);
     osd.setStyleStrategy(QFont::NoAntialias);
@@ -156,7 +185,57 @@ void GameView::paintOsd(QPainter& painter) {
     if (paused_)
         y += drawPanel({QStringLiteral("ПАУЗА")}, margin, y, true) + 4;
     if (fastForward_)
-        y += drawPanel({QStringLiteral("УСКОРЕНИЕ ×4")}, margin, y, true) + 4;
+        y += drawPanel({QStringLiteral("УСКОРЕНИЕ ×%1").arg(fastForwardFactor_)},
+                       margin, y, true) + 4;
+    if (rewinding_)
+        y += drawPanel({QStringLiteral("ПЕРЕМОТКА НАЗАД")}, margin, y, true) + 4;
+    if (stateSlots_.expiresAt) {
+        // Ten compact cells, as in FCEUX: filled occupied slots and a selected outline.
+        // Keep the row inside narrow windows even when their height requests a large font.
+        QFont slotFont(osd);
+        const int gap = qMax(2, pad / 2);
+        const int available = width() - 2 * margin - 2 * pad;
+        int cellWidth = 0;
+        for (;;) {
+            const QFontMetrics metrics(slotFont);
+            cellWidth = metrics.horizontalAdvance(QLatin1Char('0')) + 2 * pad;
+            if (10 * cellWidth + 9 * gap <= available || slotFont.pixelSize() <= 8) break;
+            slotFont.setPixelSize(qMax(8, slotFont.pixelSize() - 8));
+        }
+        const QFontMetrics slotFm(slotFont);
+        const int cellHeight = slotFm.height() + 2 * pad;
+        const int labelHeight = slotFm.height() + 2;
+        const int rowWidth = 10 * cellWidth + 9 * gap;
+        const QString label = QStringLiteral("СЛОТ %1 · %2")
+                                  .arg(stateSlots_.selected)
+                                  .arg(stateSlots_.occupiedMask & (1U << stateSlots_.selected)
+                                           ? QStringLiteral("ЗАНЯТ") : QStringLiteral("ПУСТ"));
+        const int panelWidth = qMax(rowWidth, slotFm.horizontalAdvance(label)) + 2 * pad;
+        const int panelHeight = labelHeight + cellHeight + 3 * pad;
+        if (y + panelHeight <= height() - margin) {
+            painter.save();
+            painter.setFont(slotFont);
+            const QRect panel(margin, y, panelWidth, panelHeight);
+            painter.fillRect(panel, QColor(0, 0, 0, 218));
+            painter.setPen(QColor(129, 142, 159));
+            painter.drawRect(panel.adjusted(0, 0, -1, -1));
+            painter.setPen(QColor(244, 249, 250));
+            painter.drawText(margin + pad, y + pad + slotFm.ascent(), label);
+            const int rowY = y + 2 * pad + labelHeight;
+            for (int slot = 0; slot < 10; ++slot) {
+                const bool occupied = stateSlots_.occupiedMask & (1U << slot);
+                const QRect cell(margin + pad + slot * (cellWidth + gap), rowY,
+                                 cellWidth, cellHeight);
+                painter.fillRect(cell, occupied ? QColor(72, 84, 96) : QColor(0, 0, 0));
+                painter.setPen(slot == stateSlots_.selected ? QColor(126, 224, 233)
+                                                           : QColor(129, 142, 159));
+                painter.drawRect(cell.adjusted(0, 0, -1, -1));
+                painter.setPen(occupied ? QColor(244, 249, 250) : QColor(129, 142, 159));
+                painter.drawText(cell, Qt::AlignCenter, QString::number(slot));
+            }
+            painter.restore();
+        }
+    }
     for (const Notice& notice : notices_) {
         const QStringList lines = wrapOsd(notice.text, fm, maxTextWidth, 2);
         const int panelHeight = lines.size() * lineHeight + 2 * pad;

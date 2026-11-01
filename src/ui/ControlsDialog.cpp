@@ -27,7 +27,7 @@ namespace {
 const QVector<int> commands = {
     PauseCommand, FastForwardCommand, SaveCommand, LoadCommand,
     ResetCommand, FullscreenCommand, MuteCommand,
-    NextSlotCommand, PreviousSlotCommand, MenuCommand
+    NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand
 };
 
 QString commandName(int command) {
@@ -42,6 +42,7 @@ QString commandName(int command) {
     case NextSlotCommand: return QStringLiteral("Следующий слот");
     case PreviousSlotCommand: return QStringLiteral("Предыдущий слот");
     case MenuCommand: return QStringLiteral("Меню");
+    case RewindCommand: return QStringLiteral("Перемотка назад (удерживать)");
     default: return QString();
     }
 }
@@ -50,6 +51,7 @@ QString commandShortcut(int command) {
     switch (command) {
     case PauseCommand: return QStringLiteral("P");
     case FastForwardCommand: return QStringLiteral("Tab");
+    case RewindCommand: return QStringLiteral("R");
     case SaveCommand: return QStringLiteral("F5");
     case LoadCommand: return QStringLiteral("F8");
     case ResetCommand: return QStringLiteral("Ctrl+R");
@@ -524,7 +526,7 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
     if (sequence.count() > 1 || modifiers != Qt::NoModifier)
         error = QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift.");
     else if (reservedKey(key))
-        error = QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, F5 и F8 зарезервированы.");
+        error = QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5 и F8 зарезервированы.");
     else if (key) {
         const PlayerMapping& mapping = draft();
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {

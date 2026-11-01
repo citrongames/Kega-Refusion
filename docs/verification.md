@@ -1,4 +1,4 @@
-# Verification — version 0.2.2 — 2026-11-01
+# Verification — version 0.3.0 — 2026-11-01
 
 ## Environment
 
@@ -60,3 +60,17 @@ Latest evidence: build/verification/linux-0.2.1.log, windows-0.2.1.log, native-w
 - Final Linux build: 3/3 CTest suites passed. Native Windows OSD/border and real-core suites exited 0; native UI key harness exited 0. Packaged executable smoke with the existing demo ROM exited 0 and its screenshot was inspected.
 
 Current evidence: build/verification/linux-0.2.2.log, windows-0.2.2.log, native-keys-0.2.2.log, icon-0.2.2.txt and fullscreen-0.2.2.png. Temporary test settings and redundant harness binaries were removed; user data was untouched.
+
+## 0.3.0 — archives, rewind and compact slot feedback — 2026-11-01
+
+- Final Linux CTest: archive_tests, input_tests, osd_tests and core_integration all passed (4/4). The same four final Windows native executables exited 0.
+- ZIP/7z fixtures cover listing, selecting multiple members, extraction, corruption/encryption and resource limits. Real Genesis Plus GX loaded the original generated ROM from both formats; raw and archived copies share their state identity. The core required GET_GAME_INFO_EXT for in-memory cartridge data; integration tests caught and verified that correction.
+- Rewind tests verify reverse frame order, restored core/SRAM state, subsequent forward execution, discarded future history, duration/memory bounds and disabled history. The real-window harness checks held R in RU/EN, repeat events, changed modifiers, focus loss, application deactivation and virtual controller input.
+- Speed selection at x2 and x8 updates the active OSD and survives settings reload. Rewind history settings and the OSD toggle also survive opening a new window.
+- All ten slot selections and F5/F8 operations are exercised through the window. Rendering tests cover occupied/empty cells, selected outline, label, two-second expiry, three viewport sizes, replacement by action notices and full OSD disable. Occupied means a state file exists; its integrity is checked when loading.
+- Two real Qt top-level windows verify that losing focus stops emulated frames, returning resumes only automatic pause, manual pause remains set, and disabling the option permits background execution.
+- Final packaged Windows EXE loaded an original generated ROM directly from ZIP in fullscreen, exited 0 and saved slots-0.3.0.png. That screenshot was visually inspected: all notifications are upper-left, occupied slots are filled, empty slots dim, selected slot outlined, black background and no menu/bottom strip. Demo pause/acceleration/slot statuses are illustrative.
+- Rewind defaults to 30 seconds (10/30/60 or disabled), with a 128 MiB compressed-history cap which may shorten the available history. Temporary working buffers are additional. Rewind audio is muted; byte-identical PCM replay is not claimed. Physical controller testing remains for the user's hardware.
+- Archives are read in memory, without disk extraction. Limits and supported formats are documented in archive-support.md. Large solid archives can take time to inspect; decoding is synchronous and bounded.
+
+Latest evidence retained in ignored build/verification: linux-0.3.0.log, windows-0.3.0.log, native-tests-0.3.0.log, keyboard-ui-0.3.0.log, native-ui-0.3.0.log and slots-0.3.0.png. Temporary smoke data/ROM and redundant standalone test builds were removed. Harness source and useful incremental build/dependency caches remain. Existing user settings, ROMs and saves were preserved during packaging.

@@ -12,6 +12,8 @@
 #include <stdexcept>
 
 namespace {
+static_assert(PauseCommand == 16 && MenuCommand == 25 && RewindCommand == 26,
+              "appended commands must preserve existing saved target IDs");
 void require(bool okay, const char* message) { if (!okay) throw std::runtime_error(message); }
 
 QString keyForId(const QVector<InputDevice>& devices, SDL_JoystickID id) {
@@ -254,6 +256,122 @@ void testInput() {
             "disconnected virtual joysticks remained listed");
 }
 
+void testRewindCommand() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create rewind command settings directory");
+    const QString path = temp.path() + "/settings.ini";
+    {
+        QSettings settings(path, QSettings::IniFormat);
+        settings.setValue("input/md/player1/pad/25", "b:10"); // existing Menu ID
+        settings.sync();
+    }
+    InputManager manager(path);
+    VirtualPad pad;
+    manager.poll();
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mapping.deviceKey = keyForId(manager.devices(), pad.id);
+    for (int target : InputManager::gameTargets(ConsoleProfile::MegaDrive))
+        mapping.pad[target] = {};
+    mapping.pad[RewindCommand] = {PadBinding::Button, 11, 0};
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    manager.poll(); // A neutral poll arms the newly added command.
+    int presses = 0, releases = 0;
+    QObject::connect(&manager, &InputManager::commandChanged, &manager,
+                     [&](int command, bool pressed) {
+                         if (command == RewindCommand) pressed ? ++presses : ++releases;
+                     });
+
+    pad.button(11, true);
+    manager.poll();
+    manager.poll();
+    require(presses == 1 && releases == 0,
+            "held rewind did not produce exactly one press edge");
+    pad.button(11, false);
+    manager.poll();
+    require(presses == 1 && releases == 1, "rewind button did not release");
+
+    pad.button(11, true);
+    manager.poll();
+    manager.setEnabled(false);
+    require(presses == 2 && releases == 2,
+            "focus loss did not release held rewind");
+    manager.setEnabled(true);
+    manager.poll();
+    require(presses == 2, "focus regain retriggered held rewind");
+    pad.button(11, false);
+    manager.poll();
+    pad.button(11, true);
+    manager.poll();
+    require(presses == 3 && releases == 2,
+            "rewind did not rearm after focus regained and button released");
+
+    manager.beginCapture(mapping.deviceKey, 0);
+    require(releases == 3, "input capture did not release held rewind");
+    manager.cancelCapture();
+    manager.poll();
+    require(presses == 3, "ending capture retriggered held rewind");
+    pad.button(11, false);
+    manager.poll();
+    pad.button(11, true);
+    manager.poll();
+    require(presses == 4, "rewind did not rearm after capture");
+    pad.close();
+    manager.poll();
+    require(releases == 4, "disconnected joystick left rewind held");
+
+    InputManager reloaded(path);
+    const auto saved = reloaded.mapping(ConsoleProfile::MegaDrive, 0);
+    require(saved.pad.value(RewindCommand) == PadBinding{PadBinding::Button, 11, 0},
+            "rewind command mapping did not persist");
+    require(saved.pad.value(MenuCommand) == PadBinding{PadBinding::Button, 10, 0},
+            "appending rewind changed existing Menu command mapping");
+}
+
+void testReservedRewindKey() {
+    using Codes = KeyboardScanCodes;
+    for (const auto codes : {Codes::Windows, Codes::Xkb}) {
+        const int scan = 0x13 + (codes == Codes::Xkb ? 8 : 0);
+        for (const int logical : {int(Qt::Key_R), 0x041a}) {
+            const int key = InputManager::keyboardKey(logical, scan, codes);
+            require(key == Qt::Key_R && InputManager::reservedKeyboardKey(key),
+                    "physical Russian/English R was not reserved for rewind");
+        }
+    }
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create reserved rewind settings directory");
+    const QString path = temp.path() + "/settings.ini";
+    {
+        QSettings settings(path, QSettings::IniFormat);
+        settings.setValue("input/md/player1/device", "none");
+        settings.setValue("input/md/player1/key/0", Qt::Key_R);
+        settings.setValue("input/md/player1/key/8", 0x041a); // Russian К -> R
+        settings.setValue("keys/button_0", 0x043a); // legacy lowercase к -> R
+        settings.sync();
+    }
+    InputManager manager(path);
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == 0 &&
+                manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
+            "saved English/Russian R remained bound to gameplay");
+    for (const auto profile : {ConsoleProfile::MasterSystem, ConsoleProfile::GameGear,
+                              ConsoleProfile::SG1000})
+        require(manager.mapping(profile, 0).keyboard.value(0) == 0,
+                "legacy Russian R remained bound to gameplay");
+
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mapping.keyboard[0] = Qt::Key_R;
+    mapping.keyboard[8] = 0x041a;
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == 0 &&
+                manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
+            "mapping update accepted reserved English/Russian R");
+    require(!manager.keyEvent(Qt::Key_R, true) && !manager.keyEvent(0x041a, true),
+            "reserved rewind key was treated as gameplay input");
+    InputManager reloaded(path);
+    require(reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == 0 &&
+                reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
+            "reserved rewind keyboard mappings reappeared after reload");
+}
+
 void testLegacyKeyboardSettings() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create legacy settings directory");
@@ -436,6 +554,8 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
         testInput();
+        testRewindCommand();
+        testReservedRewindKey();
         testLegacyKeyboardSettings();
         testUnknownRawJoystick();
         testPhysicalKeyboard();
