@@ -198,6 +198,12 @@ void testCore(const QString& corePath) {
     requireRejected(host.loadState(10, error), error, "load slot above 9 was accepted");
 
     error.clear();
+    LibretroHost::StateLoadError missingFailure;
+    const auto beforeMissing = host.serialize();
+    requireRejected(host.loadState(0, error, &missingFailure), error, "missing save was accepted");
+    require(missingFailure == LibretroHost::StateLoadError::Missing, "missing save not classified");
+    require(host.serialize() == beforeMissing, "missing save changed emulation state");
+    error.clear();
     require(host.saveState(0, error), "could not save slot zero");
     const QString slotZero = stateFile(dataPath, rom, 0);
     const QByteArray savedZero = readFile(slotZero);

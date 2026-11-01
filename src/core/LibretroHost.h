@@ -19,7 +19,8 @@ public:
     void runFrame();
     void reset();
     bool saveState(int slot, QString& error);
-    bool loadState(int slot, QString& error);
+    enum class StateLoadError { None, Missing, Failed };
+    bool loadState(int slot, QString& error, StateLoadError* failure = nullptr);
     QByteArray serialize() const;
     bool unserialize(const QByteArray& state);
     unsigned occupiedStateSlots() const;

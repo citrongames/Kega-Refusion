@@ -121,6 +121,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::actionCompleted, this, [this](const QString& text) {
         view_->showOsd(text, 2000, QStringLiteral("action"));
     });
+    connect(&session_, &EmulationSession::actionNotice, this, [this](const QString& text) {
+        view_->showOsd(text, 2000, QStringLiteral("action"));
+    });
     connect(&session_, &EmulationSession::errorOccurred, this, [this](const QString& text) {
         loading_ = false;
         updateInputEnabled();

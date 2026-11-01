@@ -74,3 +74,11 @@ Current evidence: build/verification/linux-0.2.2.log, windows-0.2.2.log, native-
 - Archives are read in memory, without disk extraction. Limits and supported formats are documented in archive-support.md. Large solid archives can take time to inspect; decoding is synchronous and bounded.
 
 Latest evidence retained in ignored build/verification: linux-0.3.0.log, windows-0.3.0.log, native-tests-0.3.0.log, keyboard-ui-0.3.0.log, native-ui-0.3.0.log and slots-0.3.0.png. Temporary smoke data/ROM and redundant standalone test builds were removed. Harness source and useful incremental build/dependency caches remain. Existing user settings, ROMs and saves were preserved during packaging.
+
+## Empty-slot loading correction — 2026-11-01
+
+- Missing state files are classified separately from corrupt/unreadable states. Loading an empty slot emits a two-second action OSD notice, without the modal error path, audio reset, history reset or pause changes. The existing global OSD toggle applies.
+- Linux CTest passed 4/4; native Windows real-core integration passed. A missing load is rejected without changing serialized emulation state.
+- Native Windows full window regression passed, including F8 on an empty slot with continuing video frames, no modal-error signal, no audio reset and the expected notice in GameView.
+- Linux window regression passed the same empty-slot check, then failed its unrelated focus-regain check under WSL; the entire Linux window suite is not claimed as passed for this run. Native Windows focus-regain checks passed.
+- Evidence: linux-empty-slot.log, windows-empty-slot.log, native-core-empty-slot.log, native-ui-empty-slot.log, ui-empty-slot-linux.log in ignored build/verification. Temporary harness binaries removed; source retained.

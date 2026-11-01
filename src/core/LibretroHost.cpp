@@ -266,10 +266,19 @@ bool LibretroHost::saveState(int slot, QString& error) {
     bytes.append(payload);
     return atomicWrite(statePath(slot), bytes, error);
 }
-bool LibretroHost::loadState(int slot, QString& error) {
+bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) {
+    if (failure) *failure = StateLoadError::Failed;
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
     QFile file(statePath(slot));
-    if (!file.open(QIODevice::ReadOnly)) { error = QStringLiteral("Сохранение в слоте %1 не найдено.").arg(slot); return false; }
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (!QFileInfo::exists(file.fileName())) {
+            if (failure) *failure = StateLoadError::Missing;
+            error = QStringLiteral("Сохранение в слоте %1 не найдено").arg(slot);
+        } else {
+            error = QStringLiteral("Не удалось прочитать сохранение в слоте %1: %2").arg(slot).arg(file.errorString());
+        }
+        return false;
+    }
     if (file.size() < stateHeaderSize || file.size() > stateHeaderSize + maxStateSize) { error = QStringLiteral("Неверный размер сохранения."); return false; }
     const auto bytes = file.readAll();
     if (bytes.size() < stateHeaderSize || bytes.left(8) != stateMagic || bytes.mid(8,32) != romHash_ || bytes.mid(40,32) != coreHash_) {
@@ -279,6 +288,7 @@ bool LibretroHost::loadState(int slot, QString& error) {
     const auto payload = bytes.mid(stateHeaderSize);
     if (size != quint32(payload.size()) || bytes.mid(72,32) != digest(payload)) { error = QStringLiteral("Сохранение повреждено."); return false; }
     if (!unserialize(payload)) { error = QStringLiteral("Ядро отклонило сохранение."); return false; }
+    if (failure) *failure = StateLoadError::None;
     audio_.clear();
     return true;
 }

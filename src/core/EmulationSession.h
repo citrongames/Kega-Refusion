@@ -39,6 +39,7 @@ signals:
     void stateSlotsChanged(int selected, unsigned occupied);
     void notification(const QString& text);
     void actionCompleted(const QString& text);
+    void actionNotice(const QString& text);
     void errorOccurred(const QString& text);
 protected:
     void run() override;

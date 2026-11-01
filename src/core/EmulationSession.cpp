@@ -88,13 +88,17 @@ void EmulationSession::run() {
                     emit actionCompleted(QStringLiteral("Сохранено: слот %1").arg(command.value));
                 } else emit errorOccurred(error);
                 break;
-            case Type::Restore:
-                if (host.loadState(command.value,error)) {
+            case Type::Restore: {
+                LibretroHost::StateLoadError failure;
+                if (host.loadState(command.value,error,&failure)) {
                     clearHistory(); emit audioReset();
                     emit actionCompleted(QStringLiteral("Загружено: слот %1").arg(command.value));
+                } else if (failure == LibretroHost::StateLoadError::Missing) {
+                    emit actionNotice(error);
                 } else emit errorOccurred(error);
                 emit stateSlotsChanged(-1,host.occupiedStateSlots());
                 break;
+            }
             case Type::Slots:
                 emit stateSlotsChanged(command.value,host.occupiedStateSlots());
                 break;
