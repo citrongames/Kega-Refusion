@@ -1,4 +1,4 @@
-# Verification — version 0.4.0 — 2026-11-01
+# Verification — version 0.4.1 — 2026-11-01
 
 ## Environment
 
@@ -104,3 +104,14 @@ Latest evidence retained in ignored build/verification: linux-0.3.0.log, windows
 - Packaged EXE smoke runs with GDAPT and isolated settings exited0, including fullscreen Escape/Alt+Enter; GDAPT stayed selected after transitions. The GPU screenshot path now reads the composited framebuffer rather than QWidget::grab's empty layer. Its upper-left OSD capture was visually inspected; demo statuses are illustrative. Subsequent testing was limited to this changed capture path, per the user's request to avoid redundant suites.
 
 Current evidence retained only: linux-0.4.0.log, windows-0.4.0.log, native-tests-0.4.0.log, native-ui-0.4.0.log, gpu-linux.log, packaged-0.4.0.log, rewind-benchmark-0.4.0.csv, audio-native-before-timer-60s.json, audio-native-60s.json, fullscreen-0.4.0.png and selected native GPU captures. Superseded logs/captures, smoke settings, redundant harness binaries, probe sources/binaries and duplicate packaging stage were removed. Useful incremental build/dependency caches and the existing reusable keyboard harness source remain; user ROMs/settings/saves were not removed.
+
+
+## 0.4.1 — Blargg geometry and fast-forward — 2026-11-01
+
+- Focused real-core geometry checks passed on Linux and native Windows: original MD H40/H32, SMS and GG fixtures with all four Blargg modes, filter-off restoration and native geometry retained through rewind.
+- Focused raster layout checks passed on both platforms: square-pixel/console/stretch modes, integer scaling, cropped 248/240-wide frames, interlaced height and GG geometry. GPU and raster use the same game rectangle; the prior GPU suite was not repeated for this layout-only change.
+- Fast-forward skips unseen rendering via the core API and host PCM copies. All CPU/audio synthesis state still advances. Qt performs RGB565/555 conversion. Selectable limits now include x12/x16/x32 and uncapped.
+- Per user preference, accelerated execution clears the old rewind timeline and does not serialize/compress snapshots. Recording restarts at normal speed; rewind cannot cross the omitted interval. A focused real-core session check passed on Linux and native Windows: uncapped execution, empty history during/after the gap, resumed recording and working rewind afterward. Existing unrelated suites were not rerun.
+- Native Windows paired CPU-worker benchmark, Sonic 2 (World), 180 warm-up frames plus 1800 timed emulated frames, identical scripted input: with Blargg composite and the 30-second history setting, full-output/capture mode 497.1 fps (x8.30) versus optimized fast-forward 2974.7 fps (x49.64). Without Blargg, the same history setting measured 890.9 fps (x14.87) versus 3158.4 fps (x52.71). Accelerated history storage is zero; full-output retained 19.938 MiB / 7.489 MiB respectively. Both comparison modes use the new Qt pixel converter; full-output is not the exact previous application binary.
+- The benchmark forces a rendered image every 60 emulated frames and compares it against full-output mode, checks muted PCM copying and audio/image production after resuming. All comparisons passed. These are scene-specific worker measurements without the GUI/GPU, not a guaranteed interactive speed or a full-game compatibility claim. ROM was read-only and temporary save directories were removed automatically. Source: tools/speed-benchmark.cpp; current results: build/verification/speed-windows-0.4.1.csv.
+- Windows and Linux applications built successfully. Retained evidence includes the focused geometry/layout logs, fast-forward-0.4.1.log and the final Windows speed CSV. Superseded speed logs and duplicate package staging were removed; useful incremental builds and user data were preserved.

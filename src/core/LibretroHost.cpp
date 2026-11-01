@@ -1,5 +1,6 @@
 #include "LibretroHost.h"
 #include "RomArchive.h"
+#include "VideoFrameGeometry.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -203,7 +204,14 @@ void LibretroHost::unload() {
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
 }
-void LibretroHost::runFrame() { if (loaded_) { audio_.clear(); api_->run(); } }
+void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
+    if (!loaded_) return;
+    videoEnabled_ = renderVideo; audioEnabled_ = captureAudio;
+    audio_.clear(); api_->run();
+    // Serialization and normal calls retain accurate audio state: never set
+    // libretro's fast-savestate or hard-disable-audio flags.
+    videoEnabled_ = audioEnabled_ = true;
+}
 void LibretroHost::reset() { if (loaded_) { api_->reset(); audio_.clear(); } }
 bool LibretroHost::hardReset(QString& error) {
     error.clear();
@@ -327,6 +335,7 @@ double LibretroHost::aspectRatio() const {
     if (av_.geometry.aspect_ratio > 0) return av_.geometry.aspect_ratio;
     return av_.geometry.base_height ? double(av_.geometry.base_width) / av_.geometry.base_height : 4.0 / 3.0;
 }
+QSize LibretroHost::nativeVideoSize() const { return VideoFrameGeometry::nativeSize(frame_); }
 QByteArray LibretroHost::serialize() const {
     if (!loaded_) return {};
     const size_t size = api_->serialize_size();
@@ -506,13 +515,16 @@ bool LibretroHost::environment(unsigned command, void* data) {
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
         if (!data || !validAvInfo(*static_cast<retro_system_av_info*>(data))) return false;
         h->av_ = *static_cast<retro_system_av_info*>(data); return true;
-    case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE: *static_cast<int*>(data) = 3; return true;
     case RETRO_ENVIRONMENT_GET_LANGUAGE: *static_cast<unsigned*>(data) = RETRO_LANGUAGE_ENGLISH; return true;
     case RETRO_ENVIRONMENT_SET_MESSAGE: {
         const auto* msg = static_cast<retro_message*>(data);
         if (h->message && msg && msg->msg) h->message(QString::fromUtf8(msg->msg));
         return true;
     }
+    case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
+        if (!data) return false;
+        *static_cast<int*>(data) = (h->videoEnabled_ ? 1 : 0) | (h->audioEnabled_ ? 2 : 0);
+        return true;
     case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
     case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL:
     case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
@@ -524,24 +536,48 @@ bool LibretroHost::environment(unsigned command, void* data) {
 }
 void LibretroHost::video(const void* data, unsigned width, unsigned height, size_t pitch) {
     auto* h = active_;
-    if (!h || !data || data == RETRO_HW_FRAME_BUFFER_VALID || !width || !height || width > 4096 || height > 4096) return;
+    if (!h || !h->videoEnabled_ || !data || data == RETRO_HW_FRAME_BUFFER_VALID || !width || !height || width > 4096 || height > 4096) return;
     const size_t bpp = h->pixelFormat_ == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2;
     if (pitch < width * bpp) return;
-    QImage result(int(width), int(height), QImage::Format_RGB32);
-    if (result.isNull()) return;
-    for (unsigned y = 0; y < height; ++y) {
-        const auto* source = static_cast<const unsigned char*>(data) + pitch * y;
-        auto* out = reinterpret_cast<QRgb*>(result.scanLine(int(y)));
-        for (unsigned x = 0; x < width; ++x) {
-            if (bpp == 4) { quint32 p; std::memcpy(&p, source + x * 4, 4); out[x] = p | 0xff000000u; }
-            else {
-                quint16 p; std::memcpy(&p, source + x * 2, 2);
-                const bool rgb565 = h->pixelFormat_ == RETRO_PIXEL_FORMAT_RGB565;
-                unsigned r = (p >> (rgb565 ? 11 : 10)) & 31;
-                unsigned g = (p >> 5) & (rgb565 ? 63 : 31);
-                unsigned b = p & 31;
-                out[x] = qRgb((r << 3) | (r >> 2), rgb565 ? ((g << 2) | (g >> 4)) : ((g << 3) | (g >> 2)), (b << 3) | (b >> 2));
+    QImage result;
+    if (bpp == 2) {
+        // Qt uses its optimized RGB565/555 converter; the wrapped core buffer
+        // is read-only and convertToFormat owns the resulting frame pixels.
+        const QImage wrapped(static_cast<const uchar*>(data), int(width), int(height), qsizetype(pitch),
+            h->pixelFormat_ == RETRO_PIXEL_FORMAT_RGB565 ? QImage::Format_RGB16 : QImage::Format_RGB555);
+        result = wrapped.convertToFormat(QImage::Format_RGB32);
+    } else {
+        result = QImage(int(width), int(height), QImage::Format_RGB32);
+        if (!result.isNull()) for (unsigned y = 0; y < height; ++y) {
+            const auto* source = static_cast<const uchar*>(data) + pitch*y;
+            auto* out = reinterpret_cast<QRgb*>(result.scanLine(int(y)));
+            for (unsigned x = 0; x < width; ++x) {
+                quint32 pixel; std::memcpy(&pixel,source+x*4,4); out[x] = pixel | 0xff000000u;
             }
+        }
+    }
+    if (result.isNull()) return;
+    const auto filter = h->variables_.find("genesis_plus_gx_blargg_ntsc_filter");
+    if (filter != h->variables_.end() && filter->second != "disabled") {
+        // GPX update_viewport() filters the full viewport before removing the
+        // SMS left border. H40 uses 4->8 samples; H32/SMS/GG use 3->7. All
+        // native viewport widths (including overscan/GG crop) are multiples of 4.
+        const int full = int(h->av_.geometry.base_width);
+        const int crop = full - int(width);
+        int nativeFull = 0;
+        if (full > 0 && full % 8 == 0) {
+            const int minimum = full/8*4-1;
+            nativeFull = (minimum+3)/4*4;
+        } else if (full > 0 && full % 7 == 0) {
+            const int minimum = (full/7-1)*3;
+            const int candidate = (minimum+3)/4*4;
+            if (candidate <= minimum+2) nativeFull = candidate;
+        }
+        // GPX trims 20/40 filtered samples for the optional 8/16 native-pixel
+        // SMS border. Blargg leaves vertical/interlaced geometry unchanged.
+        if (nativeFull > 0 && crop >= 0 && crop <= 40 && crop % 20 == 0) {
+            const QSize native(nativeFull-crop*2/5,int(height));
+            if (VideoFrameGeometry::validSize(native)) VideoFrameGeometry::setNativeSize(result,native);
         }
     }
     h->frame_ = std::move(result);
@@ -549,7 +585,7 @@ void LibretroHost::video(const void* data, unsigned width, unsigned height, size
 void LibretroHost::audioSample(int16_t left, int16_t right) { const int16_t samples[2]{left,right}; audioBatch(samples,1); }
 size_t LibretroHost::audioBatch(const int16_t* data, size_t frames) {
     auto* h = active_;
-    if (h && data && frames <= 192000 && h->audio_.size() + qsizetype(frames * 4) <= 768000)
+    if (h && h->audioEnabled_ && data && frames <= 192000 && h->audio_.size() + qsizetype(frames * 4) <= 768000)
         h->audio_.append(reinterpret_cast<const char*>(data), qsizetype(frames * 4));
     return frames;
 }

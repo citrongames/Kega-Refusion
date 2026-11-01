@@ -17,7 +17,7 @@ public:
     ~LibretroHost();
     bool load(const QString& path, QString& error, int archiveIndex = -1);
     void unload();
-    void runFrame();
+    void runFrame(bool renderVideo = true, bool captureAudio = true);
     void reset();
     bool hardReset(QString& error);
     // Region: 0 Auto, 1 Japan, 2 USA, 3 Europe. Filter: 0 Off, 1 Mono,
@@ -40,6 +40,7 @@ public:
     double fps() const { return av_.timing.fps; }
     int sampleRate() const { return int(av_.timing.sample_rate); }
     double aspectRatio() const;
+    QSize nativeVideoSize() const;
     const QImage& frame() const { return frame_; }
     const QByteArray& audio() const { return audio_; }
     QString gamePath() const { return gamePath_; }
@@ -75,5 +76,6 @@ private:
     retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;
     QImage frame_;
     QByteArray audio_;
+    bool videoEnabled_ = true, audioEnabled_ = true;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
 };

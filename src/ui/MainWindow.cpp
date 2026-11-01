@@ -80,7 +80,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     recentPaths_ = settings_.value(QStringLiteral("recent/files")).toStringList();
     stateSlot_ = qBound(0, settings_.value(QStringLiteral("emulation/slot"), 0).toInt(), 9);
     fastForwardFactor_ = settings_.value(QStringLiteral("emulation/fastForwardFactor"), 4).toInt();
-    if (!QList<int>{2,3,4,6,8}.contains(fastForwardFactor_)) fastForwardFactor_ = 4;
+    if (!QList<int>{0,2,3,4,6,8,12,16,32}.contains(fastForwardFactor_)) fastForwardFactor_ = 4;
     rewindSeconds_ = settings_.value(QStringLiteral("emulation/rewindSeconds"), 30).toInt();
     if (!QList<int>{0,10,30,60}.contains(rewindSeconds_)) rewindSeconds_ = 30;
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
@@ -253,8 +253,8 @@ void MainWindow::buildMenus() {
     connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
     QMenu* speedMenu = emulationMenu->addMenu(QStringLiteral("Скорость ускорения"));
     auto* speedGroup = new QActionGroup(this);
-    for (int factor : {2,3,4,6,8}) {
-        QAction* action = speedMenu->addAction(QStringLiteral("×%1").arg(factor));
+    for (int factor : {2,3,4,6,8,12,16,32,0}) {
+        QAction* action = speedMenu->addAction(factor == 0 ? QStringLiteral("Без ограничения") : QStringLiteral("×%1").arg(factor));
         action->setCheckable(true); action->setChecked(factor == fastForwardFactor_);
         speedGroup->addAction(action);
         connect(action, &QAction::triggered, this, [this, factor] {

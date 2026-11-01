@@ -16,13 +16,13 @@ public:
     qsizetype bytesUsed() const { return bytesUsed_; }
 private:
     struct Patch { QByteArray bytes; qsizetype restoredSize = 0; bool delta = false; };
-    struct Entry { Patch state, pixels; QSize size; double aspect; };
+    struct Entry { Patch state, pixels; QSize size, nativeSize; double aspect; };
     static Patch encode(const QByteArray& older, const QByteArray& newer);
     static QByteArray decode(const Patch& patch, const QByteArray& newer);
     static qsizetype entryBytes(const Entry& entry);
     std::deque<Entry> entries_;
     QByteArray currentState_, currentPixels_;
-    QSize currentSize_;
+    QSize currentSize_, currentNativeSize_;
     double currentAspect_ = 4.0 / 3.0;
     size_t entryLimit_ = 0;
     qsizetype byteLimit_, bytesUsed_ = 0;

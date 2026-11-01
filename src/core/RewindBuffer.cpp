@@ -1,4 +1,5 @@
 #include "RewindBuffer.h"
+#include "VideoFrameGeometry.h"
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
@@ -84,7 +85,7 @@ void RewindBuffer::configure(int seconds, double snapshotsPerSecond) {
         ? size_t(std::clamp(seconds,1,60)*std::clamp(snapshotsPerSecond,1.0,120.0))+1 : 0;
 }
 void RewindBuffer::clear() {
-    entries_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {};
+    entries_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
     bytesUsed_ = 0;
 }
 bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect) {
@@ -97,13 +98,13 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     const qsizetype anchorBytes = state.size()+pixels.size();
     if (anchorBytes>byteLimit_) { clear(); return false; }
     if (!currentState_.isEmpty()) {
-        Entry previous{encode(currentState_,state),encode(currentPixels_,pixels),currentSize_,currentAspect_};
+        Entry previous{encode(currentState_,state),encode(currentPixels_,pixels),currentSize_,currentNativeSize_,currentAspect_};
         if (previous.state.bytes.isEmpty() || previous.pixels.bytes.isEmpty()) { clear(); return false; }
         bytesUsed_ += entryBytes(previous);
         entries_.push_back(std::move(previous));
     }
     bytesUsed_ += anchorBytes-currentState_.size()-currentPixels_.size();
-    currentState_ = state; currentPixels_ = pixels; currentSize_ = rgb.size(); currentAspect_ = aspect;
+    currentState_ = state; currentPixels_ = pixels; currentSize_ = rgb.size(); currentNativeSize_ = VideoFrameGeometry::nativeSize(frame); currentAspect_ = aspect;
     while (!entries_.empty() && (size()>entryLimit_ || bytesUsed_>byteLimit_)) {
         bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
     }
@@ -120,9 +121,10 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect) {
     QImage image(target.size,QImage::Format_RGB32);
     if (image.isNull() || image.sizeInBytes()!=pixels.size()) { clear(); return false; }
     std::memcpy(image.bits(),pixels.constData(),size_t(pixels.size()));
+    if (target.nativeSize != image.size()) VideoFrameGeometry::setNativeSize(image,target.nativeSize);
     bytesUsed_ += raw.size()+pixels.size()-currentState_.size()-currentPixels_.size()-entryBytes(target);
     currentState_ = std::move(raw); currentPixels_ = std::move(pixels);
-    currentSize_ = target.size; currentAspect_ = target.aspect;
+    currentSize_ = target.size; currentNativeSize_ = target.nativeSize; currentAspect_ = target.aspect;
     entries_.pop_back();
     // A size-changing older anchor can be larger than the newer one.
     while (!entries_.empty() && bytesUsed_>byteLimit_) {

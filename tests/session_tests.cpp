@@ -16,7 +16,8 @@ void waitFor(const std::function<bool()>& predicate){
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  try {
- require(argc==2,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
+ require(argc==2 || fastOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  const auto path=temp.filePath("original.md");QFile file(path);require(file.open(QIODevice::WriteOnly) && file.write(rom)==rom.size(),"ROM fixture");file.close();
@@ -28,6 +29,23 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(fastOnly){
+  std::atomic<bool> reversed{false};
+  QObject::connect(&session,&EmulationSession::rewindingChanged,&app,[&](bool value){reversed=value;},Qt::DirectConnection);
+  session.setFastForwardFactor(0);session.setFastForward(true);
+  const int initial=frames;waitFor([&]{return frames>=initial+8;});
+  session.setPaused(true);waitFor([&]{return paused;});
+  session.setFastForward(false);session.setRewind(true);
+  const int boundary=frames;QThread::msleep(100);QCoreApplication::processEvents();
+  require(frames==boundary && !reversed,"rewind crossed fast-forward gap or recorded accelerated frames");
+  session.setRewind(false);session.setPaused(false);waitFor([&]{return !paused && frames>=boundary+8;});
+  session.setPaused(true);waitFor([&]{return paused;});
+  session.setRewind(true);waitFor([&]{return reversed.load();});
+  require(frames>boundary+8,"rewind did not resume after fast-forward");
+  session.setRewind(false);session.shutdown();require(errors==0,"fast-forward session error");
+  std::puts("Unlimited fast-forward, no history across gap, normal rewind recording resumed: passed");
+  return 0;
+ }
  const int before=frames;QThread::msleep(180);QCoreApplication::processEvents();
  require(frames>before+5,"GUI stall stopped emulation worker");require(ready==1,"video notifications accumulated without consumer");
  QImage image;double aspect=0;require(session.takeVideoFrame(image,aspect)&&!image.isNull(),"latest frame unavailable");

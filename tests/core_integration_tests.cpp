@@ -2,6 +2,7 @@
 #include <archive_entry.h>
 #include "core/RewindBuffer.h"
 #include "core/LibretroHost.h"
+#include "core/VideoFrameGeometry.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -607,6 +608,52 @@ void testChecksumFix(const QString& corePath) {
     require(qRed(pixel) > qGreen(pixel)+64, "ambiguous non-MD header was modified");
 }
 
+void testNativeVideoGeometry(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "native video geometry temp failed");
+    auto md40 = makeDiagnosticRom(false);
+    auto md32 = md40;
+    const int reg12 = md32.indexOf(QByteArray::fromHex("33fc8c81"));
+    require(reg12 > 0,"H40 fixture register missing"); md32[reg12+3] = 0;
+    QByteArray sms(32*1024,char(0));
+    // Original Z80 diagnostic: configure VDP Mode4 and enable display, then idle.
+    const auto program = QByteArray::fromHex("f331f0df3e04d3bf3e80d3bf3e40d3bf3e81d3bf18fe");
+    sms.replace(0,program.size(),program); sms.replace(0x7ff0,8,"TMR SEGA"); sms[0x7fff] = char(0x4c);
+    auto gg = sms; gg[0x7fff] = char(0x6c);
+    const std::array<std::pair<QString,QByteArray>,4> cases{{
+        {"wide.md",md40},{"narrow.md",md32},{"master.sms",sms},{"handheld.gg",gg}
+    }};
+    LibretroHost host(corePath,temp.path()+"/data"); QString error;
+    RewindBuffer history; history.configure(10,30);
+    for (const auto& [name,rom] : cases) {
+        const QString path = temp.path()+'/'+name; writeFile(path,rom);
+        require(host.setBlarggFilter(0,error) && host.load(path,error),"geometry ROM load failed");
+        for (int i = 0; i < 3; ++i) host.runFrame();
+        const QSize native = host.frame().size();
+        const int expectedWidth = name.endsWith(".gg") ? 160 : name.startsWith("wide") ? 320 : 256;
+        require(native.width() == expectedWidth,"unexpected native diagnostic raster width");
+        require(host.nativeVideoSize() == native,"unfiltered native geometry incorrect");
+        for (int filter : {1,2,3,4}) {
+            require(host.setBlarggFilter(filter,error),"geometry Blargg toggle failed");
+            for (int i = 0; i < 3; ++i) host.runFrame();
+            require(host.frame().width() > native.width() && host.frame().height() == native.height(),
+                    "diagnostic Blargg did not expand horizontal sample count");
+            require(host.nativeVideoSize() == native && VideoFrameGeometry::nativeSize(host.frame()) == native,
+                    "Blargg metadata lost true native console geometry");
+            history.clear();
+            require(history.capture(host.captureRewindState(),host.frame(),host.aspectRatio()),"filtered geometry capture failed");
+            host.runFrame();
+            require(history.capture(host.captureRewindState(),host.frame(),host.aspectRatio()),"second geometry capture failed");
+            QByteArray state; QImage frame; double aspect;
+            require(history.stepBack(state,frame,aspect) && VideoFrameGeometry::nativeSize(frame) == native,
+                    "rewind rebuilt filtered pixels without native geometry");
+        }
+        require(host.setBlarggFilter(0,error),"geometry disable filter failed");
+        for (int i = 0; i < 3; ++i) host.runFrame();
+        require(host.frame().size() == native && host.nativeVideoSize() == native,
+                "disabling filter retained expanded sample geometry");
+    }
+}
+
 void testRewind(const QString& corePath) {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create rewind test directory");
@@ -666,17 +713,22 @@ void testRewind(const QString& corePath) {
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
-    if (argc != 2) {
+    if (argc != 2 && !(argc == 3 && QString::fromLocal8Bit(argv[2]) == QLatin1String("--video-geometry"))) {
         std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so\n");
         return 2;
     }
     try {
+        if (argc == 3) {
+            testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
+            std::puts("native filtered video geometry passed"); return 0;
+        }
         testCore(QString::fromLocal8Bit(argv[1]));
         testSaveRam(QString::fromLocal8Bit(argv[1]));
         testRewind(QString::fromLocal8Bit(argv[1]));
         testArchiveCore(QString::fromLocal8Bit(argv[1]));
         testCoreOptionsAndReset(QString::fromLocal8Bit(argv[1]));
         testChecksumFix(QString::fromLocal8Bit(argv[1]));
+        testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
         std::puts("core integration tests passed");
         return 0;
     } catch (const std::exception& exception) {

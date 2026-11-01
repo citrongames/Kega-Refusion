@@ -52,7 +52,7 @@ void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
 void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < 2) buttons_[port].store(mask & 0xffffu); }
 void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store(0); }
 void EmulationSession::setFastForward(bool enabled) { fastForward_.store(enabled); }
-void EmulationSession::setFastForwardFactor(int factor) { fastForwardFactor_.store(std::clamp(factor, 2, 8)); }
+void EmulationSession::setFastForwardFactor(int factor) { fastForwardFactor_.store(factor == 0 ? 0 : std::clamp(factor, 2, 32)); }
 void EmulationSession::setRewind(bool enabled) { rewind_.store(enabled); }
 void EmulationSession::setRewindSeconds(int seconds) { rewindSeconds_.store(std::clamp(seconds, 0, 60)); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
@@ -83,7 +83,7 @@ void EmulationSession::run() {
     auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
     auto lastFlush = Clock::now();
     bool optionsPending = false, fastLatched = false;
-    unsigned fastFrame = 0;
+    qint64 nextPresentationNs = 0;
     while (!quitting_.load()) {
         std::deque<Command> pending;
         { std::lock_guard<std::mutex> lock(mutex_); pending.swap(commands_); }
@@ -202,21 +202,32 @@ void EmulationSession::run() {
             continue;
         }
         if (!host.loaded() || nowPaused) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
+        const bool fast = fastForward_.load();
+        if (fast != fastLatched) {
+            fastLatched = fast; clearAudio(); pacer.reset(nowNs()); nextPresentationNs = 0;
+            // Fast-forward creates a gap: discard the old timeline so rewind
+            // cannot jump across it when normal recording resumes.
+            if (fast) clearHistory();
+        }
+        const int factor = fast ? fastForwardFactor_.load() : 1;
+        const bool present = !fast || nowNs() >= nextPresentationNs;
         for (unsigned port = 0; port < 2; ++port) host.setButtons(port,buttons_[port].load());
-        host.runFrame();
+        // Fast-forward omits unseen rendering, PCM copies and rewind recording.
+        // Emulated CPU/audio state still advances normally.
+        host.runFrame(!fast || present || optionsPending, !fast);
         if (optionsPending) {
             optionsPending = false; clearHistory(); clearAudio(); pacer.reset(nowNs());
         }
-        if (historySeconds && historyHealthy && ++captureFrame % 2 == 0) {
+        if (!fast && historySeconds && historyHealthy && ++captureFrame % 2 == 0) {
             if (!history.capture(host.captureRewindState(),host.frame(),host.aspectRatio())) {
                 history.clear(); historyHealthy = false;
                 emit notification(QStringLiteral("История перемотки недоступна для текущей игры."));
             }
         }
-        const bool fast = fastForward_.load();
-        if (fast != fastLatched) { fastLatched = fast; clearAudio(); pacer.reset(nowNs()); }
-        const int factor = fast ? fastForwardFactor_.load() : 1;
-        if (!fast || (++fastFrame % unsigned(factor) == 0)) publishVideo(host.frame(),host.aspectRatio());
+        if (present) {
+            publishVideo(host.frame(),host.aspectRatio());
+            nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
+        }
         if (!fast && !host.audio().isEmpty()) emit audioSamples(host.audio(),host.sampleRate());
         const auto now = Clock::now();
         if (now - lastFlush > std::chrono::seconds(5)) {
@@ -226,8 +237,10 @@ void EmulationSession::run() {
         }
         const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
             audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
-        const auto deadline = pacer.next(nowNs(),qint64(1000000000.0 * clockScale / (host.fps() * factor)));
-        waiter.waitUntil(deadline);
+        if (factor != 0) {
+            const auto deadline = pacer.next(nowNs(),qint64(1000000000.0 * clockScale / (host.fps() * factor)));
+            waiter.waitUntil(deadline);
+        } else pacer.reset(nowNs());
     }
     host.unload();
     loaded_.store(false);

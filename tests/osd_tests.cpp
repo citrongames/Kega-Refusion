@@ -1,4 +1,5 @@
 #include "ui/GameView.h"
+#include "core/VideoFrameGeometry.h"
 
 #include <QApplication>
 #include <QEventLoop>
@@ -71,6 +72,37 @@ void testGameBorders() {
     require(image.pixelColor(320, 0) == Qt::black &&
             image.pixelColor(320, 719) == Qt::black,
             "letterbox fields around loaded game are not black");
+}
+
+void testFilteredSquarePixels() {
+    const std::array<std::pair<QSize,QSize>,6> sizes{{
+        {{256,224},{602,224}}, {{320,224},{640,224}},
+        {{248,192},{582,192}}, {{240,192},{562,192}},
+        {{320,448},{640,448}}, {{160,144},{378,144}}
+    }};
+    const QColor colour(37,58,81);
+    for (const auto& [native,samples] : sizes) {
+        GameView view; view.resize(1100,900); view.setOsdEnabled(false);
+        QImage raw(native,QImage::Format_RGB32); raw.fill(colour);
+        QImage filtered(samples,QImage::Format_RGB32); filtered.fill(colour);
+        VideoFrameGeometry::setNativeSize(filtered,native);
+        for (bool integer : {false,true}) {
+            view.setIntegerScaling(integer);
+            for (const auto mode : {GameView::AspectMode::SquarePixels,GameView::AspectMode::Console,
+                                    GameView::AspectMode::Stretch}) {
+                view.setAspectMode(mode);
+                view.setFrame(raw,4.0/3.0); const QRect expected = colorBounds(render(view),colour);
+                view.setFrame(filtered,4.0/3.0); const QRect actual = colorBounds(render(view),colour);
+                require(actual == expected, "filtered sample width changed native display rectangle");
+            }
+        }
+        filtered.setText(VideoFrameGeometry::nativeWidthKey,QStringLiteral("999999999999999999999"));
+        require(VideoFrameGeometry::nativeSize(filtered) == samples,"invalid geometry metadata was not bounded");
+    }
+    GameView maximum,regular; prepare(maximum); prepare(regular);
+    maximum.setFastForwardFactor(0); regular.setFastForwardFactor(1);
+    maximum.setFastForwardStatus(true); regular.setFastForwardStatus(true);
+    require(render(maximum) != render(regular),"maximum speed still displayed a numeric factor");
 }
 
 void testUpperLeftBounds() {
@@ -319,7 +351,12 @@ void testStateSlotExpiry() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--aspect-only"))) {
+            testFilteredSquarePixels();
+            std::puts("filtered square-pixel geometry passed"); return 0;
+        }
         testGameBorders();
+        testFilteredSquarePixels();
         testUpperLeftBounds();
         testOnlyLatestAction();
         testStatusRelease();

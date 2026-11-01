@@ -1,4 +1,5 @@
 #include "GameView.h"
+#include "../core/VideoFrameGeometry.h"
 
 #include <QFontDatabase>
 #include <QFontMetrics>
@@ -238,7 +239,7 @@ void GameView::setFastForwardStatus(bool enabled) {
 }
 
 void GameView::setFastForwardFactor(int factor) {
-    factor = qMax(1, factor);
+    factor = qMax(0, factor);
     if (fastForwardFactor_ == factor) return;
     fastForwardFactor_ = factor;
     if (fastForward_) repaintView();
@@ -303,7 +304,7 @@ void GameView::paintOsd(QPainter& painter) {
     if (paused_)
         y += drawPanel({QStringLiteral("ПАУЗА")}, margin, y, true) + 4;
     if (fastForward_)
-        y += drawPanel({QStringLiteral("УСКОРЕНИЕ ×%1").arg(fastForwardFactor_)},
+        y += drawPanel({fastForwardFactor_ ? QStringLiteral("УСКОРЕНИЕ ×%1").arg(fastForwardFactor_) : QStringLiteral("УСКОРЕНИЕ МАКС.")},
                        margin, y, true) + 4;
     if (rewinding_)
         y += drawPanel({QStringLiteral("ПЕРЕМОТКА НАЗАД")}, margin, y, true) + 4;
@@ -411,10 +412,11 @@ GameView::~GameView() {
 
 QRectF GameView::gameRect() const {
     if (frame_.isNull()) return {};
+        const QSize native = VideoFrameGeometry::nativeSize(frame_);
         const double desiredAspect =
             aspectMode_ == AspectMode::Stretch ? double(width()) / qMax(1, height()) :
             aspectMode_ == AspectMode::SquarePixels
-                ? double(frame_.width()) / qMax(1, frame_.height()) : aspectRatio_;
+                ? double(native.width()) / qMax(1, native.height()) : aspectRatio_;
 
         double targetWidth = width();
         double targetHeight = targetWidth / desiredAspect;
@@ -424,8 +426,8 @@ QRectF GameView::gameRect() const {
         }
 
         if (integerScaling_ && aspectMode_ != AspectMode::Stretch) {
-            const double baseWidth = frame_.height() * desiredAspect;
-            const double baseHeight = frame_.height();
+            const double baseWidth = native.height() * desiredAspect;
+            const double baseHeight = native.height();
             const int factor = qFloor(qMin(double(width()) / baseWidth,
                                            double(height()) / baseHeight));
             if (factor >= 1) {
