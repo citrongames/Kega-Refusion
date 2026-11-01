@@ -6,7 +6,7 @@
 
 struct DiscImage {
     QString path;
-    QByteArray hash;
+    QByteArray hash; // Cheap path-derived namespace for virtual MP3 files, not save identity.
     struct File { QString path; qint64 size; QDateTime modified; };
     struct Track { QString alias, source; bool mp3; };
     QVector<File> files;

@@ -47,6 +47,35 @@ bool validAvInfo(const retro_system_av_info& av) {
         av.timing.sample_rate >= 8000 && av.timing.sample_rate <= 192000;
 }
 QByteArray digest(const QByteArray& data) { return QCryptographicHash::hash(data, QCryptographicHash::Sha256); }
+QString readableSaveStem(QString fileName) {
+    fileName.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QString stem = QFileInfo(fileName).completeBaseName().left(256);
+    QString name; name.reserve(180);
+    int bytes = 0;
+    for (uint cp : stem.toUcs4()) {
+        if (cp < 32 || cp == 127 || cp == '<' || cp == '>' || cp == ':' || cp == '"' ||
+            cp == '/' || cp == '\\' || cp == '|' || cp == '?' || cp == '*') cp = '_';
+        const int length = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+        if (bytes + length > 180) break;
+        bytes += length;
+        if (cp <= 0xffff) name.append(QChar(ushort(cp)));
+        else { name.append(QChar(QChar::highSurrogate(cp))); name.append(QChar(QChar::lowSurrogate(cp))); }
+    }
+    name = name.trimmed();
+    while (!name.isEmpty() && (name.back() == QLatin1Char('.') || name.back().isSpace())) name.chop(1);
+    if (name.isEmpty()) name = QStringLiteral("game");
+    const QString device = name.section(QLatin1Char('.'), 0, 0).toUpper();
+    const bool numbered = device.size() == 4 &&
+        (device.startsWith(QLatin1String("COM")) || device.startsWith(QLatin1String("LPT"))) &&
+        ((device[3] >= QLatin1Char('1') && device[3] <= QLatin1Char('9')) ||
+         device[3].unicode() == 0xb9 || device[3].unicode() == 0xb2 || device[3].unicode() == 0xb3);
+    if (numbered || device == QLatin1String("CON") || device == QLatin1String("PRN") ||
+        device == QLatin1String("AUX") || device == QLatin1String("NUL") ||
+        device == QLatin1String("CONIN$") || device == QLatin1String("CONOUT$") || device == QLatin1String("CLOCK$"))
+        name.prepend(QLatin1Char('_'));
+    return name;
+}
+
 bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
@@ -167,15 +196,18 @@ void LibretroHost::setDiscIdentity() {
     contentInfo_.ext = contentExtension_.constData();
     // Disc CPU states also depend on the selected region and installed BIOS.
     // Keep them separate from states made with another boot ROM/region.
-    QByteArray identity = discs_[discIndex_].hash;
+    const QFileInfo original(discs_[discIndex_].path);
+    gameKey_ = readableSaveStem(original.fileName());
+    legacyGameKey_.clear(); // Never read/hash the whole disc to locate old saves.
+    QByteArray identity = QByteArrayLiteral("KegaRefusion-CD-name-v1:") + original.completeBaseName().toUtf8() + '\0';
     const auto region = optionOverrides_.find("genesis_plus_gx_region_detect");
     identity += region == optionOverrides_.end() ? QByteArray("auto") : region->second;
+    identity += '\0';
     for (const auto* code : {"J","U","E"}) {
         QFile bios(dataPath_ + "/bios/bios_CD_" + code + ".bin");
         identity += bios.open(QIODevice::ReadOnly) && bios.size() == 131072 ? digest(bios.readAll()) : QByteArray(32,'\0');
     }
     romHash_ = digest(identity);
-    gameKey_ = QString::fromLatin1(romHash_.toHex());
 }
 bool LibretroHost::refreshDiscFiles(QString& error) {
     CoreFileSystem::clearVirtualFiles();
@@ -415,7 +447,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     gamePath_ = info.absoluteFilePath();
     contentName_ = name;
     romHash_ = digest(content_);
-    gameKey_ = QString::fromLatin1(romHash_.toHex());
+    legacyGameKey_ = QString::fromLatin1(romHash_.toHex());
+    gameKey_ = readableSaveStem(name);
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_)) {
         error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука."); unload(); return false;
@@ -438,7 +471,7 @@ void LibretroHost::unload() {
     CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0;
     contentInfo_ = {}; contentInfoActive_ = false;
-    content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); contentName_.clear(); romHash_.clear();
+    content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); legacyGameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
     controllerDevices_.fill(~0u);
     saveRamWritable_ = true;
@@ -629,10 +662,20 @@ bool LibretroHost::unserialize(const QByteArray& state) {
     return true;
 }
 QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + QStringLiteral(".slot%1.krs").arg(slot); }
+QString LibretroHost::saveReadPath(const QString& directory, const QString& suffix) const {
+    const QString prefix = dataPath_ + QLatin1Char('/') + directory + QLatin1Char('/');
+    const QString preferred = prefix + gameKey_ + suffix;
+    const QFileInfo existing(preferred);
+    // A present but invalid new file must be reported, never masked by a legacy
+    // fallback. No legacy source file is renamed, overwritten or removed.
+    return !existing.exists() && !existing.isSymLink() && !legacyGameKey_.isEmpty()
+        ? prefix + legacyGameKey_ + suffix : preferred;
+}
+
 unsigned LibretroHost::occupiedStateSlots() const {
     unsigned mask = 0;
     if (loaded_) for (int slot = 0; slot < 10; ++slot)
-        if (QFileInfo(statePath(slot)).isFile()) mask |= 1u << slot;
+        if (QFileInfo(saveReadPath(QStringLiteral("states"), QStringLiteral(".slot%1.krs").arg(slot))).isFile()) mask |= 1u << slot;
     return mask;
 }
 QByteArray LibretroHost::captureRewindState() const {
@@ -695,7 +738,7 @@ bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) 
     if (failure) *failure = StateLoadError::Failed;
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
     if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед загрузкой состояния."); return false; }
-    QFile file(statePath(slot));
+    QFile file(saveReadPath(QStringLiteral("states"), QStringLiteral(".slot%1.krs").arg(slot)));
     if (!file.open(QIODevice::ReadOnly)) {
         if (!QFileInfo::exists(file.fileName())) {
             if (failure) *failure = StateLoadError::Missing;
@@ -765,7 +808,7 @@ bool LibretroHost::restoreSaveRam(QString& error) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         auto data = api_->get_memory_data(id);
         if (!size || !data) continue;
-        QFile file(dataPath_ + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm"));
+        QFile file(saveReadPath(QStringLiteral("saves"), id == RETRO_MEMORY_RTC ? QStringLiteral(".rtc") : QStringLiteral(".srm")));
         if (!file.exists()) continue;
         if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > qint64(size) ||
             (id == RETRO_MEMORY_RTC && file.size() != qint64(size))) {

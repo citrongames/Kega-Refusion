@@ -39,6 +39,7 @@ protected:
 private:
     void buildMenus();
     void openGameDialog();
+    void setLoadingUi(bool loading, const QString& fileName = {});
     void saveScreenshot();
     void updateRecentMenu();
     void editSegaCdBios();

@@ -26,6 +26,7 @@ public:
     QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
     bool setShaderParameter(const QString& id, float value);
     void setFrame(const QImage& frame, double aspectRatio);
+    void setLoading(bool loading, const QString& fileName = {});
     QImage captureImage();
     QImage captureGameImage();
     void setAspectMode(AspectMode mode);
@@ -76,6 +77,7 @@ private:
     };
     void expireOsd();
     void paintOsd(QPainter& painter);
+    void paintLoading(QPainter& painter);
 
     QImage frame_;
     double aspectRatio_ = 4.0 / 3.0;
@@ -83,6 +85,8 @@ private:
     bool integerScaling_ = false;
     bool osdEnabled_ = true;
     bool capturingGame_ = false;
+    bool loading_ = false;
+    QString loadingFileName_;
     bool paused_ = false;
     bool muted_ = false;
     bool fastForward_ = false;

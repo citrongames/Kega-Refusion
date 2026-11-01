@@ -76,6 +76,7 @@ private:
     void setDiscIdentity();
     bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error);
     QString statePath(int slot) const;
+    QString saveReadPath(const QString& directory, const QString& suffix) const;
     bool restoreSaveRam(QString& error);
     bool updateSaveRam(qint64 nowMs, bool force, QString& error);
     static bool environment(unsigned command, void* data);
@@ -87,7 +88,7 @@ private:
     static thread_local LibretroHost* active_;
     QLibrary library_;
     std::unique_ptr<Api> api_;
-    QString dataPath_, gamePath_, gameKey_, contentName_;
+    QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
     QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_;
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};

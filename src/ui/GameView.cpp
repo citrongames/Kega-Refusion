@@ -121,6 +121,7 @@ protected:
             QPainter painter(this);
             owner_->paintRaster(painter);
             owner_->paintOsd(painter);
+            owner_->paintLoading(painter);
             return;
         }
         const qreal dpr = devicePixelRatioF();
@@ -141,6 +142,7 @@ protected:
         }
         painter.endNativePainting();
         owner_->paintOsd(painter); // Native-resolution OSD is never filtered.
+        owner_->paintLoading(painter);
     }
 private:
     void failed(const QString& error) {
@@ -205,6 +207,20 @@ void GameView::setFrame(const QImage& frame, double aspectRatio) {
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
     repaintView();
+}
+
+void GameView::setLoading(bool loading, const QString& fileName) {
+    const QString name = loading ? fileName.left(220) : QString();
+    if (loading_ == loading && loadingFileName_ == name) return;
+    loading_ = loading;
+    loadingFileName_ = name;
+    repaintView();
+    if (loading && isVisible()) {
+        // One immediate presentation also precedes a synchronous archive scan.
+        // Do not process input/events recursively or start an animation timer.
+        if (shaderView_ && shaderView_->isVisible()) shaderView_->repaint();
+        QWidget::repaint();
+    }
 }
 
 void GameView::setAspectMode(AspectMode mode) {
@@ -395,6 +411,36 @@ void GameView::paintOsd(QPainter& painter) {
     }
 }
 
+void GameView::paintLoading(QPainter& painter) {
+    if (!loading_ || capturingGame_) return;
+    painter.save();
+    painter.fillRect(rect(), QColor(0, 0, 0, 148));
+    const int panelWidth = qMin(560, width() - 40);
+    const int panelHeight = loadingFileName_.isEmpty() ? 76 : 108;
+    const QRect panel((width() - panelWidth) / 2, (height() - panelHeight) / 2,
+                      panelWidth, panelHeight);
+    painter.fillRect(panel, QColor(17, 20, 27, 242));
+    painter.setPen(QColor(126, 224, 233));
+    painter.drawRect(panel.adjusted(0, 0, -1, -1));
+    QFont title = font();
+    title.setPixelSize(20);
+    title.setBold(true);
+    painter.setFont(title);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setPen(QColor(244, 249, 250));
+    painter.drawText(panel.adjusted(18, 16, -18, -16), Qt::AlignHCenter | Qt::AlignTop,
+                     QStringLiteral("Загрузка…"));
+    if (!loadingFileName_.isEmpty()) {
+        QFont detail = font();
+        detail.setPixelSize(14);
+        painter.setFont(detail);
+        const QString text = QFontMetrics(detail).elidedText(loadingFileName_, Qt::ElideMiddle, panelWidth - 36);
+        painter.setPen(QColor(188, 196, 211));
+        painter.drawText(panel.adjusted(18, 58, -18, -16), Qt::AlignHCenter | Qt::AlignTop, text);
+    }
+    painter.restore();
+}
+
 QRect GameView::openArea() const {
     // The visible plus is 54x54. Keep a larger target around it without
     // making the entire placeholder clickable.
@@ -403,7 +449,7 @@ QRect GameView::openArea() const {
 }
 
 void GameView::mousePressEvent(QMouseEvent* event) {
-    if (frame_.isNull() && event->button() == Qt::LeftButton &&
+    if (!loading_ && frame_.isNull() && event->button() == Qt::LeftButton &&
         openArea().contains(event->position().toPoint())) {
         emit openGameRequested();
         event->accept();
@@ -499,6 +545,7 @@ void GameView::paintEvent(QPaintEvent*) {
     }
     paintRaster(painter);
     paintOsd(painter);
+    paintLoading(painter);
 }
 
 void GameView::repaintView() {

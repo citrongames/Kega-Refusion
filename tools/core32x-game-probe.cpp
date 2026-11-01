@@ -25,7 +25,7 @@ namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -154,6 +154,8 @@ int main(int argc, char** argv) {
     bool inputSpecified = false, stateCheck = false, resetCheck = false, filterSpecified = false;
     int filter = 0, checkpoint = 0, extraStart = -1, extraPlay = -1;
     QString saveRawState, loadRawState;
+    int heldAt = -1, heldCount = 0;
+    unsigned heldMask = 0;
     bool recordRewind = false, port2Disconnected = false;
     for (int i = 6; i < args.size(); ++i) {
         const auto& option = args[i];
@@ -181,6 +183,15 @@ int main(int argc, char** argv) {
             if (extraPlay >= 0 || !valid || value < 0 || value + 4 > frames)
                 return usage(QStringLiteral("--play-at must leave four input frames."));
             extraPlay = value;
+        } else if (option.startsWith(QLatin1String("--buttons="))) {
+            const auto parts = option.mid(10).split(QLatin1Char(':'));
+            bool atOk = false, countOk = false, maskOk = false;
+            if (parts.size() != 3 || heldAt >= 0) return usage(QStringLiteral("Use --buttons=FRAME:COUNT:MASK once."));
+            heldAt = parts[0].toInt(&atOk); heldCount = parts[1].toInt(&countOk);
+            heldMask = parts[2].toUInt(&maskOk, 0);
+            if (!atOk || !countOk || !maskOk || heldAt < 0 || heldAt >= frames ||
+                heldCount < 1 || heldCount > frames - heldAt || heldMask > 0xffff)
+                return usage(QStringLiteral("Button interval or libretro mask is out of range."));
         } else if (option == QLatin1String("--port2-disconnected")) {
             port2Disconnected = true;
         } else if (option == QLatin1String("--record-rewind")) {
@@ -271,6 +282,7 @@ int main(int argc, char** argv) {
                 // GPX maps Mega Drive A/B/C to libretro Y/B/A respectively.
                 buttons |= (1u << RETRO_DEVICE_ID_JOYPAD_Y) | (1u << RETRO_DEVICE_ID_JOYPAD_B) |
                            (1u << RETRO_DEVICE_ID_JOYPAD_A);
+            if (heldAt >= 0 && frame >= heldAt && frame < heldAt + heldCount) buttons |= heldMask;
             host.setButtons(0, buttons);
             const auto previous = host.frame().cacheKey();
             host.runFrame(true, true);
@@ -290,8 +302,8 @@ int main(int argc, char** argv) {
                 savePng(host.frame(), path);
                 std::fprintf(stderr, "checkpoint frame=%d video=%s\n", frame + 1,
                     frameHash(host.frame()).constData());
-                std::uint64_t raw[80]{};
-                if (debug && debug(raw, 80)) {
+                std::uint64_t raw[112]{};
+                if (debug && debug(raw, 112)) {
                     QJsonArray values;
                     for (auto value : raw) values.append(QString::number(value, 16));
                     std::fprintf(stderr, "debug %s\n",
@@ -343,6 +355,7 @@ int main(int argc, char** argv) {
             {"input", input == Input::Play ? "start_pulses_120_123_240_243_480_483_abc_600_603_720_723" :
                       input == Input::StartPulses ? "start_pulses_120_123_240_243_480_483" : "none"},
             {"filter", filter}, {"checkpoint_interval", checkpoint}, {"extra_start_frame", extraStart}, {"extra_play_frame", extraPlay},
+            {"held_buttons_frame", heldAt}, {"held_buttons_count", heldCount}, {"held_buttons_mask", qint64(heldMask)},
             {"rewind_recording", recordRewind}, {"rewind_bytes", qint64(history.bytesUsed())}, {"state_checks", stateChecks}, {"reset_checks", resetChecks},
             {"frames_requested", frames}, {"frames_run", frames},
             {"load_ms", loadMs}, {"elapsed_ms", elapsedMs},

@@ -161,7 +161,7 @@
 +    if (candidate < next) next = candidate;
 +  }
 +  if ((scd.regs[0x58>>1].byte.h & 0x80) && gfx.cyclesPerLine) {
-+    candidate = (int64_t)gfx.cycles + gfx.cyclesPerLine;
++    candidate = (int64_t)(int32_t)gfx.cycles + gfx.cyclesPerLine;
 +    if (candidate < next) next = candidate;
 +  }
 +  if (next < (int64_t)scd.cycles) next = scd.cycles;
@@ -255,9 +255,9 @@
 +    cdc_dma_update(scd.cycles);
 +  }
 +
-+  /* update GFX processing (if started) */
++  /* GFX time is signed relative to the frame, stored with uint32 wrap. */
 +  if ((scd.regs[0x58>>1].byte.h & 0x80) && gfx.cyclesPerLine &&
-+      ((int64_t)scd.cycles >= (int64_t)gfx.cycles + gfx.cyclesPerLine))
++      ((int64_t)scd.cycles >= (int64_t)(int32_t)gfx.cycles + gfx.cyclesPerLine))
 +  {
 +    gfx_update(scd.cycles);
 +  }

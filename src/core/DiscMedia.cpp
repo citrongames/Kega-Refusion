@@ -22,10 +22,10 @@ QString resolved(const QString& directory, QString path) {
     path.replace('\\','/');
     return QDir::cleanPath(QFileInfo(QDir(directory).filePath(path)).absoluteFilePath());
 }
-bool hashFile(const QString& path, QCryptographicHash& hash, QString& error) {
+bool readableFile(const QString& path, QString& error) {
     if (!validPath(path,error)) return false;
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > 8LL*1024*1024*1024 || !hash.addData(&file)) {
+    if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > 8LL*1024*1024*1024) {
         error = QStringLiteral("Не удалось прочитать образ или дорожку: %1").arg(path); return false;
     }
     return true;
@@ -58,8 +58,8 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
     if (!validPath(absolute,error)) return false;
     if (extension == "iso") {
         const auto sidecar = info.absolutePath() + '/' + info.completeBaseName() + ".cue";
-        // GPX also opens an ISO's CUE sidecar. Include its complete track set
-        // in identity/validation so changed audio tracks cannot reuse a state.
+        // GPX also opens an ISO's CUE sidecar. Validate its complete track set
+        // without scanning the contents of the disc.
         if (QFileInfo(sidecar).isFile()) return inspect(sidecar,image,error);
     }
     QFile source(absolute);
@@ -67,7 +67,10 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
         error = QStringLiteral("Не удалось открыть образ: %1").arg(absolute); return false;
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    hash.addData(QByteArray("KegaRefusion-CD-v1:"));
+    // Private in-memory MP3 alias namespace only, not save-file identity.
+    // Hashing the path is constant work; disc contents are streamed by GPX.
+    hash.addData(QByteArray("KegaRefusion-CD-path-v1:"));
+    hash.addData(absolute.toUtf8());
     int region = 0;
     bool needs32x = false;
     QVector<DiscImage::File> files{{absolute,info.size(),info.lastModified()}};
@@ -79,7 +82,6 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
         const QString cue = QString::fromUtf8(source.readAll());
         static const QRegularExpression fileLine(QStringLiteral(R"cue(^\s*FILE\s+(?:"([^"]+)"|(\S+))\s+(\S+)\s*$)cue"), QRegularExpression::CaseInsensitiveOption);
         QStringList tracks;
-        QByteArray layout;
         for (const auto& line : cue.split('\n')) {
             const auto match = fileLine.match(line.trimmed());
             if (match.hasMatch()) {
@@ -101,20 +103,15 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
                 const QString alias = QStringLiteral("track%1.%2").arg(tracks.size(),2,10,QChar('0')).arg(mp3 ? "wav" : QFileInfo(name).suffix());
                 aliases.append({alias,tracks.last(),mp3});
                 virtualCue += "FILE \"" + alias.toUtf8() + "\" " + (mp3 ? QByteArray("WAVE") : type.toUtf8()) + '\n';
-                layout += "FILE #" + QByteArray::number(tracks.size()) + " " + match.captured(3).toUpper().toUtf8() + '\n';
             } else {
-                layout += line.trimmed().toUtf8() + '\n';
                 virtualCue += line.trimmed().toUtf8() + '\n';
             }
         }
         if (tracks.isEmpty() || tracks.size() > 99 || !cue.contains(QRegularExpression(QStringLiteral("TRACK\\s+0?1\\s+MODE[12]/"),QRegularExpression::CaseInsensitiveOption))) {
             error = QStringLiteral("CUE не содержит поддерживаемую первую дорожку данных Sega CD."); return false;
         }
-        hash.addData(layout);
         for (const auto& track : tracks) {
-            QCryptographicHash trackHash(QCryptographicHash::Sha256);
-            if (!hashFile(track,trackHash,error)) return false;
-            hash.addData(trackHash.result());
+            if (!readableFile(track,error)) return false;
             const QFileInfo trackInfo(track);
             files.append({track,trackInfo.size(),trackInfo.lastModified()});
         }
@@ -130,9 +127,9 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
             error = QStringLiteral("Файл не похож на образ Sega CD: %1").arg(info.fileName()); return false;
         }
         if (extension != "chd") needs32x = headerNeeds32x(header);
-        QCryptographicHash imageHash(QCryptographicHash::Sha256);
-        if (!hashFile(absolute,imageHash,error)) return false;
-        hash.addData(extension.toUtf8()); hash.addData(imageHash.result());
+        if (source.size() <= 0 || source.size() > 8LL*1024*1024*1024) {
+            error = QStringLiteral("Некорректный размер образа Sega CD."); return false;
+        }
     }
     image = {};
     image.path = absolute; image.hash = hash.result(); image.region = region; image.needs32x = needs32x;

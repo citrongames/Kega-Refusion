@@ -158,7 +158,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear, Qt::DirectConnection);
     connect(audio_, &AudioOutput::clockFeedback, &session_, &EmulationSession::updateAudioClock, Qt::DirectConnection);
     connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName) {
-        loading_ = false;
+        setLoadingUi(false);
         currentRom_ = path;
         activeInputProfile_ = isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName));
         input_->setProfile(activeInputProfile_);
@@ -193,7 +193,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     connect(&session_, &EmulationSession::errorOccurred, this, [this](const QString& text) {
         if (loading_) input_->setProfile(activeInputProfile_);
-        loading_ = false;
+        setLoadingUi(false);
         updateInputEnabled();
         if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"), text);
     });
@@ -854,7 +854,14 @@ void MainWindow::saveScreenshot() {
     failed(QStringLiteral("не удалось подобрать свободное имя файла"));
 }
 
+void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
+    loading_ = loading;
+    view_->setLoading(loading, fileName);
+    if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading);
+}
+
 void MainWindow::openGameDialog() {
+    if (loading_) return;
     releaseInput();
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("Открыть игру"),
@@ -865,6 +872,7 @@ void MainWindow::openGameDialog() {
 }
 
 void MainWindow::openRom(const QString& path) {
+    if (loading_) return;
     const QFileInfo file(path);
     if (!file.exists() || !file.isFile()) {
         const QString text = QStringLiteral("Файл не найден: %1").arg(path);
@@ -872,15 +880,18 @@ void MainWindow::openRom(const QString& path) {
         return;
     }
     releaseInput();
+    setLoadingUi(true, file.fileName());
     std::optional<RomArchive::Entry> archiveEntry;
     if (RomArchive::isArchive(path)) {
         QString error;
         const auto entries = RomArchive::list(path, &error);
         if (!error.isEmpty() || entries.isEmpty()) {
+            if (!smokeTest_) setLoadingUi(false);
             if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"),
                 error.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") : error);
             // Let the session report the same failure to the smoke-test observer.
             if (smokeTest_) session_.loadGame(path);
+            else { view_->setFocus(); updateInputEnabled(); }
             return;
         }
         if (entries.size() == 1) archiveEntry = entries.first();
@@ -918,13 +929,14 @@ void MainWindow::openRom(const QString& path) {
             connect(list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
             list->setFocus();
             if (dialog.exec() != QDialog::Accepted || !list->currentItem()) {
+                setLoadingUi(false);
                 view_->setFocus();
+                updateInputEnabled();
                 return;
             }
             archiveEntry = entries.at(list->currentRow());
         }
     }
-    loading_ = true;
     // Queue the selected profile's port connections before the load command,
     // so the first emulated frame already has the correct console devices.
     input_->setProfile(isCdPath(path) ? ConsoleProfile::MegaDrive :
@@ -1189,6 +1201,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (loading_) { event->ignore(); return; }
     if (event->mimeData()->hasUrls()) {
         for (const QUrl& url : event->mimeData()->urls()) {
             if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
@@ -1201,6 +1214,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
 }
 
 void MainWindow::dropEvent(QDropEvent* event) {
+    if (loading_) { event->ignore(); return; }
     for (const QUrl& url : event->mimeData()->urls()) {
         if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
             openRom(url.toLocalFile());

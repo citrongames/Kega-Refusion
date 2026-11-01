@@ -247,9 +247,8 @@ QByteArray smdRom(const QByteArray& rom) {
     return result;
 }
 
-QString stateFile(const QString& dataPath, const QByteArray& rom, int slot) {
-    const auto key = QCryptographicHash::hash(rom, QCryptographicHash::Sha256).toHex();
-    return dataPath + "/states/" + QString::fromLatin1(key) + QStringLiteral(".slot%1.krs").arg(slot);
+QString stateFile(const QString& dataPath, const QString& name, int slot) {
+    return dataPath + "/states/" + QFileInfo(name).completeBaseName() + QStringLiteral(".slot%1.krs").arg(slot);
 }
 
 struct Output {
@@ -342,7 +341,7 @@ void testCore(const QString& corePath) {
     require(host.serialize() == beforeMissing, "missing save changed emulation state");
     error.clear();
     require(host.saveState(0, error), "could not save slot zero");
-    const QString slotZero = stateFile(dataPath, rom, 0);
+    const QString slotZero = stateFile(dataPath, romPath, 0);
     const QByteArray savedZero = readFile(slotZero);
     require(savedZero.size() > checkpoint.size(), "slot file lacks state envelope");
     const auto expectedNext = runAndCapture(host);
@@ -354,7 +353,7 @@ void testCore(const QString& corePath) {
 
     error.clear();
     require(host.saveState(9, error), "could not save slot nine");
-    const QString slotNine = stateFile(dataPath, rom, 9);
+    const QString slotNine = stateFile(dataPath, romPath, 9);
     const QByteArray savedNine = readFile(slotNine);
     require(savedNine.size() > checkpoint.size(), "slot nine file lacks state envelope");
     const auto expectedAfterSlotNine = runAndCapture(host);
@@ -384,7 +383,7 @@ void testCore(const QString& corePath) {
     writeFile(otherPath, otherRom);
     error.clear();
     require(host.load(otherPath, error), "variant ROM did not load");
-    const QString otherSlot = stateFile(dataPath, otherRom, 0);
+    const QString otherSlot = stateFile(dataPath, otherPath, 0);
     writeFile(otherSlot, savedZero);
     error.clear();
     requireRejected(host.loadState(0, error), error, "state from a different ROM was accepted");
@@ -411,9 +410,7 @@ void testSaveRam(const QString& corePath) {
     const QByteArray rom = makeSaveRamRom();
     const QString romPath = temp.path() + "/battery.md";
     writeFile(romPath, rom);
-    const QString key = QString::fromLatin1(
-        QCryptographicHash::hash(rom, QCryptographicHash::Sha256).toHex());
-    const QString savePath = dataPath + "/saves/" + key + ".srm";
+    const QString savePath = dataPath + "/saves/battery.srm";
     QString error;
 
     {
@@ -486,7 +483,7 @@ QByteArray packedRom(bool sevenZip, const QByteArray& rom, bool multiple = false
 }
 void testArchiveCore(const QString& corePath) {
     QTemporaryDir temp; require(temp.isValid(),"archive core temp failed");
-    const auto rom=makeTestRom(); const QString plain=temp.path()+"/plain.md";
+    const auto rom=makeTestRom(); const QString plain=temp.path()+"/generated.md";
     writeFile(plain,rom);
     LibretroHost host(corePath,temp.path()+"/data"); QString error;
     require(host.load(plain,error),"plain archive reference did not load");
@@ -621,9 +618,7 @@ void testCoreOptionsAndReset(const QString& corePath) {
     require(host.contentName() == selected && host.gamePath() == multi &&
             selected == "folder/second.md", "hard reset selected wrong archive member");
     require(before.right(0x10000) == after.right(0x10000), "hard reset lost SRAM bytes");
-    auto changedRom = battery; changedRom[0x125] = char(changedRom[0x125] ^ 1);
-    const auto key = QCryptographicHash::hash(changedRom, QCryptographicHash::Sha256).toHex();
-    const QString save = temp.path() + "/data/saves/" + QString::fromLatin1(key) + ".srm";
+    const QString save = temp.path() + "/data/saves/second.srm";
     const QByteArray oversized(0x10001, char(0x55));
     host.unload(); writeFile(save, oversized);
     require(host.load(multi, error, 1) && host.hardReset(error), "protected SRAM hard reset failed");
@@ -646,9 +641,8 @@ void testChecksumFix(const QString& corePath) {
         const QRgb badPixel = bad.pixel(bad.width()/2,bad.height()/2);
         require(qRed(badPixel) > qGreen(badPixel)+64, "bad checksum diagnostic did not fail in red");
         require(host.saveState(4,error), "checksum original-identity state save failed");
-        const auto source = name.endsWith(".zip") ? rom : original;
-        const QString slot = stateFile(temp.path()+"/data",source,4);
-        require(QFile::exists(slot), "state identity did not use original ROM bytes");
+        const QString slot = stateFile(temp.path()+"/data",host.contentName(),4);
+        require(QFile::exists(slot), "state filename did not use selected ROM name");
         const QString identity = host.contentName();
         require(host.setAutoFixChecksum(true,error) && host.hardReset(error), "checksum fix hard reset failed");
         for (int i = 0; i < 8; ++i) host.runFrame();
@@ -759,8 +753,7 @@ void testRewind(const QString& corePath) {
     require(host.restoreRewindState(initial), "could not rewind to original SRAM");
     require(host.flushSaveRam(error), "rewound SRAM flush failed");
     // Initial erased SRAM must replace a future save after restoring the checkpoint.
-    const QString key=QString::fromLatin1(QCryptographicHash::hash(rom,QCryptographicHash::Sha256).toHex());
-    const QString ram=temp.path()+"/data/saves/"+key+".srm";
+    const QString ram=temp.path()+"/data/saves/rewind.srm";
     if (QFile::exists(ram)) require(quint8(readFile(ram)[0])==0xff, "rewind retained future SRAM");
     history.configure(1,2);
     for (int i=0;i<10;++i) require(history.capture(states.back(),frames.back(),4.0/3.0), "bounded capture failed");
