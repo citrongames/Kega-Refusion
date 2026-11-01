@@ -27,6 +27,7 @@ public:
     bool setShaderParameter(const QString& id, float value);
     void setFrame(const QImage& frame, double aspectRatio);
     QImage captureImage();
+    QImage captureGameImage();
     void setAspectMode(AspectMode mode);
     void setIntegerScaling(bool enabled);
     void showOsd(const QString& message, int durationMs = 2600,
@@ -81,6 +82,7 @@ private:
     AspectMode aspectMode_ = AspectMode::Console;
     bool integerScaling_ = false;
     bool osdEnabled_ = true;
+    bool capturingGame_ = false;
     bool paused_ = false;
     bool muted_ = false;
     bool fastForward_ = false;

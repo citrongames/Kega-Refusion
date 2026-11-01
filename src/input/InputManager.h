@@ -57,6 +57,7 @@ signals:
     void devicesChanged();
     void maskChanged(unsigned player, unsigned mask);
     void commandChanged(int command, bool pressed);
+    void captureReady(); // all inputs released; waiting for the new binding
     void bindingCaptured(const PadBinding& binding);
     void captureCancelled();
     void notification(const QString& message);

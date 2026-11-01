@@ -198,6 +198,12 @@ void testInput() {
     manager.setEnabled(false);
     manager.poll();
 
+    const auto triggerBinding = SDL_GameControllerGetBindForAxis(
+        SDL_GameControllerFromInstanceID(first.id), SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+    require(triggerBinding.bindType == SDL_CONTROLLER_BINDTYPE_AXIS,
+            "virtual controller does not have an analog trigger");
+    const int triggerAxis = triggerBinding.value.axis;
+    first.axis(triggerAxis, -32768); // A real mapped trigger rests at its negative endpoint.
     first.button(0, true);
     manager.beginCapture("auto", 0);
     manager.poll();
@@ -214,17 +220,17 @@ void testInput() {
     require(manager.capturing() && captures == 1, "capture did not rearm after held button");
     first.button(5, false);
     manager.poll(); manager.poll();
-    first.axis(2, -32768); // common idle value for an analog trigger
+    first.axis(triggerAxis, -32768); // common idle value for an analog trigger
     manager.beginCapture("auto", 0);
     require(cancellations == 0, "re-arming capture emitted a cancellation");
     manager.poll(); manager.poll();
     require(manager.capturing() && captures == 1, "idle trigger was captured as input");
-    first.axis(2, 32767);
+    first.axis(triggerAxis, 32767);
     manager.poll();
-    require(captures == 2 && lastCapture == PadBinding{PadBinding::Axis, 2, 1},
+    require(captures == 2 && lastCapture == PadBinding{PadBinding::Axis, triggerAxis, 1},
             "trigger movement was not captured");
 
-    first.axis(2, -32768);
+    first.axis(triggerAxis, -32768);
     manager.beginCapture("auto", 0);
     first.close();
     manager.poll();
@@ -255,6 +261,76 @@ void testInput() {
     manager.poll();
     require(instanceIds(manager.devices()) == baseline,
             "disconnected virtual joysticks remained listed");
+}
+
+void testSequentialAxisCapture() {
+    for (const auto type : {SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_JOYSTICK_TYPE_UNKNOWN}) {
+        QTemporaryDir temp;
+        require(temp.isValid(), "cannot create sequential capture settings directory");
+        InputManager manager(temp.path() + "/settings.ini");
+        VirtualPad pad(type);
+        manager.poll();
+        const QString key = keyForId(manager.devices(), pad.id);
+        int triggerAxis = -1;
+        if (type == SDL_JOYSTICK_TYPE_GAMECONTROLLER) {
+            const auto binding = SDL_GameControllerGetBindForAxis(
+                SDL_GameControllerFromInstanceID(pad.id), SDL_CONTROLLER_AXIS_TRIGGERLEFT);
+            require(binding.bindType == SDL_CONTROLLER_BINDTYPE_AXIS,
+                    "sequential capture fixture has no analog trigger");
+            triggerAxis = binding.value.axis;
+            pad.axis(triggerAxis, -32768);
+            manager.poll();
+        }
+        QVector<PadBinding> captured;
+        QObject::connect(&manager, &InputManager::bindingCaptured, &manager,
+                         [&](const PadBinding& binding) { captured.push_back(binding); });
+        // The right stick/raw higher-numbered axis is centered like axis 1.
+        // The next wizard step begins before the previous direction is released.
+        for (const int axis : {1, 3}) {
+            manager.beginCapture(key, 0);
+            manager.poll(); manager.poll();
+            pad.axis(axis, -32768);
+            manager.poll();
+            require(!manager.capturing() && !captured.isEmpty() &&
+                        captured.back() == PadBinding{PadBinding::Axis, axis, -1},
+                    "sequential capture missed the first axis direction");
+            const auto before = captured.size();
+            manager.beginCapture(key, 0);
+            manager.poll(); // Release before two polls can mistake the held endpoint for neutral.
+            require(manager.capturing() && captured.size() == before,
+                    "next capture accepted the previous held direction");
+            pad.axis(axis, 0);
+            manager.poll(); manager.poll();
+            pad.axis(axis, 32767);
+            manager.poll();
+            require(!manager.capturing() && captured.size() == before + 1 &&
+                        captured.back() == PadBinding{PadBinding::Axis, axis, 1},
+                    "sequential capture missed Down after releasing Up on a centered axis");
+            pad.axis(axis, 0);
+            manager.poll();
+        }
+        if (triggerAxis >= 0) {
+            manager.beginCapture(key, 0);
+            manager.poll(); manager.poll();
+            pad.axis(triggerAxis, 32767);
+            manager.poll();
+            require(!manager.capturing() &&
+                        captured.back() == PadBinding{PadBinding::Axis, triggerAxis, 1},
+                    "mapped trigger was not captured after centered stick bindings");
+            const auto before = captured.size();
+            manager.beginCapture(key, 0); // The previous trigger is still pressed.
+            manager.poll();
+            pad.axis(triggerAxis, -32768);
+            manager.poll(); manager.poll();
+            pad.button(9, true);
+            manager.poll();
+            require(!manager.capturing() && captured.size() == before + 1 &&
+                        captured.back() == PadBinding{PadBinding::Button, 9, 0},
+                    "held trigger poisoned the next wizard step's neutral baseline");
+            pad.button(9, false);
+            manager.poll();
+        }
+    }
 }
 
 void testRewindCommand() {
@@ -602,6 +678,7 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
         testInput();
+        testSequentialAxisCapture();
         testRewindCommand();
         testHardResetCommand();
         testReservedRewindKey();

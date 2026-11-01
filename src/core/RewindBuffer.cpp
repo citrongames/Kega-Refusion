@@ -78,7 +78,7 @@ QByteArray RewindBuffer::decode(const Patch& patch, const QByteArray& newer) {
     }
     return result;
 }
-qsizetype RewindBuffer::entryBytes(const Entry& e) { return e.state.bytes.size()+e.pixels.bytes.size()+sizeof(Entry); }
+qsizetype RewindBuffer::entryBytes(const Entry& e) { return e.state.bytes.capacity()+e.pixels.bytes.capacity()+sizeof(Entry); }
 void RewindBuffer::configure(int seconds, double snapshotsPerSecond) {
     clear();
     entryLimit_ = seconds > 0 && std::isfinite(snapshotsPerSecond)
@@ -95,7 +95,7 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     const QImage rgb = frame.convertToFormat(QImage::Format_RGB32);
     if (rgb.isNull() || rgb.sizeInBytes()>maxBytes) return false;
     const QByteArray pixels(reinterpret_cast<const char*>(rgb.constBits()),rgb.sizeInBytes());
-    const qsizetype anchorBytes = state.size()+pixels.size();
+    const qsizetype anchorBytes = state.capacity()+pixels.capacity();
     if (anchorBytes>byteLimit_) { clear(); return false; }
     if (!currentState_.isEmpty()) {
         Entry previous{encode(currentState_,state),encode(currentPixels_,pixels),currentSize_,currentNativeSize_,currentAspect_};
@@ -103,7 +103,7 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
         bytesUsed_ += entryBytes(previous);
         entries_.push_back(std::move(previous));
     }
-    bytesUsed_ += anchorBytes-currentState_.size()-currentPixels_.size();
+    bytesUsed_ += anchorBytes-currentState_.capacity()-currentPixels_.capacity();
     currentState_ = state; currentPixels_ = pixels; currentSize_ = rgb.size(); currentNativeSize_ = VideoFrameGeometry::nativeSize(frame); currentAspect_ = aspect;
     while (!entries_.empty() && (size()>entryLimit_ || bytesUsed_>byteLimit_)) {
         bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
@@ -118,11 +118,12 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect) {
     if (raw.isEmpty() || pixels.isEmpty() || quint64(target.size.width())*target.size.height()*4 != quint64(pixels.size())) {
         clear(); return false;
     }
+    if (raw.capacity() + pixels.capacity() > byteLimit_) { clear(); return false; }
     QImage image(target.size,QImage::Format_RGB32);
     if (image.isNull() || image.sizeInBytes()!=pixels.size()) { clear(); return false; }
     std::memcpy(image.bits(),pixels.constData(),size_t(pixels.size()));
     if (target.nativeSize != image.size()) VideoFrameGeometry::setNativeSize(image,target.nativeSize);
-    bytesUsed_ += raw.size()+pixels.size()-currentState_.size()-currentPixels_.size()-entryBytes(target);
+    bytesUsed_ += raw.capacity()+pixels.capacity()-currentState_.capacity()-currentPixels_.capacity()-entryBytes(target);
     currentState_ = std::move(raw); currentPixels_ = std::move(pixels);
     currentSize_ = target.size; currentNativeSize_ = target.nativeSize; currentAspect_ = target.aspect;
     entries_.pop_back();

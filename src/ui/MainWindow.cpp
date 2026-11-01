@@ -9,8 +9,12 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QAudioDevice>
 #include <QCloseEvent>
 #include <QDir>
+#include <QDateTime>
+#include <QFile>
+#include <QImageWriter>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QCryptographicHash>
@@ -24,6 +28,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QLabel>
+#include <QMediaDevices>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -34,6 +39,7 @@
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <QWindowStateChangeEvent>
+#include <optional>
 
 namespace {
 QString shaderParameterPrefix(const QString& path) {
@@ -82,6 +88,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         if (!loading_ && !session_.hasGame()) openGameDialog();
     });
     audio_ = new AudioOutput(this);
+    audio_->setOutputDeviceId(settings_.value(QStringLiteral("audio/outputDeviceId")).toByteArray());
     input_ = new InputManager(settings_.fileName(), this);
     connect(audio_, &AudioOutput::unavailable, this, [](const QString& text) {
         qWarning("%s", qPrintable(text));
@@ -147,7 +154,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         loading_ = false;
         currentRom_ = path;
         input_->setProfile(isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName)));
-        setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(displayName(contentName)));
+        currentGameName_ = displayName(contentName);
+        setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(currentGameName_));
         recentPaths_.removeAll(path);
         recentPaths_.prepend(path);
         while (recentPaths_.size() > 10) recentPaths_.removeLast();
@@ -232,6 +240,32 @@ void MainWindow::buildMenus() {
     discGroup_ = new QActionGroup(this);
     discGroup_->setExclusive(true);
     updateDiscMenu();
+    fileMenu->addSeparator();
+    QMenu* screenshotMenu = fileMenu->addMenu(QStringLiteral("Скриншоты"));
+    screenshotMenu->setObjectName(QStringLiteral("screenshotMenu"));
+    screenshotAction_ = screenshotMenu->addAction(QStringLiteral("Сохранить скриншот"));
+    screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
+    screenshotAction_->setShortcut(QKeySequence(QStringLiteral("F12")));
+    screenshotAction_->setAutoRepeat(false);
+    screenshotAction_->setEnabled(false);
+    screenshotAction_->setToolTip(QStringLiteral("Чистое изображение игры без OSD; папка screenshots рядом с settings.ini."));
+    shortcut(screenshotAction_);
+    connect(screenshotAction_, &QAction::triggered, this, &MainWindow::saveScreenshot);
+    QMenu* screenshotFormat = screenshotMenu->addMenu(QStringLiteral("Формат"));
+    screenshotFormat->setObjectName(QStringLiteral("screenshotFormatMenu"));
+    auto* screenshotFormats = new QActionGroup(this);
+    const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
+                          .toString() == QLatin1String("jpeg");
+    for (bool useJpeg : {false, true}) {
+        QAction* action = screenshotFormat->addAction(useJpeg ? QStringLiteral("JPEG") : QStringLiteral("PNG (без потерь)"));
+        action->setObjectName(useJpeg ? QStringLiteral("screenshotFormatJpeg") : QStringLiteral("screenshotFormatPng"));
+        action->setCheckable(true);
+        action->setChecked(useJpeg == jpeg);
+        screenshotFormats->addAction(action);
+        connect(action, &QAction::triggered, this, [this, useJpeg] {
+            settings_.setValue(QStringLiteral("screenshot/format"), useJpeg ? QStringLiteral("jpeg") : QStringLiteral("png"));
+        });
+    }
     fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(QStringLiteral("Выход"));
     quitAction->setShortcut(QKeySequence::Quit);
@@ -486,6 +520,51 @@ void MainWindow::buildMenus() {
         audio_->setVolume(value);
         settings_.setValue(QStringLiteral("audio/volume"), value);
     });
+    QMenu* outputMenu = soundMenu->addMenu(QStringLiteral("Устройство вывода"));
+    outputMenu->setObjectName(QStringLiteral("audioOutputMenu"));
+    auto* outputGroup = new QActionGroup(outputMenu);
+    outputGroup->setExclusive(true);
+    const auto refreshOutputs = [this, outputMenu, outputGroup] {
+        outputMenu->clear();
+        const QByteArray selectedId = audio_->outputDeviceId();
+        const QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
+        const QString defaultName = defaultDevice.isNull()
+            ? QStringLiteral("нет устройства") : defaultDevice.description();
+        QAction* defaultAction = outputMenu->addAction(
+            QStringLiteral("Системное по умолчанию (%1)").arg(defaultName).replace('&', QStringLiteral("&&")));
+        defaultAction->setObjectName(QStringLiteral("audioOutputDefaultAction"));
+        defaultAction->setCheckable(true);
+        defaultAction->setChecked(selectedId.isEmpty());
+        defaultAction->setData(QByteArray());
+        outputGroup->addAction(defaultAction);
+        const auto outputs = QMediaDevices::audioOutputs();
+        bool selectedPresent = selectedId.isEmpty();
+        for (const QAudioDevice& device : outputs)
+            selectedPresent = selectedPresent || device.id() == selectedId;
+        if (!selectedPresent) {
+            QAction* missing = outputMenu->addAction(QStringLiteral("Недоступно — используется системное"));
+            missing->setCheckable(true);
+            missing->setChecked(true);
+            missing->setEnabled(false);
+            outputGroup->addAction(missing);
+        }
+        if (!outputs.isEmpty()) outputMenu->addSeparator();
+        for (const QAudioDevice& device : outputs) {
+            QAction* action = outputMenu->addAction(device.description().replace('&', QStringLiteral("&&")));
+            action->setCheckable(true);
+            action->setChecked(device.id() == selectedId);
+            action->setData(device.id());
+            outputGroup->addAction(action);
+        }
+    };
+    connect(outputGroup, &QActionGroup::triggered, this, [this](QAction* action) {
+        const QByteArray id = action->data().toByteArray();
+        audio_->setOutputDeviceId(id);
+        settings_.setValue(QStringLiteral("audio/outputDeviceId"), id);
+    });
+    connect(outputMenu, &QMenu::aboutToShow, outputMenu, refreshOutputs);
+    connect(audio_, &AudioOutput::outputDevicesChanged, outputMenu, refreshOutputs);
+    refreshOutputs();
 
     QMenu* settingsMenu = menuBar()->addMenu(QStringLiteral("&Настройки"));
     QAction* controlsAction = settingsMenu->addAction(QStringLiteral("Управление…"));
@@ -655,6 +734,65 @@ void MainWindow::setSlot(int slot) {
     if (session_.hasGame()) session_.requestSlotStatus(stateSlot_);
 }
 
+void MainWindow::saveScreenshot() {
+    if (!session_.hasGame() || loading_) return;
+    const QImage image = view_->captureGameImage();
+    auto failed = [this](const QString& error) {
+        view_->showOsd(QStringLiteral("Не удалось сохранить скриншот: %1").arg(error), 4000,
+                       QStringLiteral("screenshot"));
+        qWarning("Screenshot failed: %s", qPrintable(error));
+    };
+    if (image.isNull()) {
+        failed(QStringLiteral("кадр игры ещё не готов"));
+        return;
+    }
+    const QDir directory(QDir(dataPath_).filePath(QStringLiteral("screenshots")));
+    if (!QDir().mkpath(directory.absolutePath())) {
+        failed(QStringLiteral("не удалось создать папку %1").arg(QDir::toNativeSeparators(directory.absolutePath())));
+        return;
+    }
+    QString name = currentGameName_.left(80);
+    for (qsizetype i = 0; i < name.size(); ++i) {
+        const QChar ch = name.at(i);
+        if (ch.unicode() < 32 || QStringLiteral("\\/:*?\"<>|").contains(ch))
+            name[i] = QLatin1Char('_');
+    }
+    if (name.trimmed().isEmpty()) name = QStringLiteral("game");
+    const QString stem = name + QLatin1Char('_') +
+                         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz"));
+    const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
+                          .toString() == QLatin1String("jpeg");
+    const QString extension = jpeg ? QStringLiteral("jpg") : QStringLiteral("png");
+    for (int suffix = 0; suffix < 1000; ++suffix) {
+        const QString filename = stem + (suffix ? QStringLiteral("-%1").arg(suffix) : QString()) +
+                                 QLatin1Char('.') + extension;
+        QFile file(directory.filePath(filename));
+        // NewOnly also protects existing captures if the clock moves backwards
+        // or another emulator process saves into the same directory.
+        if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            if (file.exists()) continue;
+            failed(file.errorString());
+            return;
+        }
+        QImageWriter writer(&file, jpeg ? "JPEG" : "PNG");
+        if (jpeg) writer.setQuality(95);
+        QString error;
+        if (!writer.write(image)) error = writer.errorString();
+        else if (!file.flush()) error = file.errorString();
+        file.close();
+        if (!error.isEmpty()) {
+            file.remove();
+            failed(error);
+            return;
+        }
+        view_->showOsd(QStringLiteral("Скриншот сохранён: %1").arg(filename), 2600,
+                       QStringLiteral("screenshot"));
+        qInfo("Screenshot saved: %s", qPrintable(QDir::toNativeSeparators(file.fileName())));
+        return;
+    }
+    failed(QStringLiteral("не удалось подобрать свободное имя файла"));
+}
+
 void MainWindow::openGameDialog() {
     releaseInput();
     const QString path = QFileDialog::getOpenFileName(
@@ -673,7 +811,7 @@ void MainWindow::openRom(const QString& path) {
         return;
     }
     releaseInput();
-    int archiveIndex = -1;
+    std::optional<RomArchive::Entry> archiveEntry;
     if (RomArchive::isArchive(path)) {
         QString error;
         const auto entries = RomArchive::list(path, &error);
@@ -684,7 +822,7 @@ void MainWindow::openRom(const QString& path) {
             if (smokeTest_) session_.loadGame(path);
             return;
         }
-        if (entries.size() == 1) archiveIndex = entries.first().index;
+        if (entries.size() == 1) archiveEntry = entries.first();
         else if (!smokeTest_) {
             QDialog dialog(this);
             dialog.setWindowTitle(QStringLiteral("Выбор игры из архива"));
@@ -722,12 +860,13 @@ void MainWindow::openRom(const QString& path) {
                 view_->setFocus();
                 return;
             }
-            archiveIndex = list->currentItem()->data(Qt::UserRole).toInt();
+            archiveEntry = entries.at(list->currentRow());
         }
     }
     loading_ = true;
     settings_.setValue(QStringLiteral("files/lastDirectory"), file.absolutePath());
-    session_.loadGame(file.absoluteFilePath(), archiveIndex);
+    if (archiveEntry) session_.loadGame(file.absoluteFilePath(), *archiveEntry);
+    else session_.loadGame(file.absoluteFilePath());
 }
 
 void MainWindow::editControls() {
@@ -753,6 +892,7 @@ void MainWindow::releaseInput() {
 }
 
 void MainWindow::updateInputEnabled() {
+    if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     session_.setBackgroundPaused(pauseOnFocusLoss_ &&
         (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() && !loading_ &&
@@ -888,6 +1028,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (key == Qt::Key_M) commandAction = muteAction_;
         else if (key == Qt::Key_F5) commandAction = saveAction_;
         else if (key == Qt::Key_F8) commandAction = loadAction_;
+        else if (key == Qt::Key_F12) commandAction = screenshotAction_;
     } else if (modifiers == Qt::ControlModifier && key == Qt::Key_R) {
         commandAction = resetAction_;
     } else if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier) && key == Qt::Key_R) {
@@ -947,7 +1088,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         return QMainWindow::eventFilter(watched, event);
     }
     if (modifiers != Qt::NoModifier || key == Qt::Key_P || key == Qt::Key_M ||
-        key == Qt::Key_F5 || key == Qt::Key_F8)
+        key == Qt::Key_F5 || key == Qt::Key_F8 || key == Qt::Key_F12)
         return QMainWindow::eventFilter(watched, event);
     if (input_->keyEvent(key, true)) return true;
     return QMainWindow::eventFilter(watched, event);

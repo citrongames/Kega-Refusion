@@ -14,6 +14,7 @@
 #include <limits>
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 
 thread_local LibretroHost* LibretroHost::active_ = nullptr;
 struct LibretroHost::Api {
@@ -24,6 +25,9 @@ struct LibretroHost::Api {
     API(load_game); API(unload_game); API(run); API(reset); API(serialize_size); API(serialize);
     API(unserialize); API(get_memory_data); API(get_memory_size);
 #undef API
+    void (*manage_bram)(bool) = nullptr;
+    bool (*get_bram)(unsigned, const void**, size_t*, const char**) = nullptr;
+    const char* (*state_abi)() = nullptr;
 };
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
@@ -89,6 +93,23 @@ bool LibretroHost::initialize(QString& error) {
     RESOLVE(load_game); RESOLVE(unload_game); RESOLVE(run); RESOLVE(reset); RESOLVE(serialize_size); RESOLVE(serialize);
     RESOLVE(unserialize); RESOLVE(get_memory_data); RESOLVE(get_memory_size);
 #undef RESOLVE
+    api_->manage_bram = reinterpret_cast<decltype(api_->manage_bram)>(library_.resolve("kegarefusion_manage_bram"));
+    api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
+    api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
+    if (api_->manage_bram && api_->get_bram && api_->state_abi &&
+        QByteArray(api_->state_abi()) == "kegarefusion-gpx-f27655b-battery-v1") {
+        // This extension only exposes battery memory; the pinned core's state
+        // layout is unchanged. Keep existing quick states compatible.
+#ifdef Q_OS_WIN
+        coreHash_ = QByteArray::fromHex("c48159c8f49c4266e872077eb5c461471ab63cb7555d2eb7a8df4768b69ebe8a");
+#else
+        coreHash_ = QByteArray::fromHex("34f2639a8980394875078be54aa6ba0750b8d40a26b7b07eeda4f85f5756d56f");
+#endif
+        api_->manage_bram(true);
+    } else {
+        api_->get_bram = nullptr;
+        api_->manage_bram = nullptr;
+    }
     if (api_->api_version() != RETRO_API_VERSION) { error = QStringLiteral("Несовместимая версия API ядра."); return false; }
     LibretroHost* expected = nullptr;
     if (!coreOwner.compare_exchange_strong(expected, this)) {
@@ -214,8 +235,8 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     }
     for (unsigned port = 0; port < 2; ++port)
         api_->set_controller_port_device(port,RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1));
-    // CD internal/cart BRAM is owned by GPX, including formatting and region
-    // filenames. It is not exposed as libretro cartridge SRAM.
+    // The battery extension exposes formatted BRAM and its regional path.
+    // GPX still owns initialization/formatting; the host owns atomic writes.
     saveMemorySizes_.fill(0);
     return true;
 }
@@ -271,26 +292,35 @@ bool LibretroHost::changeDisc(const QString& path, QString& error) {
     setDiscIdentity();
     return setDiscEjected(false,error);
 }
-bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
+bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
+                        const RomArchive::Entry* archiveEntry) {
     error.clear();
     if (DiscMedia::isDisc(path)) return loadCd(path,error);
     const QFileInfo info(path);
     QString name = info.fileName();
     QByteArray content;
     if (RomArchive::isArchive(path)) {
-        const auto entries = RomArchive::list(path, &error);
-        if (!error.isEmpty()) return false;
-        auto found = std::find_if(entries.begin(), entries.end(), [archiveIndex](const auto& e) {
-            return e.index == archiveIndex;
-        });
-        if (archiveIndex < 0 && entries.size() == 1) found = entries.begin();
-        if (found == entries.end()) {
-            error = entries.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") :
-                QStringLiteral("Выберите игру внутри архива.");
-            return false;
+        RomArchive::Entry selected;
+        if (archiveEntry) {
+            // The UI already validated/listed this archive. Extraction still
+            // revalidates the selected index, name and size against the file.
+            selected = *archiveEntry;
+        } else {
+            const auto entries = RomArchive::list(path, &error);
+            if (!error.isEmpty()) return false;
+            auto found = std::find_if(entries.begin(), entries.end(), [archiveIndex](const auto& e) {
+                return e.index == archiveIndex;
+            });
+            if (archiveIndex < 0 && entries.size() == 1) found = entries.begin();
+            if (found == entries.end()) {
+                error = entries.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") :
+                    QStringLiteral("Выберите игру внутри архива.");
+                return false;
+            }
+            selected = *found;
         }
-        name = found->name;
-        content = RomArchive::extract(path, *found, &error);
+        name = selected.name;
+        content = RomArchive::extract(path, selected, &error);
         if (!error.isEmpty()) return false;
     } else {
         QFile file(info.absoluteFilePath());
@@ -372,6 +402,7 @@ void LibretroHost::unload() {
     buttons_.fill(0);
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
+    batterySave_.clear();
 }
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
@@ -390,6 +421,7 @@ bool LibretroHost::hardReset(QString& error) {
     // selection and moved/deleted ROM files do not affect a power cycle.
     if (!flushSaveRam(error)) return false;
     api_->unload_game();
+    batterySave_.clear();
     loaded_ = false;
     audio_.clear(); frame_ = QImage(); buttons_.fill(0);
     if (!discs_.isEmpty()) setDiscIdentity();
@@ -610,22 +642,43 @@ bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) 
     return true;
 }
 bool LibretroHost::flushSaveRam(QString& error) {
-    if (!loaded_ || !saveRamWritable_ || isCd()) return true;
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return updateSaveRam(now, true, error);
+}
+bool LibretroHost::pollSaveRam(qint64 nowMs, QString& error) {
+    return updateSaveRam(nowMs, false, error);
+}
+bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
+    error.clear();
+    if (!loaded_ || !saveRamWritable_) return true;
+    if (isCd()) {
+        if (!api_->get_bram) return true; // Unmodified cores retain their unload writer.
+        for (unsigned index = 0; index < 2; ++index) {
+            const void* data = nullptr; size_t size = 0; const char* rawPath = nullptr;
+            if (!api_->get_bram(index, &data, &size, &rawPath)) continue;
+            const QString path = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(rawPath)));
+            const QString saveRoot = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(savePath_))) + '/';
+            if (!path.startsWith(saveRoot) || !path.endsWith(QLatin1String(".brm")) ||
+                size > 64 * 1024 * 1024) {
+                error = QStringLiteral("Ядро вернуло некорректный путь или размер BRAM.");
+                return false;
+            }
+            if (!batterySave_.update(path, data, qsizetype(size), nowMs, force, false, error))
+                return false;
+        }
+        return true;
+    }
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         const auto data = api_->get_memory_data(id);
         if (!size || !data) continue;
-        if (size > size_t(maxStateSize)) { error = QStringLiteral("Ядро вернуло неверный размер памяти сохранения."); return false; }
-        const auto suffix = id == RETRO_MEMORY_RTC ? ".rtc" : ".srm";
-        const auto path = dataPath_ + "/saves/" + gameKey_ + suffix;
-        const QByteArray bytes(static_cast<const char*>(data), qsizetype(size));
-        QFile existing(path);
-        if (id == RETRO_MEMORY_SAVE_RAM && !existing.exists() &&
-            std::all_of(bytes.cbegin(), bytes.cend(), [](char v) { return static_cast<unsigned char>(v) == 0xff; })) continue;
-        if (existing.open(QIODevice::ReadOnly) && existing.size() == bytes.size() && existing.readAll() == bytes) continue;
-        // Windows cannot atomically replace a file while our read handle is open.
-        existing.close();
-        if (!atomicWrite(path, bytes, error)) return false;
+        const auto path = dataPath_ + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
+        if (size > size_t(maxStateSize)) {
+            error = QStringLiteral("Ядро вернуло неверный размер памяти сохранения."); return false;
+        }
+        if (!batterySave_.update(path, data, qsizetype(size), nowMs, force,
+                                 id == RETRO_MEMORY_SAVE_RAM, error)) return false;
     }
     return true;
 }

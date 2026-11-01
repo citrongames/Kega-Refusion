@@ -38,6 +38,7 @@ protected:
 private:
     void buildMenus();
     void openGameDialog();
+    void saveScreenshot();
     void updateRecentMenu();
     void editSegaCdBios();
     void updateDiscMenu();
@@ -75,6 +76,7 @@ private:
     QAction* shaderGdaptAction_ = nullptr;
     QAction* shaderCustomAction_ = nullptr;
     QAction* shaderParametersAction_ = nullptr;
+    QAction* screenshotAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* loadAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
@@ -85,6 +87,7 @@ private:
     bool discEjected_ = false;
     QVector<QAction*> slotActions_;
     QString currentRom_;
+    QString currentGameName_;
     QByteArray windowedGeometry_;
     int stateSlot_ = 0;
     int fastForwardFactor_ = 4;

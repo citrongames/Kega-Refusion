@@ -1,4 +1,5 @@
 #pragma once
+#include "RomArchive.h"
 #include <QThread>
 #include <QImage>
 #include <QByteArray>
@@ -7,6 +8,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <optional>
 
 class EmulationSession final : public QThread {
     Q_OBJECT
@@ -14,6 +16,7 @@ public:
     explicit EmulationSession(QString corePath, QString dataPath, QObject* parent = nullptr);
     ~EmulationSession() override;
     void loadGame(const QString& path, int archiveIndex = -1);
+    void loadGame(const QString& path, const RomArchive::Entry& archiveEntry);
     void setPaused(bool paused);
     void resetGame();
     void hardResetGame();
@@ -57,7 +60,12 @@ protected:
     void run() override;
 private:
     enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Save, Restore, Slots, Disc, DiscIndex, Eject };
-    struct Command { Type type; QString path; int value = 0; };
+    struct Command {
+        Type type;
+        QString path;
+        int value = 0;
+        std::optional<RomArchive::Entry> archiveEntry = std::nullopt;
+    };
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);
     QString corePath_, dataPath_;

@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QMediaDevices>
 
 #include <atomic>
 #include <cstdio>
@@ -72,13 +73,30 @@ int main(int argc, char** argv) {
         audio.setMuted(true);
         audio.setVolume(120);
 
+        // An unavailable saved preference falls back without erasing the ID.
+        // Neither changing only that preference nor an unchanged device-list
+        // notification may invalidate the clock/reopen the effective output.
+        const int beforeDeviceRefresh = invalidations.load();
+        const QByteArray missingId("kega-refusion-test-missing-output");
+        audio.setOutputDeviceId(missingId);
+        require(audio.outputDeviceId() == missingId,
+                "missing output preference was discarded during fallback");
+        auto* devices = audio.findChild<QMediaDevices*>();
+        require(devices && QMetaObject::invokeMethod(devices, "audioOutputsChanged", Qt::DirectConnection),
+                "could not exercise an unchanged output-device notification");
+        require(audio.outputDeviceId() == missingId && invalidations == beforeDeviceRefresh,
+                "unrelated device refresh reset the unchanged effective output");
+        audio.setOutputDeviceId({});
+        require(audio.outputDeviceId().isEmpty() && invalidations == beforeDeviceRefresh,
+                "returning to the same system output unnecessarily reset audio");
+
         // QObject destruction removes a pending coalesced wake safely.
         {
             AudioOutput pending;
             pending.play(QByteArray(4, 'x'), 1);
         }
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-        std::puts("audio output tests passed: concurrent producer, coalesced wake, immediate clock reset");
+        std::puts("audio output tests passed: concurrent producer, coalesced wake, immediate clock reset, output preference fallback");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "audio output tests failed: %s\n", error.what());

@@ -306,6 +306,14 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
 
     connect(&input_, &InputManager::devicesChanged,
             this, &ControlsDialog::refreshDevices);
+    connect(&input_, &InputManager::captureReady, this, [this] {
+        if (captureTarget_ < 0) return;
+        const QString label = captureTarget_ < 16
+            ? InputManager::targetName(selectedProfile(), captureTarget_)
+            : commandName(captureTarget_);
+        setFeedback(QStringLiteral("Назначение «%1»: нажмите кнопку, крестовину "
+                                   "или отклоните ось. Esc — отмена.").arg(label));
+    });
     connect(&input_, &InputManager::bindingCaptured,
             this, &ControlsDialog::onCaptured);
     connect(&input_, &InputManager::captureCancelled,
@@ -528,7 +536,7 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
     if (sequence.count() > 1 || modifiers != Qt::NoModifier)
         error = QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift.");
     else if (reservedKey(key))
-        error = QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5 и F8 зарезервированы.");
+        error = QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8 и F12 зарезервированы.");
     else if (key) {
         const PlayerMapping& mapping = draft();
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
@@ -579,8 +587,8 @@ void ControlsDialog::beginCaptureFor(int target) {
         ? InputManager::targetName(selectedProfile(), target)
         : commandName(target);
     setFeedback(QStringLiteral(
-        "Назначение «%1»: отпустите все кнопки, затем нажмите кнопку, "
-        "крестовину или отклоните ось. Esc — отмена.").arg(label));
+        "Назначение «%1»: отпустите кнопки и верните стики в центр. "
+        "Ожидание нейтрального положения… Esc — отмена.").arg(label));
     input_.beginCapture(deviceKey, selectedPlayer());
     updateActionButtons();
 }

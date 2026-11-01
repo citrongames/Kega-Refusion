@@ -10,6 +10,8 @@
 #include <memory>
 #include <libretro.h>
 #include "DiscMedia.h"
+#include "RomArchive.h"
+#include "BatterySave.h"
 #include <QStringList>
 
 // Own on exactly one emulation thread. One libretro instance per process.
@@ -17,7 +19,8 @@ class LibretroHost final {
 public:
     explicit LibretroHost(QString corePath, QString dataPath);
     ~LibretroHost();
-    bool load(const QString& path, QString& error, int archiveIndex = -1);
+    bool load(const QString& path, QString& error, int archiveIndex = -1,
+              const RomArchive::Entry* archiveEntry = nullptr);
     void unload();
     bool isCd() const { return loaded_ && !discs_.isEmpty(); }
     QStringList discPaths() const;
@@ -44,6 +47,7 @@ public:
     QByteArray captureRewindState() const;
     bool restoreRewindState(const QByteArray& state);
     bool flushSaveRam(QString& error);
+    bool pollSaveRam(qint64 nowMs, QString& error);
     void setButtons(unsigned port, unsigned mask);
     bool loaded() const { return loaded_; }
     double fps() const { return av_.timing.fps; }
@@ -67,6 +71,7 @@ private:
     bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error);
     QString statePath(int slot) const;
     bool restoreSaveRam(QString& error);
+    bool updateSaveRam(qint64 nowMs, bool force, QString& error);
     static bool environment(unsigned command, void* data);
     static void video(const void* data, unsigned width, unsigned height, size_t pitch);
     static void audioSample(int16_t left, int16_t right);
@@ -89,6 +94,7 @@ private:
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     std::array<unsigned,2> buttons_{};
     std::array<size_t,2> saveMemorySizes_{};
+    BatterySave batterySave_;
     retro_system_av_info av_{};
     retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;
     QImage frame_;

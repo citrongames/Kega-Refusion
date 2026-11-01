@@ -1,0 +1,110 @@
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+index 798c6cc..07b85a7 100644
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -135,6 +135,7 @@ static double vaspect_ratio;
+ static double retro_fps;
+ 
+ static uint32_t brm_crc[2];
++static bool kegarefusion_bram_managed;
+ static uint8_t brm_format[0x40] =
+ {
+   0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x5f,0x00,0x00,0x00,0x00,0x40,
+@@ -1040,6 +1041,75 @@ static void config_default(void)
+    }
+ }
+ 
++/* Optional frontend battery persistence; no emulation or state layout changes. */
++RETRO_API void kegarefusion_manage_bram(bool enabled)
++{
++   kegarefusion_bram_managed = enabled;
++}
++
++RETRO_API bool kegarefusion_get_bram(unsigned index, const void **data,
++      size_t *size, const char **path)
++{
++   const void *memory;
++   size_t bytes;
++   const char *filename;
++
++   if (data)
++      *data = NULL;
++   if (size)
++      *size = 0;
++   if (path)
++      *path = NULL;
++   if (!data || !size || !path || (system_hw != SYSTEM_MCD))
++      return false;
++
++   switch (index)
++   {
++      case 0:
++         switch (region_code)
++         {
++            case REGION_JAPAN_NTSC:
++               filename = CD_BRAM_JP;
++               break;
++            case REGION_EUROPE:
++               filename = CD_BRAM_EU;
++               break;
++            case REGION_USA:
++               filename = CD_BRAM_US;
++               break;
++            default:
++               return false;
++         }
++         memory = scd.bram;
++         bytes = 0x2000;
++         break;
++      case 1:
++         if (!scd.cartridge.id)
++            return false;
++         memory = scd.cartridge.area;
++         bytes = scd.cartridge.mask + 1;
++         filename = CART_BRAM;
++         break;
++      default:
++         return false;
++   }
++
++   /* Match bram_save: expose only correctly formatted backup RAM. */
++   if ((bytes < 0x20) || memcmp((const uint8_t *)memory + bytes - 0x20,
++            brm_format + 0x20, 0x20))
++      return false;
++
++   *data = memory;
++   *size = bytes;
++   *path = filename;
++   return true;
++}
++
++RETRO_API const char *kegarefusion_state_abi(void)
++{
++   return "kegarefusion-gpx-f27655b-battery-v1";
++}
++
+ static void bram_load(void)
+ {
+     RFILE *fp;
+@@ -3726,7 +3796,7 @@ void retro_unload_game(void)
+       }
+    }
+ 
+-   if (system_hw == SYSTEM_MCD)
++   if ((system_hw == SYSTEM_MCD) && !kegarefusion_bram_managed)
+       bram_save();
+ 
+    audio_shutdown();
+diff --git a/libretro/link.T b/libretro/link.T
+index b0c262d..e7bf23d 100644
+--- a/libretro/link.T
++++ b/libretro/link.T
+@@ -1,5 +1,8 @@
+ {
+    global: retro_*;
++      kegarefusion_manage_bram;
++      kegarefusion_get_bram;
++      kegarefusion_state_abi;
+    local: *;
+ };
+ 

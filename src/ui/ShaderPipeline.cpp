@@ -11,11 +11,13 @@
 #include <QSet>
 #include <QVector2D>
 #include <QtMath>
+#include <array>
 #include <cmath>
 
 namespace {
 constexpr qsizetype sourceLimit = 512 * 1024;
 constexpr int passLimit = 8;
+constexpr qint64 videoMemoryLimit = 128 * 1024 * 1024;
 bool fail(QString& error, const QString& message) { error = message; return false; }
 
 QString relativePath(const QString& parent, QString path) {
@@ -258,6 +260,8 @@ bool ShaderPipeline::compile(const QByteArray& source, std::unique_ptr<QOpenGLSh
 
 bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
     initializeOpenGLFunctions();
+    if (preset.passes.size() > passLimit)
+        return fail(error, QStringLiteral("The GLSL preset must contain at most 8 shader passes."));
     preset_ = preset;
     for (const ShaderPass& pass : preset.passes) {
         std::unique_ptr<QOpenGLShaderProgram> program;
@@ -333,6 +337,39 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
                             const QRect& viewport, quint64 frameCount, int direction, QString& error) {
     if (frame.isNull() || viewport.isEmpty()) return true;
     for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
+    int maxTexture = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexture);
+    if (frame.width() > maxTexture || frame.height() > maxTexture)
+        return fail(error, QStringLiteral("The video source exceeds the GPU texture size limit."));
+    // Preflight the entire chain before any texture/FBO allocation. Per-pass
+    // limits alone allowed eight 128 MiB targets to accumulate in one preset.
+    std::array<QSize, passLimit> outputs;
+    QSize input = frame.size();
+    qint64 videoBytes = qint64(input.width()) * input.height() * 4;
+    for (qsizetype i = 0; i < preset_.passes.size(); ++i) {
+        const auto& pass = preset_.passes[i];
+        auto dimension = [&](ShaderPass::Scale mode, double factor, int in, int out) {
+            const double result = factor * (mode == ShaderPass::Scale::Absolute ? 1 :
+                                           mode == ShaderPass::Scale::Viewport ? out : in);
+            return result > maxTexture ? 0 : qMax(1, qRound(result));
+        };
+        const QSize output(dimension(pass.scaleX, pass.factorX, input.width(), viewport.width()),
+                           dimension(pass.scaleY, pass.factorY, input.height(), viewport.height()));
+        if (output.isEmpty())
+            return fail(error, QStringLiteral("Shader pass %1 exceeds the GPU texture size limit.").arg(i + 1));
+        videoBytes += qint64(output.width()) * output.height() * 4;
+        if (videoBytes > videoMemoryLimit)
+            return fail(error, QStringLiteral("The video source and shader passes exceed the 128 MiB video memory budget."));
+        outputs[size_t(i)] = output;
+        input = output;
+    }
+    if (videoBytes > videoMemoryLimit)
+        return fail(error, QStringLiteral("The video source exceeds the 128 MiB video memory budget."));
+    // Release obsolete targets together so a resize cannot temporarily retain
+    // large old targets alongside the new chain.
+    for (qsizetype i = 0; i < preset_.passes.size(); ++i)
+        if (buffers_[size_t(i)] && buffers_[size_t(i)]->size() != outputs[size_t(i)])
+            buffers_[size_t(i)].reset();
     glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST); glDisable(GL_DITHER);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -355,22 +392,11 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width(), frame.height(),
                         GL_RGBA, GL_UNSIGNED_BYTE, pixels.constBits());
     }
-    int maxTexture = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexture);
     unsigned source = texture_;
-    QSize input = frame.size();
+    input = frame.size();
     for (qsizetype i = 0; i < preset_.passes.size(); ++i) {
         const auto& pass = preset_.passes[i];
-        auto dimension = [&](ShaderPass::Scale mode, double factor, int in, int out) {
-            const double result = factor * (mode == ShaderPass::Scale::Absolute ? 1 :
-                                           mode == ShaderPass::Scale::Viewport ? out : in);
-            return result > maxTexture ? 0 : qMax(1, qRound(result));
-        };
-        const QSize output(dimension(pass.scaleX, pass.factorX, input.width(), viewport.width()),
-                           dimension(pass.scaleY, pass.factorY, input.height(), viewport.height()));
-        // Bound resource use even if a user preset requests many viewport-sized passes.
-        if (output.isEmpty() || qint64(output.width()) * output.height() > 32 * 1024 * 1024)
-            return fail(error, QStringLiteral("Shader pass %1 exceeds the GPU texture size limit.").arg(i + 1));
+        const QSize output = outputs[size_t(i)];
         auto& buffer = buffers_[size_t(i)];
         if (!buffer || buffer->size() != output) {
             QOpenGLFramebufferObjectFormat format;

@@ -45,7 +45,17 @@ if [[ "$actual" != "$pin" ]]; then
   exit 1
 fi
 
-make -s -C "$checkout" -f Makefile.libretro "${make_args[@]}" -j "$(nproc)"
+patch="$root/tools/patches/genesis-plus-gx-battery.patch"
+if git -C "$checkout" apply --check "$patch" >/dev/null 2>&1; then
+  git -C "$checkout" apply "$patch"
+elif ! git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
+  echo "Core battery patch does not match $checkout. Leaving it untouched." >&2
+  exit 1
+fi
+
+jobs=$(nproc)
+if (( jobs > 8 )); then jobs=8; fi
+make -s -C "$checkout" -f Makefile.libretro "${make_args[@]}" -j "$jobs"
 out="$root/build/$platform/core"
 mkdir -p "$out"
 cp "$checkout/genesis_plus_gx_libretro.$extension" "$out/"

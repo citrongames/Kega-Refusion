@@ -1,0 +1,2 @@
+# Preserve upstream line endings and context whitespace in source patches.
+tools/patches/*.patch -text -whitespace

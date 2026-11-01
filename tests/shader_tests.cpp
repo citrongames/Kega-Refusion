@@ -73,6 +73,27 @@ QImage render(ShaderPipeline& pipeline, const QImage& image, QSize size, QRect v
     require(pipeline.render(image, target.handle(), size, viewport, 17, 1, error), qPrintable(error));
     return target.toImage();
 }
+void memoryBudgetTests(const QString& directory) {
+    QString error;
+    ShaderPreset preset;
+    write(directory + QStringLiteral("/budget.glsl"), shader("void main() { gl_FragColor=texture2D(Texture,tc); }"));
+    QImage source(16, 8, QImage::Format_RGB32);
+    source.fill(QColor(37, 58, 81));
+    QByteArray memoryPreset("shaders=8\n");
+    for (int i = 0; i < 8; ++i) {
+        const QByteArray index = QByteArray::number(i);
+        memoryPreset += "shader" + index + "=budget.glsl\nscale_type" + index + "=absolute\nscale" + index + "=2048\n";
+    }
+    write(directory + QStringLiteral("/memory.glslp"), memoryPreset);
+    require(ShaderPreset::load(directory + QStringLiteral("/memory.glslp"), preset, error), qPrintable(error));
+    ShaderPipeline bounded;
+    require(bounded.initialize(preset, error), qPrintable(error));
+    QOpenGLFramebufferObject smallTarget(QSize(16, 8));
+    require(smallTarget.isValid(), "memory budget test FBO unavailable");
+    require(!bounded.render(source, smallTarget.handle(), QSize(16, 8), QRect(0, 0, 16, 8), 0, 1, error) &&
+            error.contains(QStringLiteral("128 MiB")), "aggregate shader memory budget was not enforced before allocation");
+}
+
 void gpuTests(const QString& directory) {
     QString error;
     ShaderPreset preset;
@@ -113,6 +134,7 @@ void gpuTests(const QString& directory) {
     stripes.fill(QColor(37, 58, 81));
     const QImage flat = render(gdapt, stripes, QSize(64, 32));
     require(flat.pixelColor(32, 16) == QColor(37, 58, 81), "gdapt changed a flat, nondithered area");
+    memoryBudgetTests(directory);
     write(directory + QStringLiteral("/lut.glsl"), shader("uniform sampler2D LUT; void main() { gl_FragColor=texture2D(LUT,tc); }"));
     require(ShaderPreset::load(directory + QStringLiteral("/lut.glsl"), preset, error), qPrintable(error));
     ShaderPipeline unsupported;
@@ -138,6 +160,33 @@ QImage capture(GameView& view) {
     require(!image.isNull(), "GameView GPU framebuffer is empty");
     return image;
 }
+void screenshotWidgetTests() {
+    GameView view;
+    view.resize(920, 620);
+    QImage source(32, 16, QImage::Format_RGB32);
+    for (int y = 0; y < source.height(); ++y)
+        for (int x = 0; x < source.width(); ++x)
+            source.setPixelColor(x, y, x % 2 ? QColor(220, 40, 20) : QColor(20, 40, 220));
+    view.setFrame(source, 4.0 / 3.0);
+    QString error;
+    require(view.setShaderPreset(QStringLiteral(":/shaders/gdapt.glslp"), &error), qPrintable(error));
+    require(view.setShaderParameter(QStringLiteral("MODE"), 1), "screenshot shader parameter unavailable");
+    const QImage baseline = capture(view);
+    view.setPausedStatus(true);
+    view.showOsd(QStringLiteral("Screenshot saved"));
+    const QImage overlays = capture(view);
+    const QImage clean = view.captureGameImage();
+    require(!clean.isNull() && clean.width() < baseline.width() && clean.height() == baseline.height(),
+            "clean native screenshot retained display borders");
+    const int left = qRound((baseline.width() - clean.width()) / 2.0);
+    require(clean == baseline.copy(left, 0, clean.width(), clean.height()),
+            "clean native screenshot retained OSD or changed filtered output");
+    const QColor centre = clean.pixelColor(clean.width()/2, clean.height()/2);
+    require(qAbs(centre.red()-120) <= 2 && qAbs(centre.blue()-120) <= 2,
+            "clean native screenshot omitted the GDAPT shader");
+    require(view.captureImage() == overlays, "clean native screenshot changed visible OSD");
+}
+
 void widgetTests(const QString& directory) {
     GameView view;
     view.resize(920, 620);
@@ -164,6 +213,13 @@ void widgetTests(const QString& directory) {
     view.setPausedStatus(true);
     view.showOsd(QStringLiteral("Saved: slot 3"));
     const QImage shaderOsd = capture(view);
+    const QImage cleanShader = view.captureGameImage();
+    require(!cleanShader.isNull() && cleanShader.width() < shaderOsd.width() &&
+            cleanShader.height() == shaderOsd.height(), "clean shader screenshot did not crop pillarboxes");
+    const int left = qRound((shaderOsd.width() - cleanShader.width()) / 2.0);
+    require(cleanShader == filtered.copy(left, 0, cleanShader.width(), cleanShader.height()),
+            "clean screenshot contains OSD or lost shader rendering");
+    require(view.captureImage() == shaderOsd, "clean GPU screenshot changed the visible OSD");
     require(view.setShaderPreset({}, &error), qPrintable(error));
     const QImage stockOsd = capture(view);
     GameView rasterView;
@@ -232,7 +288,8 @@ int main(int argc, char** argv) {
     try {
         QTemporaryDir directory;
         require(directory.isValid(), "shader test scratch unavailable");
-        parserTests(directory.path());
+        const bool resourceOnly = app.arguments().contains(QStringLiteral("--resource-only"));
+        if (!resourceOnly) parserTests(directory.path());
         if (app.arguments().contains(QStringLiteral("--parser-only"))) {
             std::puts("Shader preset/parser tests passed");
             return 0;
@@ -251,6 +308,13 @@ int main(int argc, char** argv) {
         std::printf("GPU: %s; OpenGL: %s\n",
                     context.functions()->glGetString(GL_RENDERER),
                     context.functions()->glGetString(GL_VERSION));
+        if (resourceOnly) {
+            memoryBudgetTests(directory.path());
+            context.doneCurrent();
+            screenshotWidgetTests();
+            std::puts("Aggregate shader memory budget and clean native screenshot passed");
+            return 0;
+        }
         gpuTests(directory.path());
         context.doneCurrent();
         widgetTests(directory.path());

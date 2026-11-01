@@ -12,7 +12,7 @@ public:
     bool capture(const QByteArray& state, const QImage& frame, double aspect);
     bool stepBack(QByteArray& state, QImage& frame, double& aspect);
     size_t size() const { return currentState_.isEmpty() ? 0 : entries_.size() + 1; }
-    // Includes retained raw anchor and entry metadata, excludes transient work/allocator overhead.
+    // Counts retained byte-array capacities, raw anchors and entry metadata; excludes transient work/allocator overhead.
     qsizetype bytesUsed() const { return bytesUsed_; }
 private:
     struct Patch { QByteArray bytes; qsizetype restoredSize = 0; bool delta = false; };

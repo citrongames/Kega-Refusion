@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.5.2 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.6.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -25,7 +25,8 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
     src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
     src/core/RewindBuffer.cpp src/core/RewindBuffer.h
-    src/core/FramePacer.cpp src/core/FramePacer.h)
+    src/core/FramePacer.cpp src/core/FramePacer.h
+    src/core/BatterySave.cpp src/core/BatterySave.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive)
 add_library(video_renderer STATIC
@@ -94,6 +95,9 @@ if(BUILD_TESTING)
     target_include_directories(audio_output_tests PRIVATE src)
     target_link_libraries(audio_output_tests PRIVATE Qt6::Core Qt6::Multimedia)
     add_test(NAME audio_output_tests COMMAND audio_output_tests)
+    add_executable(battery_tests tests/battery_tests.cpp)
+    target_link_libraries(battery_tests PRIVATE core_host)
+    add_test(NAME battery_policy_tests COMMAND battery_tests)
     add_executable(rewind_tests tests/rewind_tests.cpp)
     target_link_libraries(rewind_tests PRIVATE core_host)
     add_test(NAME rewind_tests COMMAND rewind_tests)

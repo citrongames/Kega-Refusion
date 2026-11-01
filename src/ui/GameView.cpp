@@ -9,6 +9,7 @@
 #include <QOpenGLContext>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QScopedValueRollback>
 #include <QShowEvent>
 #include <QSurfaceFormat>
 #include <memory>
@@ -176,6 +177,28 @@ QImage GameView::captureImage() {
     return grab().toImage();
 }
 
+QImage GameView::captureGameImage() {
+    if (frame_.isNull() || width() <= 0 || height() <= 0) return {};
+    QImage image;
+    {
+        // Grab the rendered shader/raster output without changing OSD settings,
+        // notices or persistent status. The next presentation restores overlays.
+        const QScopedValueRollback<bool> capture(capturingGame_, true);
+        image = captureImage();
+    }
+    repaintView();
+    if (image.isNull()) return {};
+    const QRectF game = gameRect();
+    const qreal scaleX = qreal(image.width()) / width();
+    const qreal scaleY = qreal(image.height()) / height();
+    const QRect crop(QPoint(qRound(game.left() * scaleX), qRound(game.top() * scaleY)),
+                     QPoint(qRound((game.left() + game.width()) * scaleX) - 1,
+                            qRound((game.top() + game.height()) * scaleY) - 1));
+    image = image.copy(crop.intersected(image.rect()));
+    image.setDevicePixelRatio(1.0);
+    return image;
+}
+
 void GameView::setFrame(const QImage& frame, double aspectRatio) {
     frame_ = frame;
     ++frameCount_;
@@ -274,7 +297,7 @@ void GameView::expireOsd() {
 }
 
 void GameView::paintOsd(QPainter& painter) {
-    if (!osdEnabled_ || (notices_.isEmpty() && !stateSlots_.expiresAt &&
+    if (capturingGame_ || !osdEnabled_ || (notices_.isEmpty() && !stateSlots_.expiresAt &&
                          !paused_ && !fastForward_ && !rewinding_ && !muted_)) return;
     QFont osd(osdFamily_);
     osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);

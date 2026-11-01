@@ -45,12 +45,10 @@ public:
         const qint64 discard = qMax<qint64>(0, oldWhole + incoming - wholeBudget);
         const qint64 discardOld = qMin(discard, oldWhole);
         const qint64 discardNew = discard - discardOld;
-        QByteArray next;
-        next.reserve(qsizetype(qMin<qint64>(capacity_, bytes_.size() + qint64(incoming))));
-        next.append(bytes_.constData(), fragment);
-        next.append(bytes_.constData() + fragment + discardOld, qsizetype(oldWhole - discardOld));
-        next.append(pcm.constData() + discardNew, qsizetype(incoming - discardNew));
-        bytes_.swap(next);
+        // Reuse the bounded buffer instead of allocating and copying the
+        // complete queue for every incoming audio chunk.
+        if (discardOld) bytes_.remove(fragment, qsizetype(discardOld));
+        bytes_.append(pcm.constData() + discardNew, qsizetype(incoming - discardNew));
         return discard;
     }
 

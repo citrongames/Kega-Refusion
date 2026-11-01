@@ -8,3 +8,11 @@
 - The libretro core is a single process-wide instance, owned by the emulation thread. Qt GUI/audio objects live on the GUI thread.
 - Changes to states/input/timing require real-core integration checks. Use generated original ROM fixtures; never commit copyrighted game ROMs.
 - After context compression continue the last unfinished task from confirmed state, files and verification results. Status questions do not cancel the task.
+
+
+## Resource discipline
+- Avoid unnecessary disk I/O: compare save data in memory, write only changes, coalesce bursts, and bound write frequency. Keep one previous battery-save backup beside the primary file.
+- Keep queues, caches, decoded media and rewind history bounded. Prefer streaming and reuse existing buffers; do not decode or retain entire media unnecessarily.
+- Do not add heavy work, file reads/writes, or avoidable allocations to per-frame/input/audio paths. Poll or recompute only when needed; measure concrete regressions.
+- Apply these requirements to existing features as well as new ones. Clean task scratch outputs while preserving useful incremental builds and user data.
+- After a completed, verified change, commit and push it to the project's private repository.

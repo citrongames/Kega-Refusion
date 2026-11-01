@@ -2,6 +2,7 @@
 
 #include "AudioQueue.h"
 
+#include <QAudioDevice>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QString>
@@ -27,13 +28,21 @@ public:
     void setMuted(bool muted);
     void setVolume(int percent);
 
+    // Selection and device discovery stay on the GUI thread. An empty ID
+    // follows the system default; a missing explicit ID is kept for reconnect.
+    QByteArray outputDeviceId() const { return outputDeviceId_; }
+    void setOutputDeviceId(const QByteArray& id);
+
 signals:
+    void outputDevicesChanged();
     void unavailable(const QString& message);
     // Combined software/device buffer occupancy; the session timestamps this
     // feedback and falls back to its monotonic clock when it becomes stale.
     void clockFeedback(qint64 queuedUsecs, qint64 targetUsecs, bool available);
 
 private:
+    QAudioDevice resolveOutputDevice() const;
+    void refreshOutputDevice();
     void requestPumpLocked();
     void pump();
     bool configure(int sampleRate);
@@ -52,6 +61,8 @@ private:
     QTimer pumpTimer_;
     QElapsedTimer clock_;
     QMediaDevices* devices_ = nullptr;
+    QByteArray outputDeviceId_;
+    QAudioDevice outputDevice_;
     QAudioSink* sink_ = nullptr;
     QIODevice* stream_ = nullptr;
     int sampleRate_ = 0;

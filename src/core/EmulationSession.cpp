@@ -15,6 +15,9 @@ void EmulationSession::enqueue(Command command) {
     commands_.push_back(std::move(command));
 }
 void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue({Type::Load,path,archiveIndex}); }
+void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry) {
+    enqueue({Type::Load,path,archiveEntry.index,archiveEntry});
+}
 void EmulationSession::setPaused(bool paused) { enqueue({Type::Pause,{},paused ? 1 : 0}); }
 void EmulationSession::resetGame() { enqueue({Type::Reset,{}}); }
 void EmulationSession::hardResetGame() { enqueue({Type::HardReset,{}}); }
@@ -90,7 +93,7 @@ void EmulationSession::run() {
     FrameWaiter waiter;
     pacer.reset(nowNs());
     auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
-    auto lastFlush = Clock::now();
+    auto lastBatteryCheck = Clock::now();
     bool optionsPending = false, fastLatched = false;
     qint64 nextPresentationNs = 0;
     while (!quitting_.load()) {
@@ -100,7 +103,8 @@ void EmulationSession::run() {
             QString error;
             switch (command.type) {
             case Type::Load:
-                if (host.load(command.path,error,command.value)) {
+                if (host.load(command.path,error,command.value,
+                              command.archiveEntry ? &*command.archiveEntry : nullptr)) {
                     loaded_.store(true); releaseButtons(); paused = false;
                     rewind_.store(false); rewindStatus(false); clearHistory();
                     clearAudio();
@@ -224,6 +228,15 @@ void EmulationSession::run() {
             waiter.waitUntil(deadline);
             continue;
         }
+        const auto batteryNow = Clock::now();
+        if (host.loaded() && !reverse &&
+            batteryNow - lastBatteryCheck >= std::chrono::seconds(1)) {
+            QString error;
+            const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                batteryNow.time_since_epoch()).count();
+            if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
+            lastBatteryCheck = batteryNow;
+        }
         if (!host.loaded() || nowPaused) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
         const bool fast = fastForward_.load();
         if (fast != fastLatched) {
@@ -255,12 +268,6 @@ void EmulationSession::run() {
             nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
         }
         if (!fast && !host.audio().isEmpty()) emit audioSamples(host.audio(),host.sampleRate());
-        const auto now = Clock::now();
-        if (now - lastFlush > std::chrono::seconds(5)) {
-            QString error;
-            if (!host.flushSaveRam(error)) emit notification(error);
-            lastFlush = now;
-        }
         const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
             audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
         if (factor != 0) {

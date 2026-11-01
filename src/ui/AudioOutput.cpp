@@ -20,9 +20,10 @@ AudioOutput::AudioOutput(QObject* parent) : QObject(parent) {
     pumpTimer_.setTimerType(Qt::PreciseTimer);
     connect(&pumpTimer_, &QTimer::timeout, this, &AudioOutput::pump);
     devices_ = new QMediaDevices(this);
+    outputDevice_ = resolveOutputDevice();
     connect(devices_, &QMediaDevices::audioOutputsChanged, this, [this] {
-        retryAtMs_ = 0;
-        clear();
+        refreshOutputDevice();
+        emit outputDevicesChanged();
     });
 }
 
@@ -34,6 +35,34 @@ AudioOutput::~AudioOutput() {
     }
     pumpTimer_.stop();
     releaseSink();
+}
+
+QAudioDevice AudioOutput::resolveOutputDevice() const {
+    if (!outputDeviceId_.isEmpty()) {
+        for (const QAudioDevice& device : QMediaDevices::audioOutputs()) {
+            if (device.id() == outputDeviceId_) return device;
+        }
+    }
+    // Preserve an unavailable explicit preference while using the current
+    // default. The next device notification can restore the preferred output.
+    return QMediaDevices::defaultAudioOutput();
+}
+
+void AudioOutput::refreshOutputDevice() {
+    const QAudioDevice device = resolveOutputDevice();
+    const bool changed = device.id() != outputDevice_.id();
+    // QAudioDevice is a snapshot; refresh its capabilities/name even when an
+    // unrelated hotplug notification does not require reopening a live sink.
+    outputDevice_ = device;
+    if (!changed) return;
+    retryAtMs_ = 0;
+    clear();
+}
+
+void AudioOutput::setOutputDeviceId(const QByteArray& id) {
+    if (id == outputDeviceId_) return;
+    outputDeviceId_ = id;
+    refreshOutputDevice();
 }
 
 void AudioOutput::requestPumpLocked() {
@@ -112,7 +141,7 @@ void AudioOutput::fail(const QString& message) {
 
 bool AudioOutput::configure(int sampleRate) {
     releaseSink();
-    const QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    const QAudioDevice device = outputDevice_;
     if (device.isNull()) {
         fail(QStringLiteral("Звук недоступен: устройство вывода не найдено"));
         return false;

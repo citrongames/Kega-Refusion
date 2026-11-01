@@ -3,6 +3,10 @@
 
 #include <QApplication>
 #include <QEventLoop>
+#include <QFile>
+#include <QImageReader>
+#include <QImageWriter>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <array>
@@ -72,6 +76,65 @@ void testGameBorders() {
     require(image.pixelColor(320, 0) == Qt::black &&
             image.pixelColor(320, 719) == Qt::black,
             "letterbox fields around loaded game are not black");
+}
+
+void testCleanScreenshot() {
+    GameView view;
+    view.resize(920, 620);
+    require(view.captureGameImage().isNull(), "screenshot captured the empty-game placeholder");
+    const QColor colour(37, 58, 81);
+    QImage frame(320, 224, QImage::Format_RGB32);
+    frame.fill(colour);
+    view.setFrame(frame, 4.0 / 3.0);
+    for (const auto mode : {GameView::AspectMode::Console, GameView::AspectMode::SquarePixels,
+                            GameView::AspectMode::Stretch}) {
+        view.setAspectMode(mode);
+        const QImage clean = view.captureGameImage();
+        require(!clean.isNull() && colorBounds(clean, colour) == clean.rect(),
+                "clean screenshot contains display borders or missing game pixels");
+        if (mode == GameView::AspectMode::Stretch)
+            require(clean.size() == view.size(), "stretched screenshot dimensions differ from game viewport");
+        view.setPausedStatus(true);
+        view.setMutedStatus(true);
+        view.setFastForwardStatus(true);
+        view.setRewindStatus(true);
+        view.showStateSlots(3, 1U << 3);
+        const QImage overlays = view.captureImage();
+        require(view.captureGameImage() == clean, "screenshot contains status or slot OSD");
+        require(view.captureImage() == overlays, "screenshot changed the visible OSD state");
+        view.showOsd(QStringLiteral("Screenshot saved"));
+        const QImage notice = view.captureImage();
+        require(view.captureGameImage() == clean, "screenshot contains a transient notice");
+        require(view.captureImage() == notice, "screenshot discarded a transient notice");
+        view.setPausedStatus(false);
+        view.setMutedStatus(false);
+        view.setFastForwardStatus(false);
+        view.setRewindStatus(false);
+        view.setOsdEnabled(false);
+        view.setOsdEnabled(true);
+    }
+    QTemporaryDir directory;
+    require(directory.isValid(), "screenshot codec scratch unavailable");
+    const QImage clean = view.captureGameImage();
+    for (const QByteArray format : {QByteArray("png"), QByteArray("jpeg")}) {
+        require(QImageWriter::supportedImageFormats().contains(format), "screenshot encoder unavailable");
+        require(QImageReader::supportedImageFormats().contains(format), "screenshot decoder unavailable");
+        const QString path = directory.filePath(QString::fromLatin1(format) + QStringLiteral("-capture.") +
+                                                 (format == "jpeg" ? QStringLiteral("jpg") : QStringLiteral("png")));
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly | QIODevice::NewOnly), "cannot create screenshot fixture");
+        QImageWriter writer(&file, format);
+        if (format == "jpeg") writer.setQuality(95);
+        require(writer.write(clean) && file.flush(), "screenshot encoding failed");
+        file.close();
+        QImageReader reader(path);
+        const QImage decoded = reader.read();
+        require(!decoded.isNull() && decoded.size() == clean.size(), "screenshot decoding or dimensions failed");
+        const QColor pixel = decoded.pixelColor(decoded.width()/2, decoded.height()/2);
+        require(qAbs(pixel.red()-colour.red()) <= 2 && qAbs(pixel.green()-colour.green()) <= 2 &&
+                    qAbs(pixel.blue()-colour.blue()) <= 2, "screenshot codec changed game colours");
+        require(!file.open(QIODevice::WriteOnly | QIODevice::NewOnly), "screenshot collision overwrote existing file");
+    }
 }
 
 void testFilteredSquarePixels() {
@@ -369,6 +432,10 @@ void testStateSlotExpiry() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--screenshot-only"))) {
+            testCleanScreenshot();
+            std::puts("clean screenshots passed"); return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--mute-only"))) {
             testMuteStatus();
             std::puts("mute OSD passed"); return 0;
@@ -379,6 +446,7 @@ int main(int argc, char** argv) {
             std::puts("filtered square-pixel geometry passed"); return 0;
         }
         testGameBorders();
+        testCleanScreenshot();
         testFilteredSquarePixels();
         testUpperLeftBounds();
         testOnlyLatestAction();

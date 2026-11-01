@@ -33,6 +33,20 @@ int main(int argc,char** argv) {
  RewindBuffer bounded(45000);bounded.configure(60,30);
  for(const auto& shot:shots) { require(bounded.capture(shot.state,shot.frame,shot.aspect),"bounded capture");require(bounded.bytesUsed()<=45000,"memory cap exceeded"); }
  while(bounded.stepBack(actual,image,aspect))require(bounded.bytesUsed()<=45000,"reverse memory cap exceeded");
+ // Reserved capacity is retained memory even when logical data is small.
+ QByteArray reserved(16,'r');reserved.reserve(128*1024);
+ RewindBuffer reservedBudget(64*1024);reservedBudget.configure(60,30);
+ require(!reservedBudget.capture(reserved,shots[0].frame,1.0),"reserved anchor bypassed memory budget");
+ QByteArray large(2*1024*1024,'q');const auto compressed=qCompress(large,1);
+ RewindBuffer compressedBudget(4*1024*1024);compressedBudget.configure(60,30);
+ QImage tiny(1,1,QImage::Format_RGB32);tiny.fill(Qt::black);
+ require(compressedBudget.capture(large,tiny,1.0),"large capacity fixture capture");
+ QByteArray small(1,'s');
+ require(compressedBudget.capture(small,tiny,1.0),"size-changing capacity fixture capture");
+ require(compressedBudget.bytesUsed()>=compressed.capacity()+small.capacity()+tiny.sizeInBytes(),
+         "compressed patch capacity was omitted from memory accounting");
+ require(compressedBudget.stepBack(actual,image,aspect) && actual==large,"capacity-aware history restore");
+ require(compressedBudget.bytesUsed()>=large.capacity()+tiny.sizeInBytes(),"restored anchor capacity was omitted");
  RewindBuffer identical;identical.configure(60,30);
  for(int i=0;i<1801;++i)require(identical.capture(shots[0].state,shots[0].frame,shots[0].aspect),"identical capture");
  require(identical.bytesUsed()<512*1024,"unchanged frames repeated full storage");

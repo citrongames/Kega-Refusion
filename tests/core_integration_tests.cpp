@@ -458,6 +458,20 @@ void testArchiveCore(const QString& corePath) {
     require(host.load(multi,error,1) && host.contentName()=="folder/second.md","archive explicit member index failed");
     require(host.occupiedStateSlots()==0,"different archive members shared save identity");
     host.runFrame(); require(!host.frame().isNull(),"selected archive member did not produce video");
+    const auto entries = RomArchive::list(multi, &error);
+    require(error.isEmpty() && entries.size() == 2, "archive metadata fixture list failed");
+    const auto selected = entries.at(1);
+    require(host.load(multi, error, selected.index, &selected) &&
+            host.contentName() == selected.name, "forwarded archive selection did not load");
+    for (int field = 0; field < 3; ++field) {
+        auto stale = selected;
+        if (field == 0) stale.name += ".changed";
+        else if (field == 1) ++stale.size;
+        else stale.index = 99;
+        require(!host.load(multi, error, stale.index, &stale) && !error.isEmpty() &&
+                host.loaded() && host.contentName() == selected.name,
+                "stale forwarded archive selection replaced the active game");
+    }
 }
 
 void testCoreOptionsAndReset(const QString& corePath) {
@@ -713,14 +727,20 @@ void testRewind(const QString& corePath) {
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
-    if (argc != 2 && !(argc == 3 && QString::fromLocal8Bit(argv[2]) == QLatin1String("--video-geometry"))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so\n");
+    const auto mode = argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString();
+    if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
+                                     mode == QLatin1String("--archive-only")))) {
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only]\n");
         return 2;
     }
     try {
-        if (argc == 3) {
+        if (mode == QLatin1String("--video-geometry")) {
             testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
             std::puts("native filtered video geometry passed"); return 0;
+        }
+        if (mode == QLatin1String("--archive-only")) {
+            testArchiveCore(QString::fromLocal8Bit(argv[1]));
+            std::puts("archive core integration passed"); return 0;
         }
         testCore(QString::fromLocal8Bit(argv[1]));
         testSaveRam(QString::fromLocal8Bit(argv[1]));
