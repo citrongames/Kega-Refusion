@@ -27,7 +27,7 @@ int main(int argc,char** argv) {
  for(int a=2;a<argc;++a){
   QTemporaryDir data;LibretroHost host(QString::fromLocal8Bit(argv[1]),data.path());QString error;
   if(!host.load(QString::fromLocal8Bit(argv[a]),error)){std::fprintf(stderr,"%s\n",qPrintable(error));return 1;}
-  RewindBuffer delta;Legacy legacy;delta.configure(60,host.fps()/2);legacy.cap=size_t(60*host.fps()/2)+1;
+  RewindBuffer delta;Legacy legacy;delta.configure(true);legacy.cap=size_t(60*host.fps()/2)+1;
   std::vector<qint64> oldTimes,newTimes,restoreTimes;QElapsedTimer timer;
   const int frames=int(host.fps()*65);
   for(int i=0;i<frames;++i){

@@ -681,7 +681,7 @@ void testNativeVideoGeometry(const QString& corePath) {
         {"wide.md",md40},{"narrow.md",md32},{"master.sms",sms},{"handheld.gg",gg}
     }};
     LibretroHost host(corePath,temp.path()+"/data"); QString error;
-    RewindBuffer history; history.configure(10,30);
+    RewindBuffer history; history.configure(true);
     for (const auto& [name,rom] : cases) {
         const QString path = temp.path()+'/'+name; writeFile(path,rom);
         require(host.setBlarggFilter(0,error) && host.load(path,error),"geometry ROM load failed");
@@ -726,7 +726,7 @@ void testRewind(const QString& corePath) {
     require(!initial.isEmpty(), "rewind snapshot missing");
     require(!host.restoreRewindState(initial.left(initial.size()-1)), "truncated rewind snapshot accepted");
     RewindBuffer history;
-    history.configure(30,30);
+    history.configure(true);
     std::vector<QByteArray> states;
     std::vector<QImage> frames;
     for (int i=0;i<12;++i) {
@@ -755,14 +755,14 @@ void testRewind(const QString& corePath) {
     // Initial erased SRAM must replace a future save after restoring the checkpoint.
     const QString ram=temp.path()+"/data/saves/rewind.srm";
     if (QFile::exists(ram)) require(quint8(readFile(ram)[0])==0xff, "rewind retained future SRAM");
-    history.configure(1,2);
+    history.configure(true);
     for (int i=0;i<10;++i) require(history.capture(states.back(),frames.back(),4.0/3.0), "bounded capture failed");
-    require(history.size()==3, "rewind duration limit failed");
+    require(history.size()==10, "history was limited by checkpoint count");
     RewindBuffer small(1);
-    small.configure(30,30);
+    small.configure(true);
     require(!small.capture(states.back(),frames.back(),4.0/3.0) && small.bytesUsed()==0, "rewind memory cap failed");
     history.clear(); require(history.size()==0 && history.bytesUsed()==0, "history clear leaked state");
-    history.configure(0,30);
+    history.configure(false);
     require(history.capture(states.back(),frames.back(),4.0/3.0) && history.size()==0, "disabled rewind recorded history");
 }
 

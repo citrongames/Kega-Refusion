@@ -269,7 +269,7 @@ int main(int argc, char** argv) {
         int maxWidth = 0, maxHeight = 0;
         QCryptographicHash audioHash(QCryptographicHash::Sha256);
         RewindBuffer history;
-        if (recordRewind) history.configure(30, host.fps() / 2);
+        if (recordRewind) history.configure(true);
         QElapsedTimer clock;
         clock.start();
         for (int frame = 0; frame < frames; ++frame) {

@@ -79,10 +79,9 @@ QByteArray RewindBuffer::decode(const Patch& patch, const QByteArray& newer) {
     return result;
 }
 qsizetype RewindBuffer::entryBytes(const Entry& e) { return e.state.bytes.capacity()+e.pixels.bytes.capacity()+sizeof(Entry); }
-void RewindBuffer::configure(int seconds, double snapshotsPerSecond) {
+void RewindBuffer::configure(bool enabled) {
     clear();
-    entryLimit_ = seconds > 0 && std::isfinite(snapshotsPerSecond)
-        ? size_t(std::clamp(seconds,1,60)*std::clamp(snapshotsPerSecond,1.0,120.0))+1 : 0;
+    enabled_ = enabled;
 }
 void RewindBuffer::setByteLimit(qsizetype byteLimit) {
     byteLimit = std::max<qsizetype>(0,byteLimit);
@@ -95,7 +94,7 @@ void RewindBuffer::clear() {
     bytesUsed_ = 0;
 }
 bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect) {
-    if (!entryLimit_) return true;
+    if (!enabled_) return true;
     if (state.isEmpty() || state.size()>maxBytes || frame.isNull() || frame.sizeInBytes()>maxBytes ||
         !std::isfinite(aspect) || aspect<=0 || quint64(frame.width())*frame.height()*4>maxBytes) return false;
     const QImage rgb = frame.convertToFormat(QImage::Format_RGB32);
@@ -111,7 +110,7 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     }
     bytesUsed_ += anchorBytes-currentState_.capacity()-currentPixels_.capacity();
     currentState_ = state; currentPixels_ = pixels; currentSize_ = rgb.size(); currentNativeSize_ = VideoFrameGeometry::nativeSize(frame); currentAspect_ = aspect;
-    while (!entries_.empty() && (size()>entryLimit_ || bytesUsed_>byteLimit_)) {
+    while (!entries_.empty() && bytesUsed_>byteLimit_) {
         bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
     }
     return true;

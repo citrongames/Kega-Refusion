@@ -96,7 +96,7 @@ private:
     QByteArray windowedGeometry_;
     int stateSlot_ = 0;
     int fastForwardFactor_ = 4;
-    int rewindSeconds_ = 30;
+    bool rewindEnabled_ = true;
     int region_ = 0, blarggFilter_ = 0;
     unsigned occupiedSlots_ = 0;
     bool pauseOnFocusLoss_ = true;

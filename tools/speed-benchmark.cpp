@@ -9,12 +9,12 @@ int main(int argc,char** argv) {
  QCoreApplication app(argc,argv);
  if(argc!=3){std::fprintf(stderr,"Usage: speed_benchmark core ROM\n");return 2;}
  std::puts("blargg,history,mode,emulated_frames,seconds,frames_per_second,speed_x,rendered_frames,history_MiB");
- for(int filter:{0,2})for(int history:{0,30}){
+ for(int filter:{0,2})for(int history:{0,1}){
   std::vector<QImage> reference;
   for(bool optimized:{false,true}){
    QTemporaryDir data;LibretroHost host(QString::fromLocal8Bit(argv[1]),data.path());QString error;
    if(!host.setBlarggFilter(filter,error)||!host.load(QString::fromLocal8Bit(argv[2]),error)){std::fprintf(stderr,"%s\n",qPrintable(error));return 1;}
-   RewindBuffer rewind;rewind.configure(history,host.fps()/2);
+   RewindBuffer rewind;rewind.configure(history != 0);
    // Warm up outside the timed section; identical input and emulated frame count.
    for(int i=0;i<180;++i)host.runFrame();
    QElapsedTimer clock;clock.start();qint64 nextPresent=0;int rendered=0;

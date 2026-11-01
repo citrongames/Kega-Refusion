@@ -118,8 +118,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     stateSlot_ = qBound(0, settings_.value(QStringLiteral("emulation/slot"), 0).toInt(), 9);
     fastForwardFactor_ = settings_.value(QStringLiteral("emulation/fastForwardFactor"), 4).toInt();
     if (!QList<int>{0,2,3,4,6,8,12,16,32}.contains(fastForwardFactor_)) fastForwardFactor_ = 4;
-    rewindSeconds_ = settings_.value(QStringLiteral("emulation/rewindSeconds"), 30).toInt();
-    if (!QList<int>{0,10,30,60}.contains(rewindSeconds_)) rewindSeconds_ = 30;
+    // Preserve an explicitly disabled legacy history, but discard its duration.
+    rewindEnabled_ = settings_.value(QStringLiteral("emulation/rewindEnabled"),
+        settings_.value(QStringLiteral("emulation/rewindSeconds"), 30).toInt() != 0).toBool();
+    if (settings_.contains(QStringLiteral("emulation/rewindSeconds"))) {
+        settings_.setValue(QStringLiteral("emulation/rewindEnabled"), rewindEnabled_);
+        settings_.remove(QStringLiteral("emulation/rewindSeconds"));
+    }
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
     region_ = qBound(0, settings_.value(QStringLiteral("emulation/region"), 0).toInt(), 3);
     blarggFilter_ = qBound(0, settings_.value(QStringLiteral("view/blarggFilter"), 0).toInt(), 4);
@@ -129,7 +134,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
     session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
     session_.setFastForwardFactor(fastForwardFactor_);
-    session_.setRewindSeconds(rewindSeconds_);
+    session_.setRewindEnabled(rewindEnabled_);
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
@@ -349,21 +354,17 @@ void MainWindow::buildMenus() {
     rewindAction_ = emulationMenu->addAction(QStringLiteral("Перемотка назад (R)"));
     rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
     connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
-    QMenu* historyMenu = emulationMenu->addMenu(QStringLiteral("История перемотки"));
-    auto* historyGroup = new QActionGroup(this);
-    for (int seconds : {0,10,30,60}) {
-        QAction* action = historyMenu->addAction(seconds ? QStringLiteral("%1 с").arg(seconds) : QStringLiteral("Выключена"));
-        action->setCheckable(true); action->setChecked(seconds == rewindSeconds_);
-        historyGroup->addAction(action);
-        connect(action, &QAction::triggered, this, [this, seconds] {
-            rewindSeconds_ = seconds;
-            settings_.setValue(QStringLiteral("emulation/rewindSeconds"), seconds);
-            session_.setRewindSeconds(seconds);
-            if (!seconds) { rewindHeld_ = rewindPadHeld_ = false; rewindAction_->setChecked(false); }
-            rewindAction_->setEnabled(session_.hasGame() && seconds > 0);
-            updateRewind();
-        });
-    }
+    QAction* historyAction = emulationMenu->addAction(QStringLiteral("Записывать историю перемотки"));
+    historyAction->setCheckable(true);
+    historyAction->setChecked(rewindEnabled_);
+    connect(historyAction, &QAction::toggled, this, [this](bool enabled) {
+        rewindEnabled_ = enabled;
+        settings_.setValue(QStringLiteral("emulation/rewindEnabled"), enabled);
+        session_.setRewindEnabled(enabled);
+        if (!enabled) { rewindHeld_ = rewindPadHeld_ = false; rewindAction_->setChecked(false); }
+        rewindAction_->setEnabled(session_.hasGame() && enabled);
+        updateRewind();
+    });
     QAction* focusPause = emulationMenu->addAction(QStringLiteral("Пауза при потере фокуса"));
     focusPause->setCheckable(true); focusPause->setChecked(pauseOnFocusLoss_);
     connect(focusPause, &QAction::toggled, this, [this](bool enabled) {
@@ -405,7 +406,7 @@ void MainWindow::buildMenus() {
         resetAction_->setEnabled(true);
         hardResetAction_->setEnabled(true);
         fastForwardAction_->setEnabled(true);
-        rewindAction_->setEnabled(rewindSeconds_ > 0);
+        rewindAction_->setEnabled(rewindEnabled_);
         saveAction_->setEnabled(true);
         loadAction_->setEnabled(true);
     });
@@ -1003,7 +1004,7 @@ void MainWindow::editSettings() {
     rewindMemory->setValue(memoryMiB);
     form->addRow(QStringLiteral("Память перемотки:"), rewindMemory);
     auto* rewindHelp = new QLabel(QStringLiteral(
-        "История ограничена и временем, и памятью. При заполнении удаляются самые старые кадры. "
+        "История ограничена только памятью, без предела по времени. При заполнении удаляются самые старые кадры. "
         "Изменение лимита очищает историю; память выделяется по мере накопления."), &dialog);
     rewindHelp->setWordWrap(true);
     form->addRow(rewindHelp);
@@ -1074,7 +1075,7 @@ void MainWindow::updateInputEnabled() {
 void MainWindow::updateFastForward() {
     const bool enabled = fastForwardHeld_ || fastForwardPadHeld_ ||
                          (fastForwardAction_ && fastForwardAction_->isChecked());
-    view_->setFastForwardStatus(enabled && !(rewindSeconds_ > 0 && (rewindHeld_ || rewindPadHeld_ ||
+    view_->setFastForwardStatus(enabled && !(rewindEnabled_ && (rewindHeld_ || rewindPadHeld_ ||
         (rewindAction_ && rewindAction_->isChecked()))));
     if (fastForwardActive_ == enabled) return;
     fastForwardActive_ = enabled;
@@ -1083,7 +1084,7 @@ void MainWindow::updateFastForward() {
 }
 
 void MainWindow::updateRewind() {
-    const bool enabled = rewindSeconds_ > 0 && (rewindHeld_ || rewindPadHeld_ ||
+    const bool enabled = rewindEnabled_ && (rewindHeld_ || rewindPadHeld_ ||
         (rewindAction_ && rewindAction_->isChecked()));
     session_.setRewind(enabled);
     updateFastForward();

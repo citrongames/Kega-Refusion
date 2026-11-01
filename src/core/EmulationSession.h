@@ -40,7 +40,7 @@ public:
     void setFastForward(bool enabled);
     void setFastForwardFactor(int factor);
     void setRewind(bool enabled);
-    void setRewindSeconds(int seconds);
+    void setRewindEnabled(bool enabled);
     void setRewindMemoryMiB(int mebibytes);
     void setBackgroundPaused(bool paused);
     void requestSlotStatus(int selected);
@@ -84,6 +84,7 @@ private:
     std::deque<Command> commands_;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
-    std::atomic<int> fastForwardFactor_{4}, rewindSeconds_{30}, rewindMemoryMiB_{128};
+    std::atomic<bool> rewindEnabled_{true};
+    std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
     std::atomic<unsigned> buttons_[2]{};
 };

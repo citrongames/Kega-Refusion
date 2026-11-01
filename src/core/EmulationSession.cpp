@@ -70,7 +70,7 @@ void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store
 void EmulationSession::setFastForward(bool enabled) { fastForward_.store(enabled); }
 void EmulationSession::setFastForwardFactor(int factor) { fastForwardFactor_.store(factor == 0 ? 0 : std::clamp(factor, 2, 32)); }
 void EmulationSession::setRewind(bool enabled) { rewind_.store(enabled); }
-void EmulationSession::setRewindSeconds(int seconds) { rewindSeconds_.store(std::clamp(seconds, 0, 60)); }
+void EmulationSession::setRewindEnabled(bool enabled) { rewindEnabled_.store(enabled); }
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
 void EmulationSession::requestSlotStatus(int selected) { enqueue({Type::Slots,{},selected}); }
@@ -85,12 +85,13 @@ void EmulationSession::run() {
         emit discStateChanged(host.discPaths(),host.discIndex(),lastDiscEjected);
     };
     RewindBuffer history;
-    int historySeconds = rewindSeconds_.load(), historyMemoryMiB = rewindMemoryMiB_.load();
+    bool historyEnabled = rewindEnabled_.load();
+    int historyMemoryMiB = rewindMemoryMiB_.load();
     bool historyHealthy = true;
     unsigned captureFrame = 0;
     auto clearHistory = [&] {
         history.setByteLimit(qsizetype(historyMemoryMiB) * 1024 * 1024);
-        history.configure(historySeconds, host.fps() / 2.0);
+        history.configure(historyEnabled);
         historyHealthy = true;
         captureFrame = 0;
     };
@@ -237,10 +238,10 @@ void EmulationSession::run() {
                 break;
             }
         }
-        const int requestedHistorySeconds = rewindSeconds_.load();
+        const bool requestedHistoryEnabled = rewindEnabled_.load();
         const int requestedHistoryMemoryMiB = rewindMemoryMiB_.load();
-        if (historySeconds != requestedHistorySeconds || historyMemoryMiB != requestedHistoryMemoryMiB) {
-            historySeconds = requestedHistorySeconds; historyMemoryMiB = requestedHistoryMemoryMiB;
+        if (historyEnabled != requestedHistoryEnabled || historyMemoryMiB != requestedHistoryMemoryMiB) {
+            historyEnabled = requestedHistoryEnabled; historyMemoryMiB = requestedHistoryMemoryMiB;
             clearHistory();
         }
         const bool background = backgroundPaused_.load();
@@ -248,7 +249,7 @@ void EmulationSession::run() {
         if (nowPaused != effectivePaused) {
             effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); clearAudio(); pacer.reset(nowNs());
         }
-        const bool reverse = rewind_.load() && historySeconds > 0 && host.loaded() && !background && !optionsPending;
+        const bool reverse = rewind_.load() && historyEnabled && host.loaded() && !background && !optionsPending;
         if (reverse != rewindLatched) {
             rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
             if (reverse) {
@@ -316,7 +317,7 @@ void EmulationSession::run() {
         if (optionsPending) {
             optionsPending = false; clearHistory(); clearAudio(); pacer.reset(nowNs());
         }
-        if (!fast && historySeconds && historyHealthy && ++captureFrame % 2 == 0) {
+        if (!fast && historyEnabled && historyHealthy && ++captureFrame % 2 == 0) {
             if (!history.capture(host.captureRewindState(),host.frame(),host.aspectRatio())) {
                 history.clear(); historyHealthy = false;
                 emit notification(QStringLiteral("История перемотки недоступна для текущей игры."));

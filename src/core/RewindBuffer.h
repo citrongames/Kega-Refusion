@@ -7,7 +7,7 @@
 class RewindBuffer final {
 public:
     explicit RewindBuffer(qsizetype byteLimit = 128 * 1024 * 1024) : byteLimit_(byteLimit) {}
-    void configure(int seconds, double snapshotsPerSecond);
+    void configure(bool enabled);
     // Changing the retained-storage budget discards the previous timeline.
     void setByteLimit(qsizetype byteLimit);
     void clear();
@@ -28,6 +28,6 @@ private:
     QByteArray currentState_, currentPixels_;
     QSize currentSize_, currentNativeSize_;
     double currentAspect_ = 4.0 / 3.0;
-    size_t entryLimit_ = 0;
+    bool enabled_ = false;
     qsizetype byteLimit_, bytesUsed_ = 0;
 };
