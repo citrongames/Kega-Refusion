@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.4.1 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.5.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -21,9 +21,12 @@ else()
     target_compile_options(rom_archive PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
+    src/core/Mp3Stream.cpp src/core/Mp3Stream.h
+    src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
+    src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
     src/core/RewindBuffer.cpp src/core/RewindBuffer.h
     src/core/FramePacer.cpp src/core/FramePacer.h)
-target_include_directories(core_host PUBLIC src third_party/libretro)
+target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)
@@ -48,6 +51,15 @@ else()
 endif()
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(cd_benchmark tools/cd-benchmark.cpp)
+    target_link_libraries(cd_benchmark PRIVATE core_host)
+    if(WIN32)
+        target_link_libraries(cd_benchmark PRIVATE psapi)
+    endif()
+    add_executable(mp3_tests tests/mp3_tests.cpp)
+    target_link_libraries(mp3_tests PRIVATE core_host)
+    add_executable(cd_tests tests/cd_tests.cpp)
+    target_link_libraries(cd_tests PRIVATE core_host)
     add_executable(archive_tests tests/archive_tests.cpp)
     target_link_libraries(archive_tests PRIVATE rom_archive kega_archive)
     add_test(NAME archive_tests COMMAND archive_tests)

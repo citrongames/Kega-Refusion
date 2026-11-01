@@ -1,0 +1,213 @@
+#include "SegaCdBios.h"
+
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
+#include <QtEndian>
+#include <array>
+#include <cstddef>
+#include <utility>
+
+namespace {
+constexpr qsizetype biosSize = 128 * 1024;
+
+struct Region {
+    int id;
+    char code;
+    const char* filename;
+    const char* label;
+};
+
+constexpr std::array<Region, 3> regions{{
+    {1, 'J', "bios_CD_J.bin", "Япония"},
+    {2, 'U', "bios_CD_U.bin", "США"},
+    {3, 'E', "bios_CD_E.bin", "Европа"},
+}};
+
+const Region* findRegion(int id) {
+    for (const auto& region : regions)
+        if (region.id == id) return &region;
+    return nullptr;
+}
+
+const Region* findRegion(char code) {
+    for (const auto& region : regions)
+        if (region.code == code) return &region;
+    return nullptr;
+}
+
+QString biosPath(const QString& dataPath, const Region& region) {
+    return QDir(dataPath).filePath(QStringLiteral("bios/") + QString::fromLatin1(region.filename));
+}
+
+// These are fingerprints of the user's six read-only source images, not BIOS data.
+// Other revisions are accepted when their internal Sega CD header is consistent.
+const Region* knownRegion(const QByteArray& bytes) {
+    const QByteArray hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+    if (hash == "e8dbee3edcd1b2751c72c1d9ae0dac1aacd9203804bfc1a35ea098d8778bcb1c" ||
+        hash == "923eb9da740f98ab1572085e3d351e2c0982df0906b0b99efb68a9997c94cf8f") return findRegion('J');
+    if (hash == "807384678ef259494d943eddb6954dfc7069693d0dde0c424e2028488d88e81a" ||
+        hash == "b1c2036b79467514eaaa69c76e5ba83801621e821059caa53cb921a0b21e3af4") return findRegion('U');
+    if (hash == "16735df92fcc1d0fc6a1eced244867e95281c5006340926082b74e363e073dc4") return findRegion('E');
+    return nullptr;
+}
+
+const Region* identify(const QByteArray& bytes, QString& reason) {
+    if (bytes.size() != biosSize) {
+        reason = QStringLiteral("ожидается образ BIOS размером 131072 байта");
+        return nullptr;
+    }
+    if (const Region* known = knownRegion(bytes)) return known;
+
+    // The platform, product, boot-ROM identifier and territory occupy fixed
+    // positions in unmodified Mega-CD/Sega-CD BIOS images.
+    const QByteArray title = bytes.mid(0x120, 16).trimmed();
+    const QByteArray secondTitle = bytes.mid(0x150, 16).trimmed();
+    const bool cdBootRom = title == "MEGA-CD BOOT ROM" || title == "SEGA-CD BOOT ROM" ||
+                           title == "CD2 BOOT ROM";
+    const quint32 stack = qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(bytes.constData()));
+    const quint32 reset = qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(bytes.constData() + 4));
+    const Region* region = findRegion(bytes.at(0x1f0));
+    if (bytes.mid(0x100, 16) != "SEGA MEGA DRIVE " ||
+        bytes.mid(0x110, 7) != "(C)SEGA" || !cdBootRom || title != secondTitle ||
+        bytes.mid(0x180, 3) != "BR " || stack != 0xfffffd00u ||
+        reset < 0x200u || reset >= static_cast<quint32>(biosSize) || (reset & 1u) ||
+        !region) {
+        reason = QStringLiteral("не распознан оригинальный заголовок Sega CD или его регион");
+        return nullptr;
+    }
+    // Sega's 16-bit ROM checksum covers all words after the 0x200-byte header.
+    // It permits other genuine BIOS revisions while rejecting damaged images.
+    const quint16 expectedChecksum = qFromBigEndian<quint16>(
+        reinterpret_cast<const uchar*>(bytes.constData() + 0x18e));
+    quint16 calculatedChecksum = 0;
+    for (qsizetype offset = 0x200; offset < bytes.size(); offset += 2)
+        calculatedChecksum = static_cast<quint16>(calculatedChecksum + qFromBigEndian<quint16>(
+            reinterpret_cast<const uchar*>(bytes.constData() + offset)));
+    if (calculatedChecksum != expectedChecksum) {
+        reason = QStringLiteral("контрольная сумма содержимого BIOS не совпадает");
+        return nullptr;
+    }
+    return region;
+}
+
+bool readImage(const QString& path, QByteArray& bytes, QString& error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = QStringLiteral("Не удалось прочитать %1: %2").arg(path, file.errorString());
+        return false;
+    }
+    if (file.size() != biosSize) {
+        error = QStringLiteral("Неверный размер BIOS %1: требуется 131072 байта.").arg(path);
+        return false;
+    }
+    bytes = file.readAll();
+    if (bytes.size() != biosSize) {
+        error = QStringLiteral("Не удалось полностью прочитать BIOS: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+void appendError(QString& error, const QString& detail) {
+    if (!error.isEmpty()) error += QLatin1Char('\n');
+    error += detail;
+}
+} // namespace
+
+bool SegaCdBios::validate(const QString& dataPath, int region, QString& error) {
+    error.clear();
+    const Region* expected = findRegion(region);
+    if (!expected) {
+        error = QStringLiteral("Неизвестный регион Sega CD: %1.").arg(region);
+        return false;
+    }
+    const QString path = biosPath(dataPath, *expected);
+    if (!QFileInfo::exists(path)) {
+        error = QStringLiteral("Для региона «%1» не найден BIOS: %2.")
+                    .arg(QString::fromUtf8(expected->label), path);
+        return false;
+    }
+    QByteArray bytes;
+    if (!readImage(path, bytes, error)) return false;
+    QString reason;
+    const Region* actual = identify(bytes, reason);
+    if (!actual) {
+        error = QStringLiteral("BIOS %1 недействителен: %2.").arg(path, reason);
+        return false;
+    }
+    if (actual != expected) {
+        error = QStringLiteral("BIOS %1 относится к региону «%2», ожидается «%3».")
+                    .arg(path, QString::fromUtf8(actual->label), QString::fromUtf8(expected->label));
+        return false;
+    }
+    return true;
+}
+
+QString SegaCdBios::status(const QString& dataPath, int region) {
+    QString error;
+    if (!validate(dataPath, region, error)) return error;
+    const Region* expected = findRegion(region);
+    return QStringLiteral("BIOS Sega CD для региона «%1» установлен: %2")
+        .arg(QString::fromUtf8(expected->label), biosPath(dataPath, *expected));
+}
+
+QStringList SegaCdBios::importDirectory(const QString& sourceDirectory, const QString& dataPath,
+                                        QString& error) {
+    error.clear();
+    QStringList imported;
+    const QDir source(sourceDirectory);
+    if (!source.exists()) {
+        error = QStringLiteral("Каталог BIOS не найден: %1").arg(sourceDirectory);
+        return imported;
+    }
+
+    struct Candidate { QString path; QByteArray bytes; };
+    std::array<Candidate, 3> candidates;
+    for (const QFileInfo& info : source.entryInfoList(QDir::Files | QDir::Readable | QDir::NoDotAndDotDot,
+                                                      QDir::Name)) {
+        if (info.size() != biosSize) continue;
+        QByteArray bytes;
+        QString readError;
+        if (!readImage(info.absoluteFilePath(), bytes, readError)) continue;
+        QString reason;
+        const Region* region = identify(bytes, reason);
+        if (!region) continue;
+        Candidate& candidate = candidates.at(static_cast<size_t>(region->id - 1));
+        if (candidate.path.isEmpty()) candidate = {info.absoluteFilePath(), std::move(bytes)};
+    }
+
+    bool found = false;
+    for (const auto& region : regions) {
+        const Candidate& candidate = candidates.at(static_cast<size_t>(region.id - 1));
+        if (candidate.path.isEmpty()) continue;
+        found = true;
+        const QString destination = biosPath(dataPath, region);
+        const QFileInfo existing(destination);
+        if (existing.exists() || existing.isSymLink()) {
+            QString validationError;
+            if (!validate(dataPath, region.id, validationError))
+                appendError(error, QStringLiteral("Существующий файл сохранён без замены. %1")
+                                   .arg(validationError));
+            continue;
+        }
+        if (!QDir().mkpath(QFileInfo(destination).absolutePath())) {
+            appendError(error, QStringLiteral("Не удалось создать каталог BIOS для %1.")
+                               .arg(destination));
+            continue;
+        }
+        QSaveFile output(destination);
+        if (!output.open(QIODevice::WriteOnly) ||
+            output.write(candidate.bytes) != candidate.bytes.size() || !output.commit()) {
+            appendError(error, QStringLiteral("Не удалось импортировать %1: %2")
+                               .arg(candidate.path, output.errorString()));
+            continue;
+        }
+        imported << QString::fromUtf8(region.label);
+    }
+    if (!found) appendError(error, QStringLiteral("В каталоге %1 не найдено подходящих образов BIOS Sega CD размером 131072 байта.")
+                                       .arg(source.absolutePath()));
+    return imported;
+}

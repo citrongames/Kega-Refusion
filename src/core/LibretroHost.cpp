@@ -1,6 +1,8 @@
 #include "LibretroHost.h"
 #include "RomArchive.h"
 #include "VideoFrameGeometry.h"
+#include "SegaCdBios.h"
+#include "CoreFileSystem.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -105,8 +107,173 @@ bool LibretroHost::initialize(QString& error) {
     initialized_ = true;
     return true;
 }
+QStringList LibretroHost::discPaths() const {
+    QStringList result;
+    if (isCd()) for (const auto& disc : discs_) result.append(disc.path);
+    return result;
+}
+bool LibretroHost::discEjected() const {
+    return isCd() && disk_.get_eject_state && disk_.get_eject_state();
+}
+bool LibretroHost::checkDiscBios(const DiscImage& image, QString& error) const {
+    int region = image.region;
+    const auto found = optionOverrides_.find("genesis_plus_gx_region_detect");
+    if (found != optionOverrides_.end()) {
+        if (found->second == "ntsc-j") region = 1;
+        else if (found->second == "ntsc-u") region = 2;
+        else if (found->second == "pal") region = 3;
+    }
+    if (region) return SegaCdBios::validate(dataPath_,region,error);
+    // CHD's compressed header is decoded by the core. At least one installed
+    // BIOS is needed; a failed core load reports the available region statuses.
+    for (int candidate : {1,2,3}) if (SegaCdBios::validate(dataPath_,candidate,error)) { error.clear(); return true; }
+    error = QStringLiteral("Не найден BIOS Sega CD. Импортируйте BIOS через Файл → Sega CD → BIOS…");
+    return false;
+}
+void LibretroHost::setDiscIdentity() {
+    const QFileInfo info(discs_[discIndex_].runtimePath);
+    encodedGamePath_ = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
+    contentDirectory_ = QDir::toNativeSeparators(info.absolutePath()).toUtf8();
+    contentBaseName_ = info.completeBaseName().toUtf8();
+    contentExtension_ = info.suffix().toLower().toUtf8();
+    contentInfo_ = {};
+    contentInfo_.full_path = encodedGamePath_.constData();
+    contentInfo_.dir = contentDirectory_.constData();
+    contentInfo_.name = contentBaseName_.constData();
+    contentInfo_.ext = contentExtension_.constData();
+    // Disc CPU states also depend on the selected region and installed BIOS.
+    // Keep them separate from states made with another boot ROM/region.
+    QByteArray identity = discs_[discIndex_].hash;
+    const auto region = optionOverrides_.find("genesis_plus_gx_region_detect");
+    identity += region == optionOverrides_.end() ? QByteArray("auto") : region->second;
+    for (const auto* code : {"J","U","E"}) {
+        QFile bios(dataPath_ + "/bios/bios_CD_" + code + ".bin");
+        identity += bios.open(QIODevice::ReadOnly) && bios.size() == 131072 ? digest(bios.readAll()) : QByteArray(32,'\0');
+    }
+    romHash_ = digest(identity);
+    gameKey_ = QString::fromLatin1(romHash_.toHex());
+}
+bool LibretroHost::refreshDiscFiles(QString& error) {
+    CoreFileSystem::clearVirtualFiles();
+    for (auto& disc : discs_) if (!DiscMedia::prepare(disc,dataPath_,error)) return false;
+    return true;
+}
+bool LibretroHost::registerDiscs(QString& error) {
+    if (!disk_.get_num_images || !disk_.set_eject_state || !disk_.get_eject_state ||
+        !disk_.set_image_index || !disk_.replace_image_index || !disk_.add_image_index ||
+        !disk_.get_num_images()) {
+        error = QStringLiteral("Ядро не распознало образ Sega CD."); return false;
+    }
+    CoreFileSystem::clearError();
+    if (!disk_.set_eject_state(true)) { error = QStringLiteral("Не удалось открыть привод."); return false; }
+    for (int i = 0; i < discs_.size(); ++i) {
+        if (unsigned(i) >= disk_.get_num_images() && !disk_.add_image_index()) {
+            error = QStringLiteral("Не удалось добавить диск."); return false;
+        }
+        // A freshly loaded disc 0 is already mounted. Replacing/selecting it
+        // again would reopen every audio track and repeat MP3 indexing.
+        if (i == 0 && discIndex_ == 0) continue;
+        const auto path = QDir::toNativeSeparators(discs_[i].runtimePath).toUtf8();
+        retro_game_info game{}; game.path = path.constData();
+        if (!disk_.replace_image_index(unsigned(i),&game)) {
+            error = QStringLiteral("Не удалось подключить диск: %1").arg(discs_[i].path); return false;
+        }
+    }
+    if ((discIndex_ != 0 && !disk_.set_image_index(unsigned(discIndex_))) || !disk_.set_eject_state(false)) {
+        error = QStringLiteral("Не удалось закрыть привод Sega CD."); return false;
+    }
+    if (!CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); return false; }
+    return true;
+}
+bool LibretroHost::loadCd(const QString& path, QString& error) {
+    QVector<DiscImage> images;
+    if (!DiscMedia::read(path,images,error) || !checkDiscBios(images.first(),error)) return false;
+    if (!initialize(error)) return false;
+    if (loaded_ && !flushSaveRam(error)) return false;
+    unload();
+    discs_ = images; discIndex_ = 0;
+    if (!refreshDiscFiles(error)) { unload(); return false; }
+    CoreFileSystem::clearError();
+    setDiscIdentity();
+    retro_game_info game{}; game.path = encodedGamePath_.constData();
+    contentInfoActive_ = true;
+    const bool accepted = api_->load_game(&game);
+    contentInfoActive_ = false;
+    if (!accepted) {
+        error = QStringLiteral("Не удалось загрузить Sega CD. Проверьте образ, дорожки и BIOS региона.\n%1\n%2\n%3")
+            .arg(SegaCdBios::status(dataPath_,1),SegaCdBios::status(dataPath_,2),SegaCdBios::status(dataPath_,3));
+        unload(); return false;
+    }
+    loaded_ = true;
+    if (!CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
+    gamePath_ = QFileInfo(path).absoluteFilePath(); contentName_ = QFileInfo(path).fileName();
+    api_->get_system_av_info(&av_);
+    if (!validAvInfo(av_) || !registerDiscs(error)) {
+        if (error.isEmpty()) error = QStringLiteral("Некорректные параметры Sega CD.");
+        unload(); return false;
+    }
+    for (unsigned port = 0; port < 2; ++port)
+        api_->set_controller_port_device(port,RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1));
+    // CD internal/cart BRAM is owned by GPX, including formatting and region
+    // filenames. It is not exposed as libretro cartridge SRAM.
+    saveMemorySizes_.fill(0);
+    return true;
+}
+bool LibretroHost::setDiscEjected(bool ejected, QString& error) {
+    error.clear();
+    if (!isCd() || !disk_.set_eject_state || !disk_.set_eject_state(ejected)) {
+        error = QStringLiteral("Не удалось изменить состояние привода Sega CD."); return false;
+    }
+    audio_.clear(); return true;
+}
+bool LibretroHost::selectDisc(int index, QString& error) {
+    error.clear();
+    if (!isCd() || index < 0 || index >= discs_.size()) {
+        error = QStringLiteral("Неверный номер диска."); return false;
+    }
+    if (!DiscMedia::unchanged(discs_[index],error)) return false;
+    CoreFileSystem::clearError();
+    const auto state = serialize();
+    const bool wasEjected = discEjected();
+    if (!setDiscEjected(true,error)) return false;
+    if (!disk_.set_image_index(unsigned(index)) || !CoreFileSystem::lastError().isEmpty()) {
+        disk_.set_image_index(unsigned(discIndex_));
+        if (!state.isEmpty()) unserialize(state);
+        disk_.set_eject_state(wasEjected);
+        error = QStringLiteral("Ядро не смогло прочитать выбранный диск."); return false;
+    }
+    discIndex_ = index; setDiscIdentity();
+    return setDiscEjected(false,error);
+}
+bool LibretroHost::changeDisc(const QString& path, QString& error) {
+    error.clear();
+    if (!isCd()) { error = QStringLiteral("Игра Sega CD не запущена."); return false; }
+    DiscImage image;
+    if (!DiscMedia::inspect(path,image,error) || !DiscMedia::prepare(image,dataPath_,error)) return false;
+    CoreFileSystem::clearError();
+    const auto previous = discs_[discIndex_];
+    const auto state = serialize();
+    const bool wasEjected = discEjected();
+    if (!setDiscEjected(true,error)) return false;
+    const auto encoded = QDir::toNativeSeparators(image.runtimePath).toUtf8();
+    retro_game_info game{}; game.path = encoded.constData();
+    if (!disk_.replace_image_index(unsigned(discIndex_),&game) || !CoreFileSystem::lastError().isEmpty()) {
+        const auto oldPath = QDir::toNativeSeparators(previous.runtimePath).toUtf8(); game.path = oldPath.constData();
+        const bool restored = disk_.replace_image_index(unsigned(discIndex_),&game);
+        if (restored && !state.isEmpty()) unserialize(state);
+        disk_.set_eject_state(restored ? wasEjected : true);
+        QString ignored; refreshDiscFiles(ignored);
+        error = QStringLiteral("Не удалось вставить диск. %1").arg(restored ? QStringLiteral("Предыдущий диск восстановлен.") : QStringLiteral("Привод оставлен открытым."));
+        return false;
+    }
+    discs_[discIndex_] = image;
+    if (!refreshDiscFiles(error)) return false;
+    setDiscIdentity();
+    return setDiscEjected(false,error);
+}
 bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
     error.clear();
+    if (DiscMedia::isDisc(path)) return loadCd(path,error);
     const QFileInfo info(path);
     QString name = info.fileName();
     QByteArray content;
@@ -165,7 +332,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
     contentInfo_.persistent_data = false;
     retro_game_info game{};
     game.path = encodedGamePath_.constData();
-    game.data = coreContent_.constData();
+    game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
     const bool accepted = api_->load_game(&game);
@@ -184,8 +351,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
     const bool md = ext != "sms" && ext != "gg" && ext != "sg";
     for (unsigned port = 0; port < 2; ++port)
         api_->set_controller_port_device(port, md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD);
-    saveMemorySizes_[0] = api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
-    saveMemorySizes_[1] = api_->get_memory_size(RETRO_MEMORY_RTC);
+    saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
@@ -198,6 +365,8 @@ void LibretroHost::unload() {
         api_->unload_game();
     }
     loaded_ = false;
+    CoreFileSystem::clearVirtualFiles();
+    discs_.clear(); discIndex_ = 0;
     contentInfo_ = {}; contentInfoActive_ = false;
     content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
@@ -216,18 +385,21 @@ void LibretroHost::reset() { if (loaded_) { api_->reset(); audio_.clear(); } }
 bool LibretroHost::hardReset(QString& error) {
     error.clear();
     if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
+    if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
     // Reuse the selected content already in memory: archives need no second
     // selection and moved/deleted ROM files do not affect a power cycle.
     if (!flushSaveRam(error)) return false;
     api_->unload_game();
     loaded_ = false;
     audio_.clear(); frame_ = QImage(); buttons_.fill(0);
+    if (!discs_.isEmpty()) setDiscIdentity();
     prepareCoreContent();
-    contentInfo_.data = coreContent_.constData();
+    CoreFileSystem::clearError();
+    contentInfo_.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     contentInfo_.size = size_t(coreContent_.size());
     retro_game_info game{};
     game.path = encodedGamePath_.constData();
-    game.data = coreContent_.constData();
+    game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
     const bool accepted = api_->load_game(&game);
@@ -237,6 +409,8 @@ bool LibretroHost::hardReset(QString& error) {
         unload(); return false;
     }
     loaded_ = true;
+    if (!discs_.isEmpty() && !CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
+    if (!discs_.isEmpty() && !registerDiscs(error)) { unload(); return false; }
     saveRamWritable_ = false;
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_)) {
@@ -247,8 +421,8 @@ bool LibretroHost::hardReset(QString& error) {
     const bool md = ext != "sms" && ext != "gg" && ext != "sg";
     for (unsigned port = 0; port < 2; ++port)
         api_->set_controller_port_device(port, md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD);
-    saveMemorySizes_[0] = api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
-    saveMemorySizes_[1] = api_->get_memory_size(RETRO_MEMORY_RTC);
+    saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
@@ -256,6 +430,7 @@ bool LibretroHost::hardReset(QString& error) {
 }
 void LibretroHost::prepareCoreContent() {
     coreContent_ = content_;
+    if (!discs_.isEmpty()) return;
     if (!autoFixChecksum_ || contentExtension_ == "sms" || contentExtension_ == "gg" || contentExtension_ == "sg") return;
     enum class Layout { Plain, Swapped, Smd };
     Layout layout = Layout::Plain;
@@ -317,6 +492,10 @@ bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value,
     return true;
 }
 bool LibretroHost::setRegion(int region, QString& error) {
+    if (isCd()) {
+        const int needed = region ? region : discs_[discIndex_].region;
+        if (needed && !SegaCdBios::validate(dataPath_,needed,error)) return false;
+    }
     static const std::array<QByteArray,4> values{"auto", "ntsc-j", "ntsc-u", "pal"};
     if (region < 0 || region >= int(values.size())) {
         error = QStringLiteral("Неверный регион."); return false;
@@ -394,6 +573,7 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
 }
 bool LibretroHost::saveState(int slot, QString& error) {
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
+    if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед сохранением состояния."); return false; }
     const auto payload = serialize();
     if (payload.isEmpty()) { error = QStringLiteral("Ядро не смогло сохранить состояние."); return false; }
     QByteArray bytes = stateMagic + romHash_ + coreHash_ + digest(payload);
@@ -405,6 +585,7 @@ bool LibretroHost::saveState(int slot, QString& error) {
 bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) {
     if (failure) *failure = StateLoadError::Failed;
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
+    if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед загрузкой состояния."); return false; }
     QFile file(statePath(slot));
     if (!file.open(QIODevice::ReadOnly)) {
         if (!QFileInfo::exists(file.fileName())) {
@@ -429,7 +610,7 @@ bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) 
     return true;
 }
 bool LibretroHost::flushSaveRam(QString& error) {
-    if (!loaded_ || !saveRamWritable_) return true;
+    if (!loaded_ || !saveRamWritable_ || isCd()) return true;
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         const auto data = api_->get_memory_data(id);
@@ -449,6 +630,7 @@ bool LibretroHost::flushSaveRam(QString& error) {
     return true;
 }
 bool LibretroHost::restoreSaveRam(QString& error) {
+    if (isCd()) return true;
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         auto data = api_->get_memory_data(id);
@@ -521,6 +703,18 @@ bool LibretroHost::environment(unsigned command, void* data) {
         if (h->message && msg && msg->msg) h->message(QString::fromUtf8(msg->msg));
         return true;
     }
+    case RETRO_ENVIRONMENT_GET_VFS_INTERFACE: {
+        auto* request = static_cast<retro_vfs_interface_info*>(data);
+        if (!request || request->required_interface_version > 3) return false;
+        request->required_interface_version = 3;
+        request->iface = CoreFileSystem::interface();
+        return true;
+    }
+    case RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE:
+        // GPX unregisters after a cartridge load, but registers only at init.
+        // Retain the callbacks as a capability; isCd() gates their use.
+        if (data) h->disk_ = *static_cast<const retro_disk_control_callback*>(data);
+        return true;
     case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
         if (!data) return false;
         *static_cast<int*>(data) = (h->videoEnabled_ ? 1 : 0) | (h->audioEnabled_ ? 2 : 0);

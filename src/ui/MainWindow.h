@@ -8,6 +8,7 @@
 #include <QVector>
 
 class QAction;
+class QActionGroup;
 class QCloseEvent;
 class QDragEnterEvent;
 class QDropEvent;
@@ -36,7 +37,10 @@ protected:
 
 private:
     void buildMenus();
+    void openGameDialog();
     void updateRecentMenu();
+    void editSegaCdBios();
+    void updateDiscMenu();
     void editControls();
     bool applyShaderPreset(const QString& path);
     void editShaderParameters();
@@ -52,11 +56,16 @@ private:
 
     EmulationSession& session_;
     QSettings settings_;
+    QString dataPath_;
     GameView* view_ = nullptr;
     AudioOutput* audio_ = nullptr;
     InputManager* input_ = nullptr;
     QTimer* inputTimer_ = nullptr;
     QMenu* recentMenu_ = nullptr;
+    QMenu* discMenu_ = nullptr;
+    QActionGroup* discGroup_ = nullptr;
+    QAction* changeDiscAction_ = nullptr;
+    QAction* ejectDiscAction_ = nullptr;
     QAction* pauseAction_ = nullptr;
     QAction* fastForwardAction_ = nullptr;
     QAction* rewindAction_ = nullptr;
@@ -71,6 +80,9 @@ private:
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
     QStringList recentPaths_;
+    QStringList discPaths_;
+    int discIndex_ = -1;
+    bool discEjected_ = false;
     QVector<QAction*> slotActions_;
     QString currentRom_;
     QByteArray windowedGeometry_;

@@ -101,6 +101,7 @@ def main() -> None:
     )
     shutil.copy2(root / "assets/fonts/OFL.txt", notices / "PressStart2P-OFL.txt")
     shutil.copy2(root / "third_party/SDL2-LICENSE.txt", notices / "SDL2-LICENSE.txt")
+    shutil.copy2(root / "third_party/minimp3/LICENSE", notices / "minimp3-CC0.txt")
     for name in ("libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt", "gdapt-NOTICE.txt"):
         shutil.copy2(root / "third_party" / name, notices / name)
 

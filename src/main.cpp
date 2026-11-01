@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("Kega Refusion — Mega Drive и Master System"));
+        QStringLiteral("Kega Refusion — Mega Drive, Sega CD и Master System"));
     parser.addHelpOption();
     QCommandLineOption coreOption(
         QStringList{QStringLiteral("core")},

@@ -7,6 +7,7 @@
 #include <QGuiApplication>
 #include <QOpenGLWidget>
 #include <QOpenGLContext>
+#include <QMouseEvent>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSurfaceFormat>
@@ -154,6 +155,7 @@ private:
 
 GameView::GameView(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
     setMinimumSize(400, 280);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     const int fontId = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/osd.ttf"));
@@ -177,6 +179,7 @@ QImage GameView::captureImage() {
 
 void GameView::setFrame(const QImage& frame, double aspectRatio) {
     frame_ = frame;
+    if (!frame_.isNull()) unsetCursor();
     ++frameCount_;
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
@@ -363,6 +366,36 @@ void GameView::paintOsd(QPainter& painter) {
     }
 }
 
+QRect GameView::openArea() const {
+    // The visible plus is 54x54. Keep a larger target around it without
+    // making the entire placeholder clickable.
+    const QPoint plusCenter = rect().center() + QPoint(0, -59);
+    return QRect(plusCenter.x() - 76, plusCenter.y() - 62, 152, 124);
+}
+
+void GameView::mousePressEvent(QMouseEvent* event) {
+    if (frame_.isNull() && event->button() == Qt::LeftButton &&
+        openArea().contains(event->position().toPoint())) {
+        emit openGameRequested();
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void GameView::mouseMoveEvent(QMouseEvent* event) {
+    if (frame_.isNull() && openArea().contains(event->position().toPoint()))
+        setCursor(Qt::PointingHandCursor);
+    else
+        unsetCursor();
+    QWidget::mouseMoveEvent(event);
+}
+
+void GameView::leaveEvent(QEvent* event) {
+    unsetCursor();
+    QWidget::leaveEvent(event);
+}
+
 void GameView::paintRaster(QPainter& painter) {
     painter.fillRect(rect(), frame_.isNull() ? QColor(17, 20, 27) : QColor(Qt::black));
 
@@ -394,10 +427,10 @@ void GameView::paintRaster(QPainter& painter) {
         painter.setFont(detail);
         painter.drawText(QRect(24, center.y() + 24, width() - 48, 26),
                          Qt::AlignCenter,
-                         QStringLiteral("Ctrl+O — открыть игру · или перетащите ROM сюда"));
+                         QStringLiteral("Нажмите + или Ctrl+O · перетащите игру сюда"));
         painter.drawText(QRect(24, center.y() + 51, width() - 48, 26),
                          Qt::AlignCenter,
-                         QStringLiteral("Поддержка: MD, GEN, BIN, SMD, SMS, GG, SG, 68K"));
+                         QStringLiteral("Поддержка: MD, GEN, BIN, SMD, SMS, GG, SG, 68K, CUE, ISO, CHD, M3U"));
     } else {
         const QRectF target = gameRect();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);

@@ -1,6 +1,6 @@
 # Architecture and current boundary
 
-Kega Refusion is a standalone C++17 / Qt6 Widgets application for Linux and Windows. The initial implementation supports cartridge loading via a pinned Genesis Plus GX libretro core; it is not yet the complete feature list from info.txt.
+Kega Refusion is a standalone C++17 / Qt6 Widgets application for Linux and Windows. The initial implementation supports cartridge and Sega CD image loading via a pinned Genesis Plus GX libretro core; it is not yet the complete feature list from info.txt.
 
 ## Ownership
 
@@ -18,7 +18,7 @@ Genesis Plus GX declares platform-dependent serialization. The first state forma
 
 ## Deferred scope
 
-32X/PicoDrive, Sega CD/BIOS and multidisc identity, specialized peripherals, netplay, achievements, movies, recording, Lua and debugging tools are not part of the initial foundation. These will be added in testable steps. No promise of full ROM collection compatibility is made from the smoke ROM tests.
+32X/PicoDrive, specialized peripherals, netplay, achievements, movies, recording, Lua and debugging tools are not part of the initial foundation. These will be added in testable steps. No promise of full ROM collection compatibility is made from the smoke ROM tests.
 
 Normal core file-state restoration resets sound resampler history, so immediate PCM bytes after loading a state are not guaranteed identical. The core fast-savestate flag keeps audio history only in global process memory and must not be enabled for file states or assumed to support a history of multiple snapshots. A dedicated full-audio serialization solution is needed before claiming audio-exact rollback.
 
@@ -63,3 +63,21 @@ GameView preserves the raw emulation image for history and delegates native pres
 Checksum autofix is optional, default off. Original content and its SHA-256 remain unchanged; a separate implicitly shared coreContent copy receives the two-byte MD header patch before load/hard reset. Canonical SEGA headers, GPX-recognized swapped headers and SMD layouts are detected; ambiguous non-MD data is untouched. Sum calculation uses normalized big-endian words after0x200, then maps0x18e/0x18f back to the original layout. Toggling while loaded performs a hard reset from retained original bytes. A self-checking original68000 fixture verifies boot rejection/acceptance, original file preservation and unchanged save identity for raw/SMD/swapped/archived content.
 
 On Windows, FrameWaiter uses a high-resolution waitable timer rather than generic Sleep-granularity waits. Older Windows fallback requests1ms timer resolution for the worker's lifetime and restores it on exit. There is no busy-spin loop. Linux uses an absolute monotonic sleep.
+
+
+## Sega CD (0.5)
+
+DiscMedia validates CUE references, ISO headers, CHD signatures and up to four M3U members before disturbing the current game. Disc/track data is streamed through SHA-256 for identity, never read wholesale into a QByteArray. ISO CUE sidecars are resolved explicitly. The host expands M3U itself, avoiding the pinned core's naïve relative-path parser. Real full_path/dir/name/ext and null data are supplied through GET_GAME_INFO_EXT. Paths exceeding the core's 255-byte UTF-8 image buffer are rejected.
+
+SegaCdBios recognizes user-provided 128 KiB images by observed fingerprints or strict header/checksum checks, imports missing regional slots with QSaveFile, and never overwrites existing BIOS files. Host preflights the detected/forced region; CHD region is decoded by the core. At least one BIOS is required for CHD auto mode and a load failure reports all regional BIOS statuses.
+
+The legacy disk interface is copied at registration and retained as a capability even after the core unregisters it for a cartridge (it re-registers only at init). Every use is gated on loaded CD content. Mount operations eject, select/replace, then close. Failed mounts attempt to remount the previous image and restore its volatile state. Commands run only on the emulation thread; queued discStateChanged updates drive UI. Automatic in-game tray changes are also observed. Disc operations clear rewind/audio; checksum autofix applies only to cartridges.
+
+Quick-state identity includes disc content, region override and installed BIOS fingerprints. The same disc must be mounted before restoring state because the core serializes CD positions but not its TOC/path. Each disc has separate slots. Hard reset retains the current image and rebuilds the disc list. Existing cartridge state/core hashes remain unchanged: no core patch or replacement was needed.
+
+CD BRAM is owned by unmodified Genesis Plus GX. Standard RETRO_MEMORY_SAVE_RAM and core serialization do not expose/include internal CD BRAM or backup-cart RAM. Host therefore does not invent .srm files or claim BRAM rollback; the core persists shared regional .brm files on unload. Normal CD video/CPU/drive rewind is supported within a mounted image; game-written BRAM is not undone by rewind/state load. This matches the core's current state boundary and is documented in the user README.
+
+
+MP3 CD audio uses a VFS v3 adapter and unmodified, pinned minimp3 (`ea99364f61c14656440e8d77e9c233ccf3124633`, CC0). A small in-memory CUE rewrites MP3 track names to virtual WAV aliases; the original data track is a read-only file alias. Neither converted audio nor ISO copies are written to disk. The core receives a 44-byte RIFF header followed by on-demand 44.1 kHz stereo signed-16 PCM. Each open MP3 stream retains minimp3's 128 KiB compressed input buffer, an 8 KiB output block, codec state and its compressed-frame seek index. MP3 frame/index scanning establishes length; no full PCM buffer is built. Header probes/seek-to-end are cheap cursor operations; decoder seeks occur only when audio bytes are actually read. Odd-byte reads and repeated random seeks are supported. Source MP3 is limited to 256 MiB and 100 decoded minutes; non-CD sample rates/channels are rejected instead of silently resampled.
+
+The VFS passes native files, BIOS and BRAM through QFile, including nontruncating UPDATE_EXISTING writes. Virtual paths are read-only; handles own their backing state after registry changes. Registrations are rebuilt from at most four active discs, so disc swaps do not accumulate aliases indefinitely. Initial CD mount does not reopen the same disc through disk callbacks, avoiding repeated audio indexing. Disc selection checks source sizes/mtime instead of rehashing every audio track; the full content fingerprint is computed once at open. A small PCM-byte counter supports diagnosing whether CD music is actually being decoded during performance measurements.

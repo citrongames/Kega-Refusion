@@ -3,6 +3,7 @@
 #include "ControlsDialog.h"
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
+#include "../core/SegaCdBios.h"
 #include "../input/InputManager.h"
 
 #include <QAction>
@@ -40,6 +41,19 @@ QString shaderParameterPrefix(const QString& path) {
     return QStringLiteral("view/shaderParameters/%1/").arg(QString::fromLatin1(key));
 }
 QString displayName(const QString& path) { return QFileInfo(path).completeBaseName(); }
+bool isCdPath(const QString& path) {
+    const QString ext = QFileInfo(path).suffix().toLower();
+    return ext == QLatin1String("cue") || ext == QLatin1String("iso") ||
+           ext == QLatin1String("chd") || ext == QLatin1String("m3u");
+}
+bool isSupportedDropFile(const QString& path) {
+    const QString ext = QFileInfo(path).suffix().toLower();
+    return QFileInfo(path).isFile() &&
+           (isCdPath(path) || QStringList{QStringLiteral("md"), QStringLiteral("gen"),
+               QStringLiteral("bin"), QStringLiteral("smd"), QStringLiteral("sms"),
+               QStringLiteral("gg"), QStringLiteral("sg"), QStringLiteral("68k"),
+               QStringLiteral("zip"), QStringLiteral("7z")}.contains(ext));
+}
 ConsoleProfile profileFor(const QFileInfo& file) {
     const QString ext = file.suffix().toLower();
     if (ext == QLatin1String("sms")) return ConsoleProfile::MasterSystem;
@@ -53,7 +67,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
                        bool smokeTest, QWidget* parent)
     : QMainWindow(parent), session_(session),
       settings_(QDir(dataPath).filePath(QStringLiteral("settings.ini")), QSettings::IniFormat),
-      smokeTest_(smokeTest) {
+      dataPath_(dataPath), smokeTest_(smokeTest) {
     setObjectName(QStringLiteral("mainWindow"));
     setWindowTitle(QStringLiteral("Kega Refusion"));
     setMinimumSize(640, 440);
@@ -64,6 +78,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     view_->setAcceptDrops(true);
     view_->installEventFilter(this);
     setCentralWidget(view_);
+    connect(view_, &GameView::openGameRequested, this, [this] {
+        if (!loading_ && !session_.hasGame()) openGameDialog();
+    });
     audio_ = new AudioOutput(this);
     input_ = new InputManager(settings_.fileName(), this);
     connect(audio_, &AudioOutput::unavailable, this, [](const QString& text) {
@@ -93,6 +110,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRewindSeconds(rewindSeconds_);
     view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
+    connect(&session_, &EmulationSession::discStateChanged, this,
+            [this](const QStringList& paths, int index, bool ejected) {
+        discPaths_ = paths;
+        discIndex_ = index;
+        discEjected_ = ejected;
+        updateDiscMenu();
+    });
     connect(view_, &GameView::shaderFailed, this, [this](const QString& error) {
         settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
         updateShaderActions();
@@ -122,7 +146,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName) {
         loading_ = false;
         currentRom_ = path;
-        input_->setProfile(profileFor(QFileInfo(contentName)));
+        input_->setProfile(isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName)));
         setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(displayName(contentName)));
         recentPaths_.removeAll(path);
         recentPaths_.prepend(path);
@@ -178,16 +202,36 @@ void MainWindow::buildMenus() {
     QAction* openAction = fileMenu->addAction(QStringLiteral("Открыть игру…"));
     openAction->setShortcut(QKeySequence::Open);
     shortcut(openAction);
-    connect(openAction, &QAction::triggered, this, [this] {
-        releaseInput();
-        const QString path = QFileDialog::getOpenFileName(
-            this, QStringLiteral("Открыть игру"),
-            settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
-            QStringLiteral("Игры Mega Drive и Master System (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.zip *.7z);;Архивы (*.zip *.7z);;Все файлы (*)"));
-        if (!path.isEmpty()) openRom(path);
-    });
+    connect(openAction, &QAction::triggered, this, &MainWindow::openGameDialog);
     recentMenu_ = fileMenu->addMenu(QStringLiteral("Недавние игры"));
     updateRecentMenu();
+    QMenu* segaCdMenu = fileMenu->addMenu(QStringLiteral("Sega CD"));
+    QAction* biosAction = segaCdMenu->addAction(QStringLiteral("BIOS…"));
+    connect(biosAction, &QAction::triggered, this, &MainWindow::editSegaCdBios);
+    segaCdMenu->addSeparator();
+    changeDiscAction_ = segaCdMenu->addAction(QStringLiteral("Сменить диск…"));
+    connect(changeDiscAction_, &QAction::triggered, this, [this] {
+        releaseInput();
+        const QString initial = discIndex_ >= 0 && discIndex_ < discPaths_.size()
+            ? QFileInfo(discPaths_[discIndex_]).absolutePath()
+            : settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString();
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Сменить диск"), initial,
+            QStringLiteral("Диски Sega CD (*.cue *.iso *.chd);;Все файлы (*)"));
+        if (!path.isEmpty()) session_.changeDisc(path);
+        view_->setFocus();
+    });
+    ejectDiscAction_ = segaCdMenu->addAction(QStringLiteral("Извлечь диск"));
+    ejectDiscAction_->setCheckable(true);
+    connect(ejectDiscAction_, &QAction::triggered, this, [this](bool ejected) {
+        releaseInput();
+        session_.setDiscEjected(ejected);
+        ejectDiscAction_->setChecked(discEjected_);
+        view_->setFocus();
+    });
+    discMenu_ = segaCdMenu->addMenu(QStringLiteral("Диски плейлиста"));
+    discGroup_ = new QActionGroup(this);
+    discGroup_->setExclusive(true);
+    updateDiscMenu();
     fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(QStringLiteral("Выход"));
     quitAction->setShortcut(QKeySequence::Quit);
@@ -450,8 +494,8 @@ void MainWindow::buildMenus() {
     connect(aboutAction, &QAction::triggered, this, [this] {
         QMessageBox::about(this, QStringLiteral("О Kega Refusion"),
             QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
-            "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K. "
-            "Поддерживаются архивы ZIP и 7z. CD и 32X пока не подготовлены.<br>"
+            "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
+            "Поддерживаются архивы ZIP и 7z. 32X пока не подготовлен.<br>"
             "Состояния сохраняются в выбранный слот от 0 до 9.<br>"
             "Клавиатуру и геймпады можно настроить в разделе «Управление»."));
     });
@@ -512,6 +556,83 @@ void MainWindow::editShaderParameters() {
     dialog.exec(); view_->setFocus();
 }
 
+void MainWindow::editSegaCdBios() {
+    releaseInput();
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("BIOS Sega CD"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    layout->addLayout(form);
+    QLabel* statusLabels[3]{};
+    const QStringList regions{QStringLiteral("Япония"), QStringLiteral("США"),
+                              QStringLiteral("Европа")};
+    for (int region = 1; region <= 3; ++region) {
+        statusLabels[region - 1] = new QLabel(&dialog);
+        form->addRow(regions[region - 1] + QStringLiteral(":"), statusLabels[region - 1]);
+    }
+    auto refresh = [this, &statusLabels] {
+        for (int region = 1; region <= 3; ++region) {
+            QString error;
+            const bool installed = SegaCdBios::validate(dataPath_, region, error);
+            statusLabels[region - 1]->setText(installed ? QStringLiteral("Установлен")
+                                                      : QStringLiteral("Не готов"));
+            statusLabels[region - 1]->setToolTip(error);
+        }
+    };
+    refresh();
+    auto* importButton = new QPushButton(QStringLiteral("Импортировать из папки…"), &dialog);
+    layout->addWidget(importButton);
+    connect(importButton, &QPushButton::clicked, &dialog, [this, &dialog, &refresh] {
+        const QString source = QFileDialog::getExistingDirectory(
+            &dialog, QStringLiteral("Папка с BIOS Sega CD"), QDir::homePath());
+        if (source.isEmpty()) return;
+        QString error;
+        const QStringList imported = SegaCdBios::importDirectory(source, dataPath_, error);
+        refresh();
+        QString message;
+        if (!imported.isEmpty())
+            message = QStringLiteral("Импортированы: %1").arg(imported.join(QStringLiteral(", ")));
+        if (!error.isEmpty()) {
+            if (!message.isEmpty()) message += QStringLiteral("\n\n");
+            QMessageBox::warning(&dialog, QStringLiteral("BIOS Sega CD"), message + error);
+        } else {
+            QMessageBox::information(&dialog, QStringLiteral("BIOS Sega CD"),
+                message.isEmpty() ? QStringLiteral("Новые BIOS не найдены.") : message);
+        }
+    });
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.exec();
+    view_->setFocus();
+}
+
+void MainWindow::updateDiscMenu() {
+    if (!discMenu_) return;
+    const bool hasDisc = !discPaths_.isEmpty();
+    changeDiscAction_->setEnabled(hasDisc);
+    ejectDiscAction_->setEnabled(hasDisc);
+    ejectDiscAction_->setChecked(hasDisc && discEjected_);
+    discMenu_->clear();
+    discMenu_->setEnabled(discPaths_.size() > 1);
+    for (int index = 0; index < discPaths_.size(); ++index) {
+        QAction* action = discMenu_->addAction(
+            QStringLiteral("%1. %2").arg(index + 1).arg(QFileInfo(discPaths_[index]).fileName()));
+        action->setToolTip(discPaths_[index]);
+        action->setCheckable(true);
+        action->setChecked(index == discIndex_);
+        discGroup_->addAction(action);
+        connect(action, &QAction::triggered, this, [this, index] {
+            releaseInput();
+            session_.selectDisc(index);
+            if (discIndex_ >= 0 && discIndex_ < discGroup_->actions().size())
+                discGroup_->actions()[discIndex_]->setChecked(true);
+            view_->setFocus();
+        });
+    }
+}
+
 void MainWindow::updateRecentMenu() {
     recentMenu_->clear();
     QStringList existing;
@@ -531,6 +652,16 @@ void MainWindow::setSlot(int slot) {
     settings_.setValue(QStringLiteral("emulation/slot"), stateSlot_);
     if (stateSlot_ < slotActions_.size()) slotActions_[stateSlot_]->setChecked(true);
     if (session_.hasGame()) session_.requestSlotStatus(stateSlot_);
+}
+
+void MainWindow::openGameDialog() {
+    releaseInput();
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Открыть игру"),
+        settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
+        QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.cue *.iso *.chd *.m3u *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;Архивы (*.zip *.7z);;Все файлы (*)"));
+    if (!path.isEmpty()) openRom(path);
+    else view_->setFocus();
 }
 
 void MainWindow::openRom(const QString& path) {
@@ -824,7 +955,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls()) {
         for (const QUrl& url : event->mimeData()->urls()) {
-            if (url.isLocalFile()) {
+            if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
                 event->acceptProposedAction();
                 return;
             }
@@ -835,7 +966,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
 
 void MainWindow::dropEvent(QDropEvent* event) {
     for (const QUrl& url : event->mimeData()->urls()) {
-        if (url.isLocalFile()) {
+        if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
             openRom(url.toLocalFile());
             event->acceptProposedAction();
             return;

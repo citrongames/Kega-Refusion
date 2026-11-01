@@ -14,3 +14,11 @@ No game ROMs or console BIOS files are distributed. Integration test ROMs are or
 - **zlib 1.3.2**: ZIP Deflate compression support, statically linked; https://zlib.net/. License preserved in third_party/zlib-LICENSE.txt.
 
 - **GDAPT v1.3**, Sp00kyFox (2014): unmodified two-pass GLSL from https://github.com/libretro/glsl-shaders at `cba01a48b0974a1232bea68d999a7c21bc4c233e`. Attribution, source hashes and the absence of an explicit upstream license grant are recorded in `third_party/gdapt-NOTICE.txt`, included with the Windows package. No RetroArch frontend implementation was copied.
+
+
+## minimp3
+
+- Source: https://github.com/lieff/minimp3
+- Revision: `ea99364f61c14656440e8d77e9c233ccf3124633`
+- License: CC0-1.0, retained in `third_party/minimp3/LICENSE`.
+- Vendored unmodified `minimp3.h` and `minimp3_ex.h` provide on-demand MP3 audio decoding and indexed seeks for virtual CD tracks. No complete decoded audio or converted files are retained.

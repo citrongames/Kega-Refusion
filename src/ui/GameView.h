@@ -4,12 +4,15 @@
 
 #include <QElapsedTimer>
 #include <QImage>
+#include <QRect>
 #include <QString>
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
 
 class QPainter;
+class QMouseEvent;
+class QEvent;
 class ShaderView;
 
 class GameView final : public QWidget {
@@ -38,11 +41,15 @@ public:
 
 signals:
     void shaderFailed(const QString& error);
+    void openGameRequested();
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     friend class ShaderView;
@@ -50,6 +57,7 @@ private:
     void ensureGpu();
     void gpuFailed(const QString& error);
     QRectF gameRect() const;
+    QRect openArea() const;
     void paintRaster(QPainter& painter);
     ShaderView* shaderView_ = nullptr;
     ShaderPreset shaderPreset_;

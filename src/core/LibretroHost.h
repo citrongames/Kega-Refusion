@@ -9,6 +9,8 @@
 #include <functional>
 #include <memory>
 #include <libretro.h>
+#include "DiscMedia.h"
+#include <QStringList>
 
 // Own on exactly one emulation thread. One libretro instance per process.
 class LibretroHost final {
@@ -17,6 +19,13 @@ public:
     ~LibretroHost();
     bool load(const QString& path, QString& error, int archiveIndex = -1);
     void unload();
+    bool isCd() const { return loaded_ && !discs_.isEmpty(); }
+    QStringList discPaths() const;
+    int discIndex() const { return discIndex_; }
+    bool discEjected() const;
+    bool changeDisc(const QString& path, QString& error);
+    bool selectDisc(int index, QString& error);
+    bool setDiscEjected(bool ejected, QString& error);
     void runFrame(bool renderVideo = true, bool captureAudio = true);
     void reset();
     bool hardReset(QString& error);
@@ -50,6 +59,11 @@ private:
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
+    bool loadCd(const QString& path, QString& error);
+    bool checkDiscBios(const DiscImage& image, QString& error) const;
+    bool registerDiscs(QString& error);
+    bool refreshDiscFiles(QString& error);
+    void setDiscIdentity();
     bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error);
     QString statePath(int slot) const;
     bool restoreSaveRam(QString& error);
@@ -66,6 +80,9 @@ private:
     QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_;
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};
+    retro_disk_control_callback disk_{};
+    QVector<DiscImage> discs_;
+    int discIndex_ = 0;
     bool contentInfoActive_ = false;
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     std::map<QByteArray,QList<QByteArray>> variableValues_;

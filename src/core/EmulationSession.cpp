@@ -2,6 +2,7 @@
 #include "LibretroHost.h"
 #include "RewindBuffer.h"
 #include "FramePacer.h"
+#include <QFileInfo>
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -17,6 +18,9 @@ void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue
 void EmulationSession::setPaused(bool paused) { enqueue({Type::Pause,{},paused ? 1 : 0}); }
 void EmulationSession::resetGame() { enqueue({Type::Reset,{}}); }
 void EmulationSession::hardResetGame() { enqueue({Type::HardReset,{}}); }
+void EmulationSession::changeDisc(const QString& path) { enqueue({Type::Disc,path}); }
+void EmulationSession::selectDisc(int index) { enqueue({Type::DiscIndex,{},index}); }
+void EmulationSession::setDiscEjected(bool ejected) { enqueue({Type::Eject,{},ejected ? 1 : 0}); }
 void EmulationSession::setRegion(int region) { enqueue({Type::Region,{},region}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
@@ -62,6 +66,11 @@ void EmulationSession::run() {
     using Clock = std::chrono::steady_clock;
     LibretroHost host(corePath_,dataPath_);
     host.message = [this](const QString& message) { emit notification(message); };
+    bool lastDiscEjected = false;
+    auto discStatus = [&] {
+        lastDiscEjected = host.discEjected();
+        emit discStateChanged(host.discPaths(),host.discIndex(),lastDiscEjected);
+    };
     RewindBuffer history;
     int historySeconds = rewindSeconds_.load();
     bool historyHealthy = true;
@@ -103,7 +112,7 @@ void EmulationSession::run() {
                     if (!host.loaded()) { clearHistory(); rewindStatus(false); }
                     emit errorOccurred(error);
                 }
-                loaded_.store(host.loaded());
+                loaded_.store(host.loaded()); discStatus();
                 break;
             case Type::Pause:
                 paused = command.value != 0;
@@ -126,18 +135,34 @@ void EmulationSession::run() {
                         emit stateSlotsChanged(-1,host.occupiedStateSlots());
                         pacer.reset(nowNs());
                     } else emit errorOccurred(error);
-                    loaded_.store(host.loaded());
+                    loaded_.store(host.loaded()); discStatus();
                 }
                 break;
+            case Type::Disc:
+            case Type::DiscIndex:
+            case Type::Eject: {
+                const bool ok = command.type == Type::Disc ? host.changeDisc(command.path,error) :
+                    command.type == Type::DiscIndex ? host.selectDisc(command.value,error) :
+                    host.setDiscEjected(command.value != 0,error);
+                // Failed mounts can also disturb the drive; do not retain an
+                // older timeline across any attempted media operation.
+                clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
+                discStatus(); emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                if (ok) emit actionCompleted(command.type == Type::Eject ?
+                    (command.value ? QStringLiteral("Привод открыт") : QStringLiteral("Привод закрыт")) :
+                    QStringLiteral("Диск: %1").arg(QFileInfo(host.discPaths().value(host.discIndex())).completeBaseName()));
+                else emit errorOccurred(error);
+                break;
+            }
             case Type::Checksum:
                 if (host.setAutoFixChecksum(command.value != 0,error)) {
-                    if (host.loaded()) {
+                    if (host.loaded() && !host.isCd()) {
                         if (host.hardReset(error)) {
                             clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
                             emit actionCompleted(command.value ? QStringLiteral("Исправление суммы: включено")
                                                                : QStringLiteral("Исправление суммы: выключено"));
                         } else emit errorOccurred(error);
-                        loaded_.store(host.loaded());
+                        loaded_.store(host.loaded()); discStatus();
                     }
                 } else emit errorOccurred(error);
                 break;
@@ -145,6 +170,10 @@ void EmulationSession::run() {
             case Type::Filter:
                 if (command.type == Type::Region ? host.setRegion(command.value,error)
                                                  : host.setBlarggFilter(command.value,error)) {
+                    if (command.type == Type::Region && host.isCd()) {
+                        if (!host.hardReset(error)) emit errorOccurred(error);
+                        loaded_.store(host.loaded()); discStatus();
+                    }
                     optionsPending = true; clearHistory(); clearAudio();
                 } else emit errorOccurred(error);
                 break;
@@ -215,6 +244,9 @@ void EmulationSession::run() {
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
         host.runFrame(!fast || present || optionsPending, !fast);
+        if (host.isCd() && host.discEjected() != lastDiscEjected) {
+            clearHistory(); discStatus();
+        }
         if (optionsPending) {
             optionsPending = false; clearHistory(); clearAudio(); pacer.reset(nowNs());
         }

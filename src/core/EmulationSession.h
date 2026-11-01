@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -16,6 +17,9 @@ public:
     void setPaused(bool paused);
     void resetGame();
     void hardResetGame();
+    void changeDisc(const QString& path);
+    void selectDisc(int index);
+    void setDiscEjected(bool ejected);
     void setRegion(int region);
     void setBlarggFilter(int filter);
     void setAutoFixChecksum(bool enabled);
@@ -40,6 +44,7 @@ signals:
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
     void gameLoaded(const QString& path, double fps, const QString& contentName);
+    void discStateChanged(const QStringList& paths, int index, bool ejected);
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);
     void rewindingChanged(bool enabled);
@@ -51,7 +56,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Save, Restore, Slots };
+    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Save, Restore, Slots, Disc, DiscIndex, Eject };
     struct Command { Type type; QString path; int value = 0; };
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);
