@@ -60,10 +60,35 @@ QString commandShortcut(int command) {
 }
 
 bool reservedKey(int key) {
-    return key == Qt::Key_Tab || key == Qt::Key_Escape ||
-           key == Qt::Key_P || key == Qt::Key_M ||
-           key == Qt::Key_F5 || key == Qt::Key_F8;
+    return InputManager::reservedKeyboardKey(key);
 }
+
+// Record the same physical identity that gameplay uses, regardless of layout.
+class PhysicalKeySequenceEdit final : public QKeySequenceEdit {
+public:
+    using QKeySequenceEdit::QKeySequenceEdit;
+protected:
+    bool event(QEvent* event) override {
+        if (event->type() == QEvent::KeyRelease) {
+            event->accept();
+            return true;
+        }
+        if (event->type() != QEvent::KeyPress)
+            return QKeySequenceEdit::event(event);
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab)
+            return QKeySequenceEdit::event(event);
+        const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+        if (!keyEvent->isAutoRepeat() && key != Qt::Key_Control &&
+            key != Qt::Key_Shift && key != Qt::Key_Meta && key != Qt::Key_Alt &&
+            key != Qt::Key_AltGr && key != Qt::Key_unknown) {
+            const auto modifiers = keyEvent->modifiers() & ~Qt::KeypadModifier;
+            setKeySequence(QKeySequence(QKeyCombination(modifiers, Qt::Key(key))));
+        }
+        event->accept();
+        return true;
+    }
+};
 
 QTableWidgetItem* cell(const QString& text, int target = -1) {
     auto* item = new QTableWidgetItem(text);
@@ -395,7 +420,8 @@ void ControlsDialog::fillGameTable() {
         gameTable_->setRowHeight(row, 34);
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target), target));
-        auto* keyEdit = new QKeySequenceEdit(gameTable_);
+        auto* keyEdit = new PhysicalKeySequenceEdit(gameTable_);
+        keyEdit->setToolTip(QStringLiteral("Клавиша по положению, независимо от раскладки. 0–9 — выбор слота."));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         keyEdit->setMaximumSequenceLength(1);
 #endif
@@ -498,7 +524,7 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
     if (sequence.count() > 1 || modifiers != Qt::NoModifier)
         error = QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift.");
     else if (reservedKey(key))
-        error = QStringLiteral("Tab, Esc, P, M, F5 и F8 зарезервированы.");
+        error = QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, F5 и F8 зарезервированы.");
     else if (key) {
         const PlayerMapping& mapping = draft();
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {

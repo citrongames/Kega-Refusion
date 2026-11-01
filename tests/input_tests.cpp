@@ -277,6 +277,130 @@ void testLegacyKeyboardSettings() {
             "explicit raw binding equal to fallback was lost");
 }
 
+void testPhysicalKeyboard() {
+    using Codes = KeyboardScanCodes;
+    struct Key { int scan; int english; int russian; };
+    const Key keys[] = {
+        {0x10, Qt::Key_Q, 0x0419}, {0x11, Qt::Key_W, 0x0426},
+        {0x12, Qt::Key_E, 0x0423}, {0x13, Qt::Key_R, 0x041a},
+        {0x14, Qt::Key_T, 0x0415}, {0x15, Qt::Key_Y, 0x041d},
+        {0x16, Qt::Key_U, 0x0413}, {0x17, Qt::Key_I, 0x0428},
+        {0x18, Qt::Key_O, 0x0429}, {0x19, Qt::Key_P, 0x0417},
+        {0x1a, Qt::Key_BracketLeft, 0x0425}, {0x1b, Qt::Key_BracketRight, 0x042a},
+        {0x1e, Qt::Key_A, 0x0424}, {0x1f, Qt::Key_S, 0x042b},
+        {0x20, Qt::Key_D, 0x0412}, {0x21, Qt::Key_F, 0x0410},
+        {0x22, Qt::Key_G, 0x041f}, {0x23, Qt::Key_H, 0x0420},
+        {0x24, Qt::Key_J, 0x041e}, {0x25, Qt::Key_K, 0x041b},
+        {0x26, Qt::Key_L, 0x0414}, {0x27, Qt::Key_Semicolon, 0x0416},
+        {0x28, Qt::Key_Apostrophe, 0x042d}, {0x29, Qt::Key_QuoteLeft, 0x0401},
+        {0x2c, Qt::Key_Z, 0x042f}, {0x2d, Qt::Key_X, 0x0427},
+        {0x2e, Qt::Key_C, 0x0421}, {0x2f, Qt::Key_V, 0x041c},
+        {0x30, Qt::Key_B, 0x0418}, {0x31, Qt::Key_N, 0x0422},
+        {0x32, Qt::Key_M, 0x042c}, {0x33, Qt::Key_Comma, 0x0411},
+        {0x34, Qt::Key_Period, 0x042e}
+    };
+    for (const Key& key : keys) {
+        for (const auto codes : {Codes::Windows, Codes::Xkb}) {
+            const int scan = key.scan + (codes == Codes::Xkb ? 8 : 0);
+            require(InputManager::keyboardKey(key.russian, scan, codes) == key.english,
+                    "Russian physical key did not match English position");
+            require(InputManager::keyboardKey(key.english, scan, codes) == key.english,
+                    "English physical key changed position");
+        }
+        require(InputManager::keyboardKey(key.russian, 0) == key.english,
+                "legacy Russian key did not migrate to its physical position");
+    }
+    // Scan identity wins over text, even on layouts other than Russian/English.
+    require(InputManager::keyboardKey(Qt::Key_A, 0x2d, Codes::Windows) == Qt::Key_X,
+            "keyboard normalization used text instead of physical scan code");
+    require(InputManager::keyboardKey(Qt::Key_A, 0x2d + 8, Codes::Xkb) == Qt::Key_X,
+            "XKB normalization used text instead of physical scan code");
+    require(InputManager::keyboardKey(Qt::Key_Home, 0xe010, Codes::Windows) == Qt::Key_Home,
+            "Windows extended scan code was mistaken for a letter");
+    require(InputManager::keyboardKey(Qt::Key_Return, 0x1c, Codes::Windows) == Qt::Key_Return &&
+                InputManager::keyboardKey(Qt::Key_Enter, 0xe01c, Codes::Windows) == Qt::Key_Enter,
+            "main Enter and keypad Enter lost their existing key identities");
+    require(InputManager::keyboardKey(Qt::Key_7, 0x47, Codes::Windows) == Qt::Key_7 &&
+                InputManager::keyboardKey(Qt::Key_7, 0x47 + 8, Codes::Xkb) == Qt::Key_7,
+            "numeric keypad digit stopped selecting a slot");
+    require(InputManager::keyboardKey(Qt::Key_Left, 0, Codes::Unavailable) == Qt::Key_Left,
+            "key without native scan code did not retain Qt identity");
+    require(InputManager::keyboardKey(0x0447, 0) == Qt::Key_X,
+            "lowercase legacy Russian binding did not migrate");
+    for (int digit = 0; digit < 10; ++digit) {
+        const int scan = digit == 0 ? 0x0b : digit + 1;
+        require(InputManager::keyboardKey(Qt::Key_unknown, scan, Codes::Windows) == Qt::Key_0 + digit &&
+                    InputManager::keyboardKey(Qt::Key_unknown, scan + 8, Codes::Xkb) == Qt::Key_0 + digit,
+                "digit scan code did not map to its save slot");
+        require(InputManager::reservedKeyboardKey(Qt::Key_0 + digit),
+                "save slot digit was available for gameplay binding");
+    }
+
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create physical keyboard settings directory");
+    InputManager manager(temp.path() + "/settings.ini");
+    std::array<unsigned, 2> masks{};
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned value) { masks.at(player) = value; });
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mapping.deviceKey = "none";
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    require(manager.keyEvent(InputManager::keyboardKey(0x0427, 0x2d, Codes::Windows), true) &&
+                (masks[0] & 1u), "Russian key did not activate default gameplay binding");
+    require(manager.keyEvent(InputManager::keyboardKey(Qt::Key_X, 0x2d, Codes::Windows), false) &&
+                masks[0] == 0, "layout switch before release left gameplay input held");
+    manager.keyEvent(InputManager::keyboardKey(Qt::Key_X, 0x2d + 8, Codes::Xkb), true);
+    require(masks[0] & 1u, "English XKB key did not activate gameplay binding");
+    manager.keyEvent(InputManager::keyboardKey(0x0427, 0x2d + 8, Codes::Xkb), false);
+    require(masks[0] == 0, "English-to-Russian layout switch left key held");
+    manager.keyEvent(Qt::Key_X, true);
+    manager.setEnabled(false);
+    require(masks[0] == 0, "focus loss left physical keyboard input held");
+    manager.setEnabled(true);
+    require(masks[0] == 0, "focus regain resurrected released keyboard input");
+}
+
+void testKeyboardSettingsMigration() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create keyboard migration directory");
+    const QString path = temp.path() + "/settings.ini";
+    {
+        QSettings settings(path, QSettings::IniFormat);
+        settings.setValue("input/md/player1/device", "none");
+        settings.setValue("input/md/player1/key/0", 0x0427); // Russian Ч -> X
+        settings.setValue("input/md/player1/key/8", Qt::Key_3);
+        settings.setValue("input/md/player2/device", "none");
+        settings.setValue("input/md/player2/key/0", 0x0419); // Russian Й -> Q
+        settings.setValue("keys/button_8", Qt::Key_8); // pre-profile slot binding
+        settings.setValue("keys/button_0", 0x0424); // Russian Ф -> A
+        settings.sync();
+    }
+    InputManager manager(path);
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == Qt::Key_X,
+            "profile Cyrillic binding did not migrate");
+    require(manager.mapping(ConsoleProfile::MegaDrive, 1).keyboard.value(0) == Qt::Key_Q,
+            "player two Cyrillic binding did not migrate");
+    for (const auto profile : {ConsoleProfile::MegaDrive, ConsoleProfile::MasterSystem,
+                              ConsoleProfile::GameGear, ConsoleProfile::SG1000}) {
+        require(manager.mapping(profile, 0).keyboard.value(8) == 0,
+                "saved slot digit remained bound to gameplay");
+    }
+    require(manager.mapping(ConsoleProfile::MasterSystem, 0).keyboard.value(0) == Qt::Key_A,
+            "pre-profile Cyrillic binding did not migrate");
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mapping.keyboard[0] = 0x041b; // Russian Л -> K
+    mapping.keyboard[8] = Qt::Key_9;
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == Qt::Key_K &&
+                manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
+            "mapping update did not canonicalize keys and reject slot digit");
+    require(!manager.keyEvent(Qt::Key_9, true), "reserved digit was treated as gameplay input");
+    InputManager reloaded(path);
+    require(reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == Qt::Key_K &&
+                reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
+            "normalized keyboard binding did not persist");
+}
+
 void testUnknownRawJoystick() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create raw joystick settings directory");
@@ -314,6 +438,8 @@ int main(int argc, char** argv) {
         testInput();
         testLegacyKeyboardSettings();
         testUnknownRawJoystick();
+        testPhysicalKeyboard();
+        testKeyboardSettingsMigration();
         std::puts("input tests passed");
         return 0;
     } catch (const std::exception& e) {

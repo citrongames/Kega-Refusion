@@ -48,20 +48,21 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     resize(920, 620);
     setAcceptDrops(true);
     view_ = new GameView(this);
+    view_->setOsdEnabled(settings_.value(QStringLiteral("view/osd"), true).toBool());
     view_->setAcceptDrops(true);
     view_->installEventFilter(this);
     setCentralWidget(view_);
     audio_ = new AudioOutput(this);
     input_ = new InputManager(settings_.fileName(), this);
-    connect(audio_, &AudioOutput::unavailable, this, [this](const QString& text) {
-        view_->showOsd(text, 7000, QStringLiteral("audio-error"));
+    connect(audio_, &AudioOutput::unavailable, this, [](const QString& text) {
+        qWarning("%s", qPrintable(text));
     });
     connect(input_, &InputManager::maskChanged, this, [this](unsigned port, unsigned mask) {
         session_.setButtons(port, mask);
     });
     connect(input_, &InputManager::commandChanged, this, &MainWindow::handleInputCommand);
-    connect(input_, &InputManager::notification, this, [this](const QString& text) {
-        view_->showOsd(text, 3500, QStringLiteral("device"));
+    connect(input_, &InputManager::notification, this, [](const QString& text) {
+        qInfo("%s", qPrintable(text));
     });
 
     recentPaths_ = settings_.value(QStringLiteral("recent/files")).toStringList();
@@ -81,7 +82,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         audio_->play(pcm, rate);
     });
     connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear);
-    connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double fps) {
+    connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double) {
         loading_ = false;
         currentRom_ = path;
         input_->setProfile(profileFor(QFileInfo(path)));
@@ -91,21 +92,20 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         while (recentPaths_.size() > 10) recentPaths_.removeLast();
         settings_.setValue(QStringLiteral("recent/files"), recentPaths_);
         updateRecentMenu();
-        view_->showOsd(QStringLiteral("%1 · %2 кадров/с").arg(QFileInfo(path).fileName())
-                       .arg(fps, 0, 'f', 2), 4000, QStringLiteral("game"));
         view_->setFocus();
         updateInputEnabled();
     });
     connect(&session_, &EmulationSession::pausedChanged, this, [this](bool paused) {
         setPausedUi(paused);
-        if (!paused) view_->showOsd(QStringLiteral("Продолжено"), 1800, QStringLiteral("pause"));
     });
-    connect(&session_, &EmulationSession::notification, this, [this](const QString& text) {
-        view_->showOsd(text, 4200, QStringLiteral("core"));
+    connect(&session_, &EmulationSession::notification, this, [](const QString& text) {
+        qWarning("%s", qPrintable(text));
+    });
+    connect(&session_, &EmulationSession::actionCompleted, this, [this](const QString& text) {
+        view_->showOsd(text, 2000, QStringLiteral("action"));
     });
     connect(&session_, &EmulationSession::errorOccurred, this, [this](const QString& text) {
         loading_ = false;
-        view_->showOsd(text, 9000, QStringLiteral("error"));
         updateInputEnabled();
         if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"), text);
     });
@@ -160,7 +160,6 @@ void MainWindow::buildMenus() {
     connect(resetAction_, &QAction::triggered, this, [this] {
         releaseInput();
         session_.resetGame();
-        view_->showOsd(QStringLiteral("Сброс"), 2200, QStringLiteral("reset"));
     });
     fastForwardAction_ = emulationMenu->addAction(QStringLiteral("Ускорение (Tab)"));
     fastForwardAction_->setCheckable(true);
@@ -174,8 +173,6 @@ void MainWindow::buildMenus() {
     shortcut(saveAction_);
     connect(saveAction_, &QAction::triggered, this, [this] {
         session_.saveState(stateSlot_);
-        view_->showOsd(QStringLiteral("Сохранение: слот %1").arg(stateSlot_), 2200,
-                       QStringLiteral("state"));
     });
     loadAction_ = emulationMenu->addAction(QStringLiteral("Загрузить состояние"));
     loadAction_->setShortcut(QKeySequence(QStringLiteral("F8")));
@@ -184,8 +181,6 @@ void MainWindow::buildMenus() {
     shortcut(loadAction_);
     connect(loadAction_, &QAction::triggered, this, [this] {
         session_.loadState(stateSlot_);
-        view_->showOsd(QStringLiteral("Загрузка: слот %1").arg(stateSlot_), 2200,
-                       QStringLiteral("state"));
     });
     QMenu* slotMenu = emulationMenu->addMenu(QStringLiteral("Слот сохранения"));
     QActionGroup* slotGroup = new QActionGroup(this);
@@ -207,6 +202,13 @@ void MainWindow::buildMenus() {
     });
 
     QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&Вид"));
+    QAction* osdAction = viewMenu->addAction(QStringLiteral("Экранные сообщения (OSD)"));
+    osdAction->setCheckable(true);
+    osdAction->setChecked(settings_.value(QStringLiteral("view/osd"), true).toBool());
+    connect(osdAction, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("view/osd"), enabled);
+        view_->setOsdEnabled(enabled);
+    });
     QMenu* aspectMenu = viewMenu->addMenu(QStringLiteral("Соотношение сторон"));
     QActionGroup* aspectGroup = new QActionGroup(this);
     aspectGroup->setExclusive(true);
@@ -225,8 +227,6 @@ void MainWindow::buildMenus() {
         connect(action, &QAction::triggered, this, [this, choice] {
             view_->setAspectMode(choice.mode);
             settings_.setValue(QStringLiteral("view/aspect"), choice.value);
-            view_->showOsd(QStringLiteral("Формат: %1").arg(QString::fromUtf8(choice.label)),
-                           2500, QStringLiteral("aspect"));
         });
     }
     QAction* integerAction = viewMenu->addAction(QStringLiteral("Целочисленный масштаб"));
@@ -235,8 +235,6 @@ void MainWindow::buildMenus() {
     connect(integerAction, &QAction::toggled, this, [this](bool enabled) {
         view_->setIntegerScaling(enabled);
         settings_.setValue(QStringLiteral("view/integer"), enabled);
-        view_->showOsd(enabled ? QStringLiteral("Масштаб: целый") :
-                       QStringLiteral("Масштаб: свободный"), 2500, QStringLiteral("scale"));
     });
     viewMenu->addSeparator();
     fullscreenAction_ = viewMenu->addAction(QStringLiteral("Полный экран"));
@@ -257,8 +255,6 @@ void MainWindow::buildMenus() {
     connect(muteAction_, &QAction::toggled, this, [this](bool muted) {
         audio_->setMuted(muted);
         settings_.setValue(QStringLiteral("audio/muted"), muted);
-        view_->showOsd(muted ? QStringLiteral("Звук выключен") :
-                       QStringLiteral("Звук включен"), 2400, QStringLiteral("sound"));
     });
     QWidget* volumePanel = new QWidget(soundMenu);
     QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
@@ -276,8 +272,6 @@ void MainWindow::buildMenus() {
     connect(volumeSlider, &QSlider::valueChanged, this, [this](int value) {
         audio_->setVolume(value);
         settings_.setValue(QStringLiteral("audio/volume"), value);
-        view_->showOsd(QStringLiteral("Громкость: %1%").arg(value), 1800,
-                       QStringLiteral("volume"));
     });
 
     QMenu* settingsMenu = menuBar()->addMenu(QStringLiteral("&Настройки"));
@@ -313,22 +307,19 @@ void MainWindow::setSlot(int slot) {
     stateSlot_ = (slot + 10) % 10;
     settings_.setValue(QStringLiteral("emulation/slot"), stateSlot_);
     if (stateSlot_ < slotActions_.size()) slotActions_[stateSlot_]->setChecked(true);
-    view_->showOsd(QStringLiteral("Слот: %1").arg(stateSlot_), 2400, QStringLiteral("slot"));
+    view_->showOsd(QStringLiteral("Слот: %1").arg(stateSlot_), 1800, QStringLiteral("action"));
 }
 
 void MainWindow::openRom(const QString& path) {
     const QFileInfo file(path);
     if (!file.exists() || !file.isFile()) {
         const QString text = QStringLiteral("Файл не найден: %1").arg(path);
-        view_->showOsd(text, 8000, QStringLiteral("error"));
         if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"), text);
         return;
     }
     releaseInput();
     loading_ = true;
     settings_.setValue(QStringLiteral("files/lastDirectory"), file.absolutePath());
-    view_->showOsd(QStringLiteral("Загрузка: %1").arg(file.fileName()), 4000,
-                   QStringLiteral("game"));
     session_.loadGame(file.absoluteFilePath());
 }
 
@@ -336,10 +327,9 @@ void MainWindow::editControls() {
     releaseInput();
     input_->setEnabled(false);
     ControlsDialog dialog(*input_, this);
-    const bool saved = dialog.exec() == QDialog::Accepted;
+    dialog.exec();
     updateInputEnabled();
     view_->setFocus();
-    if (saved) view_->showOsd(QStringLiteral("Управление обновлено"), 2000, QStringLiteral("controls"));
 }
 
 void MainWindow::releaseInput() {
@@ -367,8 +357,6 @@ void MainWindow::updateFastForward() {
     if (enabled) audio_->clear();
     session_.setFastForward(enabled);
     view_->setFastForwardStatus(enabled);
-    if (!enabled && session_.hasGame())
-        view_->showOsd(QStringLiteral("Обычная скорость"), 1400, QStringLiteral("speed"));
 }
 
 void MainWindow::setPausedUi(bool paused) {
@@ -392,12 +380,10 @@ void MainWindow::setFullscreenMode(bool enabled) {
         wasMaximizedBeforeFullscreen_ = isMaximized();
         menuBar()->hide();
         showFullScreen();
-        view_->showOsd(QStringLiteral("Полный экран"), 2100, QStringLiteral("fullscreen"));
     } else {
         menuBar()->show();
         if (wasMaximizedBeforeFullscreen_) showMaximized();
         else showNormal();
-        view_->showOsd(QStringLiteral("Оконный режим"), 2100, QStringLiteral("fullscreen"));
     }
     if (fullscreenAction_) {
         const QSignalBlocker blocker(fullscreenAction_);
@@ -410,16 +396,13 @@ void MainWindow::toggleFullscreenMenu() {
     if (!isFullScreen()) return;
     const bool visible = !menuBar()->isVisible();
     menuBar()->setVisible(visible);
-    view_->showOsd(visible ? QStringLiteral("Меню показано") :
-                   QStringLiteral("Меню скрыто"), 1700, QStringLiteral("menu"));
     view_->setFocus();
 }
 
 void MainWindow::showOsdDemo() {
     view_->setPausedStatus(true);
     view_->setFastForwardStatus(true);
-    view_->showOsd(QStringLiteral("Сохранено: слот 9"), 4000, QStringLiteral("demo"));
-    view_->showOsd(QStringLiteral("Громкость: 80%"), 4000, QStringLiteral("volume"));
+    view_->showOsd(QStringLiteral("Сохранено: слот 9"), 2000, QStringLiteral("action"));
 }
 
 void MainWindow::handleInputCommand(int command, bool pressed) {
@@ -443,7 +426,6 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
         else {
             menuBar()->setFocus();
             menuBar()->setActiveAction(menuBar()->actions().first());
-            view_->showOsd(QStringLiteral("Меню"), 1500, QStringLiteral("menu"));
         }
         break;
     default: break;
@@ -464,39 +446,69 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         releaseInput();
         return QMainWindow::eventFilter(watched, event);
     }
-    if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
+    if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease &&
+        event->type() != QEvent::ShortcutOverride)
         return QMainWindow::eventFilter(watched, event);
     if (QApplication::activeModalWidget() || QApplication::activePopupWidget() || !isActiveWindow())
         return QMainWindow::eventFilter(watched, event);
     auto* keyEvent = static_cast<QKeyEvent*>(event);
-    if (keyEvent->isAutoRepeat()) return QMainWindow::eventFilter(watched, event);
     const bool pressed = event->type() == QEvent::KeyPress;
-    const Qt::KeyboardModifiers modifiers = keyEvent->modifiers();
-    const int key = keyEvent->key();
+    const bool shortcutOverride = event->type() == QEvent::ShortcutOverride;
+    const Qt::KeyboardModifiers modifiers = keyEvent->modifiers() & ~Qt::KeypadModifier;
+    const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+    // Claim these keys before Qt resolves the logical QAction shortcuts. A
+    // shortcut and its physical counterpart must produce exactly one action.
+    QAction* commandAction = nullptr;
+    if (modifiers == Qt::NoModifier) {
+        if (key == Qt::Key_P) commandAction = pauseAction_;
+        else if (key == Qt::Key_M) commandAction = muteAction_;
+        else if (key == Qt::Key_F5) commandAction = saveAction_;
+        else if (key == Qt::Key_F8) commandAction = loadAction_;
+    } else if (modifiers == Qt::ControlModifier && key == Qt::Key_R) {
+        commandAction = resetAction_;
+    }
+    if (commandAction && commandAction->isEnabled()) {
+        if (shortcutOverride) event->accept();
+        else if (pressed && !keyEvent->isAutoRepeat()) commandAction->trigger();
+        return true;
+    }
     if (key == Qt::Key_Escape && modifiers == Qt::NoModifier && isFullScreen()) {
-        if (pressed) toggleFullscreenMenu();
+        if (shortcutOverride) event->accept();
+        else if (pressed && !keyEvent->isAutoRepeat()) toggleFullscreenMenu();
         return true;
     }
     if ((key == Qt::Key_Return || key == Qt::Key_Enter) &&
         (modifiers & Qt::AltModifier) &&
         !(modifiers & (Qt::ControlModifier | Qt::ShiftModifier | Qt::MetaModifier))) {
-        if (pressed) setFullscreenMode(!isFullScreen());
+        if (shortcutOverride) event->accept();
+        else if (pressed && !keyEvent->isAutoRepeat()) setFullscreenMode(!isFullScreen());
         return true;
     }
     if (!session_.hasGame() || loading_ || !view_->hasFocus())
         return QMainWindow::eventFilter(watched, event);
+    if (key >= Qt::Key_0 && key <= Qt::Key_9 && modifiers == Qt::NoModifier) {
+        if (shortcutOverride) event->accept();
+        else if (pressed && !keyEvent->isAutoRepeat()) setSlot(key - Qt::Key_0);
+        return true;
+    }
     if (key == Qt::Key_Tab) {
-        if (!pressed && fastForwardHeld_) {
+        if (shortcutOverride && modifiers == Qt::NoModifier) {
+            event->accept();
+            return true;
+        }
+        if (!shortcutOverride && !pressed && fastForwardHeld_) {
             fastForwardHeld_ = false;
             updateFastForward();
             return true;
         }
-        if (pressed && modifiers == Qt::NoModifier) {
+        if (pressed && !keyEvent->isAutoRepeat() && modifiers == Qt::NoModifier) {
             fastForwardHeld_ = true;
             updateFastForward();
             return true;
         }
     }
+    if (shortcutOverride) return QMainWindow::eventFilter(watched, event);
+    if (keyEvent->isAutoRepeat()) return true;
     if (!pressed) {
         if (input_->keyEvent(key, false)) return true;
         return QMainWindow::eventFilter(watched, event);

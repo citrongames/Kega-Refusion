@@ -51,13 +51,14 @@ void EmulationSession::run() {
                 emit pausedChanged(paused);
                 break;
             case Type::Reset:
-                host.reset(); emit audioReset(); emit notification(QStringLiteral("Консоль перезапущена")); break;
+                if (host.loaded()) { host.reset(); emit audioReset(); emit actionCompleted(QStringLiteral("Сброс")); }
+                break;
             case Type::Save:
-                if (host.saveState(command.value,error)) emit notification(QStringLiteral("Сохранено в слот %1").arg(command.value));
+                if (host.saveState(command.value,error)) emit actionCompleted(QStringLiteral("Сохранено: слот %1").arg(command.value));
                 else emit errorOccurred(error);
                 break;
             case Type::Restore:
-                if (host.loadState(command.value,error)) { emit audioReset(); emit notification(QStringLiteral("Загружен слот %1").arg(command.value)); }
+                if (host.loadState(command.value,error)) { emit audioReset(); emit actionCompleted(QStringLiteral("Загружено: слот %1").arg(command.value)); }
                 else emit errorOccurred(error);
                 break;
             }

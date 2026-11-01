@@ -30,6 +30,12 @@ SDL2 runs on the GUI thread and is polled every 8 ms. Known controllers use SDL 
 
 Gameplay input is disabled during modal dialogs, menus and loss of focus. Command edges rearm only after release, preventing a held reset/load/fast-forward control from firing again on refocus. Capture waits for neutral input, handles trigger rest positions and times out after ten seconds. Unplugging clears held state. Legacy keyboard settings migrate on first use.
 
-ControlsDialog keeps local drafts per system and player; Save applies them and Cancel discards them. ControllerDiagram paints four system-specific diagrams and supports selecting a target by clicking it. Commands have a separate mapping tab. OSD notices expire or coalesce; pause and fast-forward indicators remain while active. Fullscreen hides the menu; Esc toggles it without leaving fullscreen.
+ControlsDialog keeps local drafts per system and player; Save applies them and Cancel discards them. ControllerDiagram paints four system-specific diagrams and supports selecting a target by clicking it. Commands have a separate mapping tab. OSD contains only the latest action result/slot notice and active pause/fast-forward indicators, all in the upper-left corner. Resuming or returning to normal speed removes its indicator silently. General core/device/menu/FPS notifications do not enter OSD. Disabling OSD clears transient notices and suppresses all drawing; enabling restores current statuses only. Reset/save/load notices originate from successful core command completion, not from attempted requests. Fullscreen hides the menu; Esc toggles it without leaving fullscreen.
 
 The chosen ImageGen KR icon is embedded both as a Qt resource and as the Windows executable icon. Source and generation prompt are retained in assets/ and docs/icon-design.md.
+
+## Layout-independent keyboard input (0.2.1)
+
+Keyboard defaults and stored mappings use Qt key identifiers for US physical key positions. Windows Set-1 native scan codes and Linux XKB keycodes normalize printable keys before gameplay or shortcut dispatch; release uses the same identity even after a layout switch. Older Cyrillic key identifiers migrate to their corresponding positions. Non-text/keypad identities remain Qt keys. Controls capture uses the same normalization and displays canonical key labels.
+
+Digits 0–9 select state slots, including keypad digits with Num Lock enabled. They are reserved in the editor, mapping load/save and runtime input. Existing digit bindings cannot shadow slot selection. ShortcutOverride prevents Qt's logical shortcuts from competing with handled physical pause/mute/reset commands.

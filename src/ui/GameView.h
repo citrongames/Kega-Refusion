@@ -19,6 +19,7 @@ public:
     void setIntegerScaling(bool enabled);
     void showOsd(const QString& message, int durationMs = 2600,
                  const QString& category = {});
+    void setOsdEnabled(bool enabled);
     void setPausedStatus(bool paused);
     void setFastForwardStatus(bool enabled);
 
@@ -38,6 +39,7 @@ private:
     double aspectRatio_ = 4.0 / 3.0;
     AspectMode aspectMode_ = AspectMode::Console;
     bool integerScaling_ = false;
+    bool osdEnabled_ = true;
     bool paused_ = false;
     bool fastForward_ = false;
     QVector<Notice> notices_;

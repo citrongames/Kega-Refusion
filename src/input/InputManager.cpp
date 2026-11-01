@@ -82,6 +82,22 @@ QString settingsPrefix(ConsoleProfile profile, int player) {
 }
 bool gameplayTarget(int target) { return target >= 0 && target < 16; }
 bool validPlayer(int player) { return player >= 0 && player < playerCount; }
+int legacyKeyboardKey(int key) {
+    // Old settings stored the active layout's Unicode key. Keep those bindings
+    // usable at their original Russian/English key positions after upgrading.
+    if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
+    if (key >= 0x0430 && key <= 0x044f) key -= 0x20;
+    if (key == 0x0451) key = 0x0401;
+    if (key < 0x0400 || key > 0x04ff) return key;
+    const QString russian = QStringLiteral("ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ");
+    const QString physical = QStringLiteral("`QWERTYUIOP[]ASDFGHJKL;'ZXCVBNM,.");
+    const int index = russian.indexOf(QChar(key));
+    return index >= 0 ? physical[index].unicode() : key;
+}
+int storedKeyboardKey(int key) {
+    key = legacyKeyboardKey(key);
+    return InputManager::reservedKeyboardKey(key) ? 0 : key;
+}
 QString guidString(SDL_Joystick* joystick) {
     char text[33]{};
     SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), text, sizeof(text));
@@ -161,12 +177,12 @@ struct InputManager::Impl {
                     if (m.pad[target].kind == PadBinding::Automatic) m.pad[target] = automatic(target);
                 }
                 const QString keyKey = prefix + QStringLiteral("key/%1").arg(target);
-                if (gameplayTarget(target) && settings.contains(keyKey)) m.keyboard[target] = settings.value(keyKey).toInt();
+                if (gameplayTarget(target) && settings.contains(keyKey)) m.keyboard[target] = storedKeyboardKey(settings.value(keyKey).toInt());
             }
             if (!settings.contains(prefix + "device")) {
                 for (int target : InputManager::gameTargets(ConsoleProfile(p))) {
                     const QString legacy = QStringLiteral("keys/button_%1").arg(target);
-                    if (settings.contains(legacy)) m.keyboard[target] = settings.value(legacy).toInt();
+                    if (settings.contains(legacy)) m.keyboard[target] = storedKeyboardKey(settings.value(legacy).toInt());
                 }
             }
         }
@@ -430,6 +446,8 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (!validPlayer(player)) return;
     auto m = value;
     m.deadzonePercent = std::clamp(m.deadzonePercent, 5, 60);
+    for (auto it = m.keyboard.begin(); it != m.keyboard.end(); ++it)
+        it.value() = storedKeyboardKey(it.value());
     const auto defaults = defaultMapping(profile, player);
     d->mappings[profileIndex(profile)][player] = m;
     QSettings settings(d->settingsPath, QSettings::IniFormat);
@@ -529,7 +547,42 @@ void InputManager::setEnabled(bool enabled) {
     d->commandBlocked.fill(true);
     d->recompute();
 }
+int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardScanCodes codes) {
+    if (codes == KeyboardScanCodes::Native) {
+#if defined(Q_OS_WIN)
+        codes = KeyboardScanCodes::Windows;
+#elif defined(Q_OS_LINUX)
+        codes = KeyboardScanCodes::Xkb;
+#else
+        codes = KeyboardScanCodes::Unavailable;
+#endif
+    }
+    // The standard printable keys have matching Set-1 and Linux evdev codes.
+    // Preserve the E0 prefix on Windows: extended keys are different positions.
+    quint32 scan = nativeScanCode;
+    if (codes == KeyboardScanCodes::Xkb) scan = scan >= 8 ? scan - 8 : 0;
+    if (codes != KeyboardScanCodes::Unavailable && nativeScanCode != 0) {
+        if (scan >= 0x02 && scan <= 0x0d) return "1234567890-="[scan - 0x02];
+        if (scan >= 0x10 && scan <= 0x1b) return "QWERTYUIOP[]"[scan - 0x10];
+        if (scan >= 0x1e && scan <= 0x28) return "ASDFGHJKL;'"[scan - 0x1e];
+        if (scan >= 0x2c && scan <= 0x35) return "ZXCVBNM,./"[scan - 0x2c];
+        if (scan == 0x29) return Qt::Key_QuoteLeft;
+        if (scan == 0x2b) return Qt::Key_Backslash;
+        if (scan == 0x56) return Qt::Key_Less; // extra ISO key, distinct from US backslash
+    }
+    // Non-text keys and keypad keys retain Qt's identity. Native codes may be
+    // absent in synthetic/accessibility events or unsupported platform plugins.
+    return legacyKeyboardKey(logicalKey);
+}
+bool InputManager::reservedKeyboardKey(int key) {
+    return (key >= Qt::Key_0 && key <= Qt::Key_9) ||
+           key == Qt::Key_Tab || key == Qt::Key_Escape ||
+           key == Qt::Key_P || key == Qt::Key_M ||
+           key == Qt::Key_F5 || key == Qt::Key_F8;
+}
 bool InputManager::keyEvent(int key, bool pressed) {
+    key = legacyKeyboardKey(key);
+    if (reservedKeyboardKey(key)) return false;
     bool bound = false;
     for (int player = 0; player < playerCount; ++player) {
         const auto& mapping = d->mappings[profileIndex(d->profile)][player];

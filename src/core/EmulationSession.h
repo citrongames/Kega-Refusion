@@ -30,6 +30,7 @@ signals:
     void gameLoaded(const QString& path, double fps);
     void pausedChanged(bool paused);
     void notification(const QString& text);
+    void actionCompleted(const QString& text);
     void errorOccurred(const QString& text);
 protected:
     void run() override;

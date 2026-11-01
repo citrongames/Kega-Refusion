@@ -76,7 +76,7 @@ void GameView::setIntegerScaling(bool enabled) {
 
 void GameView::showOsd(const QString& message, int durationMs,
                        const QString& category) {
-    if (message.trimmed().isEmpty()) return;
+    if (!osdEnabled_ || message.trimmed().isEmpty()) return;
     const qint64 deadline = osdClock_.elapsed() + qBound(500, durationMs, 12000);
     for (int i = notices_.size() - 1; i >= 0; --i) {
         if ((!category.isEmpty() && notices_[i].category == category) ||
@@ -84,8 +84,15 @@ void GameView::showOsd(const QString& message, int durationMs,
             notices_.removeAt(i);
     }
     notices_.append({message.left(220), category, deadline});
-    while (notices_.size() > 3) notices_.removeFirst();
+    while (notices_.size() > 1) notices_.removeFirst();
     if (!osdTimer_.isActive()) osdTimer_.start();
+    update();
+}
+
+void GameView::setOsdEnabled(bool enabled) {
+    osdEnabled_ = enabled;
+    notices_.clear();
+    osdTimer_.stop();
     update();
 }
 
@@ -113,7 +120,7 @@ void GameView::expireOsd() {
 }
 
 void GameView::paintOsd(QPainter& painter) {
-    if (notices_.isEmpty() && !paused_ && !fastForward_) return;
+    if (!osdEnabled_ || (notices_.isEmpty() && !paused_ && !fastForward_)) return;
     QFont osd(osdFamily_);
     osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);
     osd.setStyleStrategy(QFont::NoAntialias);
@@ -145,27 +152,16 @@ void GameView::paintOsd(QPainter& painter) {
         return panelHeight;
     };
 
-    int statusY = margin;
-    if (paused_) {
-        const QStringList lines{QStringLiteral("ПАУЗА")};
-        const int panelWidth = fm.horizontalAdvance(lines.first()) + 2 * pad;
-        statusY += drawPanel(lines, width() - margin - panelWidth, statusY, true) + 4;
-    }
-    if (fastForward_) {
-        const QStringList lines{QStringLiteral("УСКОРЕНИЕ ×4")};
-        const int panelWidth = fm.horizontalAdvance(lines.first()) + 2 * pad;
-        statusY += drawPanel(lines, width() - margin - panelWidth, statusY, true) + 4;
-    }
-
-    int bottom = height() - margin;
-    for (int i = notices_.size() - 1; i >= 0; --i) {
-        const QStringList lines = wrapOsd(notices_[i].text, fm, maxTextWidth, 2);
+    int y = margin;
+    if (paused_)
+        y += drawPanel({QStringLiteral("ПАУЗА")}, margin, y, true) + 4;
+    if (fastForward_)
+        y += drawPanel({QStringLiteral("УСКОРЕНИЕ ×4")}, margin, y, true) + 4;
+    for (const Notice& notice : notices_) {
+        const QStringList lines = wrapOsd(notice.text, fm, maxTextWidth, 2);
         const int panelHeight = lines.size() * lineHeight + 2 * pad;
-        bottom -= panelHeight;
-        if (bottom < statusY + margin && (paused_ || fastForward_)) break;
-        if (bottom < margin) break;
-        drawPanel(lines, margin, bottom, false);
-        bottom -= 4;
+        if (y + panelHeight > height() - margin) break;
+        y += drawPanel(lines, margin, y, false) + 4;
     }
 }
 
