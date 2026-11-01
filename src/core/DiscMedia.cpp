@@ -30,8 +30,15 @@ bool hashFile(const QString& path, QCryptographicHash& hash, QString& error) {
     }
     return true;
 }
+int headerStart(const QByteArray& header) {
+    return header.startsWith("SEGADISCSYSTEM") ? 0 : header.mid(16,14) == "SEGADISCSYSTEM" ? 16 : -1;
+}
+bool headerNeeds32x(const QByteArray& header) {
+    const int start = headerStart(header);
+    return start >= 0 && header.mid(start + 0x100, 8) == "SEGA 32X";
+}
 int headerRegion(const QByteArray& header) {
-    int start = header.startsWith("SEGADISCSYSTEM") ? 0 : header.mid(16,14) == "SEGADISCSYSTEM" ? 16 : -1;
+    const int start = headerStart(header);
     if (start < 0 || header.size() <= start+0x20b) return 0;
     const auto value = quint8(header[start+0x20b]);
     return value == 0x64 ? 3 : value == 0xa1 ? 1 : 2;
@@ -62,6 +69,7 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     hash.addData(QByteArray("KegaRefusion-CD-v1:"));
     int region = 0;
+    bool needs32x = false;
     QVector<DiscImage::File> files{{absolute,info.size(),info.lastModified()}};
     QVector<DiscImage::Track> aliases;
     QByteArray virtualCue;
@@ -111,18 +119,23 @@ bool DiscMedia::inspect(const QString& path, DiscImage& image, QString& error) {
             files.append({track,trackInfo.size(),trackInfo.lastModified()});
         }
         QFile first(tracks.first());
-        if (first.open(QIODevice::ReadOnly)) region = headerRegion(first.read(0x220));
+        if (first.open(QIODevice::ReadOnly)) {
+            const auto header = first.read(0x220);
+            region = headerRegion(header);
+            needs32x = headerNeeds32x(header);
+        }
     } else {
         const auto header = source.read(0x220);
         if (extension == "chd" ? !header.startsWith("MComprHD") : !(region = headerRegion(header))) {
             error = QStringLiteral("Файл не похож на образ Sega CD: %1").arg(info.fileName()); return false;
         }
+        if (extension != "chd") needs32x = headerNeeds32x(header);
         QCryptographicHash imageHash(QCryptographicHash::Sha256);
         if (!hashFile(absolute,imageHash,error)) return false;
         hash.addData(extension.toUtf8()); hash.addData(imageHash.result());
     }
     image = {};
-    image.path = absolute; image.hash = hash.result(); image.region = region;
+    image.path = absolute; image.hash = hash.result(); image.region = region; image.needs32x = needs32x;
     image.files = files;
     if (hasMp3) { image.virtualCue = virtualCue; image.tracks = aliases; }
     return true;

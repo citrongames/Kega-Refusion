@@ -14,6 +14,7 @@ struct DiscImage {
     QByteArray virtualCue;
     QString runtimePath;
     int region = 0; // 1 Japan, 2 USA, 3 Europe; 0 requires core detection (CHD).
+    bool needs32x = false; // Boot header says SEGA 32X; CHD remains core-detected.
 };
 class DiscMedia final {
 public:

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.6.1 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.7.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -24,6 +24,7 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/Mp3Stream.cpp src/core/Mp3Stream.h
     src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
     src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
+    src/core/Sega32xBios.cpp src/core/Sega32xBios.h
     src/core/RewindBuffer.cpp src/core/RewindBuffer.h
     src/core/FramePacer.cpp src/core/FramePacer.h
     src/core/BatterySave.cpp src/core/BatterySave.h)
@@ -52,6 +53,8 @@ else()
 endif()
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(core32x_game_probe tools/core32x-game-probe.cpp)
+    target_link_libraries(core32x_game_probe PRIVATE core_host)
     add_executable(cd_benchmark tools/cd-benchmark.cpp)
     target_link_libraries(cd_benchmark PRIVATE core_host)
     if(WIN32)

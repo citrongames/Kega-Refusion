@@ -1,0 +1,24 @@
+Blargg md_ntsc 0.1.2 kernel support for Kega Refusion RGB565 filtering.
+
+Source: Genesis Plus GX revision f27655b592ef43f317272d79883bcaa10d3ac8ad,
+core/ntsc/md_ntsc.c, md_ntsc.h, md_ntsc_impl.h and license.txt:
+https://github.com/libretro/Genesis-Plus-GX/tree/f27655b592ef43f317272d79883bcaa10d3ac8ad/core/ntsc
+Upstream: md_ntsc 0.1.2, http://www.slack.net/~ant/
+Copyright (C) 2006-2007 Shay Green; LGPL version 2.1 or later.
+The md_ntsc.c donor also identifies GPX adaptations by EkeEke.
+
+The small kernel implementation is retained here, with its original notices.
+Kega Refusion changes, 2026-11-01: remove unused output/global-blitter helpers;
+use explicitly unsigned 32-bit RGB packing to avoid signed-shift undefined
+behavior; make immutable two-phase MD pixel weights local to this translation
+unit. No mutable global state, GPX bitmap or Qt dependency is retained.
+
+src/core32x/video/ntsc565.c/.h adapts initialization, error correction and the
+4-input/8-output row algorithm to an optional 65536-entry full RGB565 kernel.
+The table contains 65536 * 32 * sizeof(uint32_t) = 8388608 bytes, independent
+of LP64/LLP64 unsigned-long size. Gamma inputs retain all 32 red/blue and all
+64 green levels. Presets use the same coefficients as GPX's monochrome,
+composite, S-Video and RGB presets. Existing GPX filtering is not changed.
+
+The original LGPL 2.1 text is included in COPYING.LGPL-2.1. The component and
+these adaptations are provided under LGPL 2.1 or later, as the original code.

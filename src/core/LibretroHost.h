@@ -60,6 +60,7 @@ public:
     QString contentName() const { return contentName_; }
     std::function<void(const QString&)> message;
 private:
+    QByteArray stateCoreIdentity() const;
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();

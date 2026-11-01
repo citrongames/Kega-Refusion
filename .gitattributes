@@ -1,2 +1,6 @@
 # Preserve upstream line endings and context whitespace in source patches.
 tools/patches/*.patch -text -whitespace
+
+# Keep byte-exact upstream SH2 sources and their original whitespace.
+third_party/picodrive32x/** -text -whitespace
+third_party/blargg/** -text -whitespace

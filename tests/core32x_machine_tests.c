@@ -1,0 +1,44 @@
+#include "core32x/machine.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define CHECK(c) do { if(!(c)){fprintf(stderr,"machine fixture: %s line %d\n",#c,__LINE__);return 1;} }while(0)
+static void put16(uint8_t *p,unsigned a,uint16_t v) {p[a]=(uint8_t)(v>>8);p[a+1]=(uint8_t)v;}
+static void put32(uint8_t *p,unsigned a,uint32_t v) {put16(p,a,(uint16_t)(v>>16));put16(p,a+2,(uint16_t)v);}
+static void program(uint8_t *p,uint32_t port,uint8_t value)
+{
+    put32(p,0,0x100);put32(p,4,0x0603f000);
+    put16(p,0x100,0xd102);put16(p,0x102,(uint16_t)(0xe000|value));
+    put16(p,0x104,0x2101);put16(p,0x106,0xaffe);put16(p,0x108,0x0009);
+    put32(p,0x10c,port);
+}
+static uint32_t peripheral(void *p,unsigned cpu,uint32_t address,unsigned size)
+{ (void)p;(void)cpu;(void)size;return address==0xffffff00?0xface:0; }
+int main(void)
+{
+    uint8_t mb[2048]={0},sb[1024]={0};
+    Kega32xMachineHost h={0};Kega32xMachine *m;Kega32xBus *b;
+    program(mb,0x20004020,0x42);program(sb,0x20004022,0x24);
+    h.peripheral_read=peripheral;
+    CHECK(!kega32x_machine_create(&h,mb,2047,sb,sizeof(sb),0,0));
+    m=kega32x_machine_create(&h,mb,sizeof(mb),sb,sizeof(sb),0,0);CHECK(m);
+    b=kega32x_machine_bus(m);
+    kega32x_machine_run_until(m,100);
+    CHECK(kega_sh2_cycles(kega32x_machine_cpu(m,0))==0);
+    kega32x_bus_write16(b,KEGA32X_M68K,0,3,100);
+    kega32x_machine_run_until(m,1000);
+    CHECK(b->s.regs[0x20/2]==0x42 && b->s.regs[0x22/2]==0x24);
+    CHECK(kega32x_machine_cpu_mclk(m,0)>=998 && kega32x_machine_cpu_mclk(m,1)>=998);
+    kega32x_machine_write(m,0,0x26000100,0x12345678,4);
+    CHECK(kega32x_machine_read(m,1,0x06000100,4)==0x12345678);
+    CHECK(kega32x_machine_read(m,1,0x06000101,1)==0x34);
+    kega32x_machine_write(m,0,0xc0000100,0xbeef,2);
+    CHECK(kega32x_machine_read(m,0,0xc0000100,2)==0xbeef);
+    CHECK(kega32x_machine_read(m,1,0xc0000100,2)==0);
+    CHECK(kega32x_machine_read(m,0,0xffffff00,4)==0xface);
+    kega32x_machine_write(m,0,0x46000100,0,4);
+    CHECK(kega32x_machine_read(m,0,0x06000100,4)==0x12345678);
+    kega32x_machine_destroy(m);
+    puts("32X assembly: two synthetic BIOS programs, held reset, shared/private memory passed");
+    return 0;
+}

@@ -4,6 +4,7 @@
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
 #include "../core/SegaCdBios.h"
+#include "../core/Sega32xBios.h"
 #include "../input/InputManager.h"
 
 #include <QAction>
@@ -59,7 +60,7 @@ bool isSupportedDropFile(const QString& path) {
            (isCdPath(path) || QStringList{QStringLiteral("md"), QStringLiteral("gen"),
                QStringLiteral("bin"), QStringLiteral("smd"), QStringLiteral("sms"),
                QStringLiteral("gg"), QStringLiteral("sg"), QStringLiteral("68k"),
-               QStringLiteral("zip"), QStringLiteral("7z")}.contains(ext));
+               QStringLiteral("32x"), QStringLiteral("zip"), QStringLiteral("7z")}.contains(ext));
 }
 ConsoleProfile profileFor(const QFileInfo& file) {
     const QString ext = file.suffix().toLower();
@@ -241,6 +242,10 @@ void MainWindow::buildMenus() {
     discGroup_ = new QActionGroup(this);
     discGroup_->setExclusive(true);
     updateDiscMenu();
+    QMenu* sega32xMenu = fileMenu->addMenu(QStringLiteral("32X"));
+    QAction* bios32xAction = sega32xMenu->addAction(QStringLiteral("BIOS…"));
+    bios32xAction->setObjectName(QStringLiteral("sega32xBiosAction"));
+    connect(bios32xAction, &QAction::triggered, this, &MainWindow::editSega32xBios);
     fileMenu->addSeparator();
     screenshotAction_ = fileMenu->addAction(QStringLiteral("Сохранить скриншот"));
     screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
@@ -562,7 +567,7 @@ void MainWindow::buildMenus() {
         QMessageBox::about(this, QStringLiteral("О Kega Refusion"),
             QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
             "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
-            "Поддерживаются архивы ZIP и 7z. 32X пока не подготовлен.<br>"
+            "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.<br>"
             "Состояния сохраняются в выбранный слот от 0 до 9.<br>"
             "Клавиатуру и геймпады можно настроить в разделе «Управление»."));
     });
@@ -675,6 +680,68 @@ void MainWindow::editSegaCdBios() {
     view_->setFocus();
 }
 
+void MainWindow::editSega32xBios() {
+    releaseInput();
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("sega32xBiosDialog"));
+    dialog.setWindowTitle(QStringLiteral("BIOS 32X"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* hint = new QLabel(QStringLiteral("Для 32X нужны три файла BIOS. "
+        "Для CD32X также требуется BIOS Sega CD соответствующего региона."), &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+    auto* form = new QFormLayout;
+    layout->addLayout(form);
+    const Sega32xBios::Piece pieces[]{Sega32xBios::Piece::M68k,
+        Sega32xBios::Piece::MasterSh2, Sega32xBios::Piece::SlaveSh2};
+    const QStringList labels{QStringLiteral("68000"), QStringLiteral("Master SH2"),
+                             QStringLiteral("Slave SH2")};
+    QLabel* statusLabels[3]{};
+    for (int i = 0; i < 3; ++i) {
+        statusLabels[i] = new QLabel(&dialog);
+        statusLabels[i]->setObjectName(QStringLiteral("bios32xStatus%1").arg(i));
+        form->addRow(labels[i] + QLatin1Char(':'), statusLabels[i]);
+    }
+    auto refresh = [this, &pieces, &statusLabels] {
+        const QDir bios(QDir(dataPath_).filePath(QStringLiteral("bios")));
+        for (int i = 0; i < 3; ++i) {
+            const QString path = bios.filePath(Sega32xBios::fileName(pieces[i]));
+            QString error;
+            const bool installed = Sega32xBios::validateFile(path, pieces[i], error);
+            statusLabels[i]->setText(installed ? QStringLiteral("Установлен") : QStringLiteral("Не готов"));
+            statusLabels[i]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
+        }
+    };
+    refresh();
+    auto* importButton = new QPushButton(QStringLiteral("Импортировать из папки…"), &dialog);
+    importButton->setObjectName(QStringLiteral("import32xBios"));
+    layout->addWidget(importButton);
+    connect(importButton, &QPushButton::clicked, &dialog, [this, &dialog, &refresh] {
+        const QString source = QFileDialog::getExistingDirectory(
+            &dialog, QStringLiteral("Папка с BIOS 32X"), QDir::homePath());
+        if (source.isEmpty()) return;
+        QString error;
+        const auto imported = Sega32xBios::importDirectory(source, dataPath_, error);
+        refresh();
+        QString message;
+        if (!imported.isEmpty()) message = QStringLiteral("Импортированы: %1").arg(imported.join(QStringLiteral(", ")));
+        if (!error.isEmpty()) {
+            if (!message.isEmpty()) message += QStringLiteral("\n\n");
+            QMessageBox::warning(&dialog, QStringLiteral("BIOS 32X"), message + error);
+        } else {
+            QMessageBox::information(&dialog, QStringLiteral("BIOS 32X"),
+                message.isEmpty() ? QStringLiteral("Новые BIOS не найдены или уже установлены.") : message);
+        }
+    });
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.exec();
+    view_->setFocus();
+    updateInputEnabled();
+}
+
 void MainWindow::updateDiscMenu() {
     if (!discMenu_) return;
     const bool hasDisc = !discPaths_.isEmpty();
@@ -785,7 +852,7 @@ void MainWindow::openGameDialog() {
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("Открыть игру"),
         settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
-        QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.cue *.iso *.chd *.m3u *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;Архивы (*.zip *.7z);;Все файлы (*)"));
+        QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;Архивы (*.zip *.7z);;Все файлы (*)"));
     if (!path.isEmpty()) openRom(path);
     else view_->setFocus();
 }

@@ -2,6 +2,7 @@
 #include "RomArchive.h"
 #include "VideoFrameGeometry.h"
 #include "SegaCdBios.h"
+#include "Sega32xBios.h"
 #include "CoreFileSystem.h"
 #include <QCryptographicHash>
 #include <QDir>
@@ -28,6 +29,7 @@ struct LibretroHost::Api {
     void (*manage_bram)(bool) = nullptr;
     bool (*get_bram)(unsigned, const void**, size_t*, const char**) = nullptr;
     const char* (*state_abi)() = nullptr;
+    unsigned (*features)() = nullptr;
 };
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
@@ -93,6 +95,7 @@ bool LibretroHost::initialize(QString& error) {
     RESOLVE(load_game); RESOLVE(unload_game); RESOLVE(run); RESOLVE(reset); RESOLVE(serialize_size); RESOLVE(serialize);
     RESOLVE(unserialize); RESOLVE(get_memory_data); RESOLVE(get_memory_size);
 #undef RESOLVE
+    api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
     api_->manage_bram = reinterpret_cast<decltype(api_->manage_bram)>(library_.resolve("kegarefusion_manage_bram"));
     api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
@@ -210,6 +213,17 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     QVector<DiscImage> images;
     if (!DiscMedia::read(path,images,error) || !checkDiscBios(images.first(),error)) return false;
     if (!initialize(error)) return false;
+    const bool needs32x = images.first().needs32x;
+    if (needs32x) {
+        if (!api_->features || !(api_->features() & 1u)) {
+            error = QStringLiteral("Этот диск требует CD32X, но загруженное ядро не поддерживает 32X.");
+            return false;
+        }
+        if (!Sega32xBios::validate(dataPath_, error)) {
+            error.prepend(QStringLiteral("Для этого диска CD32X нужны три BIOS 32X.\n"));
+            return false;
+        }
+    }
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
     discs_ = images; discIndex_ = 0;
@@ -223,6 +237,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (!accepted) {
         error = QStringLiteral("Не удалось загрузить Sega CD. Проверьте образ, дорожки и BIOS региона.\n%1\n%2\n%3")
             .arg(SegaCdBios::status(dataPath_,1),SegaCdBios::status(dataPath_,2),SegaCdBios::status(dataPath_,3));
+        if (needs32x) error += QLatin1Char('\n') + Sega32xBios::status(dataPath_);
         unload(); return false;
     }
     loaded_ = true;
@@ -252,6 +267,9 @@ bool LibretroHost::selectDisc(int index, QString& error) {
     if (!isCd() || index < 0 || index >= discs_.size()) {
         error = QStringLiteral("Неверный номер диска."); return false;
     }
+    if (discs_[index].needs32x && (!api_->features || !(api_->features() & 2u))) {
+        error = QStringLiteral("Для CD32X откройте образ через «Открыть игру»."); return false;
+    }
     if (!DiscMedia::unchanged(discs_[index],error)) return false;
     CoreFileSystem::clearError();
     const auto state = serialize();
@@ -270,7 +288,11 @@ bool LibretroHost::changeDisc(const QString& path, QString& error) {
     error.clear();
     if (!isCd()) { error = QStringLiteral("Игра Sega CD не запущена."); return false; }
     DiscImage image;
-    if (!DiscMedia::inspect(path,image,error) || !DiscMedia::prepare(image,dataPath_,error)) return false;
+    if (!DiscMedia::inspect(path,image,error)) return false;
+    if (image.needs32x && (!api_->features || !(api_->features() & 2u))) {
+        error = QStringLiteral("Для CD32X откройте образ через «Открыть игру»."); return false;
+    }
+    if (!DiscMedia::prepare(image,dataPath_,error)) return false;
     CoreFileSystem::clearError();
     const auto previous = discs_[discIndex_];
     const auto state = serialize();
@@ -332,12 +354,34 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         if (content.size() != file.size()) { error = QStringLiteral("ROM прочитан не полностью."); return false; }
     }
     const auto ext = QFileInfo(name).suffix().toLower();
-    const QStringList supported{"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k"};
+    const QStringList supported{"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k", "32x"};
     if (!supported.contains(ext) || content.size() < 512 || content.size() > 32 * 1024 * 1024) {
         error = QStringLiteral("Неподдерживаемый картридж или неверный размер ROM."); return false;
     }
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
     if (!initialize(error)) return false;
+    // Read only the eight console-header bytes in each supported layout.
+    // In SMD, odd/even bytes occupy separate halves of the first 16 KiB block.
+    const auto header32x = [&content](int layout) {
+        constexpr char signature[] = "SEGA 32X";
+        for (qsizetype i = 0; i < 8; ++i) {
+            const qsizetype logical = 0x100 + i;
+            const qsizetype physical = layout == 2 ? 512 + logical / 2 + ((logical & 1) ? 0 : 0x2000)
+                                                  : layout == 1 ? (logical ^ 1) : logical;
+            if (physical >= content.size() || content[physical] != signature[i]) return false;
+        }
+        return true;
+    };
+    const bool smdLayout = content.size() >= 512 + 0x4000 &&
+        ((content.size() / 512) & 1) && !(content.size() % 512) && !((content.size() - 512) % 0x4000);
+    const bool needs32x = ext == "32x" || header32x(0) || header32x(1) || (smdLayout && header32x(2));
+    if (needs32x) {
+        if (!api_->features || !(api_->features() & 1u)) {
+            error = QStringLiteral("Это ядро ещё не поддерживает 32X.");
+            return false;
+        }
+        if (!Sega32xBios::validate(dataPath_, error)) return false;
+    }
     // Preserve the previous game's battery saves before switching content.
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
@@ -417,6 +461,9 @@ bool LibretroHost::hardReset(QString& error) {
     error.clear();
     if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
     if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
+    // The active attachment also covers CHD, whose 32X header is core-detected.
+    // Recheck user BIOS before unloading a working game for its power cycle.
+    if (api_->features && (api_->features() & 2u) && !Sega32xBios::validate(dataPath_,error)) return false;
     // Reuse the selected content already in memory: archives need no second
     // selection and moved/deleted ROM files do not affect a power cycle.
     if (!flushSaveRam(error)) return false;
@@ -603,12 +650,19 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
     audio_.clear();
     return true;
 }
+QByteArray LibretroHost::stateCoreIdentity() const {
+    // Ordinary MD/CD retain their stable GPX state identity. The attachment
+    // has its own versioned state contract, independent of executable hashes.
+    if (api_->features && (api_->features() & 2u))
+        return digest(coreHash_ + QByteArrayLiteral("kegarefusion-32x-state-v1"));
+    return coreHash_;
+}
 bool LibretroHost::saveState(int slot, QString& error) {
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
     if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед сохранением состояния."); return false; }
     const auto payload = serialize();
     if (payload.isEmpty()) { error = QStringLiteral("Ядро не смогло сохранить состояние."); return false; }
-    QByteArray bytes = stateMagic + romHash_ + coreHash_ + digest(payload);
+    QByteArray bytes = stateMagic + romHash_ + stateCoreIdentity() + digest(payload);
     quint32 size = qToBigEndian(quint32(payload.size()));
     bytes.append(reinterpret_cast<const char*>(&size), sizeof(size));
     bytes.append(payload);
@@ -630,7 +684,7 @@ bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) 
     }
     if (file.size() < stateHeaderSize || file.size() > stateHeaderSize + maxStateSize) { error = QStringLiteral("Неверный размер сохранения."); return false; }
     const auto bytes = file.readAll();
-    if (bytes.size() < stateHeaderSize || bytes.left(8) != stateMagic || bytes.mid(8,32) != romHash_ || bytes.mid(40,32) != coreHash_) {
+    if (bytes.size() < stateHeaderSize || bytes.left(8) != stateMagic || bytes.mid(8,32) != romHash_ || bytes.mid(40,32) != stateCoreIdentity()) {
         error = QStringLiteral("Сохранение относится к другой игре или сборке ядра."); return false;
     }
     const quint32 size = qFromBigEndian<quint32>(bytes.constData() + 104);

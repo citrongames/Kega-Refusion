@@ -1,0 +1,295 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -78,6 +78,9 @@
+ #include "libretro_core_options.h"
+ 
+ #include "shared.h"
++#ifdef KEGAREFUSION_32X
++#include "kega32x/gpx/bridge.h"
++#endif
+ #include "md_ntsc.h"
+ #include "sms_ntsc.h"
+ #include "osd.h"
+@@ -1323,6 +1326,9 @@
+    }
+ 
+    is_h40  = bitmap.viewport.w == 320; /* Could be read directly from the register as well. */
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) is_h40 = true;
++#endif
+    dotrate = system_clock / (is_h40 ? 8.0 : 10.0);
+ 
+    if (config.aspect_ratio == 1) /* Force NTSC PAR */
+@@ -1391,11 +1397,19 @@
+       bmdoffset = vwoffset = 0;
+ 
+    vwidth  = bitmap.viewport.w + (bitmap.viewport.x * 2);
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) vwidth = 320 + bitmap.viewport.x * 2;
++#endif
+    vheight = bitmap.viewport.h + (bitmap.viewport.y * 2);
+    vaspect_ratio = calculate_display_aspect_ratio();
+ 
+    if (config.ntsc)
+    {
++#ifdef KEGAREFUSION_32X
++      if (kegarefusion_32x_attached)
++         vwidth *= 2;
++      else
++#endif
+       if (reg[12] & 1)
+          vwidth = MD_NTSC_OUT_WIDTH(vwidth);
+       else
+@@ -2082,30 +2096,63 @@
+     orig_value = config.ntsc;
+ 
+     if (!var.value || !strcmp(var.value, "disabled"))
++    {
+       config.ntsc = 0;
++#ifdef KEGAREFUSION_32X
++      kegarefusion_32x_set_filter(0);
++#endif
++    }
+     else if (var.value && !strcmp(var.value, "monochrome"))
+     {
+       config.ntsc = 1;
+       sms_ntsc_init(sms_ntsc, &sms_ntsc_monochrome);
+       md_ntsc_init(md_ntsc,   &md_ntsc_monochrome);
++#ifdef KEGAREFUSION_32X
++      if (!kegarefusion_32x_set_filter(1))
++      {
++         config.ntsc = 0;
++         if (log_cb) log_cb(RETRO_LOG_ERROR, "32X RGB565 filter allocation failed; filter disabled.\n");
++      }
++#endif
+     }
+     else if (var.value && !strcmp(var.value, "composite"))
+     {
+       config.ntsc = 1;
+       sms_ntsc_init(sms_ntsc, &sms_ntsc_composite);
+       md_ntsc_init(md_ntsc,   &md_ntsc_composite);
++#ifdef KEGAREFUSION_32X
++      if (!kegarefusion_32x_set_filter(2))
++      {
++         config.ntsc = 0;
++         if (log_cb) log_cb(RETRO_LOG_ERROR, "32X RGB565 filter allocation failed; filter disabled.\n");
++      }
++#endif
+     }
+     else if (var.value && !strcmp(var.value, "svideo"))
+     {
+       config.ntsc = 1;
+       sms_ntsc_init(sms_ntsc, &sms_ntsc_svideo);
+       md_ntsc_init(md_ntsc,   &md_ntsc_svideo);
++#ifdef KEGAREFUSION_32X
++      if (!kegarefusion_32x_set_filter(3))
++      {
++         config.ntsc = 0;
++         if (log_cb) log_cb(RETRO_LOG_ERROR, "32X RGB565 filter allocation failed; filter disabled.\n");
++      }
++#endif
+     }
+     else if (var.value && !strcmp(var.value, "rgb"))
+     {
+       config.ntsc = 1;
+       sms_ntsc_init(sms_ntsc, &sms_ntsc_rgb);
+       md_ntsc_init(md_ntsc,   &md_ntsc_rgb);
++#ifdef KEGAREFUSION_32X
++      if (!kegarefusion_32x_set_filter(4))
++      {
++         config.ntsc = 0;
++         if (log_cb) log_cb(RETRO_LOG_ERROR, "32X RGB565 filter allocation failed; filter disabled.\n");
++      }
++#endif
+     }
+ 
+     if (orig_value != config.ntsc)
+@@ -2359,8 +2359,15 @@
+     audio_init(SOUND_FREQUENCY, 0);
+     memcpy(temp, sram.sram, sizeof(temp));
++#ifdef KEGAREFUSION_32X
++    if (kegarefusion_32x_attached)
++      kegarefusion_32x_reinit();
++    else
++#endif
++    {
+     system_init();
+     system_reset();
++    }
+     memcpy(sram.sram, temp, sizeof(temp));
+     update_viewports = true;
+   }
+ 
+@@ -3196,7 +3243,7 @@
+ #define GIT_VERSION ""
+ #endif
+    info->library_version = "v1.7.4" GIT_VERSION;
+-   info->valid_extensions = "m3u|mdx|md|smd|gen|bin|cue|iso|chd|bms|sms|gg|sg|68k|sgd";
++   info->valid_extensions = "m3u|mdx|md|smd|gen|bin|cue|iso|chd|bms|sms|gg|sg|68k|sgd|32x";
+    info->block_extract = false;
+    info->need_fullpath = true;
+ }
+@@ -3375,7 +3422,12 @@
+    input_reset();
+ }
+ 
+-size_t retro_serialize_size(void) { return STATE_SIZE; }
++size_t retro_serialize_size(void) {
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) return STATE_SIZE + kegarefusion_32x_state_size();
++#endif
++   return STATE_SIZE;
++}
+ 
+ extern int8 fast_savestates;
+ 
+@@ -3395,7 +3447,17 @@
+ }
+ 
+ bool retro_serialize(void *data, size_t size)
+-{ 
++{
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached)
++   {
++      if (!data || size != STATE_SIZE + kegarefusion_32x_state_size()) return false;
++      if (!kegarefusion_32x_state_save((uint8_t *)data + STATE_SIZE, size - STATE_SIZE)) return false;
++      fast_savestates = false;
++      return kegarefusion_32x_save_gpx(data) != 0;
++   }
++#endif
++
+    fast_savestates = get_fast_savestates();
+    if (size != STATE_SIZE)
+       return FALSE;
+@@ -3408,6 +3464,23 @@
+ 
+ bool retro_unserialize(const void *data, size_t size)
+ {
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached)
++   {
++      int loaded;
++      if (!data || size != STATE_SIZE + kegarefusion_32x_state_size()) return false;
++      if (!kegarefusion_32x_state_prepare((const uint8_t *)data + STATE_SIZE, size - STATE_SIZE)) return false;
++      fast_savestates = false;
++      kegarefusion_32x_state_begin_load();
++      loaded = state_load((uint8_t *)data);
++      if (!kegarefusion_32x_state_end_load(loaded != 0)) return false;
++#ifdef HAVE_OVERCLOCK
++      update_overclock();
++#endif
++      return true;
++   }
++#endif
++
+    fast_savestates = get_fast_savestates();
+    if (size != STATE_SIZE)
+       return FALSE;
+@@ -3479,6 +3539,46 @@
+ 	/* apply ROM patches */
+ 	apply_cheats();
+ }
++
++#ifdef KEGAREFUSION_32X
++RETRO_API unsigned retro_kegarefusion_core_features(void)
++{
++   return kegarefusion_32x_features();
++}
++
++RETRO_API int retro_kegarefusion_core_stats(uint64_t *out, size_t count)
++{
++   return kegarefusion_32x_stats(out, count);
++}
++
++static bool kegarefusion_read_32x_bios(const char *dir, const char *name, uint8_t *data, size_t length)
++{
++   char path[1024];
++   FILE *file;
++   bool okay;
++   fill_pathname_join(path, dir, name, sizeof(path));
++   file = fopen(path, "rb");
++   if (!file) return false;
++   okay = fread(data, 1, length, file) == length && fgetc(file) == EOF && !ferror(file);
++   fclose(file);
++   return okay;
++}
++static bool kegarefusion_load_32x(const char *dir, const char *extension)
++{
++   uint8_t g[256], m[2048], s[1024];
++   if (memcmp(rominfo.consoletype, "SEGA 32X", 8) != 0 && strcasecmp(extension, "32x") != 0)
++      return true;
++   if (!kegarefusion_read_32x_bios(dir, "32X_G_BIOS.BIN", g, sizeof(g)) ||
++       !kegarefusion_read_32x_bios(dir, "32X_M_BIOS.BIN", m, sizeof(m)) ||
++       !kegarefusion_read_32x_bios(dir, "32X_S_BIOS.BIN", s, sizeof(s)))
++   {
++      if (log_cb) log_cb(RETRO_LOG_ERROR, "32X requires complete G/M/S BIOS in the system directory.\n");
++      return false;
++   }
++   if (!kegarefusion_32x_attach(g, m, s)) return false;
++   return kegarefusion_32x_prepare_filter() != 0;
++}
++#endif
+ 
+ bool retro_load_game(const struct retro_game_info *info)
+ {
+@@ -3739,6 +3833,9 @@
+    audio_init(SOUND_FREQUENCY, 0);
+    system_init();
+    system_reset();
++#ifdef KEGAREFUSION_32X
++   if (!kegarefusion_load_32x(dir, content_ext)) goto error;
++#endif
+    is_running = false;
+ 
+    if (system_hw == SYSTEM_MCD)
+@@ -3760,6 +3857,9 @@
+    return true;
+ 
+ error:
++#ifdef KEGAREFUSION_32X
++   kegarefusion_32x_detach();
++#endif
+    if (sms_ntsc)
+       free(sms_ntsc);
+    sms_ntsc  = NULL;
+@@ -3783,6 +3883,9 @@
+ 
+ void retro_unload_game(void) 
+ {
++#ifdef KEGAREFUSION_32X
++   kegarefusion_32x_detach();
++#endif
+ 	/* Clear disk interface */
+    int i;
+    disk_count = 0;
+@@ -3930,6 +4033,11 @@
+    update_overclock();
+ #endif
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached)
++      kegarefusion_32x_soft_reset();
++   else
++#endif
+    gen_reset(0);
+ }
+ 
+ extern int8 audio_hard_disable;
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -576,7 +576,15 @@
+   }
+ 
+   /* auto-detect CD image file */
++#ifdef KEGAREFUSION_32X
++  {
++    uint8 cd_header[0x210] = {0};
++    size = cdd_load(filename, (char *)cd_header);
++    if (size > 0) memcpy(cart.rom, cd_header, sizeof(cd_header));
++  }
++#else
+   size = cdd_load(filename, (char *)(cart.rom));
++#endif
+   if (size < 0)
+   {
+     /* error opening file */

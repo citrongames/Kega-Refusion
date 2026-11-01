@@ -1,0 +1,50 @@
+PicoDrive SH-2 CPU subset (reference interpreter and x86-64 DRC)
+
+Source: https://github.com/irixxxx/picodrive
+Commit: 07abb00550528f7bf53087d932dd3d747cf2d0df
+
+Upstream SHA256 values below identify the original files. sh2.h, pico_types.h
+and pico_port.h remain byte-for-byte copies; mame/sh2.c has the changes
+documented below.
+14192a41fd769cb553cb1f35101f43f1cb6ee0f05683661e4b403e574d11c4c6  cpu/sh2/sh2.h
+56eff63315c6997e97e2162ba0b53d432784c790bfbd3afe706f34c0649869fe  cpu/sh2/mame/sh2.c
+8ae6083310bb23942c295640c3d312a7902789c0b2492f06d0287537dbd65e3f  pico/pico_types.h
+dd24f629a11f103df5e5d0c3a6a8193c33a53d2a0980bf4524cf3cdab35300c5  pico/pico_port.h
+
+COPYING contains PicoDrive's non-commercial source/distribution terms.
+cpu/sh2/mame/sh2.c carries its separate Juergen Buchmueller notice; preserve it
+in full, credit its authors, and mark any later changes to that source file.
+The host-independent dispatch/IRQ bridge in src/core32x/sh2/sh2_interpreter.c
+is adapted from cpu/sh2/mame/sh2pico.c and cpu/sh2/sh2.c at the same commit.
+No donor MD/CD execution, device emulation, frontend or BIOS dump is included.
+
+DRC subset from the same pinned commit (adapted, not byte-identical):
+1840761ecdd463fb068afa620e042a86d41a1c3a4f25dcd829ed7ae81d42eb2a  upstream cpu/sh2/compiler.c
+b751beb8a5b55797fb3f6d846fe8799a8ad1b8b05e6275eeaf2e756c8be77718  upstream cpu/sh2/compiler.h
+83ff0faf9fd50a31b12a64b45c29e8124351cd3aadeab3f7feb4be57298528e4  upstream cpu/drc/emit_x86.c
+215464c4afe71a1152a443656c34ad5d244fdef8bf96b50d5718f730146ac1a7  upstream cpu/drc/cmn.h
+Changes: see marked source headers and src/core32x/sh2/drc*. No donor MD/CD engine is included.
+
+Exact changes to cpu/sh2/mame/sh2.c:
+- Marked the local changes before the complete original copyright notice.
+- BF, BFS, BT, BTS disp8 and BRA, BSR disp12 use mask/subtract sign extension.
+- EXTS.B and EXTS.W use the same bounded sign-extension arithmetic.
+These preserve two's-complement results while removing signed-left-shift UB.
+
+DRC adaptations:
+- Compiler includes project drc_internal.h through the build include path,
+  so the adapter can be overlaid under GPX core/kega32x without fixed paths.
+- Native SH2 layout is unchanged. Compiler references two independent CPU
+  pointers and project-owned marker arrays; no Pico global machine/MD/CD code.
+- Numeric fetch16 callbacks replace raw BIOS/ROM instruction pointers. All
+  data accesses are host callbacks; ROM folding, loop elision and DIV sequence
+  optimization are disabled in the initial correctness backend.
+- Blocks contain at most 64 decoded instructions; every non-delay instruction
+  has a cycle boundary. Compile failures/assertions return through a guarded
+  translator frame and the normal JIT register-flush exit, then interpreter.
+- Fixed-size 4 MiB generated code cache, bounded donor metadata, checked code
+  emission and relative call reach, checked OS executable protection.
+- Branch displacement and packed cycle shifts use well-defined arithmetic.
+- Donor diagnostic printf output is disabled; no exit/abort paths are retained.
+- Failed-translation teardown clears list heads before later engine re-enable.
+- cmn.h include guard added; compiler.h instruction limit changed to 64.

@@ -41,6 +41,7 @@ private:
     void saveScreenshot();
     void updateRecentMenu();
     void editSegaCdBios();
+    void editSega32xBios();
     void updateDiscMenu();
     void editSettings();
     void editControls();

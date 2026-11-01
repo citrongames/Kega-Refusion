@@ -1,0 +1,266 @@
+--- a/core/m68k/m68kcpu.c
++++ b/core/m68k/m68kcpu.c
+@@ -412,3 +412,73 @@
+ /* ======================================================================== */
+ /* ============================== END OF FILE ============================= */
+ /* ======================================================================== */
++
++#ifdef KEGAREFUSION_32X
++/* Bounded 32X scheduler variant. Legacy runner above stays unchanged. */
++static int kegarefusion_m68k_yielded;
++void kegarefusion_m68k_yield(void) { kegarefusion_m68k_yielded = 1; }
++void kegarefusion_m68k_run(unsigned int cycles) 
++{
++  kegarefusion_m68k_yielded = 0;
++  /* Make sure CPU is not already ahead */
++  if (m68k.cycles >= cycles)
++  {
++    return;
++  }
++
++  /* Check interrupt mask to process IRQ if needed */
++  m68ki_check_interrupts();
++
++  /* Make sure we're not stopped */
++  if (CPU_STOPPED)
++  {
++    m68k.cycles = cycles;
++    return;
++  }
++
++  /* Set aimed cycle count for current CPU execution frame */
++  m68k.cycle_end = cycles;
++
++  /* Return point for when we have an address error (TODO: use goto) */
++  m68ki_set_address_error_trap() /* auto-disable (see m68kcpu.h) */
++
++#ifdef LOGERROR
++  error("[%d][%d] m68k run to %d cycles (%x), irq mask = %x (%x)\n", v_counter, m68k.cycles, cycles, m68k.pc,FLAG_INT_MASK, CPU_INT_LEVEL);
++#endif
++
++  while ((m68k.cycles < cycles) && !kegarefusion_m68k_yielded)
++  {
++    /* Set tracing according to T1. */
++    m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
++
++    /* Set the address space for reads */
++    m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
++
++#ifdef HOOK_CPU
++    /* Trigger execution hook */
++    if (UNLIKELY(cpu_hook))
++      cpu_hook(HOOK_M68K_E, 0, REG_PC, 0);
++#endif
++
++    /* Decode next instruction */
++    REG_IR = m68ki_read_imm_16();
++
++    /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
++    if (m68k.cycles >= m68k.refresh_cycles)
++    {
++      m68k.refresh_cycles = m68k.cycles + (128*7);
++      m68k.cycles += (2*7);
++    }
++
++    /* Execute instruction */
++    m68ki_instruction_jump_table[REG_IR]();
++    USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
++
++    /* Trace m68k_exception, if necessary */
++    m68ki_exception_if_trace(); /* auto-disable (see m68kcpu.h) */
++  }
++
++  /* Reset aimed cycle count to indicate end of CPU execution frame */
++  m68k.cycle_end = 0;
++}
++#endif
+--- a/core/m68k/s68kcpu.c
++++ b/core/m68k/s68kcpu.c
+@@ -535,3 +535,63 @@
+ /* ======================================================================== */
+ /* ============================== END OF FILE ============================= */
+ /* ======================================================================== */
++
++#ifdef KEGAREFUSION_32X
++/* Bounded 32X scheduler variant. Legacy runner above stays unchanged. */
++static int kegarefusion_s68k_yielded;
++void kegarefusion_s68k_yield(void) { kegarefusion_s68k_yielded = 1; }
++void kegarefusion_s68k_run(unsigned int cycles) 
++{
++  kegarefusion_s68k_yielded = 0;
++  /* Make sure CPU is not already ahead */
++  if (s68k.cycles >= cycles)
++  {
++    return;
++  }
++
++  /* Check interrupt mask to process IRQ if needed */
++  m68ki_check_interrupts();
++
++  /* Make sure we're not stopped */
++  if (CPU_STOPPED)
++  {
++    s68k.cycles = cycles;
++    return;
++  }
++
++  /* Set aimed cycle count for current CPU execution frame */
++  s68k.cycle_end = cycles;
++
++  /* Return point for when we have an address error (TODO: use goto) */
++  m68ki_set_address_error_trap() /* auto-disable (see m68kcpu.h) */
++
++#ifdef LOG_SCD
++  error("[%d][%d] s68k run to %d cycles (%x), irq mask = %x (%x)\n", v_counter, s68k.cycles, cycles, s68k.pc,FLAG_INT_MASK, CPU_INT_LEVEL);
++#endif
++ 
++  while ((s68k.cycles < cycles) && !kegarefusion_s68k_yielded)
++  {
++    /* Set tracing according to T1. */
++    m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
++
++    /* Set the address space for reads */
++    m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
++
++    /* Save current instruction PC */
++    s68k.prev_pc = REG_PC;
++
++    /* Decode next instruction */
++    REG_IR = m68ki_read_imm_16();
++
++    /* Execute instruction */
++    m68ki_instruction_jump_table[REG_IR]();
++    USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
++
++    /* Trace m68k_exception, if necessary */
++    m68ki_exception_if_trace(); /* auto-disable (see m68kcpu.h) */
++  }
++
++  /* Reset aimed cycle count to indicate end of CPU execution frame */
++  s68k.cycle_end = 0;
++}
++#endif
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -2372,3 +2372,121 @@
+ 
+   return M68K_INT_ACK_AUTOVECTOR;
+ }
++
++#ifdef KEGAREFUSION_32X
++/* GPX CD hardware on the shared 32X scheduler. Original scd_update is unchanged. */
++extern void kegarefusion_s68k_run(unsigned int cycles);
++unsigned int kegarefusion_scd_next_event(void)
++{
++  int64_t next = (int64_t)scd.cycles + (2000000 - cdd.cycles + 2) / 3;
++  int64_t candidate;
++  if (scd.timer > 0 && (int64_t)scd.cycles + scd.timer < next)
++    next = (int64_t)scd.cycles + scd.timer;
++  if (cdc.dma_w) {
++    candidate = (int32_t)cdc.cycles[0] + 128;
++    if (candidate < next) next = candidate;
++  }
++  if ((scd.regs[0x58>>1].byte.h & 0x80) && gfx.cyclesPerLine) {
++    candidate = (int64_t)gfx.cycles + gfx.cyclesPerLine;
++    if (candidate < next) next = candidate;
++  }
++  if (next < (int64_t)scd.cycles) next = scd.cycles;
++  return (unsigned int)((next * MCYCLES_PER_LINE + SCYCLES_PER_LINE - 1) / SCYCLES_PER_LINE);
++}
++void kegarefusion_scd_run(unsigned int cycles)
++{
++  int yielded = 0;
++  int s68k_run_cycles;
++  int s68k_end_cycles = (int)(((uint64_t)cycles * SCYCLES_PER_LINE) / MCYCLES_PER_LINE);
++  if (s68k_end_cycles <= (int)scd.cycles) goto devices;
++
++  /* run both CPU in sync until end of line */
++  do
++  {
++    /* CD hardware remaining cycles until end of line */
++    s68k_run_cycles = s68k_end_cycles - scd.cycles;
++
++    /* check Timer interrupt occurence */
++    if ((scd.timer > 0) && (scd.timer < s68k_run_cycles))
++    {
++      /* adjust Sub-CPU and Main-CPU end cycle counters up to Timer interrupt occurence */
++      s68k_run_cycles = scd.timer;
++    }
++
++    kegarefusion_s68k_run(scd.cycles + s68k_run_cycles);
++    if ((int)s68k.cycles < (int)scd.cycles + s68k_run_cycles)
++    {
++      s68k_run_cycles = (int)s68k.cycles - (int)scd.cycles;
++      yielded = 1;
++    }
++    if (s68k_run_cycles <= 0) goto devices;
++
++    /* increment CD hardware cycle counter */
++    scd.cycles += s68k_run_cycles;
++
++    /* CDD processing at 75Hz (one clock = 12500000/75 = 500000/3 CPU clocks) */
++    cdd.cycles += (s68k_run_cycles * 3);
++    if (cdd.cycles >= (500000 * 4))
++    {
++      /* reload CDD cycle counter */
++      cdd.cycles -= (500000 * 4);
++
++      /* update CDD sector */
++      cdd_update();
++
++      /* check if CDD communication is enabled */
++      if (scd.regs[0x37>>1].byte.l & 0x04)
++      {
++        /* pending level 4 interrupt */
++        scd.pending |= (1 << 4);
++
++        /* level 4 interrupt enabled */
++        if (scd.regs[0x32>>1].byte.l & 0x10)
++        {
++          /* update IRQ level */
++          s68k_update_irq((scd.pending & scd.regs[0x32>>1].byte.l) >> 1);
++        }
++      }
++    }
++
++    /* Timer */
++    if (scd.timer)
++    {
++      /* decrement timer */
++      scd.timer -= s68k_run_cycles;
++      if (scd.timer <= 0)
++      {
++        /* reload timer (one timer clock = 384 CPU cycles) */
++        scd.timer += (scd.regs[0x30>>1].byte.l * TIMERS_SCYCLES_RATIO);
++
++        /* level 3 interrupt enabled ? */
++        if (scd.regs[0x32>>1].byte.l & 0x08)
++        {
++          /* trigger level 3 interrupt */
++          scd.pending |= (1 << 3);
++
++          /* update IRQ level */
++          s68k_update_irq((scd.pending & scd.regs[0x32>>1].byte.l) >> 1);
++        }
++      }
++    }
++  }
++  while (((int)scd.cycles < s68k_end_cycles) && !yielded);
++
++devices:
++
++  /* update CDC DMA processing (if running) */
++  if (cdc.dma_w && ((int32_t)(scd.cycles - cdc.cycles[0]) >= 128))
++  {
++    cdc_dma_update(scd.cycles);
++  }
++
++  /* update GFX processing (if started) */
++  if ((scd.regs[0x58>>1].byte.h & 0x80) && gfx.cyclesPerLine &&
++      ((int64_t)scd.cycles >= (int64_t)gfx.cycles + gfx.cyclesPerLine))
++  {
++    gfx_update(scd.cycles);
++  }
++}
++
++#endif
