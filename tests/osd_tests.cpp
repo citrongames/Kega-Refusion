@@ -40,6 +40,25 @@ QRect changedBounds(const QImage& baseline, const QImage& actual) {
     return bounds;
 }
 
+void testGameBorders() {
+    GameView view;
+    view.resize(920, 620);
+    QImage frame(320, 224, QImage::Format_RGB32);
+    const QColor gameColor(37, 58, 81);
+    frame.fill(gameColor);
+    view.setFrame(frame, 4.0 / 3.0);
+    QImage image = render(view);
+    require(image.pixelColor(0, 310) == Qt::black &&
+            image.pixelColor(919, 310) == Qt::black,
+            "pillarbox fields around loaded game are not black");
+    require(image.pixelColor(460, 310) == gameColor, "game frame was overwritten");
+    view.resize(640, 720);
+    image = render(view);
+    require(image.pixelColor(320, 0) == Qt::black &&
+            image.pixelColor(320, 719) == Qt::black,
+            "letterbox fields around loaded game are not black");
+}
+
 void testUpperLeftBounds() {
     // Exercise all three OSD font sizes without depending on platform glyph metrics.
     for (const QSize& size : std::array<QSize, 3>{{{400, 280}, {920, 620}, {1920, 1080}}}) {
@@ -147,6 +166,7 @@ void testNoticeExpiry() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        testGameBorders();
         testUpperLeftBounds();
         testOnlyLatestAction();
         testStatusRelease();

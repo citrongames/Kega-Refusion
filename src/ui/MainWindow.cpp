@@ -477,9 +477,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (pressed && !keyEvent->isAutoRepeat()) toggleFullscreenMenu();
         return true;
     }
+    // Right Alt/AltGr arrives as Ctrl+Alt on Windows, or GroupSwitch on XKB.
+    // Accept both representations for fullscreen, including keypad Enter.
     if ((key == Qt::Key_Return || key == Qt::Key_Enter) &&
-        (modifiers & Qt::AltModifier) &&
-        !(modifiers & (Qt::ControlModifier | Qt::ShiftModifier | Qt::MetaModifier))) {
+        (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
+        !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier))) {
         if (shortcutOverride) event->accept();
         else if (pressed && !keyEvent->isAutoRepeat()) setFullscreenMode(!isFullScreen());
         return true;
@@ -496,7 +498,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             event->accept();
             return true;
         }
-        if (!shortcutOverride && !pressed && fastForwardHeld_) {
+        if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() && fastForwardHeld_) {
             fastForwardHeld_ = false;
             updateFastForward();
             return true;

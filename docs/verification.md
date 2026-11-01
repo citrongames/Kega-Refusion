@@ -1,4 +1,4 @@
-# Verification — version 0.2.1 — 2026-11-01
+# Verification — version 0.2.2 — 2026-11-01
 
 ## Environment
 
@@ -49,3 +49,14 @@ No physical controller was manually exercised during these automated checks. Dev
 - General menu/FPS/device/status notifications no longer enter OSD. Slot selection and successful reset/save/load remain short action notices; pause/fast-forward persist only while active.
 
 Latest evidence: build/verification/linux-0.2.1.log, windows-0.2.1.log, native-windows-results.txt and osd-0.2.1-*.png. The focused-window reproduction harness source is retained under ignored build/keyboard-ui; its redundant compiled copies and temporary app data were removed. Existing user saves and settings were preserved.
+
+## 0.2.2 corrections — 2026-11-01
+
+- Tab repeat-release events previously cleared held acceleration before the auto-repeat guard. They are now ignored; only real release or loss of focus/deactivation clears the hold. OSD expiry is independent of this state.
+- Native Windows event traces reproduced the Russian right-Alt representation as Ctrl+Alt (0x0c000000). Fullscreen now accepts AltGr on Windows and GroupSwitch on XKB, as well as left Alt. Native Windows tests passed all 16 enter/exit transitions across EN/RU, left/right Alt and main/keypad Enter; the original test thread layout was restored.
+- Expanded focused-window regression passed on Linux and Windows: Tab hold across repeat release/press pairs, real release, focus loss and application deactivation, plus fullscreen toggling without repeat. Harness source remains under ignored build/keyboard-ui.
+- Loaded-game pillarbox/letterbox fields are black. Rendering tests verify both orientations and preservation of the game image.
+- Incremental RC compilation was missing the ICO dependency, leaving the older icon inside the EXE despite an updated Qt resource. The dependency is now explicit. Final PE resource inspection verified that all seven embedded icon payloads exactly equal the selected KR ICO.
+- Final Linux build: 3/3 CTest suites passed. Native Windows OSD/border and real-core suites exited 0; native UI key harness exited 0. Packaged executable smoke with the existing demo ROM exited 0 and its screenshot was inspected.
+
+Current evidence: build/verification/linux-0.2.2.log, windows-0.2.2.log, native-keys-0.2.2.log, icon-0.2.2.txt and fullscreen-0.2.2.png. Temporary test settings and redundant harness binaries were removed; user data was untouched.

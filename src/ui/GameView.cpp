@@ -167,7 +167,7 @@ void GameView::paintOsd(QPainter& painter) {
 
 void GameView::paintEvent(QPaintEvent*) {
     QPainter painter(this);
-    painter.fillRect(rect(), QColor(17, 20, 27));
+    painter.fillRect(rect(), frame_.isNull() ? QColor(17, 20, 27) : QColor(Qt::black));
 
     if (frame_.isNull()) {
         painter.setRenderHint(QPainter::Antialiasing);
