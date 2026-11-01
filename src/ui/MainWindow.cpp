@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QAudioDevice>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDir>
 #include <QDateTime>
 #include <QFile>
@@ -241,9 +242,7 @@ void MainWindow::buildMenus() {
     discGroup_->setExclusive(true);
     updateDiscMenu();
     fileMenu->addSeparator();
-    QMenu* screenshotMenu = fileMenu->addMenu(QStringLiteral("Скриншоты"));
-    screenshotMenu->setObjectName(QStringLiteral("screenshotMenu"));
-    screenshotAction_ = screenshotMenu->addAction(QStringLiteral("Сохранить скриншот"));
+    screenshotAction_ = fileMenu->addAction(QStringLiteral("Сохранить скриншот"));
     screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
     screenshotAction_->setShortcut(QKeySequence(QStringLiteral("F12")));
     screenshotAction_->setAutoRepeat(false);
@@ -251,21 +250,6 @@ void MainWindow::buildMenus() {
     screenshotAction_->setToolTip(QStringLiteral("Чистое изображение игры без OSD; папка screenshots рядом с settings.ini."));
     shortcut(screenshotAction_);
     connect(screenshotAction_, &QAction::triggered, this, &MainWindow::saveScreenshot);
-    QMenu* screenshotFormat = screenshotMenu->addMenu(QStringLiteral("Формат"));
-    screenshotFormat->setObjectName(QStringLiteral("screenshotFormatMenu"));
-    auto* screenshotFormats = new QActionGroup(this);
-    const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
-                          .toString() == QLatin1String("jpeg");
-    for (bool useJpeg : {false, true}) {
-        QAction* action = screenshotFormat->addAction(useJpeg ? QStringLiteral("JPEG") : QStringLiteral("PNG (без потерь)"));
-        action->setObjectName(useJpeg ? QStringLiteral("screenshotFormatJpeg") : QStringLiteral("screenshotFormatPng"));
-        action->setCheckable(true);
-        action->setChecked(useJpeg == jpeg);
-        screenshotFormats->addAction(action);
-        connect(action, &QAction::triggered, this, [this, useJpeg] {
-            settings_.setValue(QStringLiteral("screenshot/format"), useJpeg ? QStringLiteral("jpeg") : QStringLiteral("png"));
-        });
-    }
     fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(QStringLiteral("Выход"));
     quitAction->setShortcut(QKeySequence::Quit);
@@ -567,6 +551,9 @@ void MainWindow::buildMenus() {
     refreshOutputs();
 
     QMenu* settingsMenu = menuBar()->addMenu(QStringLiteral("&Настройки"));
+    QAction* emulatorSettingsAction = settingsMenu->addAction(QStringLiteral("Настройки эмулятора…"));
+    emulatorSettingsAction->setObjectName(QStringLiteral("emulatorSettingsAction"));
+    connect(emulatorSettingsAction, &QAction::triggered, this, &MainWindow::editSettings);
     QAction* controlsAction = settingsMenu->addAction(QStringLiteral("Управление…"));
     connect(controlsAction, &QAction::triggered, this, &MainWindow::editControls);
     QMenu* helpMenu = menuBar()->addMenu(QStringLiteral("&Справка"));
@@ -867,6 +854,35 @@ void MainWindow::openRom(const QString& path) {
     settings_.setValue(QStringLiteral("files/lastDirectory"), file.absolutePath());
     if (archiveEntry) session_.loadGame(file.absoluteFilePath(), *archiveEntry);
     else session_.loadGame(file.absoluteFilePath());
+}
+
+void MainWindow::editSettings() {
+    releaseInput();
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("emulatorSettingsDialog"));
+    dialog.setWindowTitle(QStringLiteral("Настройки эмулятора — Kega Refusion"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
+                          .toString() == QLatin1String("jpeg");
+    auto* screenshotFormat = new QComboBox(&dialog);
+    screenshotFormat->setObjectName(QStringLiteral("screenshotFormat"));
+    screenshotFormat->addItem(QStringLiteral("PNG (без потерь)"), QStringLiteral("png"));
+    screenshotFormat->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
+    screenshotFormat->setCurrentIndex(jpeg ? 1 : 0);
+    form->addRow(QStringLiteral("Формат скриншотов:"), screenshotFormat);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->setObjectName(QStringLiteral("settingsButtons"));
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("ОК"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() == QDialog::Accepted && (screenshotFormat->currentIndex() == 1) != jpeg)
+        settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
+    view_->setFocus();
+    updateInputEnabled();
 }
 
 void MainWindow::editControls() {

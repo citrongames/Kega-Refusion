@@ -42,6 +42,7 @@ private:
     void updateRecentMenu();
     void editSegaCdBios();
     void updateDiscMenu();
+    void editSettings();
     void editControls();
     bool applyShaderPreset(const QString& path);
     void editShaderParameters();
