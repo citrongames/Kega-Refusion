@@ -144,6 +144,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
                 if (!smokeTest_)
                     QMessageBox::warning(this, QStringLiteral("Kega Refusion"), message);
             });
+    statusBar()->hide();
     qApp->installEventFilter(this);
 }
 
