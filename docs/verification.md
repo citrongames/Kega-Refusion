@@ -82,3 +82,9 @@ Latest evidence retained in ignored build/verification: linux-0.3.0.log, windows
 - Native Windows full window regression passed, including F8 on an empty slot with continuing video frames, no modal-error signal, no audio reset and the expected notice in GameView.
 - Linux window regression passed the same empty-slot check, then failed its unrelated focus-regain check under WSL; the entire Linux window suite is not claimed as passed for this run. Native Windows focus-regain checks passed.
 - Evidence: linux-empty-slot.log, windows-empty-slot.log, native-core-empty-slot.log, native-ui-empty-slot.log, ui-empty-slot-linux.log in ignored build/verification. Temporary harness binaries removed; source retained.
+
+## Archive member list — 2026-11-01
+
+- Multi-game archives now open a resizable dialog with a single-selection list, automatic scrollbars, Load/Cancel buttons and double-click loading. Archive member identity is stored separately from its display name. Single-ROM archives still launch directly.
+- Linux build and CTest passed 4/4; Windows package rebuilt. Native Windows UI check used an original generated 40-ROM ZIP: last-row selection/scrolling, Cancel without loading, Load and double-click both selecting member 39 all passed. The dialog screenshot was visually inspected.
+- Evidence: linux-archive-list.log, windows-archive-list.log, archive-list-native.log and archive-list.png in ignored build/verification. Temporary preview sources, binaries and generated ZIP were removed. User data retained.

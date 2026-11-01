@@ -15,7 +15,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QKeyEvent>
-#include <QInputDialog>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QListWidget>
+#include <QPushButton>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
@@ -390,14 +393,43 @@ void MainWindow::openRom(const QString& path) {
         }
         if (entries.size() == 1) archiveIndex = entries.first().index;
         else if (!smokeTest_) {
-            QStringList choices;
-            for (const auto& entry : entries)
-                choices.append(QStringLiteral("%1 (%2 КиБ) [%3]").arg(entry.name).arg((entry.size+1023)/1024).arg(entry.index));
-            bool accepted = false;
-            const QString choice = QInputDialog::getItem(this, QStringLiteral("Игра в архиве"),
-                QStringLiteral("Выберите ROM"), choices, 0, false, &accepted);
-            if (!accepted) { view_->setFocus(); return; }
-            archiveIndex = entries[choices.indexOf(choice)].index;
+            QDialog dialog(this);
+            dialog.setWindowTitle(QStringLiteral("Выбор игры из архива"));
+            dialog.resize(620, 420);
+            dialog.setMinimumSize(380, 260);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* label = new QLabel(QStringLiteral("Выберите игру для загрузки:"), &dialog);
+            layout->addWidget(label);
+            auto* list = new QListWidget(&dialog);
+            list->setObjectName(QStringLiteral("archiveGameList"));
+            list->setAccessibleName(QStringLiteral("Игры в архиве"));
+            list->setSelectionMode(QAbstractItemView::SingleSelection);
+            list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+            list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            list->setTextElideMode(Qt::ElideNone);
+            for (const auto& entry : entries) {
+                auto* item = new QListWidgetItem(entry.name, list);
+                item->setData(Qt::UserRole, entry.index);
+                item->setToolTip(QStringLiteral("%1\n%2 КиБ").arg(entry.name).arg((entry.size+1023)/1024));
+            }
+            list->setCurrentRow(0);
+            layout->addWidget(list, 1);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            auto* loadButton = buttons->button(QDialogButtonBox::Ok);
+            loadButton->setText(QStringLiteral("Загрузить"));
+            loadButton->setDefault(true);
+            buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
+            layout->addWidget(buttons);
+            connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            connect(list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+            list->setFocus();
+            if (dialog.exec() != QDialog::Accepted || !list->currentItem()) {
+                view_->setFocus();
+                return;
+            }
+            archiveIndex = list->currentItem()->data(Qt::UserRole).toInt();
         }
     }
     loading_ = true;
