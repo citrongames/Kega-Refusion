@@ -1,0 +1,79 @@
+#pragma once
+
+#include "../input/InputManager.h"
+
+#include <QDialog>
+#include <QMap>
+#include <QSet>
+#include <QVector>
+
+class QCloseEvent;
+class QComboBox;
+class QKeyEvent;
+class QKeySequence;
+class QLabel;
+class QPushButton;
+class QSlider;
+class QTableWidget;
+class QTabWidget;
+class ControllerDiagram;
+
+class ControlsDialog final : public QDialog {
+    Q_OBJECT
+public:
+    explicit ControlsDialog(InputManager& input, QWidget* parent = nullptr);
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
+
+private:
+    ConsoleProfile selectedProfile() const;
+    int selectedPlayer() const;
+    int draftKey() const;
+    PlayerMapping& draft();
+    QString captureDeviceKey();
+    void refreshDevices();
+    void refreshContents();
+    void fillGameTable();
+    void fillCommandTable();
+    void selectTarget(int target);
+    void refreshPadCell(int target);
+    void updateActionButtons();
+    void setFeedback(const QString& message, bool warning = false);
+    void onKeyboardChanged(int target, const QKeySequence& sequence);
+    void beginCaptureFor(int target);
+    void startSequence();
+    void advanceSequence();
+    void skipCapture();
+    void stopCapture();
+    void onCaptured(const PadBinding& binding);
+    void onCaptureCancelled();
+    bool validateDrafts();
+    void save();
+
+    InputManager& input_;
+    QComboBox* profileBox_ = nullptr;
+    QComboBox* playerBox_ = nullptr;
+    QComboBox* deviceBox_ = nullptr;
+    QSlider* deadzoneSlider_ = nullptr;
+    QLabel* deadzoneValue_ = nullptr;
+    QLabel* feedback_ = nullptr;
+    QTabWidget* tabs_ = nullptr;
+    QTableWidget* gameTable_ = nullptr;
+    QTableWidget* commandTable_ = nullptr;
+    ControllerDiagram* diagram_ = nullptr;
+    QPushButton* assignButton_ = nullptr;
+    QPushButton* sequenceButton_ = nullptr;
+    QPushButton* skipButton_ = nullptr;
+    QPushButton* clearButton_ = nullptr;
+    QMap<int, PlayerMapping> drafts_;
+    QSet<int> dirty_;
+    QMap<QString, QString> knownDevices_;
+    QVector<int> sequence_;
+    int sequenceIndex_ = 0;
+    int captureTarget_ = -1;
+    int selectedTarget_ = -1;
+    bool refreshing_ = false;
+    bool skipping_ = false;
+};

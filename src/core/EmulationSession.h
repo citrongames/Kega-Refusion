@@ -18,6 +18,7 @@ public:
     void saveState(int slot);
     void loadState(int slot);
     void setButton(unsigned port, unsigned id, bool pressed);
+    void setButtons(unsigned port, unsigned mask);
     void releaseButtons();
     void setFastForward(bool enabled);
     void shutdown();

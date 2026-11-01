@@ -5,3 +5,6 @@
 - **Qt 6**: dynamically linked Core, Gui, Widgets and Multimedia. Qt license notices and dependency licenses must accompany distributable Windows packages. See https://www.qt.io/licensing/open-source-lgpl-obligations and licenses supplied with the installed Qt distribution.
 
 No game ROMs or console BIOS files are distributed. Integration test ROMs are original fixtures generated from the test source at runtime.
+
+- **SDL 2.32.10**: joystick and controller discovery/input, dynamically linked; https://github.com/libsdl-org/SDL/tree/release-2.32.10. License preserved in `third_party/SDL2-LICENSE.txt`. Windows official MinGW archive is pinned by SHA-256 in `tools/prepare-sdl-windows.py`.
+- **Press Start 2P**: pixel OSD typeface with Cyrillic by the Press Start 2P Project Authors; https://github.com/google/fonts/tree/main/ofl/pressstart2p. Font and SIL Open Font License are in `assets/fonts/`.

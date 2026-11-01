@@ -1,0 +1,578 @@
+#include "InputManager.h"
+
+#include <QElapsedTimer>
+#include <QSettings>
+#include <QStringList>
+#include <QTimer>
+#include <SDL.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <memory>
+
+namespace {
+constexpr int playerCount = 2;
+constexpr int targetCount = 26;
+constexpr int captureMilliseconds = 10000;
+constexpr int captureAxisThreshold = 16000;
+
+QString profileId(ConsoleProfile profile) {
+    switch (profile) {
+    case ConsoleProfile::MegaDrive: return QStringLiteral("md");
+    case ConsoleProfile::MasterSystem: return QStringLiteral("sms");
+    case ConsoleProfile::GameGear: return QStringLiteral("gg");
+    case ConsoleProfile::SG1000: return QStringLiteral("sg");
+    }
+    return QStringLiteral("md");
+}
+int profileIndex(ConsoleProfile profile) { return int(profile); }
+PadBinding button(int index) { return {PadBinding::Button, index, 0}; }
+PadBinding axis(int index, int direction) { return {PadBinding::Axis, index, direction}; }
+PadBinding hat(int index, int direction) { return {PadBinding::Hat, index, direction}; }
+PadBinding automatic(int target) { return {PadBinding::Automatic, target, 0}; }
+PadBinding rawDefault(int target) {
+    switch (target) {
+    case 4: return hat(0, SDL_HAT_UP);
+    case 5: return hat(0, SDL_HAT_DOWN);
+    case 6: return hat(0, SDL_HAT_LEFT);
+    case 7: return hat(0, SDL_HAT_RIGHT);
+    case 0: return button(0);
+    case 8: return button(1);
+    case 1: return button(2);
+    case 10: return button(3);
+    case 9: return button(4);
+    case 11: return button(5);
+    case 2: return button(6);
+    case 3: return button(7);
+    default: return {};
+    }
+}
+QString bindingText(const PadBinding& b) {
+    switch (b.kind) {
+    case PadBinding::Button: return QStringLiteral("b:%1").arg(b.index);
+    case PadBinding::Axis: return QStringLiteral("a:%1:%2").arg(b.index).arg(b.direction);
+    case PadBinding::Hat: return QStringLiteral("h:%1:%2").arg(b.index).arg(b.direction);
+    case PadBinding::Automatic: return QStringLiteral("auto");
+    case PadBinding::None: return QStringLiteral("n");
+    }
+    return QStringLiteral("n");
+}
+PadBinding parseBinding(const QString& text) {
+    if (text == "auto") return automatic(0);
+    const auto parts = text.split(':');
+    bool okay = false;
+    if (parts.size() == 2 && parts[0] == "b") {
+        const int index = parts[1].toInt(&okay);
+        if (okay && index >= 0) return button(index);
+    }
+    if (parts.size() == 3) {
+        const int index = parts[1].toInt(&okay);
+        if (!okay || index < 0) return {};
+        const int direction = parts[2].toInt(&okay);
+        if (!okay) return {};
+        if (parts[0] == "a" && (direction == -1 || direction == 1)) return axis(index, direction);
+        if (parts[0] == "h" && (direction == SDL_HAT_UP || direction == SDL_HAT_DOWN ||
+                                 direction == SDL_HAT_LEFT || direction == SDL_HAT_RIGHT)) return hat(index, direction);
+    }
+    return {};
+}
+QString settingsPrefix(ConsoleProfile profile, int player) {
+    return QStringLiteral("input/%1/player%2/").arg(profileId(profile)).arg(player + 1);
+}
+bool gameplayTarget(int target) { return target >= 0 && target < 16; }
+bool validPlayer(int player) { return player >= 0 && player < playerCount; }
+QString guidString(SDL_Joystick* joystick) {
+    char text[33]{};
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), text, sizeof(text));
+    return QString::fromLatin1(text);
+}
+SDL_GameControllerButton controllerButton(ConsoleProfile profile, int target) {
+    (void)profile;
+    switch (target) {
+    case 4: return SDL_CONTROLLER_BUTTON_DPAD_UP;
+    case 5: return SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+    case 6: return SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+    case 7: return SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+    case 0: return SDL_CONTROLLER_BUTTON_A;
+    case 8: return SDL_CONTROLLER_BUTTON_B;
+    case 3: return SDL_CONTROLLER_BUTTON_START;
+    case 1: return SDL_CONTROLLER_BUTTON_X;
+    case 2: return SDL_CONTROLLER_BUTTON_BACK;
+    case 10: return SDL_CONTROLLER_BUTTON_Y;
+    case 9: return SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+    case 11: return SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+    default: return SDL_CONTROLLER_BUTTON_INVALID;
+    }
+}
+int dpadDirection(int target) {
+    switch (target) {
+    case 4: return -1;
+    case 5: return 1;
+    case 6: return -1;
+    case 7: return 1;
+    default: return 1;
+    }
+}
+}
+
+struct InputManager::Impl {
+    struct Device {
+        SDL_Joystick* joystick = nullptr;
+        SDL_GameController* controller = nullptr;
+        int instanceId = -1;
+        QString key, name, guid;
+        ~Device() { if (controller) SDL_GameControllerClose(controller); else if (joystick) SDL_JoystickClose(joystick); }
+    };
+    InputManager* owner;
+    QString settingsPath;
+    std::array<std::array<PlayerMapping, playerCount>, 4> mappings;
+    std::vector<std::unique_ptr<Device>> devices;
+    QSet<int> keys;
+    QMap<QString, bool> axisHeld;
+    ConsoleProfile profile = ConsoleProfile::MegaDrive;
+    bool sdlReady = false;
+    bool initialScan = true;
+    bool enabled = true;
+    std::array<unsigned, playerCount> masks{};
+    std::array<unsigned, playerCount> previews{};
+    std::array<bool, targetCount - 16> commands{};
+    std::array<bool, targetCount - 16> commandBlocked{};
+    bool capture = false, captureArmed = false;
+    int captureInstance = -1, capturePlayer = -1, neutralPolls = 0;
+    QElapsedTimer captureTimer;
+    QVector<int> neutralAxes;
+
+    explicit Impl(InputManager* parent, QString path) : owner(parent), settingsPath(std::move(path)) {
+        commandBlocked.fill(true);
+        for (int p = 0; p < 4; ++p)
+            for (int player = 0; player < playerCount; ++player)
+                mappings[p][player] = InputManager::defaultMapping(ConsoleProfile(p), player);
+        QSettings settings(settingsPath, QSettings::IniFormat);
+        for (int p = 0; p < 4; ++p) for (int player = 0; player < playerCount; ++player) {
+            auto& m = mappings[p][player];
+            const QString prefix = settingsPrefix(ConsoleProfile(p), player);
+            m.deviceKey = settings.value(prefix + "device", m.deviceKey).toString();
+            m.deadzonePercent = std::clamp(settings.value(prefix + "deadzone", m.deadzonePercent).toInt(), 5, 60);
+            for (int target = 0; target < targetCount; ++target) {
+                const QString key = prefix + QStringLiteral("pad/%1").arg(target);
+                if (settings.contains(key)) {
+                    m.pad[target] = parseBinding(settings.value(key).toString());
+                    if (m.pad[target].kind == PadBinding::Automatic) m.pad[target] = automatic(target);
+                }
+                const QString keyKey = prefix + QStringLiteral("key/%1").arg(target);
+                if (gameplayTarget(target) && settings.contains(keyKey)) m.keyboard[target] = settings.value(keyKey).toInt();
+            }
+            if (!settings.contains(prefix + "device")) {
+                for (int target : InputManager::gameTargets(ConsoleProfile(p))) {
+                    const QString legacy = QStringLiteral("keys/button_%1").arg(target);
+                    if (settings.contains(legacy)) m.keyboard[target] = settings.value(legacy).toInt();
+                }
+            }
+        }
+        SDL_SetMainReady(); // Qt owns main(), including in SDL's Windows builds.
+        if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) == 0) {
+            sdlReady = true;
+            SDL_JoystickEventState(SDL_ENABLE);
+            SDL_GameControllerEventState(SDL_ENABLE);
+        } else {
+            const QString message = QStringLiteral("Геймпады недоступны: %1").arg(QString::fromUtf8(SDL_GetError()));
+            QTimer::singleShot(0, owner, [parent, message] { emit parent->notification(message); });
+        }
+    }
+    ~Impl() {
+        devices.clear();
+        if (sdlReady) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK);
+    }
+    Device* findById(int id) const {
+        for (const auto& device : devices) if (device->instanceId == id) return device.get();
+        return nullptr;
+    }
+    Device* findByKey(const QString& key) const {
+        for (const auto& device : devices) if (device->key == key) return device.get();
+        return nullptr;
+    }
+    std::array<Device*, playerCount> assignments() const {
+        std::array<Device*, playerCount> out{};
+        for (int player = 0; player < playerCount; ++player) {
+            const QString key = mappings[profileIndex(profile)][player].deviceKey;
+            if (key != "auto" && key != "none") out[player] = findByKey(key);
+        }
+        for (int player = 0; player < playerCount; ++player) {
+            if (mappings[profileIndex(profile)][player].deviceKey != "auto") continue;
+            for (const auto& device : devices) {
+                if (device.get() != out[1 - player]) { out[player] = device.get(); break; }
+            }
+        }
+        return out;
+    }
+    void refreshDevices() {
+        if (!sdlReady) return;
+        SDL_PumpEvents();
+        SDL_GameControllerUpdate();
+        SDL_JoystickUpdate();
+        SDL_FlushEvents(SDL_JOYAXISMOTION, SDL_CONTROLLERSENSORUPDATE);
+        const int count = SDL_NumJoysticks();
+        QSet<int> present;
+        for (int index = 0; index < count; ++index) {
+            const int id = SDL_JoystickGetDeviceInstanceID(index);
+            if (id >= 0) present.insert(id);
+        }
+        bool changed = false;
+        QStringList notices;
+        for (int i = int(devices.size()) - 1; i >= 0; --i) {
+            if (!present.contains(devices[i]->instanceId)) {
+                notices.push_back(QStringLiteral("Геймпад отключён: %1").arg(devices[i]->name));
+                if (capture && captureInstance == devices[i]->instanceId) cancelCapture();
+                devices.erase(devices.begin() + i);
+                changed = true;
+            }
+        }
+        for (int index = 0; index < count; ++index) {
+            const int id = SDL_JoystickGetDeviceInstanceID(index);
+            if (id < 0 || findById(id)) continue;
+            auto device = std::make_unique<Device>();
+            if (SDL_IsGameController(index)) {
+                device->controller = SDL_GameControllerOpen(index);
+                if (device->controller) device->joystick = SDL_GameControllerGetJoystick(device->controller);
+            }
+            if (!device->joystick) device->joystick = SDL_JoystickOpen(index);
+            if (!device->joystick) continue;
+            device->instanceId = id;
+            device->name = QString::fromUtf8(SDL_JoystickName(device->joystick));
+            device->guid = guidString(device->joystick);
+            const char* serial = SDL_JoystickGetSerial(device->joystick);
+            const QString serialText = serial ? QString::fromUtf8(serial) : QString();
+            QString base = device->guid + (serialText.isEmpty() ? QStringLiteral("|ordinal") : QStringLiteral("|serial:") + serialText);
+            int ordinal = 0;
+            device->key = base;
+            while (findByKey(device->key))
+                device->key = base + '#' + QString::number(++ordinal);
+            notices.push_back(QStringLiteral("Геймпад подключён: %1").arg(device->name));
+            devices.push_back(std::move(device));
+            changed = true;
+        }
+        if (changed) {
+            axisHeld.clear();
+            emit owner->devicesChanged();
+            for (const QString& notice : notices) {
+                if (initialScan) {
+                    InputManager* target = owner;
+                    QTimer::singleShot(0, target, [target, notice] { emit target->notification(notice); });
+                } else emit owner->notification(notice);
+            }
+        }
+        initialScan = false;
+    }
+    bool axisActive(int magnitude, int deadzone, const QString& heldKey) {
+        const int threshold = 32767 * std::clamp(deadzone, 5, 60) / 100;
+        const int releaseThreshold = threshold * 3 / 4;
+        const bool wasHeld = axisHeld.value(heldKey, false);
+        const bool nowHeld = magnitude >= (wasHeld ? releaseThreshold : threshold);
+        axisHeld[heldKey] = nowHeld;
+        return nowHeld;
+    }
+    bool active(const Device* device, const PadBinding& b, int deadzone, const QString& heldKey) {
+        if (!device) return false;
+        SDL_Joystick* joy = device->joystick;
+        if (b.kind == PadBinding::Button)
+            return b.index >= 0 && b.index < SDL_JoystickNumButtons(joy) && SDL_JoystickGetButton(joy, b.index);
+        if (b.kind == PadBinding::Hat)
+            return b.index >= 0 && b.index < SDL_JoystickNumHats(joy) && (SDL_JoystickGetHat(joy, b.index) & b.direction);
+        if (b.kind == PadBinding::Axis && b.index >= 0 && b.index < SDL_JoystickNumAxes(joy) &&
+            (b.direction == -1 || b.direction == 1)) {
+            const int magnitude = int(SDL_JoystickGetAxis(joy, b.index)) * b.direction;
+            return axisActive(magnitude, deadzone, heldKey);
+        }
+        return false;
+    }
+    bool automaticActive(const Device* device, int target, int deadzone, const QString& heldKey) {
+        if (!device) return false;
+        if (device->controller) {
+            const auto logical = controllerButton(profile, target);
+            const bool digital = logical != SDL_CONTROLLER_BUTTON_INVALID &&
+                SDL_GameControllerGetButton(device->controller, logical);
+            if (target < 4 || target > 7) return digital;
+            const auto logicalAxis = (target == 4 || target == 5) ?
+                SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_LEFTX;
+            const int magnitude = int(SDL_GameControllerGetAxis(device->controller, logicalAxis)) * dpadDirection(target);
+            return digital || axisActive(magnitude, deadzone, heldKey + ":stick");
+        }
+        if (target >= 4 && target <= 7) {
+            const bool hatPressed = active(device, rawDefault(target), deadzone, heldKey + ":hat");
+            const bool stickPressed = SDL_JoystickNumAxes(device->joystick) >= 2 &&
+                active(device, axis(target <= 5 ? 1 : 0, dpadDirection(target)), deadzone, heldKey + ":stick");
+            return hatPressed || stickPressed;
+        }
+        return active(device, rawDefault(target), deadzone, heldKey);
+    }
+    unsigned padMask(int player, Device* device) {
+        if (!device) return 0;
+        const auto& m = mappings[profileIndex(profile)][player];
+        unsigned result = 0;
+        for (int target : InputManager::gameTargets(profile)) {
+            const auto configured = m.pad.value(target);
+            const QString key = QStringLiteral("%1:%2:%3").arg(device->instanceId).arg(player).arg(target);
+            const bool pressed = configured.kind == PadBinding::Automatic ?
+                automaticActive(device, target, m.deadzonePercent, key) :
+                active(device, configured, m.deadzonePercent, key);
+            if (pressed) result |= (1u << target);
+        }
+        return result;
+    }
+    void recompute() {
+        const auto assigned = assignments();
+        std::array<bool, targetCount - 16> nextCommands{};
+        for (int player = 0; player < playerCount; ++player) {
+            const auto& m = mappings[profileIndex(profile)][player];
+            const unsigned pad = padMask(player, assigned[player]);
+            if (previews[player] != pad) {
+                previews[player] = pad;
+                emit owner->previewChanged(player, pad);
+            }
+            unsigned mask = pad;
+            for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
+                if (gameplayTarget(it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
+            if (!enabled || capture) mask = 0;
+            if (masks[player] != mask) {
+                masks[player] = mask;
+                emit owner->maskChanged(player, mask);
+            }
+            if (enabled && !capture && assigned[player]) {
+                for (int command = 16; command < targetCount; ++command) {
+                    const PadBinding b = m.pad.value(command);
+                    const QString key = QStringLiteral("%1:%2:%3").arg(assigned[player]->instanceId).arg(player).arg(command);
+                    nextCommands[command - 16] |= active(assigned[player], b, m.deadzonePercent, key);
+                }
+            }
+        }
+        for (int command = 16; command < targetCount; ++command) {
+            const int index = command - 16;
+            bool value = nextCommands[index];
+            if (enabled && !capture && commandBlocked[index]) {
+                if (!value) commandBlocked[index] = false;
+                value = false;
+            }
+            if (commands[command - 16] != value) {
+                commands[command - 16] = value;
+                emit owner->commandChanged(command, value);
+            }
+        }
+    }
+    void cancelCapture() {
+        if (!capture) return;
+        capture = false; captureArmed = false; captureInstance = -1; capturePlayer = -1;
+        emit owner->captureCancelled();
+        recompute();
+    }
+    bool captureNeutral(Device* device) const {
+        SDL_Joystick* joy = device->joystick;
+        for (int i = 0; i < SDL_JoystickNumButtons(joy); ++i)
+            if (SDL_JoystickGetButton(joy, i)) return false;
+        for (int i = 0; i < SDL_JoystickNumHats(joy); ++i)
+            if (SDL_JoystickGetHat(joy, i) != SDL_HAT_CENTERED) return false;
+        for (int i = 0; i < SDL_JoystickNumAxes(joy); ++i) {
+            const int value = SDL_JoystickGetAxis(joy, i);
+            const int neutral = i < neutralAxes.size() ? neutralAxes[i] : 0;
+            if (std::abs(value - neutral) > 8000) return false;
+        }
+        return true;
+    }
+    void updateCapture() {
+        if (!capture) return;
+        if (captureTimer.elapsed() >= captureMilliseconds) { cancelCapture(); return; }
+        Device* device = findById(captureInstance);
+        if (!device) { cancelCapture(); return; }
+        if (!captureArmed) {
+            neutralPolls = captureNeutral(device) ? neutralPolls + 1 : 0;
+            if (neutralPolls >= 2) captureArmed = true;
+            return;
+        }
+        SDL_Joystick* joy = device->joystick;
+        PadBinding found;
+        for (int i = 0; i < SDL_JoystickNumButtons(joy); ++i)
+            if (SDL_JoystickGetButton(joy, i)) { found = button(i); break; }
+        if (found.kind == PadBinding::None) for (int i = 0; i < SDL_JoystickNumHats(joy); ++i) {
+            const Uint8 value = SDL_JoystickGetHat(joy, i);
+            for (const int direction : {SDL_HAT_UP, SDL_HAT_DOWN, SDL_HAT_LEFT, SDL_HAT_RIGHT})
+                if (value & direction) { found = hat(i, direction); break; }
+            if (found.kind != PadBinding::None) break;
+        }
+        if (found.kind == PadBinding::None) for (int i = 0; i < SDL_JoystickNumAxes(joy); ++i) {
+            const int value = SDL_JoystickGetAxis(joy, i);
+            const int neutral = i < neutralAxes.size() ? neutralAxes[i] : 0;
+            if (std::abs(value - neutral) >= captureAxisThreshold &&
+                std::abs(value) >= captureAxisThreshold) {
+                found = axis(i, value > 0 ? 1 : -1);
+                break;
+            }
+        }
+        if (found.kind != PadBinding::None) {
+            capture = false; captureArmed = false; captureInstance = -1; capturePlayer = -1;
+            emit owner->bindingCaptured(found);
+            recompute();
+        }
+    }
+};
+
+InputManager::InputManager(const QString& settingsPath, QObject* parent)
+    : QObject(parent), d(std::make_unique<Impl>(this, settingsPath)) { poll(); }
+InputManager::~InputManager() = default;
+QVector<InputDevice> InputManager::devices() const {
+    QVector<InputDevice> result;
+    for (const auto& device : d->devices) result.push_back({device->instanceId, device->key, device->name});
+    return result;
+}
+PlayerMapping InputManager::mapping(ConsoleProfile profile, int player) const {
+    return validPlayer(player) ? d->mappings[profileIndex(profile)][player] : PlayerMapping{};
+}
+void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMapping& value) {
+    if (!validPlayer(player)) return;
+    auto m = value;
+    m.deadzonePercent = std::clamp(m.deadzonePercent, 5, 60);
+    const auto defaults = defaultMapping(profile, player);
+    d->mappings[profileIndex(profile)][player] = m;
+    QSettings settings(d->settingsPath, QSettings::IniFormat);
+    const QString prefix = settingsPrefix(profile, player);
+    settings.setValue(prefix + "device", m.deviceKey);
+    settings.setValue(prefix + "deadzone", m.deadzonePercent);
+    for (int target = 0; target < targetCount; ++target) {
+        const QString key = prefix + QStringLiteral("pad/%1").arg(target);
+        if (m.pad.value(target) == defaults.pad.value(target)) settings.remove(key);
+        else settings.setValue(key, bindingText(m.pad.value(target)));
+        const QString keyKey = prefix + QStringLiteral("key/%1").arg(target);
+        if (!gameplayTarget(target) || m.keyboard.value(target, 0) == defaults.keyboard.value(target, 0)) settings.remove(keyKey);
+        else settings.setValue(keyKey, m.keyboard.value(target, 0));
+    }
+    settings.sync();
+    d->axisHeld.clear();
+    d->recompute();
+}
+PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
+    PlayerMapping m;
+    for (int target : gameTargets(profile)) m.pad[target] = automatic(target);
+    if (player == 0) {
+        m.keyboard[4] = Qt::Key_Up; m.keyboard[5] = Qt::Key_Down;
+        m.keyboard[6] = Qt::Key_Left; m.keyboard[7] = Qt::Key_Right;
+        m.keyboard[0] = Qt::Key_X; m.keyboard[8] = Qt::Key_C;
+        if (profile != ConsoleProfile::SG1000) m.keyboard[3] = Qt::Key_Return;
+        if (profile == ConsoleProfile::MegaDrive) {
+            m.keyboard[1] = Qt::Key_Z; m.keyboard[10] = Qt::Key_A;
+            m.keyboard[9] = Qt::Key_S; m.keyboard[11] = Qt::Key_D;
+            m.keyboard[2] = Qt::Key_Backspace;
+        }
+    }
+    return m;
+}
+QString InputManager::bindingName(const PadBinding& binding) {
+    switch (binding.kind) {
+    case PadBinding::Button: return QStringLiteral("Кнопка %1").arg(binding.index + 1);
+    case PadBinding::Axis: return QStringLiteral("Ось %1 %2").arg(binding.index + 1).arg(binding.direction > 0 ? '+' : '-');
+    case PadBinding::Hat: return QStringLiteral("Крестовина %1 (%2)").arg(binding.index + 1).arg(binding.direction);
+    case PadBinding::Automatic: return QStringLiteral("Авто");
+    case PadBinding::None: return QStringLiteral("Не назначено");
+    }
+    return QStringLiteral("Не назначено");
+}
+QString InputManager::profileName(ConsoleProfile profile) {
+    switch (profile) {
+    case ConsoleProfile::MegaDrive: return QStringLiteral("Mega Drive");
+    case ConsoleProfile::MasterSystem: return QStringLiteral("Master System");
+    case ConsoleProfile::GameGear: return QStringLiteral("Game Gear");
+    case ConsoleProfile::SG1000: return QStringLiteral("SG-1000");
+    }
+    return {};
+}
+QVector<int> InputManager::gameTargets(ConsoleProfile profile) {
+    if (profile == ConsoleProfile::MegaDrive)
+        return {4, 5, 6, 7, 1, 0, 8, 10, 9, 11, 3, 2};
+    QVector<int> targets{4, 5, 6, 7, 0, 8};
+    if (profile != ConsoleProfile::SG1000) targets.push_back(3);
+    return targets;
+}
+QString InputManager::targetName(ConsoleProfile profile, int target) {
+    switch (target) {
+    case 4: return QStringLiteral("Вверх");
+    case 5: return QStringLiteral("Вниз");
+    case 6: return QStringLiteral("Влево");
+    case 7: return QStringLiteral("Вправо");
+    case 0: return profile == ConsoleProfile::MegaDrive ? QStringLiteral("B") : QStringLiteral("1");
+    case 8: return profile == ConsoleProfile::MegaDrive ? QStringLiteral("C") : QStringLiteral("2");
+    case 1: return QStringLiteral("A");
+    case 3: return profile == ConsoleProfile::MasterSystem ? QStringLiteral("Пауза") : QStringLiteral("Start");
+    case 2: return QStringLiteral("Mode");
+    case 9: return QStringLiteral("Y");
+    case 10: return QStringLiteral("X");
+    case 11: return QStringLiteral("Z");
+    case PauseCommand: return QStringLiteral("Пауза эмуляции");
+    case FastForwardCommand: return QStringLiteral("Ускорение");
+    case SaveCommand: return QStringLiteral("Сохранить состояние");
+    case LoadCommand: return QStringLiteral("Загрузить состояние");
+    case ResetCommand: return QStringLiteral("Перезапуск");
+    case FullscreenCommand: return QStringLiteral("Полный экран");
+    case MuteCommand: return QStringLiteral("Без звука");
+    case NextSlotCommand: return QStringLiteral("Следующий слот");
+    case PreviousSlotCommand: return QStringLiteral("Предыдущий слот");
+    case MenuCommand: return QStringLiteral("Меню");
+    default: return QStringLiteral("Кнопка %1").arg(target);
+    }
+}
+void InputManager::setProfile(ConsoleProfile profile) {
+    if (d->profile == profile) return;
+    d->profile = profile; d->axisHeld.clear(); d->recompute();
+}
+ConsoleProfile InputManager::profile() const { return d->profile; }
+void InputManager::setEnabled(bool enabled) {
+    if (d->enabled == enabled) return;
+    d->enabled = enabled;
+    if (!enabled) d->keys.clear();
+    d->commandBlocked.fill(true);
+    d->recompute();
+}
+bool InputManager::keyEvent(int key, bool pressed) {
+    bool bound = false;
+    for (int player = 0; player < playerCount; ++player) {
+        const auto& mapping = d->mappings[profileIndex(d->profile)][player];
+        for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
+            if (gameplayTarget(it.key()) && it.value() == key && key != 0) bound = true;
+    }
+    if (!bound) return false;
+    if (!d->enabled || d->capture) return true;
+    if (pressed) d->keys.insert(key); else d->keys.remove(key);
+    d->recompute();
+    return true;
+}
+void InputManager::releaseKeyboard() { d->keys.clear(); d->recompute(); }
+void InputManager::beginCapture(const QString& deviceKey, int player) {
+    // Replacing an in-progress capture is a re-arm, not a cancellation event.
+    d->capture = false; d->captureArmed = false;
+    if (!validPlayer(player)) { emit captureCancelled(); return; }
+    d->refreshDevices();
+    Impl::Device* device = nullptr;
+    if (deviceKey == "auto") device = d->assignments()[player];
+    else device = d->findByKey(deviceKey);
+    if (!device) { emit captureCancelled(); return; }
+    d->capture = true; d->captureArmed = false; d->captureInstance = device->instanceId;
+    d->commandBlocked.fill(true);
+    d->capturePlayer = player; d->neutralPolls = 0;
+    d->neutralAxes.clear();
+    for (int i = 0; i < SDL_JoystickNumAxes(device->joystick); ++i) {
+        Sint16 initial = 0;
+        if (SDL_JoystickGetAxisInitialState(device->joystick, i, &initial) != SDL_TRUE)
+            initial = SDL_JoystickGetAxis(device->joystick, i) <= -30000 ? -32768 : 0;
+        // SDL may report zero as a trigger's initial value although its idle
+        // reading is -32768. Treat that stable idle extreme as neutral.
+        if (i >= 2 && SDL_JoystickGetAxis(device->joystick, i) <= -30000)
+            initial = -32768;
+        d->neutralAxes.push_back(initial);
+    }
+    d->captureTimer.start();
+    d->recompute();
+}
+void InputManager::cancelCapture() { d->cancelCapture(); }
+bool InputManager::capturing() const { return d->capture; }
+void InputManager::poll() {
+    d->refreshDevices();
+    d->updateCapture();
+    d->recompute();
+}

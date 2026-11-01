@@ -43,7 +43,9 @@ def main() -> None:
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
 
+    sdl_root = root / "build/deps/SDL2-2.32.10/x86_64-w64-mingw32"
     sources = {
+        Path("SDL2.dll"): sdl_root / "bin/SDL2.dll",
         Path("KegaRefusion.exe"): executable,
         Path("cores/genesis_plus_gx_libretro.dll"): core,
         Path("plugins/platforms/qwindows.dll"): qt_root / "plugins/platforms/qwindows.dll",
@@ -97,6 +99,8 @@ def main() -> None:
         root / "third_party/Genesis-Plus-GX-LICENSE.txt",
         notices / "Genesis-Plus-GX-LICENSE.txt",
     )
+    shutil.copy2(root / "assets/fonts/OFL.txt", notices / "PressStart2P-OFL.txt")
+    shutil.copy2(root / "third_party/SDL2-LICENSE.txt", notices / "SDL2-LICENSE.txt")
     for source, name in (
         (Path("/usr/share/common-licenses/LGPL-3"), "Qt-LGPL-3.txt"),
         (Path("/usr/share/common-licenses/LGPL-2.1"), "FFmpeg-LGPL-2.1.txt"),

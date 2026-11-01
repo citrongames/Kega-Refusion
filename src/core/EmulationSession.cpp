@@ -19,6 +19,7 @@ void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
     if (port >= 2 || id >= 16) return;
     if (pressed) buttons_[port].fetch_or(1u << id); else buttons_[port].fetch_and(~(1u << id));
 }
+void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < 2) buttons_[port].store(mask & 0xffffu); }
 void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store(0); }
 void EmulationSession::setFastForward(bool enabled) { fastForward_.store(enabled); }
 void EmulationSession::shutdown() { quitting_.store(true); if (isRunning()) wait(); }
