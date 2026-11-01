@@ -206,17 +206,157 @@ static void test_h32_and_blank(void)
     line.palette_bgr555 = NULL;
     line.line = UINT_MAX;
     out = compose(&line);
-    require(out[0] == 0 && out[1] == 0 && out[4] == 3 && out[5] == 4 &&
-            out[318] == 254 && out[319] == 255, "declared H32 nearest-neighbor policy");
+    require(out[0] == 0 && out[1] == 1 && out[2] == 2 && out[3] == 2 &&
+            out[4] == 3 && out[5] == 4 && out[318] == 254 && out[319] == 255,
+            "blank H32 MD pixels must sample EDCLK centers");
     line.mode = KEGA32X_VIDEO_DIRECT;
     line.md_transparent = transparent;
     line.framebuffer = framebuffer;
     line.line = 7;
     memset(transparent, 0, sizeof(transparent));
-    transparent[1] = 1;
-    framebuffer[0x202] = 0x03e0;
+    transparent[2] = 1;
+    framebuffer[0x200] = 0x03e0;
     out = compose(&line);
-    require(out[1] == 0 && out[2] == 0x07e0, "H32 /YS must use the MD pixel sampling position");
+    require(out[2] == 2 && out[3] == 0x07e0,
+            "H32 /YS must use the MD center sample, with no 32X before its origin");
+}
+
+static void test_h32_physical_coordinates(void)
+{
+    Kega32xVideoLine line = prepare(KEGA32X_VIDEO_DIRECT);
+    uint16_t *out;
+    unsigned x;
+    line.md_width = 256;
+    for (x = 0; x < 256; ++x) {
+        indices[x] = (uint8_t)x;
+        palette_md[x] = (uint16_t)(0x1000 + x);
+    }
+    memset(transparent, 0, sizeof(transparent));
+    /* Deliberately distinguish the left boundary and both ends of the 32X
+     * stream. Negative source indexing must never expose the preceding word. */
+    framebuffer[0x1ff] = 0xffff;
+    framebuffer[0x200] = 0x801f;       /* x32=0: red, priority */
+    framebuffer[0x201] = 0x03e0;       /* x32=1: green, behind MD */
+    framebuffer[0x202] = 0xfc00;       /* x32=2: blue, priority */
+    framebuffer[0x205] = 0x7fff;       /* x32=5: white, behind MD */
+    framebuffer[0x200 + 77] = 0x001f;
+    framebuffer[0x200 + 156] = 0x83e0;
+    framebuffer[0x200 + 157] = 0x7c00;
+    framebuffer[0x200 + 316] = 0xffff;
+    framebuffer[0x200 + 317] = framebuffer[0x200 + 318] = framebuffer[0x200 + 319] = 0x83e0;
+    transparent[0] = transparent[1] = transparent[2] = 1;
+    transparent[6] = transparent[128] = 1;
+    out = compose(&line);
+    require(out[0] == 0x1000 && out[1] == 0x1001 && out[2] == 0x1002,
+            "H32 left edge must retain MD even when /YS or 32X priority would select 32X");
+    /* Hand-selected quarter-grid positions:
+       x=3 sample14 -> MD2/32X0; x=4 sample18 -> MD3/32X1;
+       x=8 sample34 -> MD6/32X5; x=80 sample322 -> MD64/32X77;
+       x=159 sample638 -> MD127/32X156; x=160 sample642 -> MD128/32X157;
+       x=319 sample1278 -> MD255/32X316 (the remaining three colors clip). */
+    require(out[3] == 0xf800 && out[4] == 0x1003 && out[5] == 0x001f &&
+            out[8] == 0xffff && out[80] == 0x1040 && out[159] == 0x07e0 &&
+            out[160] == 0x001f && out[319] == 0xffff,
+            "H32 physical coordinates, sampled /YS, per-pixel priority or right crop");
+    transparent[64] = 1;
+    line.priority_invert = 1;
+    out = compose(&line);
+    require(out[0] == 0x1000 && out[1] == 0x1001 && out[2] == 0x1002 &&
+            out[4] == 0x07e0 && out[5] == 0x1004 && out[80] == 0xf800 &&
+            out[159] == 0x107f && out[160] == 0x001f && out[319] == 0x10ff,
+            "H32 PRI inversion must preserve point-sampled MD /YS and absent left edge");
+    line.priority_invert = 0;
+    line.pixel_shift = 1;
+    require(compose(&line)[3] == 0x07e0, "H32 phase must not replace the independent SFT pixel skip");
+}
+
+static void test_frozen_decode_and_md_remap(void)
+{
+    Kega32xVideoLine line = prepare(KEGA32X_VIDEO_PACKED);
+    Kega32xVideoLine source = line;
+    Kega32xDecodedLine decoded, frozen;
+    uint16_t *out = guarded_output + 1;
+    framebuffer[0x200] = 0x0102;
+    palette32x[1] |= 0x8000; /* red ahead of opaque MD; green behind it */
+    memset(transparent, 0, sizeof(transparent));
+    indices[0] = indices[1] = 0xc2;
+    palette_md[0xc2] = 0x1234;
+    /* Decode has no dependence on the MD snapshot. */
+    source.md_indices = NULL;
+    source.md_palette_rgb565 = NULL;
+    source.md_transparent = NULL;
+    source.md_width = 0;
+    require(kega32x_decode_line(&decoded, &source) == KEGA32X_VIDEO_OK,
+            "decode incorrectly required MD inputs");
+    require(decoded.enabled == 1 && decoded.priority_invert == 0 &&
+            decoded.colors[0] == 0x801f && decoded.colors[1] == 0x03e0,
+            "frozen row did not preserve native color and priority bits");
+    frozen = decoded;
+    /* A later register write, framebuffer edit and palette edit must not
+     * leak into repeated GPX MD remaps of the already latched 32X row. */
+    framebuffer[line.line] = 0x300;
+    framebuffer[0x200] = 0x0304;
+    palette32x[1] = palette32x[2] = 0;
+    line.priority_invert = 1;
+    line.mode = KEGA32X_VIDEO_BLANK;
+    line.framebuffer = NULL;
+    line.palette_bgr555 = NULL;
+    line.line = UINT_MAX;
+    require(kega32x_mix_rgb565(out, 320, &decoded, &line) == KEGA32X_VIDEO_OK &&
+            out[0] == 0xf800 && out[1] == 0x1234,
+            "live 32X storage/registers changed a frozen row");
+    palette_md[0xc2] = 0xabcd;
+    require(kega32x_mix_rgb565(out, 320, &decoded, &line) == KEGA32X_VIDEO_OK &&
+            out[0] == 0xf800 && out[1] == 0xabcd,
+            "MD palette remap failed to retain frozen 32X priority");
+    transparent[1] = 1;
+    require(kega32x_mix_rgb565(out, 320, &decoded, &line) == KEGA32X_VIDEO_OK &&
+            out[1] == 0x07e0, "changed MD /YS did not reveal frozen 32X color");
+    transparent[1] = 0;
+    indices[1] = 0x82;
+    palette_md[0x82] = 0x4567;
+    require(kega32x_mix_rgb565(out, 320, &decoded, &line) == KEGA32X_VIDEO_OK &&
+            out[1] == 0x4567, "MD indexed remap ignored the new full palette bank");
+    require(!memcmp(&decoded, &frozen, sizeof(decoded)), "mix changed frozen 32X data");
+    require(guarded_output[0] == 0x5aa5 && guarded_output[321] == 0x5aa5,
+            "frozen mix wrote outside its row");
+}
+
+static void test_split_validation(void)
+{
+    Kega32xVideoLine line = prepare(KEGA32X_VIDEO_PACKED);
+    Kega32xDecodedLine decoded, before;
+    uint16_t output_before[KEGA32X_VIDEO_WIDTH + 2u];
+    memset(&decoded, 0x5a, sizeof(decoded));
+    before = decoded;
+    line.line = 256;
+    require(kega32x_decode_line(&decoded, &line) == KEGA32X_VIDEO_INVALID_ARGUMENT &&
+            !memcmp(&decoded, &before, sizeof(decoded)), "invalid decode changed its destination");
+    require(kega32x_decode_line(NULL, &line) == KEGA32X_VIDEO_INVALID_ARGUMENT &&
+            kega32x_decode_line(&decoded, NULL) == KEGA32X_VIDEO_INVALID_ARGUMENT,
+            "null decode input accepted");
+    line.mode = KEGA32X_VIDEO_BLANK;
+    line.framebuffer = line.palette_bgr555 = NULL;
+    require(kega32x_decode_line(&decoded, &line) == KEGA32X_VIDEO_OK &&
+            !decoded.enabled && !decoded.priority_invert,
+            "blank decode required unused memory or left active flags");
+    line.md_transparent = NULL;
+    require(kega32x_mix_rgb565(guarded_output + 1, 320, &decoded, &line) == KEGA32X_VIDEO_OK,
+            "disabled frozen row required unused /YS");
+    memcpy(output_before, guarded_output, sizeof(output_before));
+    decoded.enabled = 1;
+    require(kega32x_mix_rgb565(guarded_output + 1, 320, &decoded, &line) == KEGA32X_VIDEO_INVALID_ARGUMENT &&
+            !memcmp(output_before, guarded_output, sizeof(output_before)),
+            "invalid mix partially wrote output");
+    decoded.enabled = 2;
+    line.md_transparent = transparent;
+    require(kega32x_mix_rgb565(guarded_output + 1, 320, &decoded, &line) == KEGA32X_VIDEO_INVALID_ARGUMENT &&
+            !memcmp(output_before, guarded_output, sizeof(output_before)),
+            "invalid frozen flags accepted or partially wrote output");
+    decoded.enabled = 0;
+    require(kega32x_mix_rgb565(guarded_output + 1, 319, &decoded, &line) == KEGA32X_VIDEO_INVALID_ARGUMENT &&
+            !memcmp(output_before, guarded_output, sizeof(output_before)),
+            "short mix output accepted or partially wrote output");
 }
 
 static void reject_without_write(Kega32xVideoLine *line, size_t count)
@@ -259,7 +399,10 @@ int main(void)
     test_rle();
     test_address_wrap_and_shift_exception();
     test_h32_and_blank();
+    test_h32_physical_coordinates();
     test_validation();
-    puts("32X compositor: modes, /YS, priority, color, shifts, H32 policy and bounded bank reads passed");
+    test_frozen_decode_and_md_remap();
+    test_split_validation();
+    puts("32X compositor: modes, /YS, priority, shifts, H32, bounded reads and frozen-row MD remaps passed");
     return 0;
 }

@@ -8,6 +8,7 @@
 #include <QVector>
 
 class QCloseEvent;
+class QCheckBox;
 class QComboBox;
 class QKeyEvent;
 class QKeySequence;
@@ -56,6 +57,7 @@ private:
     QComboBox* profileBox_ = nullptr;
     QComboBox* playerBox_ = nullptr;
     QComboBox* deviceBox_ = nullptr;
+    QCheckBox* connectedBox_ = nullptr;
     QSlider* deadzoneSlider_ = nullptr;
     QLabel* deadzoneValue_ = nullptr;
     QLabel* feedback_ = nullptr;

@@ -195,6 +195,7 @@ struct InputManager::Impl {
             auto& m = mappings[p][player];
             const QString prefix = settingsPrefix(ConsoleProfile(p), player);
             m.deviceKey = settings.value(prefix + "device", m.deviceKey).toString();
+            m.connected = settings.value(prefix + "connected", m.connected).toBool();
             m.deadzonePercent = std::clamp(settings.value(prefix + "deadzone", m.deadzonePercent).toInt(), 5, 60);
             for (int target = 0; target < targetCount; ++target) {
                 const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -366,7 +367,7 @@ struct InputManager::Impl {
         std::array<bool, targetCount - 16> nextCommands{};
         for (int player = 0; player < playerCount; ++player) {
             const auto& m = mappings[profileIndex(profile)][player];
-            const unsigned pad = padMask(player, assigned[player]);
+            const unsigned pad = m.connected ? padMask(player, assigned[player]) : 0u;
             if (previews[player] != pad) {
                 previews[player] = pad;
                 emit owner->previewChanged(player, pad);
@@ -374,7 +375,7 @@ struct InputManager::Impl {
             unsigned mask = pad;
             for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
                 if (gameplayTarget(it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
-            if (!enabled || capture) mask = 0;
+            if (!enabled || capture || !m.connected) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
                 emit owner->maskChanged(player, mask);
@@ -484,6 +485,7 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     QSettings settings(d->settingsPath, QSettings::IniFormat);
     const QString prefix = settingsPrefix(profile, player);
     settings.setValue(prefix + "device", m.deviceKey);
+    settings.setValue(prefix + "connected", m.connected);
     settings.setValue(prefix + "deadzone", m.deadzonePercent);
     for (int target = 0; target < targetCount; ++target) {
         const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -494,11 +496,13 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
         else settings.setValue(keyKey, m.keyboard.value(target, 0));
     }
     settings.sync();
+    if (profile == d->profile) emit connectionChanged(unsigned(player), m.connected);
     d->axisHeld = {};
     d->recompute();
 }
 PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
     PlayerMapping m;
+    m.connected = player == 0;
     for (int target : gameTargets(profile)) m.pad[target] = automatic(target);
     if (player == 0) {
         m.keyboard[4] = Qt::Key_Up; m.keyboard[5] = Qt::Key_Down;
@@ -567,9 +571,15 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
 }
 void InputManager::setProfile(ConsoleProfile profile) {
     if (d->profile == profile) return;
-    d->profile = profile; d->axisHeld = {}; d->recompute();
+    d->profile = profile; d->axisHeld = {};
+    for (unsigned player = 0; player < playerCount; ++player)
+        emit connectionChanged(player, d->mappings[profileIndex(profile)][player].connected);
+    d->recompute();
 }
 ConsoleProfile InputManager::profile() const { return d->profile; }
+bool InputManager::isConnected(unsigned player) const {
+    return player < playerCount && d->mappings[profileIndex(d->profile)][player].connected;
+}
 void InputManager::setEnabled(bool enabled) {
     if (d->enabled == enabled) return;
     d->enabled = enabled;

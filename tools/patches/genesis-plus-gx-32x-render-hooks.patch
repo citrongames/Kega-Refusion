@@ -10,18 +10,19 @@
  
  extern int8 audio_hard_disable;
  
-@@ -359,6 +362,10 @@
+@@ -442,6 +445,11 @@
+     }
+   }
  
-   /* reset frame cycle counter */
-   mcycles_vdp = 0;
 +#ifdef KEGAREFUSION_32X
 +  if (kegarefusion_32x_attached)
-+    kegarefusion_32x_frame_start();
++    kegarefusion_32x_frame_start(do_skip);
 +#endif
- 
-   /* reset VDP FIFO */
-   fifo_cycles[0] = 0;
-@@ -491,8 +498,17 @@
++
+   /* first line of overscan */
+   if (bitmap.viewport.y)
+   {
+@@ -491,8 +499,17 @@
    {
      /* reinitialize VCounter */
      v_counter = bitmap.viewport.h;
@@ -39,7 +40,7 @@
      m68k_run(vint_cycle);
      if (zstate == 1)
      {
-@@ -515,6 +531,11 @@
+@@ -515,6 +532,11 @@
    }
  
    /* run 68k & Z80 until end of line */
@@ -51,7 +52,7 @@
    m68k_run(MCYCLES_PER_LINE);
    if (zstate == 1)
    {
-@@ -545,6 +566,10 @@
+@@ -545,6 +567,10 @@
    {
      /* update VCounter */
      v_counter = line;
@@ -62,7 +63,7 @@
  
      /* render overscan */
      if ((line < end) || (line >= start))
-@@ -556,6 +581,11 @@
+@@ -556,6 +582,11 @@
      input_refresh();
  
      /* run 68k & Z80 until end of line */
@@ -74,7 +75,7 @@
      m68k_run(mcycles_vdp + MCYCLES_PER_LINE);
      if (zstate == 1)
      {
-@@ -575,6 +605,10 @@
+@@ -575,6 +606,10 @@
    
    /* update VCounter */
    v_counter = line;
@@ -85,7 +86,7 @@
  
    /* last line of overscan */
    if (bitmap.viewport.y)
-@@ -604,6 +638,11 @@
+@@ -604,6 +639,11 @@
    input_refresh();
  
    /* run 68k & Z80 until end of line */
@@ -97,7 +98,7 @@
    m68k_run(mcycles_vdp + MCYCLES_PER_LINE);
    if (zstate == 1)
    {
-@@ -627,6 +666,10 @@
+@@ -627,6 +667,10 @@
    {
      /* update VCounter */
      v_counter = line;
@@ -108,7 +109,7 @@
  
      /* run VDP DMA */
      if (dma_length)
-@@ -664,6 +707,11 @@
+@@ -664,6 +708,11 @@
      }
  
      /* run 68k & Z80 until end of line */
@@ -120,7 +121,7 @@
      m68k_run(mcycles_vdp + MCYCLES_PER_LINE);
      if (zstate == 1)
      {
-@@ -687,6 +735,11 @@
+@@ -687,6 +736,11 @@
      bitmap.viewport.ow = bitmap.viewport.w;
      bitmap.viewport.changed |= 1;
    }
@@ -132,18 +133,19 @@
  
    /* adjust timings for next frame */
    input_end_frame(mcycles_vdp);
-@@ -703,6 +756,10 @@
+@@ -787,6 +841,11 @@
+     }
+   }
  
-   /* reset frame cycle counter */
-   mcycles_vdp = 0;
 +#ifdef KEGAREFUSION_32X
 +  if (kegarefusion_32x_attached)
-+    kegarefusion_32x_frame_start();
++    kegarefusion_32x_frame_start(do_skip);
 +#endif
-   scd.cycles = 0;
- 
-   /* reset VDP FIFO */
-@@ -836,8 +893,17 @@
++
+   /* first line of overscan */
+   if (bitmap.viewport.y)
+   {
+@@ -836,8 +895,17 @@
    {
      /* reinitialize VCounter */
      v_counter = bitmap.viewport.h;
@@ -161,7 +163,7 @@
      m68k_run(vint_cycle);
      if (zstate == 1)
      {
-@@ -860,6 +926,11 @@
+@@ -860,6 +928,11 @@
    }
  
    /* run both 68k & CD hardware until end of line */
@@ -173,7 +175,7 @@
    scd_update(MCYCLES_PER_LINE);
  
    /* run Z80 until end of line */
-@@ -886,6 +957,10 @@
+@@ -886,6 +959,10 @@
    {
      /* update VCounter */
      v_counter = line;
@@ -184,7 +186,7 @@
  
      /* render overscan */
      if ((line < end) || (line >= start))
-@@ -897,6 +972,11 @@
+@@ -897,6 +974,11 @@
      input_refresh();
  
      /* run both 68k & CD hardware until end of line */
@@ -196,7 +198,7 @@
      scd_update(mcycles_vdp + MCYCLES_PER_LINE);
  
      /* run Z80 until end of line */
-@@ -912,6 +992,10 @@
+@@ -912,6 +994,10 @@
    
    /* update VCounter */
    v_counter = line;
@@ -207,7 +209,7 @@
  
    /* last line of overscan */
    if (bitmap.viewport.y)
-@@ -941,6 +1025,11 @@
+@@ -941,6 +1027,11 @@
    input_refresh();
  
    /* run both 68k & CD hardware until end of line */
@@ -219,7 +221,7 @@
    scd_update(mcycles_vdp + MCYCLES_PER_LINE);
  
    /* run Z80 until end of line */
-@@ -960,6 +1049,10 @@
+@@ -960,6 +1051,10 @@
    {
      /* update VCounter */
      v_counter = line;
@@ -230,7 +232,7 @@
  
      /* run VDP DMA */
      if (dma_length)
-@@ -997,6 +1090,11 @@
+@@ -997,6 +1092,11 @@
      }
  
      /* run both 68k & CD hardware until end of line */
@@ -242,7 +244,7 @@
      scd_update(mcycles_vdp + MCYCLES_PER_LINE);
  
      /* run Z80 until end of line */
-@@ -1017,6 +1115,11 @@
+@@ -1017,6 +1117,11 @@
      bitmap.viewport.changed |= 1;
    }
    

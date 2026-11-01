@@ -98,6 +98,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(input_, &InputManager::maskChanged, this, [this](unsigned port, unsigned mask) {
         session_.setButtons(port, mask);
     });
+    connect(input_, &InputManager::connectionChanged, this, [this](unsigned port, bool connected) {
+        session_.setControllerConnected(port, connected);
+    });
+    for (unsigned port = 0; port < 2; ++port)
+        session_.setControllerConnected(port, input_->isConnected(port));
     connect(input_, &InputManager::commandChanged, this, &MainWindow::handleInputCommand);
     connect(input_, &InputManager::notification, this, [](const QString& text) {
         qInfo("%s", qPrintable(text));
@@ -155,7 +160,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName) {
         loading_ = false;
         currentRom_ = path;
-        input_->setProfile(isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName)));
+        activeInputProfile_ = isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName));
+        input_->setProfile(activeInputProfile_);
         currentGameName_ = displayName(contentName);
         setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(currentGameName_));
         recentPaths_.removeAll(path);
@@ -186,6 +192,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         view_->showOsd(text, 2000, QStringLiteral("action"));
     });
     connect(&session_, &EmulationSession::errorOccurred, this, [this](const QString& text) {
+        if (loading_) input_->setProfile(activeInputProfile_);
         loading_ = false;
         updateInputEnabled();
         if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"), text);
@@ -918,6 +925,10 @@ void MainWindow::openRom(const QString& path) {
         }
     }
     loading_ = true;
+    // Queue the selected profile's port connections before the load command,
+    // so the first emulated frame already has the correct console devices.
+    input_->setProfile(isCdPath(path) ? ConsoleProfile::MegaDrive :
+                       profileFor(QFileInfo(archiveEntry ? archiveEntry->name : path)));
     settings_.setValue(QStringLiteral("files/lastDirectory"), file.absolutePath());
     if (archiveEntry) session_.loadGame(file.absoluteFilePath(), *archiveEntry);
     else session_.loadGame(file.absoluteFilePath());

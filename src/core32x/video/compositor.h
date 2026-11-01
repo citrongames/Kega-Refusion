@@ -31,9 +31,12 @@ typedef struct Kega32xVideoLine {
      * or matching the configured backdrop palette index. Required when 32X
      * display is enabled. Opaque pixels may have the same RGB as backdrop. */
     const uint8_t *md_transparent;
-    /* 320: H40 one-to-one. 256: H32 MD and /YS are nearest-neighbor expanded
-     * to 320 while 32X remains 320 pixels. H32 is a deterministic approximation;
-     * independent EDCLK phase and the fractional layer offset are not modeled. */
+    /* 320: H40 one-to-one. 256: H32 point-sampled on a 320-pixel EDCLK
+     * output grid at MD's active origin. On a quarter-H40 grid, sample=4*x+2,
+     * MD=/YS index=sample/5 and 32X index=(sample-13)/4 for sample>=13.
+     * The first three output pixels contain MD only; the right 32X tail clips.
+     * This models the relative 3.25-pixel offset without interpolation, not
+     * analogue video or races between the MD /YS and 32X clock domains. */
     unsigned md_width;
     /* The currently displayed 128 KiB bank, as host-endian numeric 16-bit
      * words. The caller owns bank selection and register/timing latching. */
@@ -48,12 +51,39 @@ typedef struct Kega32xVideoLine {
                           * when the line-table offset has low byte 0xff. */
 } Kega32xVideoLine;
 
+/* One immutable line sampled by the caller at the hardware latch boundary.
+ * Colors retain native BGR555 plus bit15 priority. No borrowed memory remains.
+ * enabled and priority_invert are normalized to 0/1; colors are unused when
+ * disabled. The caller owns the latch timing and the decoded object's lifetime. */
+typedef struct Kega32xDecodedLine {
+    uint16_t colors[KEGA32X_VIDEO_WIDTH];
+    unsigned enabled, priority_invert;
+} Kega32xDecodedLine;
+
 typedef enum Kega32xVideoResult {
     KEGA32X_VIDEO_OK = 0,
     KEGA32X_VIDEO_INVALID_ARGUMENT = -1
 } Kega32xVideoResult;
 
-/* Writes exactly 320 RGB565 pixels; no allocations, global state or I/O.
+/* Decode only the 32X fields of line; MD pointers/width are ignored. Blank
+ * sets enabled=0 without touching colors or requiring framebuffer/palette.
+ * Active modes require line 0..255 and a framebuffer, plus the palette for
+ * packed/RLE. Bank addressing wraps; work is bounded to 321 decoded pixels.
+ * Invalid arguments return before changing decoded. Buffers must not overlap. */
+Kega32xVideoResult kega32x_decode_line(Kega32xDecodedLine *decoded,
+                                      const Kega32xVideoLine *line);
+
+/* Mix exactly 320 RGB565 pixels using only the MD fields of md_line and the
+ * frozen decoded row. No framebuffer, 32X palette, mode or live PRI is read.
+ * MD transparent OR (decoded bit15 XOR frozen PRI) selects 32X. Disabled rows
+ * need no MD transparency pointer. H32 sampling retains the policy above.
+ * Invalid arguments return before output writes; buffers must not overlap. */
+Kega32xVideoResult kega32x_mix_rgb565(uint16_t *dst, size_t dst_pixels,
+                                     const Kega32xDecodedLine *decoded,
+                                     const Kega32xVideoLine *md_line);
+
+/* Compatibility wrapper: decode then mix exactly 320 RGB565 pixels.
+ * No allocations, global state or I/O.
  * All buffers remain caller-owned and input/output buffers must not overlap.
  * Framebuffer addressing wraps within its 65536-word physical bank. RLE work
  * is bounded to 321 decoded pixels, including optional shift, for any data.

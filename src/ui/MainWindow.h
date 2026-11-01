@@ -17,6 +17,7 @@ class QTimer;
 class AudioOutput;
 class EmulationSession;
 class InputManager;
+enum class ConsoleProfile;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -63,6 +64,7 @@ private:
     GameView* view_ = nullptr;
     AudioOutput* audio_ = nullptr;
     InputManager* input_ = nullptr;
+    ConsoleProfile activeInputProfile_{};
     QTimer* inputTimer_ = nullptr;
     QMenu* recentMenu_ = nullptr;
     QMenu* discMenu_ = nullptr;

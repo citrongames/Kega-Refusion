@@ -43,7 +43,18 @@ typedef struct Kega32xBus {
     Kega32xBusState s;
     Kega32xMemory *memory;
     Kega32xBusHost host;
+    /* Renderer-owned transient guard, never part of emulated/saved state.
+       Bit n watches a latched bank until its pixels have been sampled. */
+    unsigned video_watch_banks;
 } Kega32xBus;
+/* Call once before a timestamped CPU/DMA framebuffer mutation. A normal
+   backbuffer write needs no renderer callback; only a watched bank can require
+   sampling old pixels before an instruction's write crosses its deadline. */
+static inline void kega32x_fb_sync(Kega32xBus *b, uint64_t mclk)
+{
+    if ((b->video_watch_banks & (1u << ((b->s.vdp[5] & 1u) ^ 1u))) && b->host.render_sync)
+        b->host.render_sync(b->host.userdata, mclk);
+}
 void kega32x_bus_power(Kega32xBus *, Kega32xMemory *, const Kega32xBusHost *, int pal, int no_cart);
 /* Offsets: 0..0x3f system, 0x100..0x10f VDP, 0x200..0x3ff palette.
    Values are numeric words, independent of host byte order. */

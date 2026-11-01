@@ -248,8 +248,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         if (error.isEmpty()) error = QStringLiteral("Некорректные параметры Sega CD.");
         unload(); return false;
     }
-    for (unsigned port = 0; port < 2; ++port)
-        api_->set_controller_port_device(port,RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1));
+    applyControllerPorts(true);
     // The battery extension exposes formatted BRAM and its regional path.
     // GPX still owns initialization/formatting; the host owns atomic writes.
     saveMemorySizes_.fill(0);
@@ -421,10 +420,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     if (!validAvInfo(av_)) {
         error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука."); unload(); return false;
     }
-    // Genesis 6-button pad; Master System/Game Gear/SG-1000 keep plain joypads.
-    const bool md = ext != "sms" && ext != "gg" && ext != "sg";
-    for (unsigned port = 0; port < 2; ++port)
-        api_->set_controller_port_device(port, md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD);
+    applyControllerPorts(true);
     saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
     saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
@@ -444,6 +440,7 @@ void LibretroHost::unload() {
     contentInfo_ = {}; contentInfoActive_ = false;
     content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
+    controllerDevices_.fill(~0u);
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
     batterySave_.clear();
@@ -496,10 +493,7 @@ bool LibretroHost::hardReset(QString& error) {
         error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука.");
         unload(); return false;
     }
-    const auto ext = contentExtension_;
-    const bool md = ext != "sms" && ext != "gg" && ext != "sg";
-    for (unsigned port = 0; port < 2; ++port)
-        api_->set_controller_port_device(port, md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD);
+    applyControllerPorts(true);
     saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
     saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
@@ -588,7 +582,33 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     }
     return setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error);
 }
-void LibretroHost::setButtons(unsigned port, unsigned mask) { if (port < buttons_.size()) buttons_[port] = mask; }
+void LibretroHost::setButtons(unsigned port, unsigned mask) {
+    if (port < buttons_.size()) buttons_[port] = controllerConnected_[port] ? mask : 0u;
+}
+bool LibretroHost::controllerConnected(unsigned port) const {
+    return port < controllerConnected_.size() && controllerConnected_[port];
+}
+bool LibretroHost::setControllerConnected(unsigned port, bool connected) {
+    if (port >= controllerConnected_.size() || controllerConnected_[port] == connected) return false;
+    controllerConnected_[port] = connected;
+    buttons_[port] = 0;
+    applyControllerPorts();
+    return true;
+}
+void LibretroHost::applyControllerPorts(bool force) {
+    if (!loaded_) return;
+    const bool md = contentExtension_ != "sms" && contentExtension_ != "gg" && contentExtension_ != "sg";
+    for (unsigned port = 0; port < controllerConnected_.size(); ++port) {
+        const unsigned device = !controllerConnected_[port] ? RETRO_DEVICE_NONE :
+            md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD;
+        // GPX resets its input protocol on this call. Preserve it on unchanged
+        // settings and state restores; configured input.system is not serialized.
+        if (force || controllerDevices_[port] != device) {
+            api_->set_controller_port_device(port, device);
+            controllerDevices_[port] = device;
+        }
+    }
+}
 double LibretroHost::aspectRatio() const {
     if (av_.geometry.aspect_ratio > 0) return av_.geometry.aspect_ratio;
     return av_.geometry.base_height ? double(av_.geometry.base_width) / av_.geometry.base_height : 4.0 / 3.0;
@@ -603,7 +623,10 @@ QByteArray LibretroHost::serialize() const {
     return result;
 }
 bool LibretroHost::unserialize(const QByteArray& state) {
-    return loaded_ && size_t(state.size()) == api_->serialize_size() && api_->unserialize(state.constData(), size_t(state.size()));
+    if (!loaded_ || size_t(state.size()) != api_->serialize_size() ||
+        !api_->unserialize(state.constData(), size_t(state.size()))) return false;
+    applyControllerPorts();
+    return true;
 }
 QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + QStringLiteral(".slot%1.krs").arg(slot); }
 unsigned LibretroHost::occupiedStateSlots() const {
@@ -892,7 +915,8 @@ size_t LibretroHost::audioBatch(const int16_t* data, size_t frames) {
 }
 void LibretroHost::inputPoll() {}
 int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsigned id) {
-    if (!active_ || port >= 2 || (device & RETRO_DEVICE_MASK) != RETRO_DEVICE_JOYPAD) return 0;
+    if (!active_ || port >= 2 || !active_->controllerConnected_[port] ||
+        (device & RETRO_DEVICE_MASK) != RETRO_DEVICE_JOYPAD) return 0;
     const auto mask = active_->buttons_[port];
     if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return int16_t(mask);
     return id < 16 && (mask & (1u << id)) ? 1 : 0;

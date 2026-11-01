@@ -12,6 +12,7 @@
 #include <QTemporaryDir>
 
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <stdexcept>
 #include <utility>
@@ -93,6 +94,55 @@ QByteArray makeTestRom() {
         rom[at + 1] = char(displacement & 0xff);
     }
     return rom;
+}
+
+// Original port-ID loop: TH low forces D2/D3 low on a gamepad; an empty
+// controller socket floats them high. Runs on real GPX, without game ROMs.
+QByteArray makePortProbeRom() {
+    auto rom=makeTestRom();int pc=0x200;
+    const auto word=[&](quint16 value){rom[pc++]=char(value>>8);rom[pc++]=char(value);};
+    const int loop=pc;
+    word(0x13fc);word(0x40);word(0xa1);word(0x000b);
+    word(0x13fc);word(0);word(0xa1);word(0x0005);
+    word(0x1039);word(0xa1);word(0x0005);
+    word(0x0240);word(0x000c);
+    word(0x33c0);word(0x00ff);word(0);
+    word(quint16(0x6000|((loop-(pc+2))&255)));
+    return rom;
+}
+void testControllerPorts(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"port test directory");
+    const QString path=temp.filePath("original-ports.md");
+    writeFile(path,makePortProbeRom());
+    LibretroHost host(corePath,temp.path());
+    require(host.controllerConnected(0) && !host.controllerConnected(1),"host port defaults");
+    require(host.setControllerConnected(1,true),"preload connection change");
+    QString error;require(host.load(path,error),"port probe ROM load");
+    QLibrary inspect(corePath);
+    using Memory=void*(*)(unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory!=nullptr,"port test memory API");
+    const auto expect=[&](bool connected){
+        for(int i=0;i<2;++i)host.runFrame();
+        const void* ram=memory(RETRO_MEMORY_SYSTEM_RAM);require(ram!=nullptr,"port probe RAM");
+        quint16 answer;std::memcpy(&answer,ram,sizeof(answer));
+        require(answer==(connected?0:12),"real core reported wrong controller port electrical ID");
+    };
+    expect(true);
+    require(!host.setControllerConnected(1,true),"unchanged connection was treated as changed");
+    const auto withPad=host.serialize();require(!withPad.isEmpty(),"port state capture");
+    host.setControllerConnected(1,false);expect(false);
+    require(host.unserialize(withPad),"port state restore");expect(false);
+    require(!host.controllerConnected(1),"saved state changed requested port topology");
+    require(host.hardReset(error),"empty port hard reset");expect(false);
+    host.setControllerConnected(1,true);expect(true);
+    const auto rewind=host.captureRewindState();require(!rewind.isEmpty(),"port rewind capture");
+    host.setControllerConnected(1,false);
+    require(host.restoreRewindState(rewind),"port rewind restore");expect(false);
+    host.setControllerConnected(1,true);
+    require(host.hardReset(error),"connected port hard reset");expect(true);
+    host.unload();require(host.load(path,error),"port reload");expect(true);
+    host.setControllerConnected(0,false);require(!host.controllerConnected(0),"player one disconnect");
 }
 
 QByteArray makeSaveRamRom() {
@@ -729,11 +779,15 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     const auto mode = argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
-                                     mode == QLatin1String("--archive-only")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only]\n");
+                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports")))) {
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports]\n");
         return 2;
     }
     try {
+        if (mode == QLatin1String("--controller-ports")) {
+            testControllerPorts(QString::fromLocal8Bit(argv[1]));
+            std::puts("controller port connection, live ID, state restore, hard reset and reload passed");return 0;
+        }
         if (mode == QLatin1String("--video-geometry")) {
             testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
             std::puts("native filtered video geometry passed"); return 0;

@@ -6,7 +6,7 @@ Kega Refusion is a standalone C++17 / Qt6 Widgets application for Linux and Wind
 
 `MainWindow` owns presentation and routes actions. `InputManager` owns SDL device discovery, per-system/per-player mappings and keyboard/pad state. `GameView` paints copied RGB frames and timed OSD messages with the embedded Cyrillic-capable pixel font. `AudioOutput` owns Qt Multimedia output on the GUI thread. `EmulationSession` runs a dedicated emulation thread. GUI actions enqueue commands; only the emulation thread calls `LibretroHost` and core functions. Input masks are atomic, latched once per frame. Core callback buffers are copied before returning.
 
-`LibretroHost` dynamically resolves the libretro API; this keeps core-specific calls out of UI and leaves room for a second adapter/core for 32X. A process-wide owner prevents concurrent instances of the non-reentrant core. This is an explicit current limitation, not a general-purpose multicore host.
+`LibretroHost` dynamically resolves the libretro API; this keeps core-specific calls out of UI. 32X devices and SH2 execution are integrated into the existing GPX core, sharing its MD and Sega CD engines. A process-wide owner prevents concurrent instances of the non-reentrant core. This is an explicit current limitation, not a general-purpose multicore host.
 
 ## Timing and persistence
 
@@ -18,7 +18,7 @@ Genesis Plus GX declares platform-dependent serialization. The first state forma
 
 ## Deferred scope
 
-32X/PicoDrive, specialized peripherals, netplay, achievements, movies, recording, Lua and debugging tools are not part of the initial foundation. These will be added in testable steps. No promise of full ROM collection compatibility is made from the smoke ROM tests.
+Specialized peripherals, netplay, achievements, movies, recording, Lua and debugging tools are not implemented. These will be added in testable steps. No promise of full ROM collection compatibility is made from the smoke ROM tests.
 
 Normal core file-state restoration resets sound resampler history, so immediate PCM bytes after loading a state are not guaranteed identical. The core fast-savestate flag keeps audio history only in global process memory and must not be enabled for file states or assumed to support a history of multiple snapshots. A dedicated full-audio serialization solution is needed before claiming audio-exact rollback.
 
@@ -94,3 +94,11 @@ Audio selection stores a stable device ID, with empty ID meaning current system 
 A screenshot temporarily suppresses OSD rendering during framebuffer capture, crops the game rectangle and restores presentation without changing OSD settings. PNG is the default; JPEG uses quality 95. New-only file creation and a collision suffix prevent overwrites. F12 is reserved from gameplay mapping; images go to data/screenshots. The Windows package includes the JPEG image plugin.
 
 The UI forwards its validated archive member index/name/size to the worker; extraction still checks the member metadata and decoder limits, avoiding the former redundant full listing/decompression pass. MP3 remains streamed with bounded decode buffers and no temporary WAV files. Shader source and intermediate targets share a 128 MiB allocation budget. These limits describe owned payloads/allocations; driver and allocator bookkeeping is additional.
+
+## Integrated 32X timing and video
+
+The bounded scheduler must finish both CD CPUs at each shared frontier. A SUB-CPU communication-register write may wake an idle MAIN-CPU at an earlier timestamp. The scheduler retries that slice before committing its frontier; otherwise the final scanline can leave MAIN behind the frame subtraction and stall the next frame. Already executed SH2 time is monotonic and is not replayed during catch-up.
+
+Video uses three fixed tagged scanline records, covering GPX remaps of the previous/current/next line. Mode, priority, shift and display bank are latched before active display; decoded 32X colors are reused if the MD layer is remapped later. A transient watched-bank mask synchronizes framebuffer writes before mutation only when they can affect a pending row. Skipped frames retain event timing but omit pixel work. H32 maps MD and 32X samples on a shared phase grid without a supersampled frame buffer. Timing provenance and remaining approximations are recorded in `src/core32x/video/PROVENANCE.md`.
+
+Virtual controller-port connection is independent of physical keyboard/gamepad selection. Defaults connect player one and leave player two empty. Per-system settings are queued on the emulation thread before loading content; live connection changes clear rewind history. Unchanged port settings never reset the core input protocol during state restoration.

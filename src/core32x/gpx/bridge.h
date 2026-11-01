@@ -21,7 +21,7 @@ int kegarefusion_32x_set_filter(unsigned preset);
    failure as load failure. Returns zero without changing the requested preset. */
 int kegarefusion_32x_prepare_filter(void);
 void kegarefusion_32x_run(unsigned int target_mclk);
-void kegarefusion_32x_frame_start(void);
+void kegarefusion_32x_frame_start(int skip_video);
 void kegarefusion_32x_frame_end(unsigned int master_clocks);
 void kegarefusion_32x_line(int vdp_line, unsigned int master_clock);
 /* Called in remap_line before loss of MD indexed /YS metadata. Returns 1 if

@@ -27,6 +27,9 @@ void EmulationSession::setDiscEjected(bool ejected) { enqueue({Type::Eject,{},ej
 void EmulationSession::setRegion(int region) { enqueue({Type::Region,{},region}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
+void EmulationSession::setControllerConnected(unsigned port, bool connected) {
+    if (port < 2) enqueue({Type::Port,{},int(port) | (connected ? 2 : 0)});
+}
 void EmulationSession::updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available) {
     audioQueueUs_.store(queuedUsecs); audioTargetUs_.store(targetUsecs);
     audioClockAvailable_.store(available);
@@ -158,6 +161,12 @@ void EmulationSession::run() {
                 else emit errorOccurred(error);
                 break;
             }
+            case Type::Port:
+                if (host.setControllerConnected(unsigned(command.value & 1), (command.value & 2) != 0)) {
+                    clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
+                    pacer.reset(nowNs());
+                }
+                break;
             case Type::Checksum:
                 // Update the policy only. load() and an explicit hard reset
                 // rebuild the in-memory ROM with this setting.

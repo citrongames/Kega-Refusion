@@ -23,6 +23,7 @@ struct PadBinding {
 Q_DECLARE_METATYPE(PadBinding)
 struct InputDevice { int instanceId=-1; QString key; QString name; };
 struct PlayerMapping {
+    bool connected = true; // Virtual port; defaultMapping disconnects player 2.
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
     QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key
@@ -43,6 +44,7 @@ public:
     static QString targetName(ConsoleProfile profile, int target);
     void setProfile(ConsoleProfile profile);
     ConsoleProfile profile() const;
+    bool isConnected(unsigned player) const;
     void setEnabled(bool enabled); // release all outputs when unfocused or in modal dialogs
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native);
@@ -56,6 +58,7 @@ public:
 signals:
     void devicesChanged();
     void maskChanged(unsigned player, unsigned mask);
+    void connectionChanged(unsigned player, bool connected);
     void commandChanged(int command, bool pressed);
     void captureReady(); // all inputs released; waiting for the new binding
     void bindingCaptured(const PadBinding& binding);

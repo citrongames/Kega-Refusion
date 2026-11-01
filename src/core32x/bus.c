@@ -85,6 +85,7 @@ void kega32x_bus_blank(Kega32xBus *b, int vb, int hb, uint64_t t)
 void kega32x_bus_restore(Kega32xBus *b, uint64_t t)
 {
     /* Caller validates serialized ranges before installing state. */
+    b->video_watch_banks=0;
     command_irq(b,t);
     changed(b,KEGA32X_M68K,KEGA32X_MAP_CHANGED,0,t);
 }
@@ -169,6 +170,7 @@ uint8_t kega32x_bus_read8(Kega32xBus *b, unsigned cpu, uint32_t a, uint64_t t)
 static void adapter_write(Kega32xBus *b, unsigned cpu, uint16_t v, uint64_t t)
 {
     unsigned old=b->s.regs[0], flags=0;
+    if (cpu==KEGA32X_M68K && ((old^v)&ADEN)) render_sync(b,t);
     if (cpu==KEGA32X_M68K) {
         if ((old&ADEN) && !(v&ADEN)) v|=NRES;
         b->s.regs[0]=(uint16_t)((old&REN)|(v&(FM|NRES|ADEN)));
@@ -205,7 +207,9 @@ static void vdp_write(Kega32xBus *b, unsigned cpu, unsigned a, uint16_t v, uint6
     case 8:
         if (b->memory) {
             unsigned count=b->s.vdp[2]+1, address=b->s.vdp[3], i;
-            uint16_t *fb=b->memory->framebuffer[(b->s.vdp[5]&1)^1];
+            uint16_t *fb;
+            kega32x_fb_sync(b,t);
+            fb=b->memory->framebuffer[(b->s.vdp[5]&1)^1];
             for (i=0;i<count;i++) {
                 fb[address]=v;
                 address=(address&0xff00)|((address+1)&255);

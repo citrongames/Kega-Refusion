@@ -18,8 +18,9 @@ int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  try {
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
+ const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || fastOnly || checksumOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || fastOnly || checksumOnly || portsOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  const auto path=temp.filePath("original.md");QFile file(path);require(file.open(QIODevice::WriteOnly) && file.write(rom)==rom.size(),"ROM fixture");file.close();
@@ -31,6 +32,18 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(portsOnly){
+  std::atomic<bool> reversed{false};
+  QObject::connect(&session,&EmulationSession::rewindingChanged,&app,[&](bool value){reversed=value;},Qt::DirectConnection);
+  session.setPaused(true);waitFor([&]{return paused;});
+  session.setRewind(true);waitFor([&]{return reversed.load();});
+  session.setControllerConnected(1,true);waitFor([&]{return !reversed.load();});
+  const int frozen=frames;
+  session.setRewind(true);QThread::msleep(80);QCoreApplication::processEvents();
+  require(!reversed && frames==frozen,"live port change retained mismatched rewind history");
+  session.setRewind(false);session.shutdown();require(errors==0,"port session error");
+  std::puts("Controller connection commands run on worker and discard old rewind history: passed");return 0;
+ }
  if(checksumOnly){
   session.setPaused(true);waitFor([&]{return paused;});
   std::atomic<int> audioResets{0};

@@ -9,6 +9,59 @@ static unsigned irq_level[2], request_count, change_flags;
 static void irq(void *p,unsigned cpu,unsigned level,uint64_t t) { (void)p;(void)t;irq_level[cpu]=level; }
 static void request(void *p,uint64_t t) { (void)p;(void)t;request_count++; }
 static void change(void *p,unsigned c,unsigned f,uint32_t a,uint64_t t) { (void)p;(void)c;(void)a;(void)t;change_flags|=f; }
+typedef struct VideoWatch {
+    Kega32xBus *bus;
+    unsigned calls, bank, address;
+    uint16_t old;
+    uint64_t time;
+} VideoWatch;
+static void watch_sync(void *user,uint64_t time)
+{
+    VideoWatch *watch=user;
+    assert(time==watch->time);
+    assert(watch->bus->memory->framebuffer[watch->bank][watch->address]==watch->old);
+    ++watch->calls;
+    /* Sampling completes the renderer's transient watch. */
+    watch->bus->video_watch_banks=0;
+}
+static void test_video_watch(Kega32xMemory *memory)
+{
+    Kega32xBus bus;
+    Kega32xBusHost host={0};
+    VideoWatch watch={0};
+    host.userdata=&watch;
+    kega32x_bus_power(&bus,memory,&host,0,0);
+    kega32x_bus_write16(&bus,KEGA32X_M68K,0,3,0);
+    watch.bus=&bus;watch.bank=1;watch.address=0x10fe;watch.old=0x1234;watch.time=10;
+    bus.host.render_sync=watch_sync;
+    memory->framebuffer[1][watch.address]=watch.old;
+    kega32x_fb_sync(&bus,10);
+    bus.video_watch_banks=1; /* displayed bank0, writable bank1: no match */
+    kega32x_fb_sync(&bus,10);
+    assert(watch.calls==0);
+    bus.video_watch_banks=2;
+    kega32x_fb_sync(&bus,10);
+    kega32x_fb_write16(&bus,watch.address*2u,0xabcd);
+    assert(watch.calls==1 && !bus.video_watch_banks && memory->framebuffer[1][watch.address]==0xabcd);
+    /* Autofill synchronizes once, before its first memory write, only if its
+       current writable bank is watched. The four-word fill wraps its page. */
+    bus.s.vdp[2]=3;bus.s.vdp[3]=(uint16_t)watch.address;
+    bus.video_watch_banks=1;
+    kega32x_bus_write16(&bus,KEGA32X_M68K,0x108,0x1111,100);
+    assert(watch.calls==1 && memory->framebuffer[1][0x1000]==0x1111);
+    kega32x_bus_advance(&bus,200);
+    bus.s.vdp[3]=(uint16_t)watch.address;
+    bus.video_watch_banks=2;watch.old=0x1111;watch.time=210;
+    kega32x_bus_write16(&bus,KEGA32X_M68K,0x108,0x2222,210);
+    assert(watch.calls==2 && !bus.video_watch_banks && memory->framebuffer[1][watch.address]==0x2222 &&
+           memory->framebuffer[1][0x1001]==0x2222);
+    bus.s.vdp[5]|=1;bus.video_watch_banks=2; /* writable bank now0 */
+    kega32x_fb_sync(&bus,220);
+    assert(watch.calls==2);
+    bus.video_watch_banks=3;
+    kega32x_bus_restore(&bus,220);
+    assert(!bus.video_watch_banks && watch.calls==2);
+}
 int main(void)
 {
     Kega32xBus b;
@@ -93,6 +146,7 @@ int main(void)
     assert(kega32x_fb_read16(&b,0)==0x1256);
     kega32x_fb_write16(&b,0,0);
     assert(kega32x_fb_read16(&b,0)==0);
-    free(m); puts("32X bus: FIFO, IRQ, byte lanes, video ownership, fill and swap passed");
+    test_video_watch(m);
+    free(m); puts("32X bus: FIFO, IRQ, byte lanes, fill/swap and watched-bank pre-write order passed");
     return 0;
 }

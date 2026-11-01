@@ -3,6 +3,7 @@
 #include "ControllerDiagram.h"
 
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -157,6 +158,10 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     scope->addLayout(deadzoneRow, 1, 3);
     scope->setColumnStretch(2, 2);
     scope->setColumnStretch(3, 1);
+    connectedBox_ = new QCheckBox(QStringLiteral("Подключён к консоли"), this);
+    connectedBox_->setObjectName(QStringLiteral("connectedBox"));
+    connectedBox_->setToolTip(QStringLiteral("Отключённый порт не виден игре. Назначения сохраняются."));
+    scope->addWidget(connectedBox_, 2, 0, 1, 4);
     mainLayout->addLayout(scope);
 
     tabs_ = new QTabWidget(this);
@@ -247,6 +252,13 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
                 dirty_.insert(draftKey());
                 updateActionButtons();
             });
+    connect(connectedBox_, &QCheckBox::toggled, this, [this](bool connected) {
+        if (refreshing_) return;
+        stopCapture();
+        draft().connected = connected;
+        dirty_.insert(draftKey());
+        updateActionButtons();
+    });
     connect(deadzoneSlider_, &QSlider::valueChanged, this, [this](int value) {
         deadzoneValue_->setText(QStringLiteral("%1 %").arg(value));
         if (refreshing_) return;
@@ -384,7 +396,7 @@ void ControlsDialog::refreshDevices() {
     const QSignalBlocker blocker(deviceBox_);
     deviceBox_->clear();
     deviceBox_->addItem(QStringLiteral("Автоматически"), QStringLiteral("auto"));
-    deviceBox_->addItem(QStringLiteral("Нет"), QStringLiteral("none"));
+    deviceBox_->addItem(QStringLiteral("Только клавиатура"), QStringLiteral("none"));
     const auto devices = input_.devices();
     for (const InputDevice& device : devices) {
         knownDevices_.insert(device.key, device.name);
@@ -408,6 +420,7 @@ void ControlsDialog::refreshDevices() {
 void ControlsDialog::refreshContents() {
     refreshing_ = true;
     const PlayerMapping mapping = draft();
+    connectedBox_->setChecked(mapping.connected);
     refreshDevices();
     deadzoneSlider_->setValue(qBound(5, mapping.deadzonePercent, 60));
     deadzoneValue_->setText(
@@ -508,10 +521,14 @@ void ControlsDialog::refreshPadCell(int target) {
 
 void ControlsDialog::updateActionButtons() {
     if (!assignButton_) return;
-    const bool targetSelected = selectedTarget_ >= 0;
+    const bool connected = draft().connected;
+    gameTable_->setEnabled(connected);
+    diagram_->setEnabled(connected);
+    const bool gamePage = tabs_->currentIndex() == 0;
+    const bool targetSelected = selectedTarget_ >= 0 && (!gamePage || connected);
     const bool deviceSelected = draft().deviceKey != QStringLiteral("none");
     assignButton_->setEnabled(targetSelected && deviceSelected);
-    sequenceButton_->setEnabled(deviceSelected);
+    sequenceButton_->setEnabled(deviceSelected && (!gamePage || connected));
     skipButton_->setEnabled(captureTarget_ >= 0 && !sequence_.isEmpty());
     clearButton_->setEnabled(targetSelected);
 }
@@ -564,6 +581,7 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
 }
 
 void ControlsDialog::beginCaptureFor(int target) {
+    if (target < 16 && !draft().connected) return;
     if (draft().deviceKey == QStringLiteral("none")) {
         setFeedback(QStringLiteral("Сначала выберите устройство."), true);
         return;

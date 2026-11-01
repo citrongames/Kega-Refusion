@@ -19,6 +19,18 @@
 #undef fprintf
 #endif
 int kegarefusion_32x_attached;
+/* GPX may redraw the previous row or render the next one early. Keep three
+   tagged rows, never a frame-sized copy or a queue of register writes. */
+typedef struct Gpx32xVideoRow {
+    uint64_t start, latch_due, pixels_due;
+    int logical, output;
+    unsigned valid, md_ready, latched, decoded_ready, border, md_width;
+    uint16_t control, shift;
+    unsigned bank, enabled;
+    uint8_t indices[384];
+    uint16_t palette[256];
+    Kega32xDecodedLine decoded;
+} Gpx32xVideoRow;
 typedef struct Gpx32x {
     Kega32xMachine *machine;
     cpu_memory_map original[256];
@@ -27,7 +39,9 @@ typedef struct Gpx32x {
     uint8_t boot_page[65536];
     uint64_t frame_base, hint_due;
     unsigned now, main_running, hint_count;
-    int line, render_guard;
+    int line, skip_video;
+    unsigned line_start;
+    Gpx32xVideoRow video[3];
     Kega32xNtsc565 *filter;
     int filter_preset;
     Kega32xMachineState *snapshot;
@@ -42,6 +56,38 @@ static Gpx32x *ctx;
 /* GPX config.ntsc is an enable flag, not the selected preset. Options are
    received before attachment too; ordinary MD/CD never allocate this table. */
 static unsigned requested_filter_preset;
+static void video_sync(uint64_t);
+static void video_reset(void) {
+    unsigned i;
+    for(i=0;i<3;i++)ctx->video[i].valid=0;
+    if(ctx->machine)kega32x_machine_bus(ctx->machine)->video_watch_banks=0;
+}
+static Gpx32xVideoRow *video_row(int logical,uint64_t start) {
+    Gpx32xVideoRow *row=&ctx->video[(start/MCYCLES_PER_LINE)%3];
+    if(!row->valid || row->start!=start || row->logical!=logical) {
+        /* GPX HVC tables place active MD pixels at 988/1000 master clocks.
+           H32's 32X layer follows by 13 quarter-pixels (26 clocks).
+           Sega figure 3.17 latches registers 216 clocks before XHDISP.
+           This maps documented relative timings onto GPX; bus wait timing
+           and analogue /YS edge races remain separate approximations. */
+        unsigned active=(reg[12]&1)?988u:1026u;
+        row->valid=1;row->start=start;row->logical=logical;
+        row->latch_due=start+active-216u;row->pixels_due=start+active;
+        row->md_ready=row->latched=row->decoded_ready=0;
+    }
+    return row;
+}
+static uint64_t video_next_event(void) {
+    uint64_t due=UINT64_MAX;unsigned i;
+    for(i=0;i<3;i++) {
+        const Gpx32xVideoRow *row=&ctx->video[i];
+        uint64_t next;
+        if(!row->valid || row->decoded_ready)continue;
+        next=row->latched?row->pixels_due:row->latch_due;
+        if(next<due)due=next;
+    }
+    return due;
+}
 int kegarefusion_32x_prepare_filter(void)
 {
     Kega32xNtsc565 *next;
@@ -220,17 +266,25 @@ static unsigned zfb_read8(unsigned a)
 }
 static void zfb_write8(unsigned a,unsigned v)
 {
-    kega32x_machine_run_until(ctx->machine,z80_time());
-    kega32x_fb_write8(kega32x_machine_bus(ctx->machine),a,(uint8_t)v);
+    const uint64_t t=z80_time();Kega32xBus *b;
+    kega32x_machine_run_until(ctx->machine,t);
+    b=kega32x_machine_bus(ctx->machine);kega32x_fb_sync(b,t);
+    kega32x_fb_write8(b,a,(uint8_t)v);
 }
 static unsigned fb_read8(unsigned a)
 { unsigned v;sync_device();v=kega32x_fb_read16(kega32x_machine_bus(ctx->machine),a);return (v>>((a&1)?0:8))&255; }
 static unsigned fb_read16(unsigned a)
 { sync_device();return kega32x_fb_read16(kega32x_machine_bus(ctx->machine),a); }
 static void fb_write8(unsigned a,unsigned v)
-{ sync_device();kega32x_fb_write8(kega32x_machine_bus(ctx->machine),a,(uint8_t)v); }
+{
+    Kega32xBus *b;sync_device();b=kega32x_machine_bus(ctx->machine);
+    kega32x_fb_sync(b,current_time());kega32x_fb_write8(b,a,(uint8_t)v);
+}
 static void fb_write16(unsigned a,unsigned v)
-{ sync_device();kega32x_fb_write16(kega32x_machine_bus(ctx->machine),a,(uint16_t)v); }
+{
+    Kega32xBus *b;sync_device();b=kega32x_machine_bus(ctx->machine);
+    kega32x_fb_sync(b,current_time());kega32x_fb_write16(b,a,(uint16_t)v);
+}
 static unsigned rom_address(unsigned a)
 {
     unsigned bank=kega32x_machine_bus(ctx->machine)->s.regs[2];
@@ -285,9 +339,10 @@ static void changed(void *user,unsigned source,unsigned flags,uint32_t a,uint64_
 }
 static void render_sync(void *user,uint64_t t)
 {
-    (void)user;(void)t;
-    /* GPX renders each line once; remap-on-register-write is already routed
-       through its existing renderer. Avoid recursive remapping here. */
+    (void)user;
+    /* Before a video-register/palette write: if an instruction crossed a
+       deadline, capture the old values before installing its new value. */
+    video_sync(t);
 }
 static void audio_delta(void *user,uint64_t t,int32_t l,int32_t r)
 {
@@ -328,6 +383,7 @@ void kegarefusion_32x_reinit(void)
     system_init();system_reset();
     maps_capture();
     ctx->frame_base=0;ctx->now=0;ctx->hint_due=UINT64_MAX;ctx->hint_count=0;ctx->line=-1;
+    ctx->line_start=0;video_reset();
     kega32x_machine_power_reset(ctx->machine,vdp_pal,!ctx->has_cart_rom);
     map_apply();
 }
@@ -356,10 +412,11 @@ static void blank_at(unsigned local)
     int vb=ctx->line>=bitmap.viewport.h && ctx->line<lines_per_frame-1;
     kega32x_bus_blank(kega32x_machine_bus(ctx->machine),vb,hb,ctx->frame_base+local);
 }
-void kegarefusion_32x_frame_start(void)
+void kegarefusion_32x_frame_start(int skip)
 {
     if(!ctx)return;
-    ctx->now=0;ctx->line=bitmap.viewport.h;
+    ctx->now=0;ctx->line=bitmap.viewport.h;ctx->line_start=0;
+    ctx->skip_video=skip!=0;video_reset();
     /* Normally prepared at load/option change, outside scanline rendering.
        The fallback also covers an attachment whose caller omitted load setup. */
     if(!config.ntsc)requested_filter_preset=0;
@@ -373,13 +430,17 @@ void kegarefusion_32x_frame_start(void)
 void kegarefusion_32x_frame_end(unsigned cycles)
 {
     if(!ctx)return;
-    kegarefusion_32x_run(cycles);ctx->frame_base+=cycles;ctx->now=0;
+    kegarefusion_32x_run(cycles);video_sync(ctx->frame_base+cycles);
+    ctx->frame_base+=cycles;ctx->now=0;
 }
 void kegarefusion_32x_line(int line,unsigned cycles)
 {
     Kega32xBus *b;
     if(!ctx)return;
-    ctx->line=line;b=kega32x_machine_bus(ctx->machine);blank_at(cycles);
+    video_sync(ctx->frame_base+cycles);
+    ctx->line=line;ctx->line_start=cycles;
+    video_row(line,ctx->frame_base+cycles);
+    b=kega32x_machine_bus(ctx->machine);blank_at(cycles);
     if(line==lines_per_frame-1)ctx->hint_count=b->s.hcount;
     if(line<bitmap.viewport.h || (b->s.sh2_control&0x80)) {
         if(!ctx->hint_count) {ctx->hint_count=b->s.hcount;ctx->hint_due=ctx->frame_base+cycles+((reg[12]&1)?436:540);}
@@ -391,7 +452,10 @@ void kegarefusion_32x_run(unsigned target)
     if(!ctx){m68k_run(target);return;}
     while(ctx->now<target) {
         unsigned next=target,phase=ctx->now%MCYCLES_PER_LINE,edge;
-        uint64_t event=kega32x_machine_next_event(ctx->machine);
+        uint64_t event,video_event;
+        video_sync(ctx->frame_base+ctx->now);
+        event=kega32x_machine_next_event(ctx->machine);
+        video_event=video_next_event();if(video_event<event)event=video_event;
         unsigned hb0=(reg[12]&1)?228:280,hb1=(reg[12]&1)?872:860;
         if(next-ctx->now>448)next=ctx->now+448;
         edge=ctx->now-phase+(phase<hb0?hb0:phase<hb1?hb1:MCYCLES_PER_LINE);
@@ -405,46 +469,106 @@ void kegarefusion_32x_run(unsigned target)
         ctx->main_running=1;kegarefusion_m68k_run(next);ctx->main_running=0;
         if(m68k.cycles<next)next=m68k.cycles;
         kega32x_machine_run_until(ctx->machine,ctx->frame_base+next);
-        if(system_hw==SYSTEM_MCD)kegarefusion_scd_run(next);
+        if(system_hw==SYSTEM_MCD) {
+            kegarefusion_scd_run(next);
+            /* A SUB-CPU register write can wake an idle MAIN-CPU at an
+               earlier timestamp. Like GPX scd_update, finish that CPU's
+               slice before committing the shared frontier. Otherwise a
+               final-line wake leaves MAIN behind the frame subtraction,
+               producing a negative cycle count and a permanent stall. */
+            /* An old snapshot may already contain the former stall. Do
+               not turn that invalid residual clock into an endless retry. */
+            if(m68k.cycles<0)return;
+            if(m68k.cycles<(int)next)continue;
+        }
         if(next<=ctx->now)return;
-        ctx->now=next;blank_at(next);
+        ctx->now=next;video_sync(ctx->frame_base+next);blank_at(next);
         if(ctx->hint_due<=ctx->frame_base+next) {
             kega32x_bus_irq(kega32x_machine_bus(ctx->machine),KEGA32X_IRQ_HINT,ctx->hint_due);
             ctx->hint_due=UINT64_MAX;
         }
     }
 }
-int kegarefusion_32x_render(int logical,int output,const uint8_t *indices,const uint16_t *palette,unsigned width)
+static int video_mix(Gpx32xVideoRow *row)
 {
-    Kega32xBus *b;Kega32xVideoLine line={0};uint8_t ys[320];uint16_t mixed[384];
-    unsigned i,border,total,active;size_t pitch,capacity;
-    if(!ctx || !indices || !palette || !bitmap.data || bitmap.pitch<=0 ||
-       output<0 || output>=bitmap.height || bitmap.viewport.x<0)return 0;
-    b=kega32x_machine_bus(ctx->machine);
-    border=(unsigned)bitmap.viewport.x;active=(unsigned)bitmap.viewport.w;
-    if(border>32 || (active!=256 && active!=320) || width<active+2*border)return 0;
-    total=320+2*border;pitch=(size_t)bitmap.pitch/2;
+    Kega32xVideoLine line={0};uint8_t ys[320];uint16_t mixed[384];
+    unsigned i,total=320+2*row->border;size_t pitch,capacity;
+    if(!row->md_ready || !row->decoded_ready || !bitmap.data || bitmap.pitch<=0 ||
+       row->output<0 || row->output>=bitmap.height)return 0;
+    pitch=(size_t)bitmap.pitch/2;
     if((bitmap.pitch&1) || pitch<total*(config.ntsc?2u:1u) ||
        (size_t)bitmap.height>SIZE_MAX/pitch)return 0;
     capacity=pitch*(size_t)bitmap.height;
-    for(i=0;i<active;i++)ys[i]=(indices[border+i]&15)==0;
-    line.md_indices=indices+border;line.md_palette_rgb565=palette;line.md_transparent=ys;line.md_width=active;
-    line.framebuffer=b->memory->framebuffer[b->s.vdp[5]&1];line.palette_bgr555=b->s.palette;
-    line.line=(unsigned)logical&255;line.mode=(Kega32xVideoMode)(b->s.vdp[0]&3);
-    /* Attachment geometry stays 320 even before ADEN or after shutdown. MD-only
-       composition keeps H32 rows consistent with the advertised 32X geometry.
-       Vertical overscan must not display a wrapped 32X line-table entry. */
-    if(!(b->s.regs[0]&1) || logical<0 || logical>=((b->s.vdp[0]&0x40)?240:224))
-        line.mode=KEGA32X_VIDEO_BLANK;
-    line.priority_invert=b->s.vdp[0]&0x80;line.pixel_shift=b->s.vdp[1]&1;
-    if(kega32x_compose_rgb565(mixed+border,320,&line)!=KEGA32X_VIDEO_OK)return 0;
-    for(i=0;i<border;i++)mixed[i]=mixed[border+320+i]=palette[0x40];
+    for(i=0;i<row->md_width;i++)ys[i]=(row->indices[row->border+i]&15)==0;
+    line.md_indices=row->indices+row->border;line.md_palette_rgb565=row->palette;
+    line.md_transparent=ys;line.md_width=row->md_width;
+    if(kega32x_mix_rgb565(mixed+row->border,320,&row->decoded,&line)!=KEGA32X_VIDEO_OK)return 0;
+    for(i=0;i<row->border;i++)mixed[i]=mixed[row->border+320+i]=row->palette[0x40];
     if(config.ntsc) {
-        if(!ctx->filter)return 0; /* prepare_filter is required before the frame. */
-        return kega32x_ntsc565_row(ctx->filter,mixed,total,384,palette[0x40],(uint16_t *)bitmap.data,
-            capacity,pitch,(size_t)output)==KEGA32X_NTSC565_OK;
+        if(!ctx->filter)return 0;
+        return kega32x_ntsc565_row(ctx->filter,mixed,total,384,row->palette[0x40],
+            (uint16_t *)bitmap.data,capacity,pitch,(size_t)row->output)==KEGA32X_NTSC565_OK;
     }
-    memcpy(bitmap.data+(size_t)output*bitmap.pitch,mixed,total*sizeof(uint16_t));return 1;
+    memcpy(bitmap.data+(size_t)row->output*bitmap.pitch,mixed,total*sizeof(uint16_t));return 1;
+}
+static void video_decode(Gpx32xVideoRow *row)
+{
+    Kega32xBus *b=kega32x_machine_bus(ctx->machine);Kega32xVideoLine line={0};
+    line.framebuffer=b->memory->framebuffer[row->bank];line.palette_bgr555=b->s.palette;
+    line.line=(unsigned)row->logical&255;
+    line.mode=(Kega32xVideoMode)(row->control&3);
+    if(!row->enabled || row->logical<0 || row->logical>=((row->control&0x40)?240:224))
+        line.mode=KEGA32X_VIDEO_BLANK;
+    line.priority_invert=row->control&0x80;line.pixel_shift=row->shift&1;
+    if(kega32x_decode_line(&row->decoded,&line)==KEGA32X_VIDEO_OK)video_mix(row);
+}
+static void video_sync(uint64_t t)
+{
+    Kega32xBus *b;unsigned i,watch=0;
+    if(!ctx || !ctx->machine)return;
+    b=kega32x_machine_bus(ctx->machine);
+    for(i=0;i<3;i++) {
+        Gpx32xVideoRow *row=&ctx->video[i];
+        if(!row->valid || row->decoded_ready)continue;
+        if(!row->latched && t>=row->latch_due) {
+            row->control=b->s.vdp[0];row->shift=b->s.vdp[1];
+            row->bank=b->s.vdp[5]&1;row->enabled=b->s.regs[0]&1;row->latched=1;
+        }
+        if(row->latched && t>=row->pixels_due) {
+            row->decoded_ready=1;
+            /* Register/event timing is identical in skipped frames; only
+               pixel work is omitted. A visible row may get its first MD
+               remap late, so decode it even before that remap arrives. */
+            if(!ctx->skip_video)video_decode(row);
+        }
+        if(!ctx->skip_video && row->latched && !row->decoded_ready)watch|=1u<<row->bank;
+    }
+    b->video_watch_banks=watch;
+}
+int kegarefusion_32x_render(int logical,int output,const uint8_t *indices,const uint16_t *palette,unsigned width)
+{
+    Gpx32xVideoRow *row;unsigned border,active;int delta;uint64_t start,offset;
+    if(ctx && ctx->skip_video)return 1;
+    if(!ctx || !indices || !palette || !bitmap.data || bitmap.pitch<=0 ||
+       output<0 || output>=bitmap.height || bitmap.viewport.x<0)return 0;
+    border=(unsigned)bitmap.viewport.x;active=(unsigned)bitmap.viewport.w;
+    if(border>32 || (active!=256 && active!=320) || width<active+2*border)return 0;
+    delta=logical-ctx->line;
+    if(delta>lines_per_frame/2)delta-=lines_per_frame;
+    if(delta<-lines_per_frame/2)delta+=lines_per_frame;
+    start=ctx->frame_base+ctx->line_start;
+    offset=(uint64_t)(delta<0?-delta:delta)*MCYCLES_PER_LINE;
+    if(delta<0) {if(start<offset)return 0;start-=offset;} else start+=offset;
+    row=video_row(logical,start);
+    row->output=output;row->border=border;row->md_width=active;
+    memcpy(row->indices,indices,active+2*border);
+    memcpy(row->palette,palette,sizeof(row->palette));
+    row->md_ready=1;
+    /* Most remaps occur in HBlank before the latch. Later MD partial blanking
+       must use the frozen 32X row, never newly written next-line registers. */
+    if(row->decoded_ready)return video_mix(row);
+    video_sync(ctx->frame_base+ctx->now);
+    return 1;
 }
 
 /* A separate versioned block follows the unchanged GPX state. Snapshot storage
@@ -537,7 +661,7 @@ int kegarefusion_32x_state_end_load(int success)
            amplitude only after the absolute-to-frame timestamp is restored. */
         okay=kega32x_machine_set_state(ctx->machine,ctx->snapshot);
     }
-    ctx->restore.ready=0;map_apply();bitmap.viewport.changed|=9;return okay;
+    ctx->restore.ready=0;video_reset();map_apply();bitmap.viewport.changed|=9;return okay;
 }
 
 int kegarefusion_32x_save_gpx(void *data)

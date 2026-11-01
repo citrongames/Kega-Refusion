@@ -2,6 +2,7 @@
 #include "core/LibretroHost.h"
 #include "core/Sega32xBios.h"
 #include "core/SegaCdBios.h"
+#include "core/RewindBuffer.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -24,7 +25,7 @@ namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -151,7 +152,9 @@ int main(int argc, char** argv) {
     enum class Input { None, StartPulses, Play };
     Input input = Input::None;
     bool inputSpecified = false, stateCheck = false, resetCheck = false, filterSpecified = false;
-    int filter = 0;
+    int filter = 0, checkpoint = 0, extraStart = -1, extraPlay = -1;
+    QString saveRawState, loadRawState;
+    bool recordRewind = false, port2Disconnected = false;
     for (int i = 6; i < args.size(); ++i) {
         const auto& option = args[i];
         if (option == QLatin1String("--no-input") || option == QLatin1String("--start-pulses") ||
@@ -166,6 +169,35 @@ int main(int argc, char** argv) {
         } else if (option == QLatin1String("--reset-check")) {
             if (resetCheck) return usage(QStringLiteral("Duplicate --reset-check option."));
             resetCheck = true;
+        } else if (option.startsWith(QLatin1String("--save-state="))) {
+            saveRawState = option.mid(13);
+            if (saveRawState.isEmpty()) return usage(QStringLiteral("Empty state path."));
+        } else if (option.startsWith(QLatin1String("--load-state="))) {
+            loadRawState = option.mid(13);
+            if (loadRawState.isEmpty()) return usage(QStringLiteral("Empty state path."));
+        } else if (option.startsWith(QLatin1String("--play-at="))) {
+            bool valid = false;
+            const int value = option.mid(10).toInt(&valid);
+            if (extraPlay >= 0 || !valid || value < 0 || value + 4 > frames)
+                return usage(QStringLiteral("--play-at must leave four input frames."));
+            extraPlay = value;
+        } else if (option == QLatin1String("--port2-disconnected")) {
+            port2Disconnected = true;
+        } else if (option == QLatin1String("--record-rewind")) {
+            if (recordRewind) return usage(QStringLiteral("Duplicate --record-rewind."));
+            recordRewind = true;
+        } else if (option.startsWith(QLatin1String("--start-at="))) {
+            bool valid = false;
+            const int value = option.mid(11).toInt(&valid);
+            if (extraStart >= 0 || !valid || value < 0 || value + 4 > frames)
+                return usage(QStringLiteral("--start-at must leave four input frames."));
+            extraStart = value;
+        } else if (option.startsWith(QLatin1String("--checkpoint="))) {
+            bool valid = false;
+            const int value = option.mid(13).toInt(&valid);
+            if (checkpoint || !valid || value < 1 || value > frames || frames / value > 20)
+                return usage(QStringLiteral("--checkpoint requires a frame interval producing at most 20 images."));
+            checkpoint = value;
         } else if (option.startsWith(QLatin1String("--filter="))) {
             bool valid = false;
             const int value = option.mid(9).toInt(&valid);
@@ -205,18 +237,37 @@ int main(int argc, char** argv) {
         using Features = unsigned (*)();
         const auto features = reinterpret_cast<Features>(diagnostics.resolve("retro_kegarefusion_core_features"));
         const unsigned initialFeatures = features ? features() : 0;
+        using Debug = int (*)(std::uint64_t*, size_t);
+        const auto debug = reinterpret_cast<Debug>(diagnostics.resolve("retro_kegarefusion_debug"));
+        if (!loadRawState.isEmpty()) {
+            QFile file(loadRawState);
+            require(file.open(QIODevice::ReadOnly) && file.size() > 0 && file.size() <= 4*1024*1024,
+                    QStringLiteral("Could not read bounded diagnostic state."));
+            require(host.unserialize(file.readAll()), QStringLiteral("Diagnostic state rejected."));
+        }
+
+        if (port2Disconnected) {
+            using SetDevice = void (*)(unsigned, unsigned);
+            const auto setDevice = reinterpret_cast<SetDevice>(diagnostics.resolve("retro_set_controller_port_device"));
+            require(setDevice != nullptr, QStringLiteral("Controller device API missing."));
+            setDevice(1, RETRO_DEVICE_NONE);
+        }
 
         qint64 videoUpdates = 0, framesWithVideo = 0, audioChunks = 0, audioBytes = 0;
         qsizetype minAudioBytes = std::numeric_limits<qsizetype>::max(), maxAudioBytes = 0;
         int maxWidth = 0, maxHeight = 0;
         QCryptographicHash audioHash(QCryptographicHash::Sha256);
+        RewindBuffer history;
+        if (recordRewind) history.configure(30, host.fps() / 2);
         QElapsedTimer clock;
         clock.start();
         for (int frame = 0; frame < frames; ++frame) {
             const bool start = input != Input::None && ((frame >= 120 && frame < 124) ||
                                   (frame >= 240 && frame < 244) || (frame >= 480 && frame < 484));
-            unsigned buttons = start ? (1u << RETRO_DEVICE_ID_JOYPAD_START) : 0u;
-            if (input == Input::Play && ((frame >= 600 && frame < 604) || (frame >= 720 && frame < 724)))
+            const bool extra = extraStart >= 0 && frame >= extraStart && frame < extraStart + 4;
+            unsigned buttons = (start || extra) ? (1u << RETRO_DEVICE_ID_JOYPAD_START) : 0u;
+            if ((input == Input::Play && ((frame >= 600 && frame < 604) || (frame >= 720 && frame < 724))) ||
+                (extraPlay >= 0 && frame >= extraPlay && frame < extraPlay + 4))
                 // GPX maps Mega Drive A/B/C to libretro Y/B/A respectively.
                 buttons |= (1u << RETRO_DEVICE_ID_JOYPAD_Y) | (1u << RETRO_DEVICE_ID_JOYPAD_B) |
                            (1u << RETRO_DEVICE_ID_JOYPAD_A);
@@ -229,6 +280,24 @@ int main(int argc, char** argv) {
                 maxWidth = std::max(maxWidth, host.frame().width());
                 maxHeight = std::max(maxHeight, host.frame().height());
             }
+            if (recordRewind && (frame + 1) % 2 == 0)
+                require(history.capture(host.captureRewindState(), host.frame(), host.aspectRatio()),
+                        QStringLiteral("Rewind recording failed at frame %1.").arg(frame));
+            if (checkpoint && (frame + 1) % checkpoint == 0) {
+                const QFileInfo target(output);
+                const QString path = target.absolutePath() + QLatin1Char('/') +
+                    target.completeBaseName() + QStringLiteral(".f%1.png").arg(frame + 1);
+                savePng(host.frame(), path);
+                std::fprintf(stderr, "checkpoint frame=%d video=%s\n", frame + 1,
+                    frameHash(host.frame()).constData());
+                std::uint64_t raw[80]{};
+                if (debug && debug(raw, 80)) {
+                    QJsonArray values;
+                    for (auto value : raw) values.append(QString::number(value, 16));
+                    std::fprintf(stderr, "debug %s\n",
+                        QJsonDocument(values).toJson(QJsonDocument::Compact).constData());
+                }
+            }
             const auto& pcm = host.audio();
             if (!pcm.isEmpty()) {
                 ++audioChunks; audioBytes += pcm.size();
@@ -238,6 +307,13 @@ int main(int argc, char** argv) {
             }
         }
         const double elapsedMs = clock.nsecsElapsed() / 1.0e6;
+        if (!saveRawState.isEmpty()) {
+            const QByteArray raw = host.serialize();
+            QSaveFile file(saveRawState);
+            require(!raw.isEmpty() && file.open(QIODevice::WriteOnly) &&
+                    file.write(raw) == raw.size() && file.commit(),
+                    QStringLiteral("Could not save diagnostic state."));
+        }
         const unsigned benchmarkFeatures = features ? features() : 0;
         using Stats = int (*)(std::uint64_t*, size_t);
         const auto stats = reinterpret_cast<Stats>(diagnostics.resolve("retro_kegarefusion_core_stats"));
@@ -266,7 +342,8 @@ int main(int argc, char** argv) {
             {"bios_32x_imported", labels(x32Imported)}, {"bios_cd_imported", labels(cdImported)},
             {"input", input == Input::Play ? "start_pulses_120_123_240_243_480_483_abc_600_603_720_723" :
                       input == Input::StartPulses ? "start_pulses_120_123_240_243_480_483" : "none"},
-            {"filter", filter}, {"state_checks", stateChecks}, {"reset_checks", resetChecks},
+            {"filter", filter}, {"checkpoint_interval", checkpoint}, {"extra_start_frame", extraStart}, {"extra_play_frame", extraPlay},
+            {"rewind_recording", recordRewind}, {"rewind_bytes", qint64(history.bytesUsed())}, {"state_checks", stateChecks}, {"reset_checks", resetChecks},
             {"frames_requested", frames}, {"frames_run", frames},
             {"load_ms", loadMs}, {"elapsed_ms", elapsedMs},
             {"emulated_frames_per_second", elapsedMs > 0 ? frames * 1000.0 / elapsedMs : 0.0},

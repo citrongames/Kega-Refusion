@@ -32,6 +32,7 @@ public:
     void loadState(int slot);
     void setButton(unsigned port, unsigned id, bool pressed);
     void setButtons(unsigned port, unsigned mask);
+    void setControllerConnected(unsigned port, bool connected);
     void releaseButtons();
     void setFastForward(bool enabled);
     void setFastForwardFactor(int factor);
@@ -59,7 +60,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Save, Restore, Slots, Disc, DiscIndex, Eject };
+    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Port, Save, Restore, Slots, Disc, DiscIndex, Eject };
     struct Command {
         Type type;
         QString path;

@@ -49,6 +49,10 @@ public:
     bool flushSaveRam(QString& error);
     bool pollSaveRam(qint64 nowMs, QString& error);
     void setButtons(unsigned port, unsigned mask);
+    // Virtual console ports, independent of physical input device selection.
+    // Configuration survives unload/load. Returns true only for a change.
+    bool setControllerConnected(unsigned port, bool connected);
+    bool controllerConnected(unsigned port) const;
     bool loaded() const { return loaded_; }
     double fps() const { return av_.timing.fps; }
     int sampleRate() const { return int(av_.timing.sample_rate); }
@@ -64,6 +68,7 @@ private:
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
+    void applyControllerPorts(bool force = false);
     bool loadCd(const QString& path, QString& error);
     bool checkDiscBios(const DiscImage& image, QString& error) const;
     bool registerDiscs(QString& error);
@@ -94,6 +99,8 @@ private:
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     std::array<unsigned,2> buttons_{};
+    std::array<bool,2> controllerConnected_{{true,false}};
+    std::array<unsigned,2> controllerDevices_{{~0u,~0u}};
     std::array<size_t,2> saveMemorySizes_{};
     BatterySave batterySave_;
     retro_system_av_info av_{};

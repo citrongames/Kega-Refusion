@@ -195,6 +195,7 @@ void kega32x_machine_write(Kega32xMachine *m,unsigned c,uint32_t address,uint32_
         else {kega32x_bus_write16(&m->bus,c,off,(uint16_t)(value>>16),t);kega32x_bus_write16(&m->bus,c,off+2,(uint16_t)value,t);}
         break;
     case 0x04000000:
+        kega32x_fb_sync(&m->bus,t);
         if(size==1)kega32x_fb_write8(&m->bus,a,(uint8_t)value);
         else if(size==2)kega32x_fb_write16(&m->bus,a,(uint16_t)value);
         else {kega32x_fb_write16(&m->bus,a,(uint16_t)(value>>16));kega32x_fb_write16(&m->bus,a+2,(uint16_t)value);}

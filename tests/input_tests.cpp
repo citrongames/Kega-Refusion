@@ -66,6 +66,57 @@ struct VirtualPad {
     }
 };
 
+void testConnectedPorts() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "connection settings directory");
+    const QString path=temp.filePath("settings.ini");
+    {
+        QSettings legacy(path,QSettings::IniFormat);
+        legacy.setValue("input/md/player2/device","none");
+        legacy.setValue("input/md/player2/key/0",Qt::Key_Q);
+    }
+    InputManager manager(path);
+    for (auto profile : {ConsoleProfile::MegaDrive,ConsoleProfile::MasterSystem,
+                         ConsoleProfile::GameGear,ConsoleProfile::SG1000}) {
+        require(manager.mapping(profile,0).connected && !manager.mapping(profile,1).connected,
+                "absent connection settings did not default to P1 only");
+    }
+    require(manager.isConnected(0) && !manager.isConnected(1),"initial connection query");
+    unsigned mask=0;int connections=0;
+    QObject::connect(&manager,&InputManager::maskChanged,&manager,
+                     [&](unsigned p,unsigned value){if(p==0)mask=value;});
+    QObject::connect(&manager,&InputManager::connectionChanged,&manager,
+                     [&](unsigned,bool){++connections;});
+    auto first=manager.mapping(ConsoleProfile::MegaDrive,0);
+    first.deviceKey="none";first.pad[0]={PadBinding::Button,7,0};
+    manager.setMapping(ConsoleProfile::MegaDrive,0,first);
+    require(manager.keyEvent(Qt::Key_X,true) && mask==1,"physical none disabled keyboard input");
+    first.connected=false;manager.setMapping(ConsoleProfile::MegaDrive,0,first);
+    require(!manager.isConnected(0) && mask==0,"disconnected virtual port left gameplay input held");
+    first.connected=true;manager.setMapping(ConsoleProfile::MegaDrive,0,first);
+    require(manager.isConnected(0) && mask==1,"reconnect did not retain keyboard binding");
+    manager.releaseKeyboard();
+    auto second=manager.mapping(ConsoleProfile::MegaDrive,1);
+    second.connected=true;manager.setMapping(ConsoleProfile::MegaDrive,1,second);
+    auto sms=manager.mapping(ConsoleProfile::MasterSystem,0);sms.connected=false;
+    const int before=connections;
+    manager.setMapping(ConsoleProfile::MasterSystem,0,sms);
+    require(connections==before,"inactive profile changed live ports");
+    manager.setProfile(ConsoleProfile::MasterSystem);
+    require(connections==before+2 && !manager.isConnected(0) && !manager.isConnected(1),
+            "profile switch did not publish both port connections");
+    InputManager reopened(path);
+    require(reopened.mapping(ConsoleProfile::MegaDrive,0).connected &&
+            reopened.mapping(ConsoleProfile::MegaDrive,1).connected &&
+            !reopened.mapping(ConsoleProfile::MasterSystem,0).connected,
+            "per-profile connection settings were not persisted");
+    const auto preserved=reopened.mapping(ConsoleProfile::MegaDrive,0);
+    require(preserved.deviceKey=="none" && preserved.keyboard.value(0)==Qt::Key_X &&
+            preserved.pad.value(0)==PadBinding{PadBinding::Button,7,0} &&
+            reopened.mapping(ConsoleProfile::MegaDrive,1).keyboard.value(0)==Qt::Key_Q,
+            "connection changes lost existing device/key/pad bindings");
+}
+
 void testInput() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create settings directory");
@@ -124,6 +175,9 @@ void testInput() {
                     manager.mapping(ConsoleProfile::MegaDrive, 1).deviceKey == "auto",
                 "auto assignment test did not use automatic device selection");
     }
+    auto enabledSecond = manager.mapping(ConsoleProfile::MegaDrive, 1);
+    enabledSecond.connected = true;
+    manager.setMapping(ConsoleProfile::MegaDrive, 1, enabledSecond);
     second.button(1, true);
     manager.poll();
     require(masks[1] & (1u << 8), "second joystick did not control player two");
@@ -677,6 +731,10 @@ void testUnknownRawJoystick() {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
+        testConnectedPorts();
+        if (argc==2 && QString::fromLocal8Bit(argv[1])==QLatin1String("--connections")) {
+            std::puts("input port defaults, migration, persistence and keyboard separation passed");return 0;
+        }
         testInput();
         testSequentialAxisCapture();
         testRewindCommand();
