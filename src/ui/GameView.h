@@ -34,6 +34,7 @@ public:
     void showStateSlots(int selected, unsigned occupiedMask, int durationMs = 2000);
     void setOsdEnabled(bool enabled);
     void setPausedStatus(bool paused);
+    void setMutedStatus(bool muted);
     void setFastForwardStatus(bool enabled);
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
@@ -81,6 +82,7 @@ private:
     bool integerScaling_ = false;
     bool osdEnabled_ = true;
     bool paused_ = false;
+    bool muted_ = false;
     bool fastForward_ = false;
     int fastForwardFactor_ = 4;
     bool rewinding_ = false;

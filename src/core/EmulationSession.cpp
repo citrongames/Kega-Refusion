@@ -155,16 +155,10 @@ void EmulationSession::run() {
                 break;
             }
             case Type::Checksum:
-                if (host.setAutoFixChecksum(command.value != 0,error)) {
-                    if (host.loaded() && !host.isCd()) {
-                        if (host.hardReset(error)) {
-                            clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
-                            emit actionCompleted(command.value ? QStringLiteral("Исправление суммы: включено")
-                                                               : QStringLiteral("Исправление суммы: выключено"));
-                        } else emit errorOccurred(error);
-                        loaded_.store(host.loaded()); discStatus();
-                    }
-                } else emit errorOccurred(error);
+                // Update the policy only. load() and an explicit hard reset
+                // rebuild the in-memory ROM with this setting.
+                if (!host.setAutoFixChecksum(command.value != 0,error))
+                    emit errorOccurred(error);
                 break;
             case Type::Region:
             case Type::Filter:

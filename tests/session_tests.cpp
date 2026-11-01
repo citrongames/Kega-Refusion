@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QDir>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QtEndian>
@@ -17,7 +18,8 @@ int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  try {
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
- require(argc==2 || fastOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
+ require(argc==2 || fastOnly || checksumOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  const auto path=temp.filePath("original.md");QFile file(path);require(file.open(QIODevice::WriteOnly) && file.write(rom)==rom.size(),"ROM fixture");file.close();
@@ -29,6 +31,31 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(checksumOnly){
+  session.setPaused(true);waitFor([&]{return paused;});
+  std::atomic<int> audioResets{0};
+  QObject::connect(&session,&EmulationSession::audioReset,&app,[&]{++audioResets;},Qt::DirectConnection);
+  session.saveState(0);waitFor([&]{return actions==1;});
+  const QDir states(temp.path()+"/states");
+  const auto files=states.entryList({"*.slot0.krs"},QDir::Files);
+  require(files.size()==1,"checksum test state missing");
+  auto readState=[&]{QFile state(states.filePath(files.first()));require(state.open(QIODevice::ReadOnly),"state read failed");return state.readAll();};
+  const QByteArray original=readState();const int frozen=frames;
+  for(bool enabled:{true,false}){
+   const int completed=actions;
+   session.setAutoFixChecksum(enabled);session.saveState(0);
+   waitFor([&]{return actions>=completed+1;});
+   require(errors==0 && audioResets==0 && frames==frozen && paused,
+           "checksum toggle disturbed the running session");
+   require(readState()==original,"checksum toggle changed the game state");
+  }
+  session.setAutoFixChecksum(true);const int completed=actions;
+  session.hardResetGame();waitFor([&]{return actions>=completed+1;});
+  require(audioResets>0 && errors==0,"explicit hard reset no longer works");
+  session.shutdown();
+  std::puts("Checksum toggles preserve exact paused state; explicit hard reset passed");
+  return 0;
+ }
  if(fastOnly){
   std::atomic<bool> reversed{false};
   QObject::connect(&session,&EmulationSession::rewindingChanged,&app,[&](bool value){reversed=value;},Qt::DirectConnection);

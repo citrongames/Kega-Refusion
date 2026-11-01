@@ -285,9 +285,8 @@ void MainWindow::buildMenus() {
     checksumAction->setObjectName(QStringLiteral("autoFixChecksum"));
     checksumAction->setCheckable(true);
     checksumAction->setChecked(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
-    checksumAction->setToolTip(QStringLiteral("Для Mega Drive/Genesis. Исправляется копия в памяти; текущая игра будет перезапущена."));
+    checksumAction->setToolTip(QStringLiteral("Для Mega Drive/Genesis. Исправляется копия в памяти; применится при следующей загрузке игры или хард-ресете."));
     connect(checksumAction, &QAction::toggled, this, [this](bool enabled) {
-        releaseInput();
         settings_.setValue(QStringLiteral("emulation/autoFixChecksum"), enabled);
         session_.setAutoFixChecksum(enabled);
     });
@@ -464,8 +463,10 @@ void MainWindow::buildMenus() {
     muteAction_->setChecked(settings_.value(QStringLiteral("audio/muted"), false).toBool());
     shortcut(muteAction_);
     audio_->setMuted(muteAction_->isChecked());
+    view_->setMutedStatus(muteAction_->isChecked());
     connect(muteAction_, &QAction::toggled, this, [this](bool muted) {
         audio_->setMuted(muted);
+        view_->setMutedStatus(muted);
         settings_.setValue(QStringLiteral("audio/muted"), muted);
     });
     QWidget* volumePanel = new QWidget(soundMenu);

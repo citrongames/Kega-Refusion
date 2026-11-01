@@ -274,6 +274,24 @@ void testStateSlots() {
     }
 }
 
+void testMuteStatus() {
+    GameView view;
+    prepare(view);
+    const QImage baseline = render(view);
+    view.setMutedStatus(true);
+    const QImage muted = render(view);
+    require(muted != baseline, "mute status did not render");
+    const QRect bounds = changedBounds(baseline, muted);
+    require(bounds.left() < 30 && bounds.top() < 30 && bounds.bottom() < 100,
+            "mute status is not at the upper left");
+    view.setOsdEnabled(false);
+    require(render(view) == baseline, "disabled OSD still shows mute");
+    view.setOsdEnabled(true);
+    require(render(view) == muted, "active mute was not restored");
+    view.setMutedStatus(false);
+    require(render(view) == baseline, "unmuting left a notification");
+}
+
 void testGlobalToggle() {
     GameView view;
     prepare(view);
@@ -351,6 +369,11 @@ void testStateSlotExpiry() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--mute-only"))) {
+            testMuteStatus();
+            std::puts("mute OSD passed"); return 0;
+        }
+        testMuteStatus();
         if (app.arguments().contains(QStringLiteral("--aspect-only"))) {
             testFilteredSquarePixels();
             std::puts("filtered square-pixel geometry passed"); return 0;

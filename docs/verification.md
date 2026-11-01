@@ -1,4 +1,4 @@
-# Verification — version 0.5.1 — 2026-11-01
+# Verification — version 0.5.2 — 2026-11-01
 
 ## Environment
 
@@ -144,3 +144,11 @@ Current evidence retained only: linux-0.4.0.log, windows-0.4.0.log, native-tests
 - The same native full-window probe after the fix produced ~59–60 GUI deliveries and swaps per second after startup; no recurring audio reset stalls. Evidence: build/verification/fps-before-0.5.1.log, fps-trace-0.5.1.log and fps-fixed-0.5.1.log. The diagnostic CLI --performance-check reports produced, delivered and displayed frames over ten seconds without changing ordinary startup behavior.
 - The startup plus target is now 304x248 logical pixels, twice the previous width and height. Removed all hover cursor changes and mouse tracking; clicking still opens the shared dialog only while no game is loaded.
 - Windows and Linux builds and the two focused audio queue/output tests passed. The producer burst regression now requires exactly three stream invalidations (two format changes and explicit clear), despite 20,000 queued chunks. The deployed executable with sound enabled sustained ~59–60 swaps/s; fps-deployed-0.5.1.log. Built/deployed executable SHA-256 matched. No unrelated suites were rerun. Temporary probe data and duplicate package staging were removed; user settings/saves and incremental builds were preserved.
+
+
+## 0.5.2 — deferred checksum policy and mute status — 2026-11-01
+
+- Checksum toggling updates only the host policy. It no longer releases held input, reloads content, clears rewind/audio, resets pacing, or reports a completed fix. A subsequent game load or explicit hard reset rebuilds the in-memory cartridge using the new policy.
+- Focused real-core session checks passed on Windows and Linux: toggling both directions while paused preserved byte-identical quick-state files, frame count and pause state, emitted no audio resets, and explicit hard reset still worked. Only the checksum-specific session mode was run.
+- Mute is an active upper-left OSD status, including a persisted mute setting. Unmuting removes it without a resume message; disabling OSD hides it. Focused rendered-image checks passed on Windows and Linux. The initial Windows test launcher incorrectly requested an unavailable offscreen plugin; it was corrected to use the installed windows plugin.
+- Windows and Linux applications built successfully. No unrelated regression suites were repeated.

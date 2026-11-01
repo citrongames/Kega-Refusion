@@ -227,6 +227,12 @@ void GameView::setOsdEnabled(bool enabled) {
     repaintView();
 }
 
+void GameView::setMutedStatus(bool muted) {
+    if (muted_ == muted) return;
+    muted_ = muted;
+    repaintView();
+}
+
 void GameView::setPausedStatus(bool paused) {
     if (paused_ == paused) return;
     paused_ = paused;
@@ -269,7 +275,7 @@ void GameView::expireOsd() {
 
 void GameView::paintOsd(QPainter& painter) {
     if (!osdEnabled_ || (notices_.isEmpty() && !stateSlots_.expiresAt &&
-                         !paused_ && !fastForward_ && !rewinding_)) return;
+                         !paused_ && !fastForward_ && !rewinding_ && !muted_)) return;
     QFont osd(osdFamily_);
     osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);
     osd.setStyleStrategy(QFont::NoAntialias);
@@ -309,6 +315,8 @@ void GameView::paintOsd(QPainter& painter) {
                        margin, y, true) + 4;
     if (rewinding_)
         y += drawPanel({QStringLiteral("ПЕРЕМОТКА НАЗАД")}, margin, y, true) + 4;
+    if (muted_)
+        y += drawPanel({QStringLiteral("ЗВУК ВЫКЛЮЧЕН")}, margin, y, true) + 4;
     if (stateSlots_.expiresAt) {
         // Ten compact cells, as in FCEUX: filled occupied slots and a selected outline.
         // Keep the row inside narrow windows even when their height requests a large font.
