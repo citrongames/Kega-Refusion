@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QLibrary>
 #include <QString>
+#include <QList>
 #include <map>
 #include <array>
 #include <functional>
@@ -18,6 +19,13 @@ public:
     void unload();
     void runFrame();
     void reset();
+    bool hardReset(QString& error);
+    // Region: 0 Auto, 1 Japan, 2 USA, 3 Europe. Filter: 0 Off, 1 Mono,
+    // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
+    bool setRegion(int region, QString& error);
+    bool setBlarggFilter(int filter, QString& error);
+    // Applies to the core's ROM copy at load/power cycle, never to source bytes.
+    bool setAutoFixChecksum(bool enabled, QString& error);
     bool saveState(int slot, QString& error);
     enum class StateLoadError { None, Missing, Failed };
     bool loadState(int slot, QString& error, StateLoadError* failure = nullptr);
@@ -40,6 +48,8 @@ public:
 private:
     struct Api;
     bool initialize(QString& error);
+    void prepareCoreContent();
+    bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error);
     QString statePath(int slot) const;
     bool restoreSaveRam(QString& error);
     static bool environment(unsigned command, void* data);
@@ -52,11 +62,13 @@ private:
     QLibrary library_;
     std::unique_ptr<Api> api_;
     QString dataPath_, gamePath_, gameKey_, contentName_;
-    QByteArray systemPath_, savePath_, content_, encodedGamePath_, romHash_, coreHash_;
+    QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_;
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};
     bool contentInfoActive_ = false;
-    std::map<QByteArray,QByteArray> variables_;
+    std::map<QByteArray,QByteArray> variables_, optionOverrides_;
+    std::map<QByteArray,QList<QByteArray>> variableValues_;
+    bool variablesUpdated_ = false, autoFixChecksum_ = false;
     std::array<unsigned,2> buttons_{};
     std::array<size_t,2> saveMemorySizes_{};
     retro_system_av_info av_{};

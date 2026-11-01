@@ -1,6 +1,7 @@
 #include "EmulationSession.h"
 #include "LibretroHost.h"
 #include "RewindBuffer.h"
+#include "FramePacer.h"
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -15,6 +16,33 @@ void EmulationSession::enqueue(Command command) {
 void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue({Type::Load,path,archiveIndex}); }
 void EmulationSession::setPaused(bool paused) { enqueue({Type::Pause,{},paused ? 1 : 0}); }
 void EmulationSession::resetGame() { enqueue({Type::Reset,{}}); }
+void EmulationSession::hardResetGame() { enqueue({Type::HardReset,{}}); }
+void EmulationSession::setRegion(int region) { enqueue({Type::Region,{},region}); }
+void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
+void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
+void EmulationSession::updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available) {
+    audioQueueUs_.store(queuedUsecs); audioTargetUs_.store(targetUsecs);
+    audioClockAvailable_.store(available);
+    audioFeedbackNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+void EmulationSession::publishVideo(const QImage& frame, double aspectRatio) {
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(videoMutex_);
+        latestFrame_ = frame; latestAspect_ = aspectRatio;
+        if (!videoPending_) { videoPending_ = true; notify = true; }
+    }
+    if (notify) emit videoFrameReady();
+    // Kept for instrumentation; the application uses the coalesced ready signal.
+    emit videoFrame(frame,aspectRatio);
+}
+bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio) {
+    std::lock_guard<std::mutex> lock(videoMutex_);
+    if (!videoPending_) return false;
+    frame = latestFrame_; aspectRatio = latestAspect_; videoPending_ = false;
+    return !frame.isNull();
+}
 void EmulationSession::saveState(int slot) { enqueue({Type::Save,{},slot}); }
 void EmulationSession::loadState(int slot) { enqueue({Type::Restore,{},slot}); }
 void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
@@ -48,8 +76,13 @@ void EmulationSession::run() {
     auto rewindStatus = [&](bool enabled) {
         if (rewinding != enabled) { rewinding = enabled; emit rewindingChanged(enabled); }
     };
-    auto deadline = Clock::now();
-    auto lastFlush = deadline;
+    auto nowNs = [] { return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(); };
+    FramePacer pacer;
+    FrameWaiter waiter;
+    pacer.reset(nowNs());
+    auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
+    auto lastFlush = Clock::now();
+    bool optionsPending = false, fastLatched = false;
     unsigned fastFrame = 0;
     while (!quitting_.load()) {
         std::deque<Command> pending;
@@ -61,10 +94,11 @@ void EmulationSession::run() {
                 if (host.load(command.path,error,command.value)) {
                     loaded_.store(true); releaseButtons(); paused = false;
                     rewind_.store(false); rewindStatus(false); clearHistory();
-                    emit audioReset();
+                    clearAudio();
                     emit gameLoaded(host.gamePath(),host.fps(),host.contentName());
                     emit stateSlotsChanged(-1,host.occupiedStateSlots());
                     emit pausedChanged(false);
+                    pacer.reset(nowNs());
                 } else {
                     if (!host.loaded()) { clearHistory(); rewindStatus(false); }
                     emit errorOccurred(error);
@@ -73,14 +107,46 @@ void EmulationSession::run() {
                 break;
             case Type::Pause:
                 paused = command.value != 0;
-                emit audioReset();
+                clearAudio();
                 emit pausedChanged(paused);
+                pacer.reset(nowNs());
                 break;
             case Type::Reset:
                 if (host.loaded()) {
-                    host.reset(); clearHistory(); emit audioReset();
-                    emit actionCompleted(QStringLiteral("Сброс"));
+                    host.reset(); clearHistory(); clearAudio();
+                    emit actionCompleted(QStringLiteral("Мягкий сброс"));
+                    pacer.reset(nowNs());
                 }
+                break;
+            case Type::HardReset:
+                if (host.loaded()) {
+                    if (host.hardReset(error)) {
+                        clearHistory(); clearAudio(); rewindStatus(false);
+                        emit actionCompleted(QStringLiteral("Жёсткий сброс"));
+                        emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                        pacer.reset(nowNs());
+                    } else emit errorOccurred(error);
+                    loaded_.store(host.loaded());
+                }
+                break;
+            case Type::Checksum:
+                if (host.setAutoFixChecksum(command.value != 0,error)) {
+                    if (host.loaded()) {
+                        if (host.hardReset(error)) {
+                            clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
+                            emit actionCompleted(command.value ? QStringLiteral("Исправление суммы: включено")
+                                                               : QStringLiteral("Исправление суммы: выключено"));
+                        } else emit errorOccurred(error);
+                        loaded_.store(host.loaded());
+                    }
+                } else emit errorOccurred(error);
+                break;
+            case Type::Region:
+            case Type::Filter:
+                if (command.type == Type::Region ? host.setRegion(command.value,error)
+                                                 : host.setBlarggFilter(command.value,error)) {
+                    optionsPending = true; clearHistory(); clearAudio();
+                } else emit errorOccurred(error);
                 break;
             case Type::Save:
                 if (host.saveState(command.value,error)) {
@@ -91,8 +157,9 @@ void EmulationSession::run() {
             case Type::Restore: {
                 LibretroHost::StateLoadError failure;
                 if (host.loadState(command.value,error,&failure)) {
-                    clearHistory(); emit audioReset();
+                    clearHistory(); clearAudio();
                     emit actionCompleted(QStringLiteral("Загружено: слот %1").arg(command.value));
+                    pacer.reset(nowNs());
                 } else if (failure == LibretroHost::StateLoadError::Missing) {
                     emit actionNotice(error);
                 } else emit errorOccurred(error);
@@ -103,7 +170,6 @@ void EmulationSession::run() {
                 emit stateSlotsChanged(command.value,host.occupiedStateSlots());
                 break;
             }
-            deadline = Clock::now();
         }
         if (historySeconds != rewindSeconds_.load()) {
             historySeconds = rewindSeconds_.load(); clearHistory();
@@ -111,11 +177,11 @@ void EmulationSession::run() {
         const bool background = backgroundPaused_.load();
         const bool nowPaused = host.loaded() && (paused || background);
         if (nowPaused != effectivePaused) {
-            effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); emit audioReset();
+            effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); clearAudio(); pacer.reset(nowNs());
         }
-        const bool reverse = rewind_.load() && historySeconds > 0 && host.loaded() && !background;
+        const bool reverse = rewind_.load() && historySeconds > 0 && host.loaded() && !background && !optionsPending;
         if (reverse != rewindLatched) {
-            rewindLatched = reverse; emit audioReset(); deadline = Clock::now();
+            rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
             if (!reverse) rewindStatus(false);
         }
         if (reverse) {
@@ -124,22 +190,23 @@ void EmulationSession::run() {
             double aspect = 4.0 / 3.0;
             if (history.stepBack(state,frame,aspect)) {
                 if (host.restoreRewindState(state)) {
-                    captureFrame = 0; rewindStatus(true); emit videoFrame(frame,aspect);
+                    captureFrame = 0; rewindStatus(true); publishVideo(frame,aspect);
                 } else {
                     clearHistory(); historyHealthy = false; rewindStatus(false);
                     emit errorOccurred(QStringLiteral("Ядро отклонило состояние перемотки. История очищена."));
                 }
             } else rewindStatus(false);
             // Hold at the oldest checkpoint rather than inadvertently running forward.
-            deadline += std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(2.0 / host.fps()));
-            const auto now = Clock::now();
-            if (now - deadline > std::chrono::milliseconds(100)) deadline = now;
-            std::this_thread::sleep_until(deadline);
+            const auto deadline = pacer.next(nowNs(),qint64(2000000000.0 / host.fps()));
+            waiter.waitUntil(deadline);
             continue;
         }
         if (!host.loaded() || nowPaused) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
         for (unsigned port = 0; port < 2; ++port) host.setButtons(port,buttons_[port].load());
         host.runFrame();
+        if (optionsPending) {
+            optionsPending = false; clearHistory(); clearAudio(); pacer.reset(nowNs());
+        }
         if (historySeconds && historyHealthy && ++captureFrame % 2 == 0) {
             if (!history.capture(host.captureRewindState(),host.frame(),host.aspectRatio())) {
                 history.clear(); historyHealthy = false;
@@ -147,8 +214,9 @@ void EmulationSession::run() {
             }
         }
         const bool fast = fastForward_.load();
+        if (fast != fastLatched) { fastLatched = fast; clearAudio(); pacer.reset(nowNs()); }
         const int factor = fast ? fastForwardFactor_.load() : 1;
-        if (!fast || (++fastFrame % unsigned(factor) == 0)) emit videoFrame(host.frame(),host.aspectRatio());
+        if (!fast || (++fastFrame % unsigned(factor) == 0)) publishVideo(host.frame(),host.aspectRatio());
         if (!fast && !host.audio().isEmpty()) emit audioSamples(host.audio(),host.sampleRate());
         const auto now = Clock::now();
         if (now - lastFlush > std::chrono::seconds(5)) {
@@ -156,10 +224,10 @@ void EmulationSession::run() {
             if (!host.flushSaveRam(error)) emit notification(error);
             lastFlush = now;
         }
-        const auto frameTime = std::chrono::duration<double>(1.0 / (host.fps() * factor));
-        deadline += std::chrono::duration_cast<Clock::duration>(frameTime);
-        if (now - deadline > std::chrono::milliseconds(100)) deadline = now;
-        std::this_thread::sleep_until(deadline);
+        const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
+            audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
+        const auto deadline = pacer.next(nowNs(),qint64(1000000000.0 * clockScale / (host.fps() * factor)));
+        waiter.waitUntil(deadline);
     }
     host.unload();
     loaded_.store(false);

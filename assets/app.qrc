@@ -1,4 +1,5 @@
 <RCC>
   <qresource prefix="/fonts"><file alias="osd.ttf">fonts/PressStart2P-Regular.ttf</file></qresource>
   <qresource prefix="/icons"><file alias="app.png">app.png</file></qresource>
+  <qresource prefix="/shaders"><file alias="gdapt.glslp">shaders/gdapt.glslp</file><file alias="shaders/gdapt/gdapt-pass0.glsl">shaders/shaders/gdapt/gdapt-pass0.glsl</file><file alias="shaders/gdapt/gdapt-pass1.glsl">shaders/shaders/gdapt/gdapt-pass1.glsl</file></qresource>
 </RCC>

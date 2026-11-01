@@ -15,6 +15,12 @@ public:
     void loadGame(const QString& path, int archiveIndex = -1);
     void setPaused(bool paused);
     void resetGame();
+    void hardResetGame();
+    void setRegion(int region);
+    void setBlarggFilter(int filter);
+    void setAutoFixChecksum(bool enabled);
+    void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
+    bool takeVideoFrame(QImage& frame, double& aspectRatio);
     void saveState(int slot);
     void loadState(int slot);
     void setButton(unsigned port, unsigned id, bool pressed);
@@ -29,6 +35,7 @@ public:
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
@@ -44,11 +51,17 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, Save, Restore, Slots };
+    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Save, Restore, Slots };
     struct Command { Type type; QString path; int value = 0; };
     void enqueue(Command command);
+    void publishVideo(const QImage& frame, double aspectRatio);
     QString corePath_, dataPath_;
-    std::mutex mutex_;
+    std::mutex mutex_, videoMutex_;
+    QImage latestFrame_;
+    double latestAspect_ = 4.0 / 3.0;
+    bool videoPending_ = false;
+    std::atomic<qint64> audioQueueUs_{0}, audioTargetUs_{0}, audioFeedbackNs_{0};
+    std::atomic<bool> audioClockAvailable_{false};
     std::deque<Command> commands_;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};

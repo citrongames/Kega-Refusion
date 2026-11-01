@@ -60,6 +60,8 @@ QByteArray makeTestRom() {
         rom[pc++] = char(value >> 8);
         rom[pc++] = char(value & 0xff);
     };
+    // MOVE.W #$8004, ($C00004).L: enable colour palette output.
+    word(0x33fc); word(0x8004); word(0x00c0); word(0x0004);
     // MOVE.W #$8144, ($C00004).L: enable the VDP display.
     word(0x33fc); word(0x8144); word(0x00c0); word(0x0004);
     // MOVE.W #$8700, ($C00004).L: backdrop uses CRAM colour zero.
@@ -109,6 +111,89 @@ QByteArray makeSaveRamRom() {
     rom[0x306] = char(0x00); rom[0x307] = char(0x00);
     rom.replace(0x308, oldProgram.size(), oldProgram);
     return rom;
+}
+
+// Static original diagnostic: region register or a high-frequency red/blue tile.
+QByteArray makeDiagnosticRom(bool region, bool bootCounter = false) {
+    auto rom = makeTestRom();
+    int pc = 0x200;
+    const auto word = [&](quint16 value) { rom[pc++] = char(value >> 8); rom[pc++] = char(value); };
+    const auto reg = [&](quint16 value) { word(0x33fc); word(value); word(0x00c0); word(4); };
+    const auto command = [&](quint32 value) {
+        word(0x23fc); word(quint16(value >> 16)); word(quint16(value)); word(0x00c0); word(4);
+    };
+    const auto colour = [&](quint16 value) { word(0x33fc); word(value); word(0x00c0); word(0); };
+    reg(0x8004); reg(0x8144); reg(0x8700);
+    if (!region && !bootCounter) { reg(0x8f02); reg(0x8230); reg(0x8407); reg(0x8c81); }
+    if (bootCounter) {
+        word(0x3039); word(0x00ff); word(0); // MOVE.W work RAM,D0
+        word(0x5440);                      // ADDQ.W #2,D0
+        word(0x33c0); word(0x00ff); word(0);
+        command(0xc0000000); word(0x33c0); word(0x00c0); word(0);
+        word(0x60fe);
+    } else if (region) {
+        const int loop = pc;
+        word(0x1039); word(0x00a1); word(1); // MOVE.B region register,D0
+        word(0x0240); word(0x00c0);          // ANDI.W #$C0,D0
+        word(0xe848);                        // LSR.W #4,D0
+        command(0xc0000000); word(0x33c0); word(0x00c0); word(0);
+        const int branch = pc; word(0x6000);
+        rom[branch + 1] = char(loop - (branch + 2));
+    } else {
+        command(0xc0000000); colour(0); colour(0x000e); colour(0x0e00);
+        command(0x40000000); // VRAM tile zero, alternating palette entries 1/2.
+        for (int row = 0; row < 8; ++row) {
+            word(0x23fc); word(0x1212); word(0x1212); word(0x00c0); word(0);
+        }
+        word(0x60fe);
+    }
+    return rom;
+}
+
+QByteArray makeChecksumRom() {
+    auto rom = makeTestRom();
+    int pc = 0x200;
+    const auto word = [&](quint16 value) { rom[pc++] = char(value >> 8); rom[pc++] = char(value); };
+    const auto reg = [&](quint16 value) { word(0x33fc); word(value); word(0x00c0); word(4); };
+    word(0x7000); // MOVEQ #0,D0: running checksum.
+    word(0x207c); word(0); word(0x0200); // MOVEA.L #$200,A0.
+    word(0x323c); word(quint16((rom.size()-0x200)/2-1));
+    const int loop = pc;
+    word(0xd058); // ADD.W (A0)+,D0.
+    const int dbra = pc; word(0x51c9); word(quint16(loop-(dbra+2)));
+    word(0x3439); word(0); word(0x018e); // MOVE.W header checksum,D2.
+    word(0xb042); // CMP.W D2,D0.
+    const int equal = pc; word(0x6700);
+    word(0x303c); word(0x000e); // Failure: red.
+    const int finish = pc; word(0x6000);
+    const int success = pc;
+    word(0x303c); word(0x00e0); // Success: green.
+    const int display = pc;
+    reg(0x8004); reg(0x8144); reg(0x8700);
+    word(0x23fc); word(0xc000); word(0); word(0x00c0); word(4);
+    word(0x33c0); word(0x00c0); word(0); word(0x60fe);
+    rom[equal+1] = char(success-(equal+2));
+    rom[finish+1] = char(display-(finish+2));
+    quint16 checksum = 0;
+    for (int i = 0x200; i < rom.size(); i += 2)
+        checksum = quint16(checksum + (quint16(quint8(rom[i])) << 8) + quint8(rom[i+1]));
+    checksum ^= 0xffff; // Deliberately incorrect header; program verifies the entire ROM.
+    rom[0x18e] = char(checksum >> 8); rom[0x18f] = char(checksum);
+    return rom;
+}
+
+QByteArray swappedRom(QByteArray rom) {
+    for (qsizetype i = 0; i < rom.size(); i += 2) std::swap(rom[i],rom[i+1]);
+    return rom;
+}
+QByteArray smdRom(const QByteArray& rom) {
+    QByteArray result(rom.size()+512, char(0));
+    for (qsizetype offset = 0; offset < rom.size(); offset += 0x4000)
+        for (qsizetype i = 0; i < 0x2000; ++i) {
+            result[512+offset+i] = rom[offset+2*i+1];
+            result[512+offset+0x2000+i] = rom[offset+2*i];
+        }
+    return result;
 }
 
 QString stateFile(const QString& dataPath, const QByteArray& rom, int slot) {
@@ -179,6 +264,7 @@ void testCore(const QString& corePath) {
 
     std::vector<Output> firstPass;
     for (int i = 0; i < 5; ++i) firstPass.push_back(runAndCapture(host));
+    require(firstPass.front().frame != firstPass.back().frame, "diagnostic ROM video did not advance");
     require(host.serialize() != checkpoint, "emulation state did not advance");
     require(host.unserialize(checkpoint), "core rejected its own serialized state");
     for (const auto& expected : firstPass) {
@@ -373,6 +459,154 @@ void testArchiveCore(const QString& corePath) {
     host.runFrame(); require(!host.frame().isNull(),"selected archive member did not produce video");
 }
 
+void testCoreOptionsAndReset(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "options test temp failed");
+    const QString path = temp.path() + "/regions.md";
+    writeFile(path, makeDiagnosticRom(true));
+    LibretroHost host(corePath, temp.path() + "/data"); QString error;
+    require(!host.setRegion(-1, error) && !error.isEmpty(), "invalid region accepted");
+    require(!host.setBlarggFilter(5, error) && !error.isEmpty(), "invalid Blargg filter accepted");
+    require(host.setRegion(3, error), "preload PAL option rejected");
+    require(host.load(path, error), "region ROM did not load");
+    require(host.fps() > 49 && host.fps() < 51, "preload PAL option lost to core defaults");
+    QImage japan, usa, europe;
+    for (int region : {1, 2, 3, 0}) {
+        require(host.setRegion(region, error), "live region rejected");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        require(host.loaded() && host.gamePath() == path && host.contentName() == "regions.md",
+                "region change altered content identity");
+        const double expected = region == 3 ? 50 : 60;
+        require(std::abs(host.fps() - expected) < 1, "live region did not update frame timing");
+        if (region == 1) japan = host.frame();
+        if (region == 2) usa = host.frame();
+        if (region == 3) europe = host.frame();
+        if (!region) require(host.frame() == usa, "Auto did not restore ROM's USA region");
+    }
+    require(japan != usa && usa != europe && japan != europe,
+            "region register did not distinguish Japan, USA and Europe");
+    require(host.saveState(1, error), "NTSC state save failed");
+    require(host.setRegion(3, error), "PAL reselect failed");
+    host.runFrame();
+    require(host.loadState(1, error), "state rejected after region change");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    require(host.fps() > 49 && host.fps() < 51 && host.frame() == europe,
+            "old state overrode manually selected PAL timing or region register");
+
+    const QString pattern = temp.path() + "/pattern.md";
+    writeFile(pattern, makeDiagnosticRom(false));
+    require(host.setRegion(2, error) && host.load(pattern, error), "filter ROM load failed");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    const QImage raw = host.frame();
+    bool red = false, blue = false;
+    for (int x = 0; x < raw.width(); ++x) {
+        const QRgb pixel = raw.pixel(x, raw.height()/2);
+        red |= qRed(pixel) > qBlue(pixel) + 64;
+        blue |= qBlue(pixel) > qRed(pixel) + 64;
+    }
+    require(red && blue, "filter diagnostic did not produce alternating red/blue pixels");
+    std::vector<QImage> filtered;
+    for (int filter : {1, 2, 3, 4}) {
+        require(host.setBlarggFilter(filter, error), "live Blargg option rejected");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        const QImage image = host.frame();
+        require(image.width() > raw.width() && image.height() == raw.height(),
+                "Blargg did not change actual core output geometry");
+        require(image != raw, "Blargg did not change core video");
+        if (filter == 1) for (int x = 0; x < image.width(); ++x) {
+            const QRgb pixel = image.pixel(x, image.height()/2);
+            require(std::abs(qRed(pixel)-qGreen(pixel)) <= 8 && std::abs(qBlue(pixel)-qGreen(pixel)) <= 8,
+                    "Blargg monochrome output retained colour");
+        }
+        for (const auto& previous : filtered)
+            require(image != previous, "distinct Blargg presets produced identical diagnostic video");
+        filtered.push_back(image);
+    }
+    require(host.setBlarggFilter(0, error), "disable Blargg failed");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    require(host.frame() == raw, "disabling Blargg did not restore original pixels");
+    require(host.setBlarggFilter(2, error), "enable Blargg before reload failed");
+    require(host.hardReset(error), "hard reset with Blargg failed");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    require(host.frame() == filtered[1], "hard reset lost selected Blargg preset");
+
+    const QString boots = temp.path() + "/boots.md";
+    writeFile(boots, makeDiagnosticRom(false, true));
+    require(host.setBlarggFilter(0, error) && host.load(boots, error), "boot counter ROM load failed");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    const QImage cold = host.frame();
+    host.reset();
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    require(host.frame() != cold, "soft reset cleared work RAM boot counter");
+    require(QFile::remove(boots), "cannot remove loaded diagnostic ROM");
+    require(host.hardReset(error), "hard reset required original ROM file");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    require(host.frame() == cold && host.gamePath() == boots,
+            "hard reset did not clear volatile RAM or preserve content identity");
+
+    const QString multi = temp.path() + "/battery.zip";
+    const auto battery = makeSaveRamRom();
+    writeFile(multi, packedRom(false, battery, true));
+    require(host.load(multi, error, 1), "multi-member battery ROM did not load");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    require(host.flushSaveRam(error), "pre-reset battery flush failed");
+    const auto before = host.captureRewindState();
+    const QString selected = host.contentName();
+    require(host.hardReset(error), "archive battery hard reset failed");
+    const auto after = host.captureRewindState();
+    require(host.contentName() == selected && host.gamePath() == multi &&
+            selected == "folder/second.md", "hard reset selected wrong archive member");
+    require(before.right(0x10000) == after.right(0x10000), "hard reset lost SRAM bytes");
+    auto changedRom = battery; changedRom[0x125] = char(changedRom[0x125] ^ 1);
+    const auto key = QCryptographicHash::hash(changedRom, QCryptographicHash::Sha256).toHex();
+    const QString save = temp.path() + "/data/saves/" + QString::fromLatin1(key) + ".srm";
+    const QByteArray oversized(0x10001, char(0x55));
+    host.unload(); writeFile(save, oversized);
+    require(host.load(multi, error, 1) && host.hardReset(error), "protected SRAM hard reset failed");
+    require(readFile(save) == oversized, "hard reset overwrote rejected user SRAM");
+}
+
+void testChecksumFix(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "checksum test temp failed");
+    const auto rom = makeChecksumRom();
+    LibretroHost host(corePath,temp.path()+"/data"); QString error;
+    const std::vector<std::pair<QString,QByteArray>> cases{
+        {"checksum.md",rom}, {"checksum.smd",smdRom(rom)},
+        {"swapped.bin",swappedRom(rom)}, {"checksum.zip",packedRom(false,rom)}};
+    for (const auto& [name,original] : cases) {
+        const QString path = temp.path()+'/'+name;
+        writeFile(path,original);
+        require(host.setAutoFixChecksum(false,error) && host.load(path,error), "checksum fixture load failed");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        const auto bad = host.frame();
+        const QRgb badPixel = bad.pixel(bad.width()/2,bad.height()/2);
+        require(qRed(badPixel) > qGreen(badPixel)+64, "bad checksum diagnostic did not fail in red");
+        require(host.saveState(4,error), "checksum original-identity state save failed");
+        const auto source = name.endsWith(".zip") ? rom : original;
+        const QString slot = stateFile(temp.path()+"/data",source,4);
+        require(QFile::exists(slot), "state identity did not use original ROM bytes");
+        const QString identity = host.contentName();
+        require(host.setAutoFixChecksum(true,error) && host.hardReset(error), "checksum fix hard reset failed");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        const auto good = host.frame();
+        const QRgb goodPixel = good.pixel(good.width()/2,good.height()/2);
+        require(qGreen(goodPixel) > qRed(goodPixel)+64, "memory checksum fix did not pass cartridge self-check");
+        require(host.contentName() == identity && host.gamePath() == path && host.occupiedStateSlots() == (1u<<4),
+                "checksum fix changed selected content or original save identity");
+        require(readFile(path) == original, "checksum fix rewrote original ROM/archive file");
+        require(host.setAutoFixChecksum(false,error) && host.hardReset(error), "checksum fix disable failed");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        require(host.frame() == bad, "checksum fix disable did not restore unmodified in-memory content");
+        require(readFile(path) == original, "checksum fix disable rewrote source file");
+    }
+    // A BIN without a valid MD header must not be patched merely due to its extension.
+    QByteArray ambiguous = rom; ambiguous.replace(0x100,4,"TEST");
+    const QString path = temp.path()+"/ambiguous.bin"; writeFile(path,ambiguous);
+    require(host.setAutoFixChecksum(true,error) && host.load(path,error), "ambiguous BIN fixture load failed");
+    for (int i = 0; i < 8; ++i) host.runFrame();
+    const QRgb pixel = host.frame().pixel(host.frame().width()/2,host.frame().height()/2);
+    require(qRed(pixel) > qGreen(pixel)+64, "ambiguous non-MD header was modified");
+}
+
 void testRewind(const QString& corePath) {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create rewind test directory");
@@ -441,6 +675,8 @@ int main(int argc, char** argv) {
         testSaveRam(QString::fromLocal8Bit(argv[1]));
         testRewind(QString::fromLocal8Bit(argv[1]));
         testArchiveCore(QString::fromLocal8Bit(argv[1]));
+        testCoreOptionsAndReset(QString::fromLocal8Bit(argv[1]));
+        testChecksumFix(QString::fromLocal8Bit(argv[1]));
         std::puts("core integration tests passed");
         return 0;
     } catch (const std::exception& exception) {

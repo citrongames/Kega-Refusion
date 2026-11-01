@@ -13,7 +13,7 @@
 
 namespace {
 constexpr int playerCount = 2;
-constexpr int targetCount = RewindCommand + 1;
+constexpr int targetCount = HardResetCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
 
@@ -526,7 +526,8 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
     case FastForwardCommand: return QStringLiteral("Ускорение");
     case SaveCommand: return QStringLiteral("Сохранить состояние");
     case LoadCommand: return QStringLiteral("Загрузить состояние");
-    case ResetCommand: return QStringLiteral("Перезапуск");
+    case ResetCommand: return QStringLiteral("Мягкий сброс");
+    case HardResetCommand: return QStringLiteral("Жёсткий сброс");
     case FullscreenCommand: return QStringLiteral("Полный экран");
     case MuteCommand: return QStringLiteral("Без звука");
     case NextSlotCommand: return QStringLiteral("Следующий слот");

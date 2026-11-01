@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
         if (!screenshotPath.isEmpty()) {
             QTimer::singleShot(2000, &window, [&] {
                 if (!QDir().mkpath(QFileInfo(screenshotPath).absolutePath()) ||
-                    !window.grab().save(screenshotPath)) {
+                    !static_cast<GameView*>(window.centralWidget())->captureImage().save(screenshotPath)) {
                     screenshotError = true;
                     qCritical("Could not save smoke-test screenshot");
                 }

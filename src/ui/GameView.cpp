@@ -3,6 +3,13 @@
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QPainter>
+#include <QGuiApplication>
+#include <QOpenGLWidget>
+#include <QOpenGLContext>
+#include <QResizeEvent>
+#include <QShowEvent>
+#include <QSurfaceFormat>
+#include <memory>
 #include <QtMath>
 #include <algorithm>
 
@@ -41,6 +48,109 @@ QStringList wrapOsd(const QString& text, const QFontMetrics& metrics,
 }
 } // namespace
 
+// Kept as a child so the raster path remains usable on offscreen platforms and
+// machines without desktop OpenGL. Only emulated video enters the shader chain.
+class ShaderView final : public QOpenGLWidget, protected QOpenGLFunctions {
+public:
+    explicit ShaderView(GameView* owner) : QOpenGLWidget(owner), owner_(owner) {
+        QSurfaceFormat format;
+        format.setRenderableType(QSurfaceFormat::OpenGL);
+        format.setVersion(2, 1);
+        format.setProfile(QSurfaceFormat::NoProfile);
+        format.setSwapInterval(1);
+        format.setDepthBufferSize(0);
+        format.setStencilBufferSize(0);
+        setFormat(format);
+        setFocusPolicy(Qt::NoFocus);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setObjectName(QStringLiteral("gpuVideo"));
+    }
+    ~ShaderView() override {
+        if (context()) {
+            disconnect(context(), nullptr, this, nullptr);
+            makeCurrent();
+            pipeline_.reset();
+            doneCurrent();
+        }
+    }
+    bool load(const ShaderPreset& preset, QString& error) {
+        if (!initialized_) return true; // initializeGL reads the owner's pending preset.
+        if (!context() || !context()->isValid())
+            return false;
+        makeCurrent();
+        auto next = std::make_unique<ShaderPipeline>();
+        const bool okay = next->initialize(preset, error);
+        if (okay) pipeline_ = std::move(next);
+        next.reset();
+        doneCurrent();
+        if (okay) update();
+        return okay;
+    }
+    void parameter(const QString& id, float value) {
+        if (pipeline_) pipeline_->setParameter(id, value);
+        update();
+    }
+protected:
+    void initializeGL() override {
+        initialized_ = true;
+        initializeOpenGLFunctions();
+        connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this] {
+            makeCurrent();
+            pipeline_.reset();
+            initialized_ = false;
+            doneCurrent();
+        }, Qt::DirectConnection);
+        if (context()->isOpenGLES()) {
+            failed(QStringLiteral("Desktop OpenGL 2.1 or newer is required for GLSL video shaders."));
+            return;
+        }
+        QString error;
+        auto next = std::make_unique<ShaderPipeline>();
+        if (!next->initialize(owner_->shaderPreset_, error)) {
+            next.reset();
+            failed(error);
+            return;
+        }
+        pipeline_ = std::move(next);
+    }
+    void paintGL() override {
+        if (owner_->frame_.isNull() || !pipeline_) {
+            QPainter painter(this);
+            owner_->paintRaster(painter);
+            owner_->paintOsd(painter);
+            return;
+        }
+        const qreal dpr = devicePixelRatioF();
+        const QRectF logical = owner_->gameRect();
+        // Round edges, rather than independently rounding position and dimensions.
+        const QRect target(QPoint(qRound(logical.left() * dpr), qRound(logical.top() * dpr)),
+                           QPoint(qRound((logical.left() + logical.width()) * dpr) - 1,
+                                  qRound((logical.top() + logical.height()) * dpr) - 1));
+        // Invalidate Qt's cached GL state around native drawing; otherwise its
+        // font atlas can be mistaken for the video texture on subsequent paints.
+        QPainter painter(this);
+        painter.beginNativePainting();
+        QString error;
+        if (!pipeline_->render(owner_->frame_, defaultFramebufferObject(),
+                               QSize(qRound(width() * dpr), qRound(height() * dpr)),
+                               target, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error)) {
+            failed(error);
+        }
+        painter.endNativePainting();
+        owner_->paintOsd(painter); // Native-resolution OSD is never filtered.
+    }
+private:
+    void failed(const QString& error) {
+        if (failurePending_) return;
+        failurePending_ = true;
+        QTimer::singleShot(0, owner_, [owner = owner_, error] { owner->gpuFailed(error); });
+    }
+    GameView* owner_;
+    std::unique_ptr<ShaderPipeline> pipeline_;
+    bool initialized_ = false;
+    bool failurePending_ = false;
+};
+
 GameView::GameView(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(400, 280);
@@ -57,21 +167,29 @@ GameView::GameView(QWidget* parent) : QWidget(parent) {
     connect(&osdTimer_, &QTimer::timeout, this, &GameView::expireOsd);
 }
 
+QImage GameView::captureImage() {
+    // QWidget::grab does not include a composited QOpenGLWidget on every driver.
+    if (shaderView_ && shaderView_->isVisible() && shaderView_->isValid())
+        return shaderView_->grabFramebuffer();
+    return grab().toImage();
+}
+
 void GameView::setFrame(const QImage& frame, double aspectRatio) {
     frame_ = frame;
+    ++frameCount_;
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
-    update();
+    repaintView();
 }
 
 void GameView::setAspectMode(AspectMode mode) {
     aspectMode_ = mode;
-    update();
+    repaintView();
 }
 
 void GameView::setIntegerScaling(bool enabled) {
     integerScaling_ = enabled;
-    update();
+    repaintView();
 }
 
 void GameView::showOsd(const QString& message, int durationMs,
@@ -87,7 +205,7 @@ void GameView::showOsd(const QString& message, int durationMs,
     notices_.append({message.left(220), category, deadline});
     while (notices_.size() > 1) notices_.removeFirst();
     if (!osdTimer_.isActive()) osdTimer_.start();
-    update();
+    repaintView();
 }
 
 void GameView::showStateSlots(int selected, unsigned occupiedMask, int durationMs) {
@@ -96,7 +214,7 @@ void GameView::showStateSlots(int selected, unsigned occupiedMask, int durationM
     stateSlots_ = {qBound(0, selected, 9), occupiedMask & 0x3ffU,
                    osdClock_.elapsed() + qBound(500, durationMs, 12000)};
     if (!osdTimer_.isActive()) osdTimer_.start();
-    update();
+    repaintView();
 }
 
 void GameView::setOsdEnabled(bool enabled) {
@@ -104,32 +222,32 @@ void GameView::setOsdEnabled(bool enabled) {
     notices_.clear();
     stateSlots_.expiresAt = 0;
     osdTimer_.stop();
-    update();
+    repaintView();
 }
 
 void GameView::setPausedStatus(bool paused) {
     if (paused_ == paused) return;
     paused_ = paused;
-    update();
+    repaintView();
 }
 
 void GameView::setFastForwardStatus(bool enabled) {
     if (fastForward_ == enabled) return;
     fastForward_ = enabled;
-    update();
+    repaintView();
 }
 
 void GameView::setFastForwardFactor(int factor) {
     factor = qMax(1, factor);
     if (fastForwardFactor_ == factor) return;
     fastForwardFactor_ = factor;
-    if (fastForward_) update();
+    if (fastForward_) repaintView();
 }
 
 void GameView::setRewindStatus(bool enabled) {
     if (rewinding_ == enabled) return;
     rewinding_ = enabled;
-    update();
+    repaintView();
 }
 
 void GameView::expireOsd() {
@@ -138,11 +256,11 @@ void GameView::expireOsd() {
                                     [now](const Notice& n) { return n.expiresAt <= now; });
     if (end != notices_.end()) {
         notices_.erase(end, notices_.end());
-        update();
+        repaintView();
     }
     if (stateSlots_.expiresAt && stateSlots_.expiresAt <= now) {
         stateSlots_.expiresAt = 0;
-        update();
+        repaintView();
     }
     if (notices_.isEmpty() && !stateSlots_.expiresAt) osdTimer_.stop();
 }
@@ -244,8 +362,7 @@ void GameView::paintOsd(QPainter& painter) {
     }
 }
 
-void GameView::paintEvent(QPaintEvent*) {
-    QPainter painter(this);
+void GameView::paintRaster(QPainter& painter) {
     painter.fillRect(rect(), frame_.isNull() ? QColor(17, 20, 27) : QColor(Qt::black));
 
     if (frame_.isNull()) {
@@ -281,6 +398,19 @@ void GameView::paintEvent(QPaintEvent*) {
                          Qt::AlignCenter,
                          QStringLiteral("Поддержка: MD, GEN, BIN, SMD, SMS, GG, SG, 68K"));
     } else {
+        const QRectF target = gameRect();
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        painter.drawImage(target, frame_);
+    }
+}
+
+
+GameView::~GameView() {
+    delete shaderView_;
+}
+
+QRectF GameView::gameRect() const {
+    if (frame_.isNull()) return {};
         const double desiredAspect =
             aspectMode_ == AspectMode::Stretch ? double(width()) / qMax(1, height()) :
             aspectMode_ == AspectMode::SquarePixels
@@ -304,11 +434,103 @@ void GameView::paintEvent(QPaintEvent*) {
             }
         }
 
-        const QRectF target((width() - targetWidth) / 2.0,
+        return QRectF((width() - targetWidth) / 2.0,
                             (height() - targetHeight) / 2.0,
                             targetWidth, targetHeight);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        painter.drawImage(target, frame_);
+
+}
+
+void GameView::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    if (shaderView_ && shaderView_->isVisible()) {
+        painter.fillRect(rect(), Qt::black);
+        return;
     }
+    paintRaster(painter);
     paintOsd(painter);
+}
+
+void GameView::repaintView() {
+    QWidget::update();
+    if (shaderView_) shaderView_->update();
+}
+
+void GameView::ensureGpu() {
+    if (shaderView_ || gpuFailed_ || gpuCreating_) return;
+    const QString platform = QGuiApplication::platformName();
+    if (platform == QStringLiteral("offscreen") || platform == QStringLiteral("minimal")) return;
+    // Adding the first QOpenGLWidget recreates some native top-level windows and
+    // reenters showEvent before the constructor returns.
+    gpuCreating_ = true;
+    shaderView_ = new ShaderView(this);
+    shaderView_->setGeometry(rect());
+    shaderView_->show();
+    shaderView_->raise();
+    gpuCreating_ = false;
+    // A failed context may prevent initializeGL from being called altogether.
+    QTimer::singleShot(0, this, [this] {
+        if (shaderView_ && isVisible() && !shaderView_->isValid())
+            gpuFailed(QStringLiteral("Cannot create an OpenGL video context. Raster rendering remains available."));
+    });
+}
+
+void GameView::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    ensureGpu();
+}
+
+void GameView::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (shaderView_) shaderView_->setGeometry(rect());
+}
+
+void GameView::gpuFailed(const QString& error) {
+    const bool hadShader = !shaderPreset_.path.isEmpty();
+    shaderPreset_ = {};
+    gpuFailed_ = true;
+    if (shaderView_) {
+        shaderView_->hide();
+        shaderView_->deleteLater();
+        shaderView_ = nullptr;
+    }
+    repaintView();
+    if (hadShader) emit shaderFailed(error);
+}
+
+bool GameView::setShaderPreset(const QString& path, QString* error) {
+    QString failure;
+    ShaderPreset next;
+    if (!path.isEmpty() && !ShaderPreset::load(path, next, failure)) {
+        if (error) *error = failure;
+        return false;
+    }
+    const QString platform = QGuiApplication::platformName();
+    if (!path.isEmpty() && (platform == QStringLiteral("offscreen") || platform == QStringLiteral("minimal"))) {
+        if (error) *error = QStringLiteral("GLSL shaders require a native OpenGL window; this platform only supports raster rendering.");
+        return false;
+    }
+    if (shaderView_ && !shaderView_->load(next, failure)) {
+        if (error) *error = failure;
+        return false;
+    }
+    shaderPreset_ = std::move(next);
+    if (!path.isEmpty() && !shaderView_) {
+        gpuFailed_ = false;
+        if (isVisible()) ensureGpu();
+    }
+    if (error) error->clear();
+    repaintView();
+    return true;
+}
+
+bool GameView::setShaderParameter(const QString& id, float value) {
+    if (!qIsFinite(value)) return false;
+    for (auto& parameter : shaderPreset_.parameters) {
+        if (parameter.id != id) continue;
+        parameter.value = qBound(parameter.minimum, value, parameter.maximum);
+        if (shaderView_) shaderView_->parameter(id, parameter.value);
+        repaintView();
+        return true;
+    }
+    return false;
 }

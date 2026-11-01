@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ShaderPipeline.h"
+
 #include <QElapsedTimer>
 #include <QImage>
 #include <QString>
@@ -8,13 +10,21 @@
 #include <QWidget>
 
 class QPainter;
+class ShaderView;
 
 class GameView final : public QWidget {
+    Q_OBJECT
 public:
     enum class AspectMode { Console, SquarePixels, Stretch };
 
     explicit GameView(QWidget* parent = nullptr);
+    ~GameView() override;
+    bool setShaderPreset(const QString& path, QString* error = nullptr);
+    QString shaderPreset() const { return shaderPreset_.path; }
+    QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
+    bool setShaderParameter(const QString& id, float value);
     void setFrame(const QImage& frame, double aspectRatio);
+    QImage captureImage();
     void setAspectMode(AspectMode mode);
     void setIntegerScaling(bool enabled);
     void showOsd(const QString& message, int durationMs = 2600,
@@ -26,10 +36,27 @@ public:
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
 
+signals:
+    void shaderFailed(const QString& error);
+
 protected:
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    friend class ShaderView;
+    void repaintView();
+    void ensureGpu();
+    void gpuFailed(const QString& error);
+    QRectF gameRect() const;
+    void paintRaster(QPainter& painter);
+    ShaderView* shaderView_ = nullptr;
+    ShaderPreset shaderPreset_;
+    bool gpuFailed_ = false;
+    bool gpuCreating_ = false;
+    quint64 frameCount_ = 0;
+
     struct Notice {
         QString text;
         QString category;

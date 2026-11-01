@@ -27,6 +27,16 @@ std::atomic<LibretroHost*> coreOwner{nullptr};
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
 constexpr qsizetype stateHeaderSize = 108;
 const QByteArray stateMagic("KRSTATE1", 8);
+bool validGeometry(const retro_game_geometry& geometry) {
+    return geometry.base_width && geometry.base_height && geometry.base_width <= 4096 &&
+        geometry.base_height <= 4096 && std::isfinite(geometry.aspect_ratio) &&
+        geometry.aspect_ratio >= 0 && geometry.aspect_ratio <= 10;
+}
+bool validAvInfo(const retro_system_av_info& av) {
+    return validGeometry(av.geometry) && std::isfinite(av.timing.fps) &&
+        av.timing.fps >= 1 && av.timing.fps <= 240 && std::isfinite(av.timing.sample_rate) &&
+        av.timing.sample_rate >= 8000 && av.timing.sample_rate <= 192000;
+}
 QByteArray digest(const QByteArray& data) { return QCryptographicHash::hash(data, QCryptographicHash::Sha256); }
 bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
     QSaveFile file(path);
@@ -140,6 +150,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
     contentExtension_ = ext.toUtf8();
     archiveMember_ = name.toUtf8();
     const bool archived = RomArchive::isArchive(path);
+    prepareCoreContent();
     contentInfo_ = {};
     contentInfo_.full_path = archived ? nullptr : encodedGamePath_.constData();
     contentInfo_.archive_path = archived ? encodedGamePath_.constData() : nullptr;
@@ -147,26 +158,25 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex) {
     contentInfo_.dir = contentDirectory_.constData();
     contentInfo_.name = contentBaseName_.constData();
     contentInfo_.ext = contentExtension_.constData();
-    contentInfo_.data = content_.constData();
-    contentInfo_.size = size_t(content_.size());
+    contentInfo_.data = coreContent_.constData();
+    contentInfo_.size = size_t(coreContent_.size());
     contentInfo_.file_in_archive = archived;
     contentInfo_.persistent_data = false;
     retro_game_info game{};
     game.path = encodedGamePath_.constData();
-    game.data = content_.constData();
-    game.size = size_t(content_.size());
+    game.data = coreContent_.constData();
+    game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
-    if (!accepted) { error = QStringLiteral("Genesis Plus GX не смог загрузить ROM."); contentInfo_ = {}; content_.clear(); return false; }
+    if (!accepted) { error = QStringLiteral("Genesis Plus GX не смог загрузить ROM."); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
     gamePath_ = info.absoluteFilePath();
     contentName_ = name;
     romHash_ = digest(content_);
     gameKey_ = QString::fromLatin1(romHash_.toHex());
     api_->get_system_av_info(&av_);
-    if (!std::isfinite(av_.timing.fps) || av_.timing.fps < 1 || av_.timing.fps > 240 ||
-        !std::isfinite(av_.timing.sample_rate) || av_.timing.sample_rate < 8000 || av_.timing.sample_rate > 192000) {
+    if (!validAvInfo(av_)) {
         error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука."); unload(); return false;
     }
     // Genesis 6-button pad; Master System/Game Gear/SG-1000 keep plain joypads.
@@ -188,13 +198,130 @@ void LibretroHost::unload() {
     }
     loaded_ = false;
     contentInfo_ = {}; contentInfoActive_ = false;
-    content_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); contentName_.clear(); romHash_.clear();
+    content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
 }
 void LibretroHost::runFrame() { if (loaded_) { audio_.clear(); api_->run(); } }
 void LibretroHost::reset() { if (loaded_) { api_->reset(); audio_.clear(); } }
+bool LibretroHost::hardReset(QString& error) {
+    error.clear();
+    if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
+    // Reuse the selected content already in memory: archives need no second
+    // selection and moved/deleted ROM files do not affect a power cycle.
+    if (!flushSaveRam(error)) return false;
+    api_->unload_game();
+    loaded_ = false;
+    audio_.clear(); frame_ = QImage(); buttons_.fill(0);
+    prepareCoreContent();
+    contentInfo_.data = coreContent_.constData();
+    contentInfo_.size = size_t(coreContent_.size());
+    retro_game_info game{};
+    game.path = encodedGamePath_.constData();
+    game.data = coreContent_.constData();
+    game.size = size_t(coreContent_.size());
+    contentInfoActive_ = true;
+    const bool accepted = api_->load_game(&game);
+    contentInfoActive_ = false;
+    if (!accepted) {
+        error = QStringLiteral("Genesis Plus GX не смог перезапустить ROM.");
+        unload(); return false;
+    }
+    loaded_ = true;
+    saveRamWritable_ = false;
+    api_->get_system_av_info(&av_);
+    if (!validAvInfo(av_)) {
+        error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука.");
+        unload(); return false;
+    }
+    const auto ext = contentExtension_;
+    const bool md = ext != "sms" && ext != "gg" && ext != "sg";
+    for (unsigned port = 0; port < 2; ++port)
+        api_->set_controller_port_device(port, md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD);
+    saveMemorySizes_[0] = api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    saveMemorySizes_[1] = api_->get_memory_size(RETRO_MEMORY_RTC);
+    QString saveError;
+    saveRamWritable_ = restoreSaveRam(saveError);
+    if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
+    return true;
+}
+void LibretroHost::prepareCoreContent() {
+    coreContent_ = content_;
+    if (!autoFixChecksum_ || contentExtension_ == "sms" || contentExtension_ == "gg" || contentExtension_ == "sg") return;
+    enum class Layout { Plain, Swapped, Smd };
+    Layout layout = Layout::Plain;
+    QByteArray normalized = content_;
+    const auto segaHeader = [](const QByteArray& bytes) {
+        return bytes.size() >= 512 && bytes.mid(0x100,4) == "SEGA";
+    };
+    if (!segaHeader(normalized)) {
+        const bool swapped = normalized.mid(0x100,16) == "ESAGM GE ARDVI E" ||
+                             normalized.mid(0x100,12) == "ESAGG NESESI";
+        if (swapped && !(normalized.size() & 1)) {
+            layout = Layout::Swapped;
+            for (qsizetype i = 0; i < normalized.size(); i += 2) std::swap(normalized[i], normalized[i+1]);
+        } else if (normalized.size() > 512 && ((normalized.size()/512) & 1) &&
+                   !(normalized.size()%512) && !((normalized.size()-512)%0x4000)) {
+            layout = Layout::Smd;
+            normalized = content_.mid(512);
+            for (qsizetype offset = 0; offset < normalized.size(); offset += 0x4000) {
+                const auto block = normalized.mid(offset,0x4000);
+                for (qsizetype i = 0; i < 0x2000; ++i) {
+                    normalized[offset+2*i] = block[0x2000+i];
+                    normalized[offset+2*i+1] = block[i];
+                }
+            }
+        } else return;
+    }
+    // Ambiguous BIN and unsupported layouts remain untouched. Only a valid
+    // MD header in the detected byte order authorizes the two-byte patch.
+    if (!segaHeader(normalized) || (normalized.size() & 1)) return;
+    quint16 checksum = 0;
+    for (qsizetype i = 0x200; i < normalized.size(); i += 2)
+        checksum = quint16(checksum + (quint16(quint8(normalized[i])) << 8) + quint8(normalized[i+1]));
+    const auto sourceOffset = [layout](qsizetype offset) {
+        if (layout == Layout::Swapped) return offset ^ 1;
+        if (layout == Layout::Smd) return 512 + (offset/0x4000)*0x4000 +
+            ((offset & 1) ? 0 : 0x2000) + (offset%0x4000)/2;
+        return offset;
+    };
+    coreContent_[sourceOffset(0x18e)] = char(checksum >> 8);
+    coreContent_[sourceOffset(0x18f)] = char(checksum);
+}
+bool LibretroHost::setAutoFixChecksum(bool enabled, QString& error) {
+    error.clear(); autoFixChecksum_ = enabled; return true;
+}
+bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value, QString& error) {
+    error.clear();
+    if (initialized_) {
+        const auto choices = variableValues_.find(key);
+        if (choices == variableValues_.end() || !choices->second.contains(value)) {
+            error = QStringLiteral("Ядро не поддерживает выбранный параметр: %1").arg(QString::fromUtf8(key));
+            return false;
+        }
+    }
+    optionOverrides_[key] = value;
+    if (variables_[key] != value) {
+        variables_[key] = value;
+        variablesUpdated_ = true;
+    }
+    return true;
+}
+bool LibretroHost::setRegion(int region, QString& error) {
+    static const std::array<QByteArray,4> values{"auto", "ntsc-j", "ntsc-u", "pal"};
+    if (region < 0 || region >= int(values.size())) {
+        error = QStringLiteral("Неверный регион."); return false;
+    }
+    return setCoreOption("genesis_plus_gx_region_detect", values[size_t(region)], error);
+}
+bool LibretroHost::setBlarggFilter(int filter, QString& error) {
+    static const std::array<QByteArray,5> values{"disabled", "monochrome", "composite", "svideo", "rgb"};
+    if (filter < 0 || filter >= int(values.size())) {
+        error = QStringLiteral("Неверный фильтр Blargg."); return false;
+    }
+    return setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error);
+}
 void LibretroHost::setButtons(unsigned port, unsigned mask) { if (port < buttons_.size()) buttons_[port] = mask; }
 double LibretroHost::aspectRatio() const {
     if (av_.geometry.aspect_ratio > 0) return av_.geometry.aspect_ratio;
@@ -349,14 +476,21 @@ bool LibretroHost::environment(unsigned command, void* data) {
     }
     case RETRO_ENVIRONMENT_GET_CAN_DUPE: *static_cast<bool*>(data) = true; return true;
     case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS: return true;
-    case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: *static_cast<bool*>(data) = false; return true;
+    case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
+        *static_cast<bool*>(data) = h->variablesUpdated_; h->variablesUpdated_ = false; return true;
     case RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION: *static_cast<unsigned*>(data) = 0; return true;
     case RETRO_ENVIRONMENT_SET_VARIABLES: {
         auto* vars = static_cast<const retro_variable*>(data);
         for (; vars && vars->key; ++vars) {
             const QByteArray value(vars->value);
             const auto start = value.indexOf(';');
-            if (start >= 0) h->variables_[vars->key] = value.mid(start + 1).trimmed().split('|').first();
+            if (start >= 0) {
+                const auto choices = value.mid(start + 1).trimmed().split('|');
+                h->variableValues_[vars->key] = choices;
+                const auto selected = h->optionOverrides_.find(vars->key);
+                h->variables_[vars->key] = selected != h->optionOverrides_.end() && choices.contains(selected->second)
+                    ? selected->second : choices.first();
+            }
         }
         return true;
     }
@@ -366,8 +500,12 @@ bool LibretroHost::environment(unsigned command, void* data) {
         var->value = found == h->variables_.end() ? nullptr : found->second.constData();
         return found != h->variables_.end();
     }
-    case RETRO_ENVIRONMENT_SET_GEOMETRY: h->av_.geometry = *static_cast<retro_game_geometry*>(data); return true;
-    case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: h->av_ = *static_cast<retro_system_av_info*>(data); return true;
+    case RETRO_ENVIRONMENT_SET_GEOMETRY:
+        if (!data || !validGeometry(*static_cast<retro_game_geometry*>(data))) return false;
+        h->av_.geometry = *static_cast<retro_game_geometry*>(data); return true;
+    case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO:
+        if (!data || !validAvInfo(*static_cast<retro_system_av_info*>(data))) return false;
+        h->av_ = *static_cast<retro_system_av_info*>(data); return true;
     case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE: *static_cast<int*>(data) = 3; return true;
     case RETRO_ENVIRONMENT_GET_LANGUAGE: *static_cast<unsigned*>(data) = RETRO_LANGUAGE_ENGLISH; return true;
     case RETRO_ENVIRONMENT_SET_MESSAGE: {

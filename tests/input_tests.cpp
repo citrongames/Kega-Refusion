@@ -12,7 +12,8 @@
 #include <stdexcept>
 
 namespace {
-static_assert(PauseCommand == 16 && MenuCommand == 25 && RewindCommand == 26,
+static_assert(PauseCommand == 16 && ResetCommand == 20 && MenuCommand == 25 &&
+              RewindCommand == 26 && HardResetCommand == 27,
               "appended commands must preserve existing saved target IDs");
 void require(bool okay, const char* message) { if (!okay) throw std::runtime_error(message); }
 
@@ -327,6 +328,53 @@ void testRewindCommand() {
             "appending rewind changed existing Menu command mapping");
 }
 
+void testHardResetCommand() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create hard reset settings directory");
+    const QString path = temp.path()+"/settings.ini";
+    {
+        QSettings settings(path,QSettings::IniFormat);
+        settings.setValue("input/md/player1/pad/20","b:4"); // Existing soft reset ID.
+        settings.setValue("input/md/player1/pad/26","b:10"); // Existing rewind ID.
+        settings.sync();
+    }
+    InputManager manager(path);
+    VirtualPad pad;
+    manager.poll();
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive,0);
+    mapping.deviceKey = keyForId(manager.devices(),pad.id);
+    for (int target : InputManager::gameTargets(ConsoleProfile::MegaDrive)) mapping.pad[target] = {};
+    mapping.pad[HardResetCommand] = {PadBinding::Button,11,0};
+    manager.setMapping(ConsoleProfile::MegaDrive,0,mapping);
+    manager.poll();
+    int hardPresses = 0, hardReleases = 0, softPresses = 0;
+    QObject::connect(&manager,&InputManager::commandChanged,&manager,[&](int command,bool pressed) {
+        if (command == HardResetCommand) pressed ? ++hardPresses : ++hardReleases;
+        if (command == ResetCommand && pressed) ++softPresses;
+    });
+    pad.button(11,true); manager.poll(); manager.poll(); manager.poll();
+    require(hardPresses == 1 && !hardReleases && !softPresses,
+            "held hard reset did not produce exactly one distinct press");
+    manager.setEnabled(false); manager.setEnabled(true); manager.poll();
+    require(hardPresses == 1 && hardReleases == 1,
+            "focus regained retriggered held hard reset");
+    pad.button(11,false); manager.poll();
+    pad.button(11,true); manager.poll(); manager.poll();
+    require(hardPresses == 2 && hardReleases == 1,
+            "hard reset did not rearm after release");
+    pad.button(11,false); manager.poll();
+    pad.button(4,true); manager.poll();
+    require(softPresses == 1 && hardPresses == 2,"old soft reset mapping changed command ID");
+    pad.button(4,false); manager.poll();
+    InputManager reloaded(path);
+    const auto saved = reloaded.mapping(ConsoleProfile::MegaDrive,0);
+    require(saved.pad.value(HardResetCommand) == PadBinding{PadBinding::Button,11,0},
+            "hard reset binding did not persist");
+    require(saved.pad.value(ResetCommand) == PadBinding{PadBinding::Button,4,0} &&
+            saved.pad.value(RewindCommand) == PadBinding{PadBinding::Button,10,0},
+            "adding hard reset changed existing soft reset or rewind bindings");
+}
+
 void testReservedRewindKey() {
     using Codes = KeyboardScanCodes;
     for (const auto codes : {Codes::Windows, Codes::Xkb}) {
@@ -555,6 +603,7 @@ int main(int argc, char** argv) {
     try {
         testInput();
         testRewindCommand();
+        testHardResetCommand();
         testReservedRewindKey();
         testLegacyKeyboardSettings();
         testUnknownRawJoystick();

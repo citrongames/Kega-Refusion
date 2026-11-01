@@ -10,6 +10,9 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QCryptographicHash>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
@@ -32,6 +35,10 @@
 #include <QWindowStateChangeEvent>
 
 namespace {
+QString shaderParameterPrefix(const QString& path) {
+    const auto key = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("view/shaderParameters/%1/").arg(QString::fromLatin1(key));
+}
 QString displayName(const QString& path) { return QFileInfo(path).completeBaseName(); }
 ConsoleProfile profileFor(const QFileInfo& file) {
     const QString ext = file.suffix().toLower();
@@ -77,10 +84,25 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     rewindSeconds_ = settings_.value(QStringLiteral("emulation/rewindSeconds"), 30).toInt();
     if (!QList<int>{0,10,30,60}.contains(rewindSeconds_)) rewindSeconds_ = 30;
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
+    region_ = qBound(0, settings_.value(QStringLiteral("emulation/region"), 0).toInt(), 3);
+    blarggFilter_ = qBound(0, settings_.value(QStringLiteral("view/blarggFilter"), 0).toInt(), 4);
+    session_.setRegion(region_);
+    session_.setBlarggFilter(blarggFilter_);
+    session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setRewindSeconds(rewindSeconds_);
     view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
+    connect(view_, &GameView::shaderFailed, this, [this](const QString& error) {
+        settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
+        updateShaderActions();
+        if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Шейдер"), error);
+    });
+    const QString shader = settings_.value(QStringLiteral("view/shaderPreset")).toString();
+    if (!shader.isEmpty() && !applyShaderPreset(shader)) {
+        settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
+        updateShaderActions();
+    }
     const int aspect = settings_.value(QStringLiteral("view/aspect"), 0).toInt();
     view_->setAspectMode(aspect == 1 ? GameView::AspectMode::SquarePixels :
                          aspect == 2 ? GameView::AspectMode::Stretch : GameView::AspectMode::Console);
@@ -88,13 +110,15 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     const QByteArray geometry = settings_.value(QStringLiteral("window/geometry")).toByteArray();
     if (!geometry.isEmpty()) restoreGeometry(geometry);
 
-    connect(&session_, &EmulationSession::videoFrame, view_, [this](const QImage& image, double ratio) {
-        view_->setFrame(image, ratio);
+    connect(&session_, &EmulationSession::videoFrameReady, view_, [this] {
+        QImage image; double ratio = 4.0 / 3.0;
+        if (session_.takeVideoFrame(image, ratio)) view_->setFrame(image, ratio);
     });
     connect(&session_, &EmulationSession::audioSamples, audio_, [this](const QByteArray& pcm, int rate) {
         audio_->play(pcm, rate);
-    });
-    connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear);
+    }, Qt::DirectConnection);
+    connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear, Qt::DirectConnection);
+    connect(audio_, &AudioOutput::clockFeedback, &session_, &EmulationSession::updateAudioClock, Qt::DirectConnection);
     connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName) {
         loading_ = false;
         currentRom_ = path;
@@ -140,6 +164,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     qApp->installEventFilter(this);
 }
 
+MainWindow::~MainWindow() {
+    // The direct audio producer must stop before QObject destroys AudioOutput.
+    session_.shutdown();
+}
+
 void MainWindow::buildMenus() {
     auto shortcut = [this](QAction* action) {
         action->setShortcutContext(Qt::WindowShortcut);
@@ -175,7 +204,7 @@ void MainWindow::buildMenus() {
     connect(pauseAction_, &QAction::toggled, this, [this](bool paused) {
         session_.setPaused(paused);
     });
-    resetAction_ = emulationMenu->addAction(QStringLiteral("Сброс"));
+    resetAction_ = emulationMenu->addAction(QStringLiteral("Мягкий сброс"));
     resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     resetAction_->setAutoRepeat(false);
     resetAction_->setEnabled(false);
@@ -183,6 +212,40 @@ void MainWindow::buildMenus() {
     connect(resetAction_, &QAction::triggered, this, [this] {
         releaseInput();
         session_.resetGame();
+    });
+    hardResetAction_ = emulationMenu->addAction(QStringLiteral("Жёсткий сброс"));
+    hardResetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    hardResetAction_->setAutoRepeat(false);
+    hardResetAction_->setEnabled(false);
+    shortcut(hardResetAction_);
+    connect(hardResetAction_, &QAction::triggered, this, [this] {
+        releaseInput(); session_.hardResetGame();
+    });
+    QMenu* regionMenu = emulationMenu->addMenu(QStringLiteral("Регион"));
+    regionMenu->setObjectName(QStringLiteral("regionMenu"));
+    auto* regionGroup = new QActionGroup(this);
+    const QStringList regions{QStringLiteral("Авто"), QStringLiteral("Япония (NTSC-J)"),
+        QStringLiteral("США (NTSC-U)"), QStringLiteral("Европа (PAL)")};
+    for (int region = 0; region < regions.size(); ++region) {
+        QAction* action = regionMenu->addAction(regions[region]);
+        action->setObjectName(QStringLiteral("region%1").arg(region));
+        action->setCheckable(true); action->setChecked(region == region_);
+        regionGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, region] {
+            releaseInput(); region_ = region;
+            settings_.setValue(QStringLiteral("emulation/region"), region);
+            session_.setRegion(region);
+        });
+    }
+    QAction* checksumAction = emulationMenu->addAction(QStringLiteral("Автоисправление контрольной суммы ROM"));
+    checksumAction->setObjectName(QStringLiteral("autoFixChecksum"));
+    checksumAction->setCheckable(true);
+    checksumAction->setChecked(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
+    checksumAction->setToolTip(QStringLiteral("Для Mega Drive/Genesis. Исправляется копия в памяти; текущая игра будет перезапущена."));
+    connect(checksumAction, &QAction::toggled, this, [this](bool enabled) {
+        releaseInput();
+        settings_.setValue(QStringLiteral("emulation/autoFixChecksum"), enabled);
+        session_.setAutoFixChecksum(enabled);
     });
     fastForwardAction_ = emulationMenu->addAction(QStringLiteral("Ускорение (Tab)"));
     fastForwardAction_->setCheckable(true);
@@ -257,6 +320,7 @@ void MainWindow::buildMenus() {
     connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString&, double) {
         pauseAction_->setEnabled(true);
         resetAction_->setEnabled(true);
+        hardResetAction_->setEnabled(true);
         fastForwardAction_->setEnabled(true);
         rewindAction_->setEnabled(rewindSeconds_ > 0);
         saveAction_->setEnabled(true);
@@ -298,6 +362,48 @@ void MainWindow::buildMenus() {
         view_->setIntegerScaling(enabled);
         settings_.setValue(QStringLiteral("view/integer"), enabled);
     });
+    QMenu* blarggMenu = viewMenu->addMenu(QStringLiteral("Фильтр Blargg NTSC"));
+    blarggMenu->setObjectName(QStringLiteral("blarggMenu"));
+    auto* blarggGroup = new QActionGroup(this);
+    const QStringList filters{QStringLiteral("Выключен"), QStringLiteral("Монохромный"),
+        QStringLiteral("Композитный"), QStringLiteral("S-Video"), QStringLiteral("RGB")};
+    for (int filter = 0; filter < filters.size(); ++filter) {
+        QAction* action = blarggMenu->addAction(filters[filter]);
+        action->setObjectName(QStringLiteral("blargg%1").arg(filter));
+        action->setCheckable(true); action->setChecked(filter == blarggFilter_);
+        blarggGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, filter] {
+            blarggFilter_ = filter;
+            settings_.setValue(QStringLiteral("view/blarggFilter"), filter);
+            session_.setBlarggFilter(filter);
+        });
+    }
+    QMenu* shaderMenu = viewMenu->addMenu(QStringLiteral("Шейдер"));
+    shaderMenu->setObjectName(QStringLiteral("shaderMenu"));
+    auto* shaderGroup = new QActionGroup(this);
+    shaderOffAction_ = shaderMenu->addAction(QStringLiteral("Выключен"));
+    shaderGdaptAction_ = shaderMenu->addAction(QStringLiteral("GDAPT"));
+    shaderCustomAction_ = shaderMenu->addAction(QStringLiteral("Пользовательский"));
+    for (QAction* action : {shaderOffAction_, shaderGdaptAction_, shaderCustomAction_}) {
+        action->setCheckable(true); shaderGroup->addAction(action);
+    }
+    shaderCustomAction_->setEnabled(false);
+    connect(shaderOffAction_, &QAction::triggered, this, [this] { applyShaderPreset({}); });
+    connect(shaderGdaptAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/gdapt.glslp")); });
+    shaderMenu->addSeparator();
+    QAction* shaderLoad = shaderMenu->addAction(QStringLiteral("Загрузить GLSL-пресет…"));
+    connect(shaderLoad, &QAction::triggered, this, [this] {
+        releaseInput();
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Загрузить GLSL-пресет"),
+            settings_.value(QStringLiteral("files/shaderDirectory")).toString(),
+            QStringLiteral("GLSL-пресеты (*.glslp);;GLSL-шейдеры (*.glsl)"));
+        if (!path.isEmpty() && applyShaderPreset(path))
+            settings_.setValue(QStringLiteral("files/shaderDirectory"), QFileInfo(path).absolutePath());
+        view_->setFocus();
+    });
+    shaderParametersAction_ = shaderMenu->addAction(QStringLiteral("Параметры…"));
+    connect(shaderParametersAction_, &QAction::triggered, this, &MainWindow::editShaderParameters);
+    updateShaderActions();
     viewMenu->addSeparator();
     fullscreenAction_ = viewMenu->addAction(QStringLiteral("Полный экран"));
     fullscreenAction_->setShortcut(QKeySequence(QStringLiteral("Alt+Return")));
@@ -349,6 +455,61 @@ void MainWindow::buildMenus() {
             "Состояния сохраняются в выбранный слот от 0 до 9.<br>"
             "Клавиатуру и геймпады можно настроить в разделе «Управление»."));
     });
+}
+
+bool MainWindow::applyShaderPreset(const QString& path) {
+    QString error;
+    if (!view_->setShaderPreset(path, &error)) {
+        updateShaderActions();
+        if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Шейдер"), error);
+        return false;
+    }
+    settings_.setValue(QStringLiteral("view/shaderPreset"), path);
+    const QString prefix = shaderParameterPrefix(path);
+    for (const auto& parameter : view_->shaderParameters()) {
+        const float value = settings_.value(prefix + parameter.id, parameter.value).toFloat();
+        view_->setShaderParameter(parameter.id, value);
+    }
+    updateShaderActions();
+    return true;
+}
+
+void MainWindow::updateShaderActions() {
+    if (!shaderOffAction_) return;
+    const QString path = view_->shaderPreset();
+    shaderOffAction_->setChecked(path.isEmpty());
+    shaderGdaptAction_->setChecked(path == QLatin1String(":/shaders/gdapt.glslp"));
+    shaderCustomAction_->setChecked(!path.isEmpty() && path != QLatin1String(":/shaders/gdapt.glslp"));
+    shaderParametersAction_->setEnabled(!view_->shaderParameters().isEmpty());
+}
+
+void MainWindow::editShaderParameters() {
+    const auto parameters = view_->shaderParameters();
+    if (parameters.isEmpty()) return;
+    releaseInput();
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Параметры шейдера"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    layout->addLayout(form);
+    const QString prefix = shaderParameterPrefix(view_->shaderPreset());
+    for (const auto& parameter : parameters) {
+        auto* value = new QDoubleSpinBox(&dialog);
+        value->setDecimals(6);
+        value->setRange(parameter.minimum, parameter.maximum);
+        value->setSingleStep(parameter.step);
+        value->setValue(parameter.value);
+        value->setObjectName(parameter.id);
+        form->addRow(parameter.label, value);
+        connect(value, &QDoubleSpinBox::valueChanged, &dialog, [this, prefix, id = parameter.id](double selected) {
+            if (view_->setShaderParameter(id, float(selected))) settings_.setValue(prefix + id, selected);
+        });
+    }
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.exec(); view_->setFocus();
 }
 
 void MainWindow::updateRecentMenu() {
@@ -544,6 +705,7 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
     case SaveCommand: if (saveAction_->isEnabled()) saveAction_->trigger(); break;
     case LoadCommand: if (loadAction_->isEnabled()) loadAction_->trigger(); break;
     case ResetCommand: if (resetAction_->isEnabled()) resetAction_->trigger(); break;
+    case HardResetCommand: if (hardResetAction_->isEnabled()) hardResetAction_->trigger(); break;
     case FullscreenCommand: fullscreenAction_->trigger(); break;
     case MuteCommand: muteAction_->trigger(); break;
     case NextSlotCommand: setSlot(stateSlot_ + 1); break;
@@ -596,6 +758,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (key == Qt::Key_F8) commandAction = loadAction_;
     } else if (modifiers == Qt::ControlModifier && key == Qt::Key_R) {
         commandAction = resetAction_;
+    } else if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier) && key == Qt::Key_R) {
+        commandAction = hardResetAction_;
     }
     if (commandAction && commandAction->isEnabled()) {
         if (shortcutOverride) event->accept();

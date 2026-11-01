@@ -27,7 +27,7 @@ namespace {
 const QVector<int> commands = {
     PauseCommand, FastForwardCommand, SaveCommand, LoadCommand,
     ResetCommand, FullscreenCommand, MuteCommand,
-    NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand
+    NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand
 };
 
 QString commandName(int command) {
@@ -36,7 +36,8 @@ QString commandName(int command) {
     case FastForwardCommand: return QStringLiteral("Ускорение (удерживать)");
     case SaveCommand: return QStringLiteral("Сохранить состояние");
     case LoadCommand: return QStringLiteral("Загрузить состояние");
-    case ResetCommand: return QStringLiteral("Сброс");
+    case ResetCommand: return QStringLiteral("Мягкий сброс");
+    case HardResetCommand: return QStringLiteral("Жёсткий сброс");
     case FullscreenCommand: return QStringLiteral("Полный экран");
     case MuteCommand: return QStringLiteral("Без звука");
     case NextSlotCommand: return QStringLiteral("Следующий слот");
@@ -55,6 +56,7 @@ QString commandShortcut(int command) {
     case SaveCommand: return QStringLiteral("F5");
     case LoadCommand: return QStringLiteral("F8");
     case ResetCommand: return QStringLiteral("Ctrl+R");
+    case HardResetCommand: return QStringLiteral("Ctrl+Shift+R");
     case FullscreenCommand: return QStringLiteral("Alt+Enter");
     case MuteCommand: return QStringLiteral("M");
     default: return QStringLiteral("—");

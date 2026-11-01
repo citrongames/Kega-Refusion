@@ -22,6 +22,7 @@ class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(EmulationSession& session, const QString& dataPath,
                         bool smokeTest = false, QWidget* parent = nullptr);
+    ~MainWindow() override;
     void openRom(const QString& path);
     void setFullscreenMode(bool enabled);
     void showOsdDemo();
@@ -37,6 +38,9 @@ private:
     void buildMenus();
     void updateRecentMenu();
     void editControls();
+    bool applyShaderPreset(const QString& path);
+    void editShaderParameters();
+    void updateShaderActions();
     void releaseInput();
     void updateInputEnabled();
     void updateFastForward();
@@ -57,6 +61,11 @@ private:
     QAction* fastForwardAction_ = nullptr;
     QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;
+    QAction* hardResetAction_ = nullptr;
+    QAction* shaderOffAction_ = nullptr;
+    QAction* shaderGdaptAction_ = nullptr;
+    QAction* shaderCustomAction_ = nullptr;
+    QAction* shaderParametersAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* loadAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
@@ -68,6 +77,7 @@ private:
     int stateSlot_ = 0;
     int fastForwardFactor_ = 4;
     int rewindSeconds_ = 30;
+    int region_ = 0, blarggFilter_ = 0;
     unsigned occupiedSlots_ = 0;
     bool pauseOnFocusLoss_ = true;
     bool rewindHeld_ = false, rewindPadHeld_ = false;
