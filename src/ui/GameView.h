@@ -12,7 +12,6 @@
 
 class QPainter;
 class QMouseEvent;
-class QEvent;
 class ShaderView;
 
 class GameView final : public QWidget {
@@ -48,8 +47,6 @@ protected:
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void leaveEvent(QEvent* event) override;
 
 private:
     friend class ShaderView;

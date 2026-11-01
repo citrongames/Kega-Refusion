@@ -12,6 +12,10 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <QtGlobal>
+#include <QElapsedTimer>
+#include <QOpenGLWidget>
+#include <atomic>
+#include <cstdio>
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
@@ -23,6 +27,9 @@ int main(int argc, char* argv[]) {
     parser.setApplicationDescription(
         QStringLiteral("Kega Refusion — Mega Drive, Sega CD и Master System"));
     parser.addHelpOption();
+    QCommandLineOption performanceOption(QStringList{QStringLiteral("performance-check")},
+        QStringLiteral("Измерить работу окна в течение 10 секунд"));
+    parser.addOption(performanceOption);
     QCommandLineOption coreOption(
         QStringList{QStringLiteral("core")},
         QStringLiteral("Путь к ядру Genesis Plus GX Libretro"),
@@ -101,6 +108,15 @@ int main(int argc, char* argv[]) {
     bool screenshotError = false;
 
     EmulationSession session(corePath, dataPath);
+    std::atomic<int> produced{0};
+    int delivered = 0, swapped = 0;
+    QElapsedTimer performanceClock;
+    performanceClock.start();
+    if (parser.isSet(performanceOption)) {
+        QObject::connect(&session, &EmulationSession::videoFrame, &app,
+            [&](const QImage&, double) { ++produced; }, Qt::DirectConnection);
+        QObject::connect(&session, &EmulationSession::videoFrameReady, &app,[&] { ++delivered; });
+    }
     QObject::connect(&session, &EmulationSession::errorOccurred, &app,
                      [&](const QString&) { smokeError = true; });
     if (smokeTest && !romPath.isEmpty()) {
@@ -112,6 +128,20 @@ int main(int argc, char* argv[]) {
 
     MainWindow window(session, dataPath, smokeTest);
     window.show();
+    if (parser.isSet(performanceOption)) {
+        QTimer::singleShot(500, &app,[&] {
+            if (auto* gpu = window.findChild<QOpenGLWidget*>(QStringLiteral("gpuVideo")))
+                QObject::connect(gpu, &QOpenGLWidget::frameSwapped, &app,[&] { ++swapped; });
+        });
+        auto* report = new QTimer(&app);
+        QObject::connect(report, &QTimer::timeout, &app,[&] {
+            std::printf("PERF ms=%lld core=%d gui=%d swaps=%d\n",
+                static_cast<long long>(performanceClock.elapsed()), produced.load(), delivered, swapped);
+            std::fflush(stdout);
+        });
+        report->start(1000);
+        QTimer::singleShot(10000, &app,[&] { app.quit(); });
+    }
     if (parser.isSet(fullscreenOption))
         QTimer::singleShot(0, &window, [&window] { window.setFullscreenMode(true); });
     if (!romPath.isEmpty())

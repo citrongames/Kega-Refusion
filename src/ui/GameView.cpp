@@ -155,7 +155,6 @@ private:
 
 GameView::GameView(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
-    setMouseTracking(true);
     setMinimumSize(400, 280);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     const int fontId = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/osd.ttf"));
@@ -179,7 +178,6 @@ QImage GameView::captureImage() {
 
 void GameView::setFrame(const QImage& frame, double aspectRatio) {
     frame_ = frame;
-    if (!frame_.isNull()) unsetCursor();
     ++frameCount_;
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
@@ -370,7 +368,7 @@ QRect GameView::openArea() const {
     // The visible plus is 54x54. Keep a larger target around it without
     // making the entire placeholder clickable.
     const QPoint plusCenter = rect().center() + QPoint(0, -59);
-    return QRect(plusCenter.x() - 76, plusCenter.y() - 62, 152, 124);
+    return QRect(plusCenter.x() - 152, plusCenter.y() - 124, 304, 248);
 }
 
 void GameView::mousePressEvent(QMouseEvent* event) {
@@ -381,19 +379,6 @@ void GameView::mousePressEvent(QMouseEvent* event) {
         return;
     }
     QWidget::mousePressEvent(event);
-}
-
-void GameView::mouseMoveEvent(QMouseEvent* event) {
-    if (frame_.isNull() && openArea().contains(event->position().toPoint()))
-        setCursor(Qt::PointingHandCursor);
-    else
-        unsetCursor();
-    QWidget::mouseMoveEvent(event);
-}
-
-void GameView::leaveEvent(QEvent* event) {
-    unsetCursor();
-    QWidget::leaveEvent(event);
 }
 
 void GameView::paintRaster(QPainter& painter) {

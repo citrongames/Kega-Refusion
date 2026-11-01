@@ -1,4 +1,4 @@
-# Verification — version 0.5.0 — 2026-11-01
+# Verification — version 0.5.1 — 2026-11-01
 
 ## Environment
 
@@ -135,3 +135,12 @@ Current evidence retained only: linux-0.4.0.log, windows-0.4.0.log, native-tests
 - Normal-speed CPU/RAM comparison uses fresh processes per format, the same warmed game state and 600 paced frames (~10 seconds): BIN 59.886 fps, 10.293% of one logical CPU, 29.482 MiB average working set / 44.768 MiB private; MP3 59.848 fps, 7.481% of one logical CPU, 30.961 MiB working set / 46.363 MiB private. Memory increment is ~1.48 MiB resident / ~1.60 MiB private. The short CPU observation does not establish that MP3 is intrinsically cheaper: clock/power/scheduling/I/O effects matter. It showed no CPU increase in this sample; the paired uncapped measurement quantifies the small throughput cost. These figures describe the core worker, without GUI/audio device/rewind overhead, not total application consumption.
 - Evidence: cd-speed-0.5.0.csv, cd-realtime-bin-0.5.0.csv, cd-realtime-mp3-0.5.0.csv and representative screenshots/logs in cd-games-0.5.0. Early timing attempts that toggled the game's own pause were rejected; the final benchmark source stops Start input before timing. Superseded/empty results and intermediate captures were removed.
 - The native application also passed an MP3 startup smoke run. The startup plus now has a 152x124 clickable area around its 54x54 mark, a pointing cursor and the shared open-game dialog; it is inactive during play. Windows/Linux final builds passed. No unrelated broad suites were repeated.
+
+
+## 0.5.1 — audio startup loop and startup click target — 2026-11-01
+
+- Native Windows full-window diagnosis reproduced ~5 swaps/s with the core still producing ~60 frames/s. Cursor removal did not resolve the slowdown. Event timing isolated AudioOutput: an initial device start took ~376–412 ms, then repeated release/start cycles cost ~44–50 ms each.
+- The bounded producer queue overflowed during slow device setup. Overflow scheduled another device reset and invalidated the in-progress pump, so the next pump reopened the device and overflowed again. Overflow now only drops stale whole PCM frames using AudioQueue's existing bounded append; explicit clear and format changes still reset. Partial samples remain aligned. Software buffering stays capped at 60 ms, with a 40 ms device high-water target.
+- The same native full-window probe after the fix produced ~59–60 GUI deliveries and swaps per second after startup; no recurring audio reset stalls. Evidence: build/verification/fps-before-0.5.1.log, fps-trace-0.5.1.log and fps-fixed-0.5.1.log. The diagnostic CLI --performance-check reports produced, delivered and displayed frames over ten seconds without changing ordinary startup behavior.
+- The startup plus target is now 304x248 logical pixels, twice the previous width and height. Removed all hover cursor changes and mouse tracking; clicking still opens the shared dialog only while no game is loaded.
+- Windows and Linux builds and the two focused audio queue/output tests passed. The producer burst regression now requires exactly three stream invalidations (two format changes and explicit clear), despite 20,000 queued chunks. The deployed executable with sound enabled sustained ~59–60 swaps/s; fps-deployed-0.5.1.log. Built/deployed executable SHA-256 matched. No unrelated suites were rerun. Temporary probe data and duplicate package staging were removed; user settings/saves and incremental builds were preserved.

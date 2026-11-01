@@ -60,14 +60,10 @@ void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
         ++generation_;
         emit clockFeedback(0, AudioQueue::TargetUsecs, false);
     }
-    if (queue_.append(pcm) > 0) {
-        // A stalled UI must recover close to the current frame, rather than
-        // spending seconds playing a full stale buffer after the stall.
-        queue_.keepNewest(queue_.bytesForUsecs(AudioQueue::TargetUsecs));
-        resetPending_ = true;
-        ++generation_;
-        emit clockFeedback(0, AudioQueue::TargetUsecs, false);
-    }
+    // Overflow already drops stale whole frames while preserving a partial
+    // device write. Keep the live sink: reopening it can take longer than this
+    // bounded queue, causing another overflow and an endless reopen loop.
+    queue_.append(pcm);
     requestPumpLocked();
 }
 

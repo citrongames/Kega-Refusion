@@ -53,6 +53,10 @@ int main(int argc, char** argv) {
             audio.clear();
         });
         producer.join();
+        // Only the two format changes and explicit clear reset the stream.
+        // Overflow must not restart a slow device forever while PCM arrives.
+        require(invalidations == 3,
+                "queue overflow repeatedly reset the audio stream");
         require(producerInvalidation && invalidations > 0,
                 "producer clear did not invalidate audio clock before GUI processing");
         require(wakes.count == 0, "GUI processed producer work while deliberately blocked");

@@ -1,6 +1,6 @@
 # Kega Refusion
 
-Нативный эмулятор Sega для Windows и Linux на C++17 / Qt 6, с ядром Genesis Plus GX. Версия 0.5.0: Sega CD / Mega-CD, импорт BIOS и смена дисков.
+Нативный эмулятор Sega для Windows и Linux на C++17 / Qt 6, с ядром Genesis Plus GX. Версия 0.5.1: исправлено торможение окна при запуске звука; Sega CD / Mega-CD, импорт BIOS и смена дисков.
 
 ## Сейчас работает
 
