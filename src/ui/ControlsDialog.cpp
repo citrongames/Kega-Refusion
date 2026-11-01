@@ -161,7 +161,18 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     connectedBox_ = new QCheckBox(QStringLiteral("Подключён к консоли"), this);
     connectedBox_->setObjectName(QStringLiteral("connectedBox"));
     connectedBox_->setToolTip(QStringLiteral("Отключённый порт не виден игре. Назначения сохраняются."));
-    scope->addWidget(connectedBox_, 2, 0, 1, 4);
+    scope->addWidget(connectedBox_, 2, 0, 1, 2);
+    controllerTypeLabel_ = new QLabel(QStringLiteral("Тип геймпада"), this);
+    controllerTypeBox_ = new QComboBox(this);
+    controllerTypeBox_->setObjectName(QStringLiteral("controllerTypeBox"));
+    controllerTypeBox_->addItem(QStringLiteral("3 кнопки"), false);
+    controllerTypeBox_->addItem(QStringLiteral("6 кнопок"), true);
+    controllerTypeBox_->setToolTip(QStringLiteral("Тип геймпада, который видит игра. Назначения сохраняются при переключении."));
+    auto* controllerTypeRow = new QHBoxLayout;
+    controllerTypeRow->addWidget(controllerTypeLabel_);
+    controllerTypeRow->addWidget(controllerTypeBox_);
+    controllerTypeRow->addStretch(1);
+    scope->addLayout(controllerTypeRow, 2, 2, 1, 2);
     mainLayout->addLayout(scope);
 
     tabs_ = new QTabWidget(this);
@@ -259,6 +270,13 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
         dirty_.insert(draftKey());
         updateActionButtons();
     });
+    connect(controllerTypeBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        if (refreshing_) return;
+        stopCapture();
+        draft().sixButton = controllerTypeBox_->currentData().toBool();
+        dirty_.insert(draftKey());
+        refreshContents();
+    });
     connect(deadzoneSlider_, &QSlider::valueChanged, this, [this](int value) {
         deadzoneValue_->setText(QStringLiteral("%1 %").arg(value));
         if (refreshing_) return;
@@ -268,7 +286,7 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     connect(tabs_, &QTabWidget::currentChanged, this, [this] {
         stopCapture();
         const auto& targets = tabs_->currentIndex() == 0
-            ? InputManager::gameTargets(selectedProfile()) : commands;
+            ? activeGameTargets() : commands;
         selectTarget(targets.isEmpty() ? -1 : targets.first());
     });
     connect(gameTable_, &QTableWidget::itemSelectionChanged, this, [this] {
@@ -367,6 +385,10 @@ PlayerMapping& ControlsDialog::draft() {
     return drafts_[key];
 }
 
+QVector<int> ControlsDialog::activeGameTargets() {
+    return InputManager::gameTargets(selectedProfile(), draft().sixButton);
+}
+
 QString ControlsDialog::captureDeviceKey() {
     const QString key = draft().deviceKey;
     if (key != QStringLiteral("auto"))
@@ -421,22 +443,27 @@ void ControlsDialog::refreshContents() {
     refreshing_ = true;
     const PlayerMapping mapping = draft();
     connectedBox_->setChecked(mapping.connected);
+    const bool md = selectedProfile() == ConsoleProfile::MegaDrive;
+    controllerTypeLabel_->setVisible(md);
+    controllerTypeBox_->setVisible(md);
+    controllerTypeBox_->setCurrentIndex(mapping.sixButton ? 1 : 0);
     refreshDevices();
     deadzoneSlider_->setValue(qBound(5, mapping.deadzonePercent, 60));
     deadzoneValue_->setText(
         QStringLiteral("%1 %").arg(deadzoneSlider_->value()));
     diagram_->setProfile(selectedProfile());
-    diagram_->setTargets(InputManager::gameTargets(selectedProfile()));
+    diagram_->setSixButton(mapping.sixButton);
+    diagram_->setTargets(activeGameTargets());
     fillGameTable();
     fillCommandTable();
     refreshing_ = false;
     const auto& targets = tabs_->currentIndex() == 0
-        ? InputManager::gameTargets(selectedProfile()) : commands;
+        ? activeGameTargets() : commands;
     selectTarget(targets.isEmpty() ? -1 : targets.first());
 }
 
 void ControlsDialog::fillGameTable() {
-    const QVector<int> targets = InputManager::gameTargets(selectedProfile());
+    const QVector<int> targets = activeGameTargets();
     const PlayerMapping mapping = draft();
     gameTable_->clearContents();
     gameTable_->setRowCount(targets.size());
@@ -556,8 +583,9 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
         error = QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8 и F12 зарезервированы.");
     else if (key) {
         const PlayerMapping& mapping = draft();
+        const auto targets = activeGameTargets();
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
-            if (it.key() != target && it.value() == key) {
+            if (it.key() != target && targets.contains(it.key()) && it.value() == key) {
                 error = QStringLiteral("Эта клавиша уже назначена другой кнопке.");
                 break;
             }
@@ -581,7 +609,7 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
 }
 
 void ControlsDialog::beginCaptureFor(int target) {
-    if (target < 16 && !draft().connected) return;
+    if (target < 16 && (!draft().connected || !activeGameTargets().contains(target))) return;
     if (draft().deviceKey == QStringLiteral("none")) {
         setFeedback(QStringLiteral("Сначала выберите устройство."), true);
         return;
@@ -614,7 +642,7 @@ void ControlsDialog::beginCaptureFor(int target) {
 void ControlsDialog::startSequence() {
     stopCapture();
     sequence_ = tabs_->currentIndex() == 0
-        ? InputManager::gameTargets(selectedProfile()) : commands;
+        ? activeGameTargets() : commands;
     sequenceIndex_ = 0;
     if (!sequence_.isEmpty())
         beginCaptureFor(sequence_.first());
@@ -659,8 +687,10 @@ void ControlsDialog::onCaptured(const PadBinding& binding) {
     const int target = captureTarget_;
     captureTarget_ = -1;
     const PlayerMapping& current = draft();
+    const auto targets = activeGameTargets();
     for (auto it = current.pad.cbegin(); it != current.pad.cend(); ++it) {
-        if (it.key() != target && it.value().kind != PadBinding::None &&
+        if ((it.key() >= 16 || targets.contains(it.key())) &&
+            it.key() != target && it.value().kind != PadBinding::None &&
             it.value().kind != PadBinding::Automatic &&
             it.value() == binding) {
             setFeedback(QStringLiteral("Этот элемент геймпада уже назначен. "
@@ -704,9 +734,11 @@ void ControlsDialog::onCaptureCancelled() {
 bool ControlsDialog::validateDrafts() {
     for (int key : dirty_) {
         const PlayerMapping& mapping = drafts_[key];
+        const auto targets = InputManager::gameTargets(static_cast<ConsoleProfile>(key / 2), mapping.sixButton);
         QSet<int> keyboard;
-        for (int assigned : mapping.keyboard) {
-            if (!assigned) continue;
+        for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
+            const int assigned = it.value();
+            if (!targets.contains(it.key()) || !assigned) continue;
             if (reservedKey(assigned) || keyboard.contains(assigned)) {
                 setFeedback(QStringLiteral("Проверьте клавиши: есть повтор или "
                                            "зарезервированная клавиша."), true);
@@ -715,7 +747,9 @@ bool ControlsDialog::validateDrafts() {
             keyboard.insert(assigned);
         }
         QVector<PadBinding> pad;
-        for (const PadBinding& assigned : mapping.pad) {
+        for (auto it = mapping.pad.cbegin(); it != mapping.pad.cend(); ++it) {
+            if (it.key() < 16 && !targets.contains(it.key())) continue;
+            const PadBinding& assigned = it.value();
             if (assigned.kind == PadBinding::None ||
                 assigned.kind == PadBinding::Automatic) continue;
             for (const PadBinding& previous : pad) {

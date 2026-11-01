@@ -1,9 +1,9 @@
 #include "ControllerDiagram.h"
 
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPainterPath>
-#include <QTransform>
+#include <QPainterPathStroker>
 #include <QtMath>
 
 namespace {
@@ -11,37 +11,124 @@ constexpr int Up = 4;
 constexpr int Down = 5;
 constexpr int Left = 6;
 constexpr int Right = 7;
-const QColor ink(31, 35, 41);
-const QColor cream(222, 219, 203);
+constexpr qreal ImageWidth = 1536;
+constexpr qreal ImageHeight = 1024;
 const QColor accent(64, 180, 198);
 const QColor selected(239, 184, 73);
+
+QPainterPath ellipse(QPointF center, qreal rx, qreal ry) {
+    QPainterPath path;
+    path.addEllipse(QRectF(center.x() - rx, center.y() - ry, 2 * rx, 2 * ry));
+    return path;
+}
+
+// Expanded click shapes share no area: bisectors divide nearby buttons while
+// leaving their actual faces intact. A tiny gap also avoids boundary ties.
+QPainterPath nearerHalfPlane(QPointF center, QPointF other) {
+    const QPointF normal = (other - center) / QLineF(center, other).length();
+    const QPointF tangent(-normal.y(), normal.x());
+    const QPointF middle = (center + other) / 2 - normal;
+    QPainterPath path;
+    path.moveTo(middle + tangent * 4096);
+    path.lineTo(middle - tangent * 4096);
+    path.lineTo(middle - tangent * 4096 - normal * 8192);
+    path.lineTo(middle + tangent * 4096 - normal * 8192);
+    path.closeSubpath();
+    return path;
+}
+
+QPainterPath diskSector(QPointF center, qreal angle) {
+    constexpr qreal inner = 65, outer = 195, halfAngle = 30;
+    const auto point = [center](qreal radius, qreal degrees) {
+        const qreal radians = qDegreesToRadians(degrees);
+        return center + QPointF(radius * qCos(radians), -radius * qSin(radians));
+    };
+    QPainterPath path;
+    path.moveTo(point(inner, angle - halfAngle));
+    path.lineTo(point(outer, angle - halfAngle));
+    path.arcTo(QRectF(center.x() - outer, center.y() - outer, 2 * outer, 2 * outer),
+               angle - halfAngle, 2 * halfAngle);
+    path.lineTo(point(inner, angle + halfAngle));
+    path.arcTo(QRectF(center.x() - inner, center.y() - inner, 2 * inner, 2 * inner),
+               angle + halfAngle, -2 * halfAngle);
+    path.closeSubpath();
+    return path;
+}
 }
 
 ControllerDiagram::ControllerDiagram(QWidget* parent) : QWidget(parent) {
     setMinimumSize(290, 220);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setCursor(Qt::PointingHandCursor);
+    updateIllustration();
 }
 
 QSize ControllerDiagram::sizeHint() const { return QSize(410, 300); }
 
 void ControllerDiagram::setProfile(ConsoleProfile profile) {
+    if (profile_ == profile) {
+        // ControlsDialog also reapplies the profile when switching players.
+        // Clear the previous player's indicators without reloading the image.
+        if (selectedTarget_ != -1 || pressedMask_) {
+            selectedTarget_ = -1;
+            pressedMask_ = 0;
+            update();
+        }
+        return;
+    }
     profile_ = profile;
     selectedTarget_ = -1;
     pressedMask_ = 0;
+    updateIllustration();
+}
+
+void ControllerDiagram::setSixButton(bool sixButton) {
+    if (sixButton_ == sixButton)
+        return;
+    sixButton_ = sixButton;
+    if (profile_ == ConsoleProfile::MegaDrive)
+        updateIllustration();
+}
+
+void ControllerDiagram::updateIllustration() {
+    QString path;
+    switch (profile_) {
+    case ConsoleProfile::MegaDrive:
+        path = sixButton_ ? QStringLiteral(":/controllers/md6.png")
+                          : QStringLiteral(":/controllers/md3.png");
+        break;
+    case ConsoleProfile::MasterSystem: path = QStringLiteral(":/controllers/sms.png"); break;
+    case ConsoleProfile::GameGear: path = QStringLiteral(":/controllers/gg.png"); break;
+    case ConsoleProfile::SG1000: path = QStringLiteral(":/controllers/sg1000.png"); break;
+    }
+    // Retain only the selected illustration. Painting and pressed-mask updates
+    // never load a resource or allocate a resized copy of the bitmap.
+    if (illustrationPath_ != path) {
+        illustrationPath_ = path;
+        illustration_.load(path);
+    }
+    rebuildTargets();
     update();
 }
 
 void ControllerDiagram::setTargets(const QVector<int>& targets) {
-    targets_.clear();
+    QSet<int> next;
     for (int target : targets)
-        targets_.insert(target);
+        next.insert(target);
+    if (targets_ == next)
+        return;
+    targets_.swap(next);
+    if (!targets_.contains(selectedTarget_))
+        selectedTarget_ = -1;
+    rebuildTargets();
     update();
 }
 
 void ControllerDiagram::setSelectedTarget(int target) {
-    selectedTarget_ = target;
-    update();
+    if (selectedTarget_ != target) {
+        selectedTarget_ = target;
+        update();
+    }
 }
 
 void ControllerDiagram::setPressedMask(unsigned mask) {
@@ -51,232 +138,229 @@ void ControllerDiagram::setPressedMask(unsigned mask) {
     }
 }
 
+void ControllerDiagram::addArea(int target, const QPainterPath& shape, qreal padding) {
+    if (!targets_.contains(target))
+        return;
+    QPainterPathStroker stroke;
+    stroke.setWidth(2 * padding);
+    stroke.setJoinStyle(Qt::RoundJoin);
+    stroke.setCapStyle(Qt::RoundCap);
+    areas_.append({target, shape, shape.united(stroke.createStroke(shape))});
+}
+
+void ControllerDiagram::addCircle(int target, QPointF center, qreal radius) {
+    addEllipse(target, center, radius, radius);
+}
+
+void ControllerDiagram::addEllipse(int target, QPointF center, qreal rx, qreal ry) {
+    addArea(target, ellipse(center, rx, ry));
+}
+
+void ControllerDiagram::addDpad(QPointF center, qreal reach) {
+    const qreal halfWidth = reach * 0.325;
+    const QPair<int, QRectF> pieces[] = {
+        {Up, QRectF(center.x() - halfWidth, center.y() - reach,
+                    2 * halfWidth, reach - halfWidth)},
+        {Down, QRectF(center.x() - halfWidth, center.y() + halfWidth,
+                      2 * halfWidth, reach - halfWidth)},
+        {Left, QRectF(center.x() - reach, center.y() - halfWidth,
+                      reach - halfWidth, 2 * halfWidth)},
+        {Right, QRectF(center.x() + halfWidth, center.y() - halfWidth,
+                       reach - halfWidth, 2 * halfWidth)}
+    };
+    for (const auto& piece : pieces) {
+        QPainterPath shape;
+        shape.addRoundedRect(piece.second, reach * 0.06, reach * 0.06);
+        addArea(piece.first, shape);
+    }
+}
+
+void ControllerDiagram::rebuildTargets() {
+    areas_.clear();
+    switch (profile_) {
+    case ConsoleProfile::MegaDrive:
+        if (sixButton_) {
+            addDpad(QPointF(355, 512), 150);
+            addEllipse(3, QPointF(770, 418), 72, 25);
+            addEllipse(2, QPointF(1230, 197), 52, 22);
+            addCircle(10, QPointF(1029, 463), 59);
+            addCircle(9, QPointF(1173, 423), 59);
+            addCircle(11, QPointF(1318, 381), 59);
+            addCircle(1, QPointF(1056, 621), 73);
+            addCircle(0, QPointF(1220, 579), 73);
+            addCircle(8, QPointF(1381, 540), 73);
+        } else {
+            addDpad(QPointF(390, 516), 112);
+            QPainterPath start;
+            start.addRoundedRect(QRectF(-70, -16, 140, 32), 16, 16);
+            QTransform angle;
+            angle.translate(1095, 327.5);
+            angle.rotate(-18);
+            addArea(3, angle.map(start));
+            addCircle(1, QPointF(1023, 615), 70);
+            addCircle(0, QPointF(1172, 537), 68);
+            addCircle(8, QPointF(1324, 479), 66);
+        }
+        break;
+    case ConsoleProfile::MasterSystem:
+        addDpad(QPointF(322, 525), 145);
+        addCircle(0, QPointF(1045, 575), 80);
+        addCircle(8, QPointF(1295, 575), 80);
+        break;
+    case ConsoleProfile::GameGear:
+        addDpad(QPointF(211, 485), 100);
+        addEllipse(3, QPointF(1317, 355), 45, 20);
+        addCircle(0, QPointF(1265, 525), 51);
+        addCircle(8, QPointF(1399, 460), 51);
+        break;
+    case ConsoleProfile::SG1000: {
+        const QPointF center(394, 523);
+        addArea(Up, diskSector(center, 90));
+        addArea(Down, diskSector(center, 270));
+        addArea(Left, diskSector(center, 180));
+        addArea(Right, diskSector(center, 0));
+        QPainterPath first, second;
+        first.addRoundedRect(QRectF(947, 498, 148, 222), 74, 74);
+        second.addRoundedRect(QRectF(1206, 498, 148, 222), 74, 74);
+        addArea(0, first);
+        addArea(8, second);
+        break;
+    }
+    }
+    for (qsizetype i = 0; i < areas_.size(); ++i) {
+        for (qsizetype j = i + 1; j < areas_.size(); ++j) {
+            auto& first = areas_[i];
+            auto& second = areas_[j];
+            if (!first.hit.boundingRect().intersects(second.hit.boundingRect()))
+                continue;
+            const QPointF a = first.shape.boundingRect().center();
+            const QPointF b = second.shape.boundingRect().center();
+            if (QLineF(a, b).length() < 1)
+                continue;
+            first.hit = first.hit.intersected(nearerHalfPlane(a, b));
+            second.hit = second.hit.intersected(nearerHalfPlane(b, a));
+        }
+    }
+}
+
+QRectF ControllerDiagram::illustrationArea() const {
+    const qreal footer = profile_ == ConsoleProfile::MasterSystem ? 72 : 28;
+    return QRectF(8, 34, qMax(1, width() - 16), qMax(qreal(1), height() - 34 - footer));
+}
+
+QRectF ControllerDiagram::consolePauseArea() const {
+    return QRectF((width() - 196) / 2.0, height() - 66, 196, 32);
+}
+
 QTransform ControllerDiagram::drawingTransform() const {
-    const qreal scale = qMin(width() / 440.0, height() / 300.0);
+    const QRectF area = illustrationArea();
+    const qreal scale = qMin(area.width() / ImageWidth, area.height() / ImageHeight);
     QTransform transform;
-    transform.translate((width() - 440.0 * scale) / 2.0,
-                        (height() - 300.0 * scale) / 2.0);
+    transform.translate(area.center().x() - ImageWidth * scale / 2,
+                        area.center().y() - ImageHeight * scale / 2);
     transform.scale(scale, scale);
     return transform;
 }
 
-QColor ControllerDiagram::faceFor(int target, const QColor& normal) const {
-    return target >= 0 && target < 16 && (pressedMask_ & (1u << target))
-        ? accent : normal;
-}
-
-void ControllerDiagram::addHit(int target, const QRectF& area) {
-    if (targets_.contains(target))
-        hitAreas_.append({target, area});
-}
-
-void ControllerDiagram::drawButton(QPainter& painter, int target, QPointF center,
-                                   qreal radius, const QString& label,
-                                   const QColor& face) {
-    if (!targets_.contains(target))
-        return;
-    const QRectF outer(center.x() - radius, center.y() - radius,
-                       radius * 2, radius * 2);
-    painter.setPen(QPen(target == selectedTarget_ ? selected : ink,
-                        target == selectedTarget_ ? 4 : 2));
-    painter.setBrush(faceFor(target, face));
-    painter.drawEllipse(outer);
-    painter.setPen(faceFor(target, face).lightness() < 125
-                       ? QColor(245, 246, 249) : ink);
-    QFont labelFont = painter.font();
-    labelFont.setBold(true);
-    labelFont.setPointSizeF(10);
-    painter.setFont(labelFont);
-    painter.drawText(outer, Qt::AlignCenter, label);
-    addHit(target, outer.adjusted(-5, -5, 5, 5));
-}
-
-void ControllerDiagram::drawSmallButton(QPainter& painter, int target,
-                                        const QRectF& area, const QString& label) {
-    if (!targets_.contains(target))
-        return;
-    painter.setPen(QPen(target == selectedTarget_ ? selected : QColor(24, 27, 32),
-                        target == selectedTarget_ ? 3 : 1.5));
-    painter.setBrush(faceFor(target, QColor(70, 75, 82)));
-    painter.drawRoundedRect(area, area.height() / 2, area.height() / 2);
-    painter.setPen(QColor(246, 246, 247));
-    QFont font = painter.font();
-    font.setPointSizeF(8.5);
-    font.setBold(true);
-    painter.setFont(font);
-    painter.drawText(area, Qt::AlignCenter, label);
-    addHit(target, area.adjusted(-5, -5, 5, 5));
-}
-
-void ControllerDiagram::drawDpad(QPainter& painter, QPointF center, qreal size) {
-    const qreal arm = size * 0.38;
-    const QRectF up(center.x() - arm / 2, center.y() - size,
-                    arm, size - arm / 2);
-    const QRectF down(center.x() - arm / 2, center.y() + arm / 2,
-                      arm, size - arm / 2);
-    const QRectF left(center.x() - size, center.y() - arm / 2,
-                      size - arm / 2, arm);
-    const QRectF right(center.x() + arm / 2, center.y() - arm / 2,
-                       size - arm / 2, arm);
-    const QPair<int, QRectF> pieces[] = {
-        {Up, up}, {Down, down}, {Left, left}, {Right, right}
-    };
-    for (const auto& piece : pieces) {
-        if (!targets_.contains(piece.first))
-            continue;
-        painter.setPen(QPen(piece.first == selectedTarget_ ? selected : ink,
-                            piece.first == selectedTarget_ ? 3 : 1));
-        painter.setBrush(faceFor(piece.first, QColor(63, 68, 74)));
-        painter.drawRoundedRect(piece.second, 3, 3);
-        addHit(piece.first, piece.second.adjusted(-5, -5, 5, 5));
+void ControllerDiagram::drawHighlight(QPainter& painter, int target,
+                                      const QPainterPath& shape) const {
+    const bool pressed = target >= 0 && target < 16 && (pressedMask_ & (1u << target));
+    if (pressed) {
+        QColor fill = accent;
+        fill.setAlpha(60);
+        QPen pen(accent, 2);
+        pen.setCosmetic(true);
+        painter.setPen(pen);
+        painter.setBrush(fill);
+        painter.drawPath(shape);
     }
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(48, 53, 59));
-    painter.drawEllipse(QRectF(center.x() - 11, center.y() - 11, 22, 22));
-    painter.setPen(QPen(QColor(160, 166, 172), 1.5));
-    painter.drawLine(QPointF(center.x(), center.y() - size + 8),
-                     QPointF(center.x(), center.y() - size + 18));
-    painter.drawLine(QPointF(center.x(), center.y() + size - 8),
-                     QPointF(center.x(), center.y() + size - 18));
-    painter.drawLine(QPointF(center.x() - size + 8, center.y()),
-                     QPointF(center.x() - size + 18, center.y()));
-    painter.drawLine(QPointF(center.x() + size - 8, center.y()),
-                     QPointF(center.x() + size - 18, center.y()));
+    if (target == selectedTarget_) {
+        QColor fill = selected;
+        fill.setAlpha(pressed ? 0 : 38);
+        QPen pen(selected, 2.5);
+        pen.setCosmetic(true);
+        painter.setPen(pen);
+        painter.setBrush(fill);
+        painter.drawPath(shape);
+    }
 }
 
 void ControllerDiagram::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
     painter.fillRect(rect(), palette().color(QPalette::Base));
-    painter.setTransform(drawingTransform());
-    hitAreas_.clear();
 
     QFont title = painter.font();
     title.setPointSizeF(11);
     title.setBold(true);
     painter.setFont(title);
     painter.setPen(palette().color(QPalette::Text));
-    painter.drawText(QRectF(12, 4, 416, 28), Qt::AlignCenter,
-                     InputManager::profileName(profile_));
+    QString name = InputManager::profileName(profile_);
+    if (profile_ == ConsoleProfile::MegaDrive)
+        name += sixButton_ ? QStringLiteral(" · 6 кнопок") : QStringLiteral(" · 3 кнопки");
+    painter.drawText(QRectF(8, 4, width() - 16, 26), Qt::AlignCenter, name);
 
-    if (profile_ == ConsoleProfile::MegaDrive) {
-        QPainterPath shell;
-        shell.moveTo(33, 166);
-        shell.cubicTo(21, 104, 68, 75, 132, 74);
-        shell.cubicTo(193, 54, 272, 57, 332, 75);
-        shell.cubicTo(403, 74, 429, 122, 408, 189);
-        shell.cubicTo(396, 238, 363, 252, 321, 233);
-        shell.cubicTo(270, 214, 174, 214, 122, 235);
-        shell.cubicTo(72, 253, 42, 223, 33, 166);
-        painter.setPen(QPen(QColor(19, 21, 25), 3));
-        painter.setBrush(QColor(55, 58, 64));
-        painter.drawPath(shell);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(90, 93, 99));
-        painter.drawRoundedRect(QRectF(155, 86, 124, 20), 10, 10);
-        drawDpad(painter, QPointF(117, 165), 35);
-        drawSmallButton(painter, 2, QRectF(181, 113, 41, 17),
-                        QStringLiteral("MODE"));
-        drawSmallButton(painter, 3, QRectF(232, 113, 43, 17),
-                        QStringLiteral("START"));
-        const QColor red(165, 54, 60);
-        const QColor slate(77, 81, 90);
-        drawButton(painter, 10, QPointF(284, 145), 17, QStringLiteral("X"), slate);
-        drawButton(painter, 9, QPointF(332, 133), 17, QStringLiteral("Y"), slate);
-        drawButton(painter, 11, QPointF(380, 121), 17, QStringLiteral("Z"), slate);
-        drawButton(painter, 1, QPointF(277, 191), 19, QStringLiteral("A"), red);
-        drawButton(painter, 0, QPointF(328, 179), 19, QStringLiteral("B"), red);
-        drawButton(painter, 8, QPointF(379, 167), 19, QStringLiteral("C"), red);
-    } else if (profile_ == ConsoleProfile::MasterSystem) {
-        painter.setPen(QPen(QColor(97, 99, 101), 2));
-        painter.setBrush(cream);
-        painter.drawRoundedRect(QRectF(27, 72, 386, 160), 16, 16);
-        painter.setPen(QPen(QColor(165, 164, 150), 1));
-        painter.drawRoundedRect(QRectF(39, 84, 362, 136), 12, 12);
-        drawDpad(painter, QPointF(125, 153), 37);
-        drawButton(painter, 0, QPointF(294, 167), 23, QStringLiteral("1"),
-                   QColor(175, 62, 65));
-        drawButton(painter, 8, QPointF(359, 145), 23, QStringLiteral("2"),
-                   QColor(175, 62, 65));
-        drawSmallButton(painter, 3, QRectF(177, 44, 55, 20),
-                        QStringLiteral("PAUSE"));
-        painter.setPen(QColor(88, 91, 96));
-        QFont note = painter.font();
-        note.setPointSizeF(8);
-        note.setBold(false);
-        painter.setFont(note);
-        painter.drawText(QRectF(237, 44, 80, 20), Qt::AlignVCenter,
-                         QStringLiteral("на консоли"));
-    } else if (profile_ == ConsoleProfile::GameGear) {
-        painter.setPen(QPen(QColor(24, 26, 30), 2));
-        painter.setBrush(QColor(57, 61, 68));
-        painter.drawRoundedRect(QRectF(18, 55, 404, 199), 47, 47);
-        painter.setPen(QPen(QColor(19, 21, 25), 2));
-        painter.setBrush(QColor(23, 30, 36));
-        painter.drawRoundedRect(QRectF(155, 80, 145, 142), 13, 13);
-        painter.setBrush(QColor(61, 113, 121));
-        painter.drawRoundedRect(QRectF(169, 94, 117, 114), 3, 3);
-        drawDpad(painter, QPointF(92, 155), 32);
-        drawButton(painter, 0, QPointF(345, 165), 20, QStringLiteral("1"),
-                   QColor(145, 50, 56));
-        drawButton(painter, 8, QPointF(382, 130), 20, QStringLiteral("2"),
-                   QColor(145, 50, 56));
-        drawSmallButton(painter, 3, QRectF(202, 228, 53, 17),
-                        QStringLiteral("START"));
+    if (illustration_.isNull()) {
+        painter.drawText(illustrationArea(), Qt::AlignCenter,
+                         QStringLiteral("Изображение недоступно"));
     } else {
-        painter.setPen(QPen(QColor(88, 90, 91), 2));
-        painter.setBrush(QColor(205, 207, 199));
-        painter.drawRoundedRect(QRectF(28, 70, 384, 166), 25, 25);
-        painter.setPen(QPen(QColor(150, 152, 149), 2));
-        painter.setBrush(QColor(83, 89, 93));
-        painter.drawEllipse(QRectF(74, 93, 128, 128));
-        painter.setPen(QPen(QColor(37, 41, 45), 6));
-        painter.drawLine(QPointF(138, 157), QPointF(138, 120));
-        painter.setPen(QPen(QColor(20, 22, 24), 2));
-        painter.setBrush(QColor(48, 52, 57));
-        painter.drawEllipse(QRectF(121, 99, 34, 34));
-        // Invisible directional sectors over the joystick are still clickable.
-        addHit(Up, QRectF(113, 93, 50, 42));
-        addHit(Down, QRectF(113, 179, 50, 42));
-        addHit(Left, QRectF(74, 133, 47, 48));
-        addHit(Right, QRectF(155, 133, 47, 48));
-        const QPair<int, QPointF> arrows[] = {
-            {Up, QPointF(138, 83)}, {Down, QPointF(138, 228)},
-            {Left, QPointF(64, 157)}, {Right, QPointF(212, 157)}
-        };
-        for (const auto& arrow : arrows) {
-            if (!targets_.contains(arrow.first))
-                continue;
-            painter.setPen(arrow.first == selectedTarget_ ? selected
-                           : (pressedMask_ & (1u << arrow.first)) ? accent : ink);
-            QFont f = painter.font();
-            f.setPointSizeF(14);
-            f.setBold(true);
-            painter.setFont(f);
-            const QRectF arrowArea(arrow.second.x() - 14, arrow.second.y() - 14,
-                                   28, 28);
-            painter.drawText(arrowArea, Qt::AlignCenter,
-                             arrow.first == Up ? QStringLiteral("▲")
-                             : arrow.first == Down ? QStringLiteral("▼")
-                             : arrow.first == Left ? QStringLiteral("◀")
-                                                   : QStringLiteral("▶"));
-            addHit(arrow.first, arrowArea.adjusted(-3, -3, 3, 3));
+        painter.save();
+        painter.setTransform(drawingTransform());
+        painter.drawPixmap(QRectF(0, 0, ImageWidth, ImageHeight), illustration_,
+                           QRectF(illustration_.rect()));
+        for (const auto& area : areas_)
+            drawHighlight(painter, area.target, area.shape);
+        // SJ-150's image has no printed numbers. These are mapping hints below
+        // the controller, rather than invented markings on its button faces.
+        if (profile_ == ConsoleProfile::SG1000) {
+            QFont labels = painter.font();
+            labels.setPixelSize(64);
+            labels.setBold(true);
+            painter.setFont(labels);
+            painter.setPen(palette().color(QPalette::Text));
+            if (targets_.contains(0))
+                painter.drawText(QRectF(968, 826, 106, 76), Qt::AlignCenter, QStringLiteral("1"));
+            if (targets_.contains(8))
+                painter.drawText(QRectF(1227, 826, 106, 76), Qt::AlignCenter, QStringLiteral("2"));
         }
-        drawButton(painter, 0, QPointF(291, 163), 24, QStringLiteral("1"),
-                   QColor(159, 59, 60));
-        drawButton(painter, 8, QPointF(359, 139), 24, QStringLiteral("2"),
-                   QColor(159, 59, 60));
+        painter.restore();
     }
 
-    painter.resetTransform();
+    if (profile_ == ConsoleProfile::MasterSystem && targets_.contains(3)) {
+        const QRectF panel = consolePauseArea();
+        const QRectF button(panel.right() - 87, panel.top() + 3, 83, panel.height() - 6);
+        painter.setPen(QPen(palette().color(QPalette::Mid), 1));
+        painter.setBrush(palette().color(QPalette::AlternateBase));
+        painter.drawRoundedRect(panel, 6, 6);
+        QFont font = painter.font();
+        font.setPointSizeF(9);
+        font.setBold(false);
+        painter.setFont(font);
+        painter.setPen(palette().color(QPalette::Text));
+        painter.drawText(QRectF(panel.left() + 9, panel.top(), 100, panel.height()),
+                         Qt::AlignVCenter, QStringLiteral("Пауза консоли"));
+        painter.setBrush(palette().color(QPalette::Button));
+        painter.setPen(QPen(palette().color(QPalette::Mid), 1));
+        painter.drawRoundedRect(button, 5, 5);
+        QPainterPath outline;
+        outline.addRoundedRect(button, 5, 5);
+        drawHighlight(painter, 3, outline);
+        font.setBold(true);
+        painter.setFont(font);
+        painter.setPen(palette().color(QPalette::ButtonText));
+        painter.drawText(button, Qt::AlignCenter, QStringLiteral("PAUSE"));
+    }
+
     QColor hintColor = palette().color(QPalette::Text);
     hintColor.setAlpha(165);
     painter.setPen(hintColor);
     QFont hint = painter.font();
     hint.setPointSizeF(9);
+    hint.setBold(false);
     painter.setFont(hint);
-    painter.drawText(QRect(8, height() - 24, width() - 16, 18),
-                     Qt::AlignCenter, QStringLiteral("Нажмите кнопку на рисунке для выбора"));
+    painter.drawText(QRect(8, height() - 24, width() - 16, 18), Qt::AlignCenter,
+                     QStringLiteral("Нажмите кнопку на рисунке для выбора"));
 }
 
 void ControllerDiagram::mousePressEvent(QMouseEvent* event) {
@@ -284,13 +368,18 @@ void ControllerDiagram::mousePressEvent(QMouseEvent* event) {
         QWidget::mousePressEvent(event);
         return;
     }
+    if (profile_ == ConsoleProfile::MasterSystem && targets_.contains(3) &&
+        consolePauseArea().contains(event->position())) {
+        emit targetClicked(3);
+        event->accept();
+        return;
+    }
     bool invertible = false;
-    const QPointF point = drawingTransform().inverted(&invertible)
-                              .map(event->position());
-    if (invertible) {
-        for (int index = hitAreas_.size() - 1; index >= 0; --index) {
-            if (hitAreas_[index].second.contains(point)) {
-                emit targetClicked(hitAreas_[index].first);
+    const QPointF point = drawingTransform().inverted(&invertible).map(event->position());
+    if (invertible && !illustration_.isNull()) {
+        for (const auto& area : areas_) {
+            if (area.hit.contains(point)) {
+                emit targetClicked(area.target);
                 event->accept();
                 return;
             }

@@ -24,6 +24,7 @@ Q_DECLARE_METATYPE(PadBinding)
 struct InputDevice { int instanceId=-1; QString key; QString name; };
 struct PlayerMapping {
     bool connected = true; // Virtual port; defaultMapping disconnects player 2.
+    bool sixButton = true; // Mega Drive port type; bindings survive 3/6 changes.
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
     QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key
@@ -40,11 +41,12 @@ public:
     static PlayerMapping defaultMapping(ConsoleProfile profile, int player);
     static QString bindingName(const PadBinding& binding);
     static QString profileName(ConsoleProfile profile);
-    static QVector<int> gameTargets(ConsoleProfile profile);
+    static QVector<int> gameTargets(ConsoleProfile profile, bool sixButton = true);
     static QString targetName(ConsoleProfile profile, int target);
     void setProfile(ConsoleProfile profile);
     ConsoleProfile profile() const;
     bool isConnected(unsigned player) const;
+    bool sixButton(unsigned player) const;
     void setEnabled(bool enabled); // release all outputs when unfocused or in modal dialogs
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native);
@@ -59,6 +61,7 @@ signals:
     void devicesChanged();
     void maskChanged(unsigned player, unsigned mask);
     void connectionChanged(unsigned player, bool connected);
+    void controllerTypeChanged(unsigned player, bool sixButton);
     void commandChanged(int command, bool pressed);
     void captureReady(); // all inputs released; waiting for the new binding
     void bindingCaptured(const PadBinding& binding);

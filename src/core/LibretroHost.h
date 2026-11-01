@@ -55,6 +55,8 @@ public:
     // Configuration survives unload/load. Returns true only for a change.
     bool setControllerConnected(unsigned port, bool connected);
     bool controllerConnected(unsigned port) const;
+    bool setControllerSixButton(unsigned port, bool sixButton);
+    bool controllerSixButton(unsigned port) const;
     bool loaded() const { return loaded_; }
     double fps() const { return av_.timing.fps; }
     int sampleRate() const { return int(av_.timing.sample_rate); }
@@ -103,6 +105,7 @@ private:
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     std::array<unsigned,2> buttons_{};
     std::array<bool,2> controllerConnected_{{true,false}};
+    std::array<bool,2> controllerSixButton_{{true,true}};
     std::array<unsigned,2> controllerDevices_{{~0u,~0u}};
     std::array<size_t,2> saveMemorySizes_{};
     BatterySave batterySave_;

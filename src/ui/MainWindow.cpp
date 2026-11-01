@@ -18,6 +18,7 @@
 #include <QFile>
 #include <QImageWriter>
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QFormLayout>
 #include <QCryptographicHash>
 #include <QDragEnterEvent>
@@ -101,8 +102,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(input_, &InputManager::connectionChanged, this, [this](unsigned port, bool connected) {
         session_.setControllerConnected(port, connected);
     });
-    for (unsigned port = 0; port < 2; ++port)
+    connect(input_, &InputManager::controllerTypeChanged, this, [this](unsigned port, bool sixButton) {
+        session_.setControllerSixButton(port, sixButton);
+    });
+    for (unsigned port = 0; port < 2; ++port) {
         session_.setControllerConnected(port, input_->isConnected(port));
+        session_.setControllerSixButton(port, input_->sixButton(port));
+    }
     connect(input_, &InputManager::commandChanged, this, &MainWindow::handleInputCommand);
     connect(input_, &InputManager::notification, this, [](const QString& text) {
         qInfo("%s", qPrintable(text));
@@ -124,6 +130,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setRewindSeconds(rewindSeconds_);
+    session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
     connect(&session_, &EmulationSession::discStateChanged, this,
@@ -179,6 +186,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     connect(&session_, &EmulationSession::effectivePauseChanged, view_, &GameView::setPausedStatus);
     connect(&session_, &EmulationSession::rewindingChanged, view_, &GameView::setRewindStatus);
+    connect(&session_, &EmulationSession::rewindProgress, view_, &GameView::setRewindProgress);
     connect(&session_, &EmulationSession::stateSlotsChanged, this, [this](int selected, unsigned occupied) {
         occupiedSlots_ = occupied;
         if (selected >= 0 && selected == stateSlot_ && session_.hasGame())
@@ -986,6 +994,21 @@ void MainWindow::editSettings() {
     spriteLimit->setToolTip(QStringLiteral(
         "Уменьшает мигание и исчезновение спрайтов. "
         "В отдельных играх может нарушать графические эффекты."));
+    const int memoryMiB = qBound(16, settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt(), 1024);
+    auto* rewindMemory = new QSpinBox(&dialog);
+    rewindMemory->setObjectName(QStringLiteral("rewindMemoryLimit"));
+    rewindMemory->setRange(16, 1024);
+    rewindMemory->setSingleStep(16);
+    rewindMemory->setSuffix(QStringLiteral(" МиБ"));
+    rewindMemory->setValue(memoryMiB);
+    form->addRow(QStringLiteral("Память перемотки:"), rewindMemory);
+    auto* rewindHelp = new QLabel(QStringLiteral(
+        "История ограничена и временем, и памятью. При заполнении удаляются самые старые кадры. "
+        "Изменение лимита очищает историю; память выделяется по мере накопления."), &dialog);
+    rewindHelp->setWordWrap(true);
+    form->addRow(rewindHelp);
+    rewindMemory->setToolTip(QStringLiteral(
+        "Лимит сохранённой истории. Рабочие буферы и прочая память эмулятора учитываются отдельно."));
     layout->addLayout(form);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
@@ -995,6 +1018,10 @@ void MainWindow::editSettings() {
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
     if (dialog.exec() == QDialog::Accepted) {
+        if (rewindMemory->value() != memoryMiB) {
+            settings_.setValue(QStringLiteral("emulation/rewindMemoryMiB"), rewindMemory->value());
+            session_.setRewindMemoryMiB(rewindMemory->value());
+        }
         if ((screenshotFormat->currentIndex() == 1) != jpeg)
             settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
         const bool selectedFastCd = cdLoading->currentData().toBool();

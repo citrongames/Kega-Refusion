@@ -18,6 +18,7 @@ constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
 
 constexpr int mdTargets[] = {4, 5, 6, 7, 1, 0, 8, 10, 9, 11, 3, 2};
+constexpr int md3Targets[] = {4, 5, 6, 7, 1, 0, 8, 3};
 constexpr int smsTargets[] = {4, 5, 6, 7, 0, 8, 3};
 constexpr int sgTargets[] = {4, 5, 6, 7, 0, 8};
 struct TargetRange {
@@ -26,8 +27,9 @@ struct TargetRange {
     const int* begin() const { return first; }
     const int* end() const { return first + count; }
 };
-TargetRange gameTargetRange(ConsoleProfile profile) {
-    if (profile == ConsoleProfile::MegaDrive) return {mdTargets, 12};
+TargetRange gameTargetRange(ConsoleProfile profile, bool sixButton = true) {
+    if (profile == ConsoleProfile::MegaDrive)
+        return sixButton ? TargetRange{mdTargets, 12} : TargetRange{md3Targets, 8};
     if (profile == ConsoleProfile::SG1000) return {sgTargets, 6};
     return {smsTargets, 7};
 }
@@ -106,6 +108,10 @@ QString settingsPrefix(ConsoleProfile profile, int player) {
     return QStringLiteral("input/%1/player%2/").arg(profileId(profile)).arg(player + 1);
 }
 bool gameplayTarget(int target) { return target >= 0 && target < 16; }
+bool activeGameplayTarget(ConsoleProfile profile, bool sixButton, int target) {
+    return gameplayTarget(target) && (profile != ConsoleProfile::MegaDrive || sixButton ||
+           (target != 2 && target != 9 && target != 10 && target != 11));
+}
 bool validPlayer(int player) { return player >= 0 && player < playerCount; }
 int legacyKeyboardKey(int key) {
     // Old settings stored the active layout's Unicode key. Keep those bindings
@@ -196,6 +202,7 @@ struct InputManager::Impl {
             const QString prefix = settingsPrefix(ConsoleProfile(p), player);
             m.deviceKey = settings.value(prefix + "device", m.deviceKey).toString();
             m.connected = settings.value(prefix + "connected", m.connected).toBool();
+            m.sixButton = settings.value(prefix + "sixButton", m.sixButton).toBool();
             m.deadzonePercent = std::clamp(settings.value(prefix + "deadzone", m.deadzonePercent).toInt(), 5, 60);
             for (int target = 0; target < targetCount; ++target) {
                 const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -352,7 +359,7 @@ struct InputManager::Impl {
         if (!device) return 0;
         const auto& m = mappings[profileIndex(profile)][player];
         unsigned result = 0;
-        for (int target : gameTargetRange(profile)) {
+        for (int target : gameTargetRange(profile, m.sixButton)) {
             const auto configured = m.pad.value(target);
             bool& held = axisHeld[player][target];
             const bool pressed = configured.kind == PadBinding::Automatic ?
@@ -374,7 +381,7 @@ struct InputManager::Impl {
             }
             unsigned mask = pad;
             for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
-                if (gameplayTarget(it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
+                if (activeGameplayTarget(profile, m.sixButton, it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
             if (!enabled || capture || !m.connected) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
@@ -481,11 +488,14 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     for (auto it = m.keyboard.begin(); it != m.keyboard.end(); ++it)
         it.value() = storedKeyboardKey(it.value());
     const auto defaults = defaultMapping(profile, player);
+    if (profile == d->profile && d->mappings[profileIndex(profile)][player].sixButton != m.sixButton)
+        d->keys.clear(); // Release keys hidden by a type change, including their later key-up.
     d->mappings[profileIndex(profile)][player] = m;
     QSettings settings(d->settingsPath, QSettings::IniFormat);
     const QString prefix = settingsPrefix(profile, player);
     settings.setValue(prefix + "device", m.deviceKey);
     settings.setValue(prefix + "connected", m.connected);
+    settings.setValue(prefix + "sixButton", m.sixButton);
     settings.setValue(prefix + "deadzone", m.deadzonePercent);
     for (int target = 0; target < targetCount; ++target) {
         const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -496,7 +506,10 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
         else settings.setValue(keyKey, m.keyboard.value(target, 0));
     }
     settings.sync();
-    if (profile == d->profile) emit connectionChanged(unsigned(player), m.connected);
+    if (profile == d->profile) {
+        emit connectionChanged(unsigned(player), m.connected);
+        emit controllerTypeChanged(unsigned(player), m.sixButton);
+    }
     d->axisHeld = {};
     d->recompute();
 }
@@ -536,8 +549,8 @@ QString InputManager::profileName(ConsoleProfile profile) {
     }
     return {};
 }
-QVector<int> InputManager::gameTargets(ConsoleProfile profile) {
-    const auto targets = gameTargetRange(profile);
+QVector<int> InputManager::gameTargets(ConsoleProfile profile, bool sixButton) {
+    const auto targets = gameTargetRange(profile, sixButton);
     return QVector<int>(targets.begin(), targets.end());
 }
 QString InputManager::targetName(ConsoleProfile profile, int target) {
@@ -549,7 +562,7 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
     case 0: return profile == ConsoleProfile::MegaDrive ? QStringLiteral("B") : QStringLiteral("1");
     case 8: return profile == ConsoleProfile::MegaDrive ? QStringLiteral("C") : QStringLiteral("2");
     case 1: return QStringLiteral("A");
-    case 3: return profile == ConsoleProfile::MasterSystem ? QStringLiteral("Пауза") : QStringLiteral("Start");
+    case 3: return profile == ConsoleProfile::MasterSystem ? QStringLiteral("Пауза консоли") : QStringLiteral("Start");
     case 2: return QStringLiteral("Mode");
     case 9: return QStringLiteral("Y");
     case 10: return QStringLiteral("X");
@@ -572,13 +585,19 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
 void InputManager::setProfile(ConsoleProfile profile) {
     if (d->profile == profile) return;
     d->profile = profile; d->axisHeld = {};
-    for (unsigned player = 0; player < playerCount; ++player)
-        emit connectionChanged(player, d->mappings[profileIndex(profile)][player].connected);
+    for (unsigned player = 0; player < playerCount; ++player) {
+        const auto& mapping = d->mappings[profileIndex(profile)][player];
+        emit connectionChanged(player, mapping.connected);
+        emit controllerTypeChanged(player, mapping.sixButton);
+    }
     d->recompute();
 }
 ConsoleProfile InputManager::profile() const { return d->profile; }
 bool InputManager::isConnected(unsigned player) const {
     return player < playerCount && d->mappings[profileIndex(d->profile)][player].connected;
+}
+bool InputManager::sixButton(unsigned player) const {
+    return player < playerCount && d->mappings[profileIndex(d->profile)][player].sixButton;
 }
 void InputManager::setEnabled(bool enabled) {
     if (d->enabled == enabled) return;
@@ -627,7 +646,7 @@ bool InputManager::keyEvent(int key, bool pressed) {
     for (int player = 0; player < playerCount; ++player) {
         const auto& mapping = d->mappings[profileIndex(d->profile)][player];
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
-            if (gameplayTarget(it.key()) && it.value() == key && key != 0) bound = true;
+            if (activeGameplayTarget(d->profile, mapping.sixButton, it.key()) && it.value() == key && key != 0) bound = true;
     }
     if (!bound) return false;
     if (!d->enabled || d->capture) return true;

@@ -35,11 +35,13 @@ public:
     void setButton(unsigned port, unsigned id, bool pressed);
     void setButtons(unsigned port, unsigned mask);
     void setControllerConnected(unsigned port, bool connected);
+    void setControllerSixButton(unsigned port, bool sixButton);
     void releaseButtons();
     void setFastForward(bool enabled);
     void setFastForwardFactor(int factor);
     void setRewind(bool enabled);
     void setRewindSeconds(int seconds);
+    void setRewindMemoryMiB(int mebibytes);
     void setBackgroundPaused(bool paused);
     void requestSlotStatus(int selected);
     void shutdown();
@@ -54,6 +56,7 @@ signals:
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);
     void rewindingChanged(bool enabled);
+    void rewindProgress(qint64 remainingMs, qint64 totalMs);
     void stateSlotsChanged(int selected, unsigned occupied);
     void notification(const QString& text);
     void actionCompleted(const QString& text);
@@ -62,7 +65,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, Save, Restore, Slots, Disc, DiscIndex, Eject };
+    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, Save, Restore, Slots, Disc, DiscIndex, Eject };
     struct Command {
         Type type;
         QString path;
@@ -81,6 +84,6 @@ private:
     std::deque<Command> commands_;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
-    std::atomic<int> fastForwardFactor_{4}, rewindSeconds_{30};
+    std::atomic<int> fastForwardFactor_{4}, rewindSeconds_{30}, rewindMemoryMiB_{128};
     std::atomic<unsigned> buttons_[2]{};
 };

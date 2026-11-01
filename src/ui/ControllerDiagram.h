@@ -2,10 +2,15 @@
 
 #include "../input/InputManager.h"
 
+#include <QPainterPath>
+#include <QPixmap>
 #include <QRectF>
 #include <QSet>
+#include <QTransform>
 #include <QVector>
 #include <QWidget>
+
+class QPainter;
 
 class ControllerDiagram final : public QWidget {
     Q_OBJECT
@@ -13,6 +18,7 @@ public:
     explicit ControllerDiagram(QWidget* parent = nullptr);
     QSize sizeHint() const override;
     void setProfile(ConsoleProfile profile);
+    void setSixButton(bool sixButton);
     void setTargets(const QVector<int>& targets);
     void setSelectedTarget(int target);
     void setPressedMask(unsigned mask);
@@ -25,18 +31,28 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
 
 private:
-    void addHit(int target, const QRectF& area);
-    void drawDpad(QPainter& painter, QPointF center, qreal size);
-    void drawButton(QPainter& painter, int target, QPointF center, qreal radius,
-                    const QString& label, const QColor& face);
-    void drawSmallButton(QPainter& painter, int target, const QRectF& area,
-                         const QString& label);
-    QColor faceFor(int target, const QColor& normal) const;
+    struct TargetArea {
+        int target;
+        QPainterPath shape;
+        QPainterPath hit;
+    };
+    void updateIllustration();
+    void rebuildTargets();
+    void addArea(int target, const QPainterPath& shape, qreal padding = 24);
+    void addCircle(int target, QPointF center, qreal radius);
+    void addEllipse(int target, QPointF center, qreal rx, qreal ry);
+    void addDpad(QPointF center, qreal reach);
+    void drawHighlight(QPainter& painter, int target, const QPainterPath& shape) const;
+    QRectF illustrationArea() const;
+    QRectF consolePauseArea() const;
     QTransform drawingTransform() const;
 
     ConsoleProfile profile_ = ConsoleProfile::MegaDrive;
+    bool sixButton_ = true;
+    QString illustrationPath_;
+    QPixmap illustration_;
     QSet<int> targets_;
     int selectedTarget_ = -1;
     unsigned pressedMask_ = 0;
-    QVector<QPair<int, QRectF>> hitAreas_;
+    QVector<TargetArea> areas_;
 };

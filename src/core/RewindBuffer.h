@@ -8,11 +8,15 @@ class RewindBuffer final {
 public:
     explicit RewindBuffer(qsizetype byteLimit = 128 * 1024 * 1024) : byteLimit_(byteLimit) {}
     void configure(int seconds, double snapshotsPerSecond);
+    // Changing the retained-storage budget discards the previous timeline.
+    void setByteLimit(qsizetype byteLimit);
     void clear();
     bool capture(const QByteArray& state, const QImage& frame, double aspect);
     bool stepBack(QByteArray& state, QImage& frame, double& aspect);
     size_t size() const { return currentState_.isEmpty() ? 0 : entries_.size() + 1; }
-    // Counts retained byte-array capacities, raw anchors and entry metadata; excludes transient work/allocator overhead.
+    // Counts retained byte-array capacities, raw anchors and live Entry metadata.
+    // Transient encode/decode/image work, Qt control blocks, deque storage and
+    // allocator overhead are outside this retained-storage budget.
     qsizetype bytesUsed() const { return bytesUsed_; }
 private:
     struct Patch { QByteArray bytes; qsizetype restoredSize = 0; bool delta = false; };

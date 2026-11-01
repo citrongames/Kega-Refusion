@@ -84,6 +84,12 @@ void RewindBuffer::configure(int seconds, double snapshotsPerSecond) {
     entryLimit_ = seconds > 0 && std::isfinite(snapshotsPerSecond)
         ? size_t(std::clamp(seconds,1,60)*std::clamp(snapshotsPerSecond,1.0,120.0))+1 : 0;
 }
+void RewindBuffer::setByteLimit(qsizetype byteLimit) {
+    byteLimit = std::max<qsizetype>(0,byteLimit);
+    if (byteLimit_ == byteLimit) return;
+    byteLimit_ = byteLimit;
+    clear();
+}
 void RewindBuffer::clear() {
     entries_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
     bytesUsed_ = 0;

@@ -297,6 +297,19 @@ void GameView::setRewindStatus(bool enabled) {
     repaintView();
 }
 
+void GameView::setRewindProgress(qint64 remainingMs, qint64 totalMs) {
+    auto time = [](qint64 ms) {
+        const qint64 tenths = qMax<qint64>(0, ms) / 100;
+        return QStringLiteral("%1:%2.%3").arg(tenths / 600, 2, 10, QLatin1Char('0'))
+            .arg(tenths / 10 % 60, 2, 10, QLatin1Char('0')).arg(tenths % 10);
+    };
+    // The origin stays fixed; remaining history counts down to zero.
+    const QString text = QStringLiteral("%1 / %2").arg(time(remainingMs), time(totalMs));
+    if (rewindTime_ == text) return;
+    rewindTime_ = text;
+    if (rewinding_ && osdEnabled_) repaintView();
+}
+
 void GameView::expireOsd() {
     const qint64 now = osdClock_.elapsed();
     const auto end = std::remove_if(notices_.begin(), notices_.end(),
@@ -353,7 +366,7 @@ void GameView::paintOsd(QPainter& painter) {
         y += drawPanel({fastForwardFactor_ ? QStringLiteral("УСКОРЕНИЕ ×%1").arg(fastForwardFactor_) : QStringLiteral("УСКОРЕНИЕ МАКС.")},
                        margin, y, true) + 4;
     if (rewinding_)
-        y += drawPanel({QStringLiteral("ПЕРЕМОТКА НАЗАД")}, margin, y, true) + 4;
+        y += drawPanel({QStringLiteral("ПЕРЕМОТКА НАЗАД"), rewindTime_}, margin, y, true) + 4;
     if (muted_)
         y += drawPanel({QStringLiteral("ЗВУК ВЫКЛЮЧЕН")}, margin, y, true) + 4;
     if (stateSlots_.expiresAt) {

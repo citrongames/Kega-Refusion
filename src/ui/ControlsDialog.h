@@ -33,6 +33,7 @@ private:
     int selectedPlayer() const;
     int draftKey() const;
     PlayerMapping& draft();
+    QVector<int> activeGameTargets();
     QString captureDeviceKey();
     void refreshDevices();
     void refreshContents();
@@ -58,6 +59,8 @@ private:
     QComboBox* playerBox_ = nullptr;
     QComboBox* deviceBox_ = nullptr;
     QCheckBox* connectedBox_ = nullptr;
+    QLabel* controllerTypeLabel_ = nullptr;
+    QComboBox* controllerTypeBox_ = nullptr;
     QSlider* deadzoneSlider_ = nullptr;
     QLabel* deadzoneValue_ = nullptr;
     QLabel* feedback_ = nullptr;

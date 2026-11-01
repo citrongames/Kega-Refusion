@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <thread>
 
 EmulationSession::EmulationSession(QString corePath, QString dataPath, QObject* parent)
@@ -31,6 +32,9 @@ void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::Sprit
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
 void EmulationSession::setControllerConnected(unsigned port, bool connected) {
     if (port < 2) enqueue({Type::Port,{},int(port) | (connected ? 2 : 0)});
+}
+void EmulationSession::setControllerSixButton(unsigned port, bool sixButton) {
+    if (port < 2) enqueue({Type::ControllerType,{},int(port) | (sixButton ? 2 : 0)});
 }
 void EmulationSession::updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available) {
     audioQueueUs_.store(queuedUsecs); audioTargetUs_.store(targetUsecs);
@@ -67,6 +71,7 @@ void EmulationSession::setFastForward(bool enabled) { fastForward_.store(enabled
 void EmulationSession::setFastForwardFactor(int factor) { fastForwardFactor_.store(factor == 0 ? 0 : std::clamp(factor, 2, 32)); }
 void EmulationSession::setRewind(bool enabled) { rewind_.store(enabled); }
 void EmulationSession::setRewindSeconds(int seconds) { rewindSeconds_.store(std::clamp(seconds, 0, 60)); }
+void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
 void EmulationSession::requestSlotStatus(int selected) { enqueue({Type::Slots,{},selected}); }
 void EmulationSession::shutdown() { quitting_.store(true); if (isRunning()) wait(); }
@@ -80,10 +85,11 @@ void EmulationSession::run() {
         emit discStateChanged(host.discPaths(),host.discIndex(),lastDiscEjected);
     };
     RewindBuffer history;
-    int historySeconds = rewindSeconds_.load();
+    int historySeconds = rewindSeconds_.load(), historyMemoryMiB = rewindMemoryMiB_.load();
     bool historyHealthy = true;
     unsigned captureFrame = 0;
     auto clearHistory = [&] {
+        history.setByteLimit(qsizetype(historyMemoryMiB) * 1024 * 1024);
         history.configure(historySeconds, host.fps() / 2.0);
         historyHealthy = true;
         captureFrame = 0;
@@ -94,6 +100,12 @@ void EmulationSession::run() {
         if (rewinding != enabled) { rewinding = enabled; emit rewindingChanged(enabled); }
     };
     auto nowNs = [] { return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(); };
+    qint64 rewindTotalMs = 0, rewindLastProgressMs = 0, nextRewindProgressNs = 0;
+    double rewindStepMs = 0;
+    auto rewindAvailableMs = [&] {
+        const size_t checkpoints = history.size();
+        return qint64(std::llround(double(checkpoints ? checkpoints-1 : 0) * rewindStepMs));
+    };
     FramePacer pacer;
     FrameWaiter waiter;
     pacer.reset(nowNs());
@@ -169,6 +181,12 @@ void EmulationSession::run() {
                     pacer.reset(nowNs());
                 }
                 break;
+            case Type::ControllerType:
+                if (host.setControllerSixButton(unsigned(command.value & 1), (command.value & 2) != 0)) {
+                    clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
+                    pacer.reset(nowNs());
+                }
+                break;
             case Type::SpriteLimit:
                 if (host.setRemoveSpriteLimit(command.value != 0,error)) {
                     optionsPending = true; clearHistory();
@@ -219,8 +237,11 @@ void EmulationSession::run() {
                 break;
             }
         }
-        if (historySeconds != rewindSeconds_.load()) {
-            historySeconds = rewindSeconds_.load(); clearHistory();
+        const int requestedHistorySeconds = rewindSeconds_.load();
+        const int requestedHistoryMemoryMiB = rewindMemoryMiB_.load();
+        if (historySeconds != requestedHistorySeconds || historyMemoryMiB != requestedHistoryMemoryMiB) {
+            historySeconds = requestedHistorySeconds; historyMemoryMiB = requestedHistoryMemoryMiB;
+            clearHistory();
         }
         const bool background = backgroundPaused_.load();
         const bool nowPaused = host.loaded() && (paused || background);
@@ -230,20 +251,37 @@ void EmulationSession::run() {
         const bool reverse = rewind_.load() && historySeconds > 0 && host.loaded() && !background && !optionsPending;
         if (reverse != rewindLatched) {
             rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
-            if (!reverse) rewindStatus(false);
+            if (reverse) {
+                // Checkpoints are recorded every two emulated frames. Freeze
+                // this hold's origin while the remaining step count decreases.
+                rewindStepMs = 2000.0 / host.fps();
+                rewindTotalMs = rewindAvailableMs();
+                rewindLastProgressMs = rewindTotalMs;
+                nextRewindProgressNs = nowNs() + 100000000;
+                rewindStatus(true);
+                emit rewindProgress(rewindTotalMs,rewindTotalMs);
+            } else rewindStatus(false);
         }
         if (reverse) {
+            rewindStatus(true);
             QByteArray state;
             QImage frame;
             double aspect = 4.0 / 3.0;
             if (history.stepBack(state,frame,aspect)) {
                 if (host.restoreRewindState(state)) {
-                    captureFrame = 0; rewindStatus(true); publishVideo(frame,aspect);
+                    captureFrame = 0; publishVideo(frame,aspect);
                 } else {
-                    clearHistory(); historyHealthy = false; rewindStatus(false);
+                    clearHistory(); historyHealthy = false;
                     emit errorOccurred(QStringLiteral("Ядро отклонило состояние перемотки. История очищена."));
                 }
-            } else rewindStatus(false);
+            }
+            const qint64 remainingMs = std::min(rewindTotalMs,rewindAvailableMs());
+            const qint64 progressNow = nowNs();
+            if (remainingMs != rewindLastProgressMs && progressNow >= nextRewindProgressNs) {
+                rewindLastProgressMs = remainingMs;
+                nextRewindProgressNs = progressNow + 100000000;
+                emit rewindProgress(remainingMs,rewindTotalMs);
+            }
             // Hold at the oldest checkpoint rather than inadvertently running forward.
             const auto deadline = pacer.next(nowNs(),qint64(2000000000.0 / host.fps()));
             waiter.waitUntil(deadline);

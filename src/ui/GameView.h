@@ -40,6 +40,7 @@ public:
     void setFastForwardStatus(bool enabled);
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
+    void setRewindProgress(qint64 remainingMs, qint64 totalMs);
 
 signals:
     void shaderFailed(const QString& error);
@@ -92,6 +93,7 @@ private:
     bool fastForward_ = false;
     int fastForwardFactor_ = 4;
     bool rewinding_ = false;
+    QString rewindTime_;
     StateSlots stateSlots_;
     QVector<Notice> notices_;
     QElapsedTimer osdClock_;

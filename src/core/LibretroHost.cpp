@@ -624,7 +624,10 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     return setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error);
 }
 void LibretroHost::setButtons(unsigned port, unsigned mask) {
-    if (port < buttons_.size()) buttons_[port] = controllerConnected_[port] ? mask : 0u;
+    if (port >= buttons_.size()) return;
+    if (controllerDevices_[port] == RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0))
+        mask &= ~((1u << 2) | (1u << 9) | (1u << 10) | (1u << 11)); // Mode/X/Y/Z.
+    buttons_[port] = controllerConnected_[port] ? mask : 0u;
 }
 bool LibretroHost::controllerConnected(unsigned port) const {
     return port < controllerConnected_.size() && controllerConnected_[port];
@@ -636,12 +639,24 @@ bool LibretroHost::setControllerConnected(unsigned port, bool connected) {
     applyControllerPorts();
     return true;
 }
+bool LibretroHost::controllerSixButton(unsigned port) const {
+    return port < controllerSixButton_.size() && controllerSixButton_[port];
+}
+bool LibretroHost::setControllerSixButton(unsigned port, bool sixButton) {
+    if (port >= controllerSixButton_.size() || controllerSixButton_[port] == sixButton) return false;
+    controllerSixButton_[port] = sixButton;
+    buttons_[port] = 0;
+    applyControllerPorts();
+    return true;
+}
 void LibretroHost::applyControllerPorts(bool force) {
     if (!loaded_) return;
     const bool md = contentExtension_ != "sms" && contentExtension_ != "gg" && contentExtension_ != "sg";
     for (unsigned port = 0; port < controllerConnected_.size(); ++port) {
-        const unsigned device = !controllerConnected_[port] ? RETRO_DEVICE_NONE :
-            md ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) : RETRO_DEVICE_JOYPAD;
+        const unsigned pad = md ? (controllerSixButton_[port]
+            ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
+            : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)) : RETRO_DEVICE_JOYPAD;
+        const unsigned device = controllerConnected_[port] ? pad : RETRO_DEVICE_NONE;
         // GPX resets its input protocol on this call. Preserve it on unchanged
         // settings and state restores; configured input.system is not serialized.
         if (force || controllerDevices_[port] != device) {
@@ -968,7 +983,11 @@ void LibretroHost::inputPoll() {}
 int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsigned id) {
     if (!active_ || port >= 2 || !active_->controllerConnected_[port] ||
         (device & RETRO_DEVICE_MASK) != RETRO_DEVICE_JOYPAD) return 0;
-    const auto mask = active_->buttons_[port];
+    auto mask = active_->buttons_[port];
+    // SMS Pause belongs to the console. GPX samples it on input.pad[0],
+    // so a binding on either connected player's pad reaches the same button.
+    if (port == 0 && active_->contentExtension_ == "sms")
+        mask |= active_->buttons_[1] & (1u << RETRO_DEVICE_ID_JOYPAD_START);
     if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return int16_t(mask);
     return id < 16 && (mask & (1u << id)) ? 1 : 0;
 }
