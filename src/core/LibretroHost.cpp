@@ -608,6 +608,14 @@ bool LibretroHost::setRegion(int region, QString& error) {
     }
     return setCoreOption("genesis_plus_gx_region_detect", values[size_t(region)], error);
 }
+bool LibretroHost::setRemoveSpriteLimit(bool enabled, QString& error) {
+    return setCoreOption("genesis_plus_gx_no_sprite_limit", enabled ? "enabled" : "disabled", error);
+}
+bool LibretroHost::setFastCdLoading(bool enabled, QString& error) {
+    // Keep the drive's sector/audio clock intact; GPX retains its minimum
+    // BIOS handshake delay while omitting simulated mechanical seek time.
+    return setCoreOption("genesis_plus_gx_cd_latency", enabled ? "disabled" : "enabled", error);
+}
 bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     static const std::array<QByteArray,5> values{"disabled", "monochrome", "composite", "svideo", "rgb"};
     if (filter < 0 || filter >= int(values.size())) {

@@ -26,6 +26,8 @@ void EmulationSession::selectDisc(int index) { enqueue({Type::DiscIndex,{},index
 void EmulationSession::setDiscEjected(bool ejected) { enqueue({Type::Eject,{},ejected ? 1 : 0}); }
 void EmulationSession::setRegion(int region) { enqueue({Type::Region,{},region}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
+void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
+void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
 void EmulationSession::setControllerConnected(unsigned port, bool connected) {
     if (port < 2) enqueue({Type::Port,{},int(port) | (connected ? 2 : 0)});
@@ -166,6 +168,16 @@ void EmulationSession::run() {
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
                     pacer.reset(nowNs());
                 }
+                break;
+            case Type::SpriteLimit:
+                if (host.setRemoveSpriteLimit(command.value != 0,error)) {
+                    optionsPending = true; clearHistory();
+                } else emit errorOccurred(error);
+                break;
+            case Type::CdLoading:
+                if (host.setFastCdLoading(command.value != 0,error)) {
+                    if (host.isCd()) { optionsPending = true; clearHistory(); }
+                } else emit errorOccurred(error);
                 break;
             case Type::Checksum:
                 // Update the policy only. load() and an explicit hard reset

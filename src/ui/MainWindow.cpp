@@ -120,6 +120,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRegion(region_);
     session_.setBlarggFilter(blarggFilter_);
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
+    session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
+    session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setRewindSeconds(rewindSeconds_);
     view_->setFastForwardFactor(fastForwardFactor_);
@@ -961,6 +963,29 @@ void MainWindow::editSettings() {
     screenshotFormat->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
     screenshotFormat->setCurrentIndex(jpeg ? 1 : 0);
     form->addRow(QStringLiteral("Формат скриншотов:"), screenshotFormat);
+    const bool fastCd = settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool();
+    auto* cdLoading = new QComboBox(&dialog);
+    cdLoading->setObjectName(QStringLiteral("cdLoadingMode"));
+    cdLoading->addItem(QStringLiteral("Обычная (как на консоли)"), false);
+    cdLoading->addItem(QStringLiteral("Ускоренная"), true);
+    cdLoading->setCurrentIndex(fastCd ? 1 : 0);
+    form->addRow(QStringLiteral("Загрузка CD:"), cdLoading);
+    auto* cdHelp = new QLabel(QStringLiteral(
+        "Ускоренный режим убирает задержки поиска дорожек. "
+        "Если игра зависает или звук рассинхронизируется, верните обычный режим."), &dialog);
+    cdHelp->setWordWrap(true);
+    cdHelp->setMinimumWidth(360);
+    form->addRow(cdHelp);
+    const bool noSpriteLimit = settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool();
+    auto* spriteLimit = new QComboBox(&dialog);
+    spriteLimit->setObjectName(QStringLiteral("spriteLimitMode"));
+    spriteLimit->addItem(QStringLiteral("Как на консоли"), false);
+    spriteLimit->addItem(QStringLiteral("Снять ограничение"), true);
+    spriteLimit->setCurrentIndex(noSpriteLimit ? 1 : 0);
+    form->addRow(QStringLiteral("Лимит спрайтов:"), spriteLimit);
+    spriteLimit->setToolTip(QStringLiteral(
+        "Уменьшает мигание и исчезновение спрайтов. "
+        "В отдельных играх может нарушать графические эффекты."));
     layout->addLayout(form);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
@@ -969,8 +994,20 @@ void MainWindow::editSettings() {
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
-    if (dialog.exec() == QDialog::Accepted && (screenshotFormat->currentIndex() == 1) != jpeg)
-        settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
+    if (dialog.exec() == QDialog::Accepted) {
+        if ((screenshotFormat->currentIndex() == 1) != jpeg)
+            settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
+        const bool selectedFastCd = cdLoading->currentData().toBool();
+        if (selectedFastCd != fastCd) {
+            settings_.setValue(QStringLiteral("emulation/fastCdLoading"), selectedFastCd);
+            session_.setFastCdLoading(selectedFastCd);
+        }
+        const bool selectedNoSpriteLimit = spriteLimit->currentData().toBool();
+        if (selectedNoSpriteLimit != noSpriteLimit) {
+            settings_.setValue(QStringLiteral("emulation/removeSpriteLimit"), selectedNoSpriteLimit);
+            session_.setRemoveSpriteLimit(selectedNoSpriteLimit);
+        }
+    }
     view_->setFocus();
     updateInputEnabled();
 }

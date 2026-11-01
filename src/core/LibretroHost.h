@@ -36,6 +36,8 @@ public:
     // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
     bool setRegion(int region, QString& error);
     bool setBlarggFilter(int filter, QString& error);
+    bool setFastCdLoading(bool enabled, QString& error);
+    bool setRemoveSpriteLimit(bool enabled, QString& error);
     // Applies to the core's ROM copy at load/power cycle, never to source bytes.
     bool setAutoFixChecksum(bool enabled, QString& error);
     bool saveState(int slot, QString& error);

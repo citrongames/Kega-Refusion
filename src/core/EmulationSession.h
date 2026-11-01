@@ -25,6 +25,8 @@ public:
     void setDiscEjected(bool ejected);
     void setRegion(int region);
     void setBlarggFilter(int filter);
+    void setFastCdLoading(bool enabled);
+    void setRemoveSpriteLimit(bool enabled);
     void setAutoFixChecksum(bool enabled);
     void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
     bool takeVideoFrame(QImage& frame, double& aspectRatio);
@@ -60,7 +62,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, Checksum, Port, Save, Restore, Slots, Disc, DiscIndex, Eject };
+    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, Save, Restore, Slots, Disc, DiscIndex, Eject };
     struct Command {
         Type type;
         QString path;
