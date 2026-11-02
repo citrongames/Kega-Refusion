@@ -19,6 +19,7 @@ public:
     QSize sizeHint() const override;
     void setProfile(ConsoleProfile profile);
     void setSixButton(bool sixButton);
+    void setControllerType(ControllerType type);
     void setTargets(const QVector<int>& targets);
     void setSelectedTarget(int target);
     void setPressedMask(unsigned mask);
@@ -45,10 +46,14 @@ private:
     void drawHighlight(QPainter& painter, int target, const QPainterPath& shape) const;
     QRectF illustrationArea() const;
     QRectF consolePauseArea() const;
+    QRectF extraButtonsArea() const;
+    QRectF extraButtonArea(int target) const;
+    QRectF reloadArea() const;
     QTransform drawingTransform() const;
 
     ConsoleProfile profile_ = ConsoleProfile::MegaDrive;
     bool sixButton_ = true;
+    ControllerType controllerType_ = ControllerType::Pad;
     QString illustrationPath_;
     QPixmap illustration_;
     QSet<int> targets_;

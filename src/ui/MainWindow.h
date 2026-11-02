@@ -1,6 +1,8 @@
 #pragma once
 
 #include "GameView.h"
+#include "../core/Cheats.h"
+#include <array>
 
 #include <QMainWindow>
 #include <QSettings>
@@ -47,6 +49,9 @@ private:
     void updateDiscMenu();
     void editSettings();
     void editControls();
+    void editCheats();
+    void updateGunConfiguration();
+    void updateGunAim(unsigned player, QPointF position, bool offscreen);
     bool applyShaderPreset(const QString& path);
     void editShaderParameters();
     void updateShaderActions();
@@ -73,6 +78,13 @@ private:
     QAction* changeDiscAction_ = nullptr;
     QAction* ejectDiscAction_ = nullptr;
     QAction* pauseAction_ = nullptr;
+    QAction* frameAdvanceAction_ = nullptr;
+    QAction* cheatsAction_ = nullptr;
+    CheatList cheats_;
+    Cheats::Platform cheatPlatform_ = Cheats::Platform::MegaDrive;
+    bool cheatsSupported_ = false;
+    std::array<unsigned,2> padMasks_{}, gunMasks_{};
+    std::array<QPointF,2> gunAims_{{QPointF(.5,.5),QPointF(.5,.5)}};
     QAction* fastForwardAction_ = nullptr;
     QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;

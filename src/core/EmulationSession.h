@@ -1,5 +1,7 @@
 #pragma once
 #include "RomArchive.h"
+#include "Cheats.h"
+#include "../input/ControllerType.h"
 #include <QThread>
 #include <QImage>
 #include <QByteArray>
@@ -36,6 +38,10 @@ public:
     void setButtons(unsigned port, unsigned mask);
     void setControllerConnected(unsigned port, bool connected);
     void setControllerSixButton(unsigned port, bool sixButton);
+    void setControllerKind(unsigned player, ControllerType type);
+    void setGunAim(unsigned player, int x, int y, bool offscreen);
+    void advanceFrame();
+    void setCheats(const CheatList& cheats);
     void releaseButtons();
     void setFastForward(bool enabled);
     void setFastForwardFactor(int factor);
@@ -57,6 +63,7 @@ signals:
     void effectivePauseChanged(bool paused);
     void rewindingChanged(bool enabled);
     void rewindProgress(qint64 remainingMs, qint64 totalMs);
+    void cheatsChanged(const CheatList& cheats, int platform, bool supported, const QString& detail);
     void stateSlotsChanged(int selected, unsigned occupied);
     void notification(const QString& text);
     void actionCompleted(const QString& text);
@@ -65,12 +72,13 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, Save, Restore, Slots, Disc, DiscIndex, Eject };
+    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject };
     struct Command {
         Type type;
         QString path;
         int value = 0;
         std::optional<RomArchive::Entry> archiveEntry = std::nullopt;
+        CheatList cheats{};
     };
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);
@@ -87,4 +95,5 @@ private:
     std::atomic<bool> rewindEnabled_{true};
     std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
     std::atomic<unsigned> buttons_[2]{};
+    std::atomic<quint64> gunPositions_[2]{{quint64(1)<<32},{quint64(1)<<32}};
 };

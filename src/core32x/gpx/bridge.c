@@ -673,6 +673,18 @@ int kegarefusion_32x_save_gpx(void *data)
     maps_restore();saved=state_save(data);map_apply();return saved;
 }
 
+void kegarefusion_32x_invalidate_code(void)
+{
+    /* Keep the 68K cartridge shadow coherent too; its first 256 bytes are
+       deliberately the 32X bootstrap/HINT overlay, not cartridge bytes. */
+    if(ctx && ctx->has_cart_rom && ctx->original[0].base)
+        memcpy(ctx->boot_page+256,ctx->original[0].base+256,sizeof(ctx->boot_page)-256);
+#ifdef KEGA_SH2_DRC
+    /* Frontend cheat edits run between frames, never inside a translated block. */
+    if(ctx) kega_sh2_drc_flush();
+#endif
+}
+
 unsigned kegarefusion_32x_features(void)
 {
     unsigned features=1u|(ctx?2u:0u);

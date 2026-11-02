@@ -25,11 +25,13 @@ struct LibretroHost::Api {
     API(set_input_poll); API(set_input_state); API(set_controller_port_device);
     API(load_game); API(unload_game); API(run); API(reset); API(serialize_size); API(serialize);
     API(unserialize); API(get_memory_data); API(get_memory_size);
+    API(cheat_reset); API(cheat_set);
 #undef API
     void (*manage_bram)(bool) = nullptr;
     bool (*get_bram)(unsigned, const void**, size_t*, const char**) = nullptr;
     const char* (*state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
+    void (*invalidate_code)() = nullptr;
 };
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
@@ -125,6 +127,9 @@ bool LibretroHost::initialize(QString& error) {
     RESOLVE(unserialize); RESOLVE(get_memory_data); RESOLVE(get_memory_size);
 #undef RESOLVE
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
+    api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
+    api_->cheat_set = reinterpret_cast<decltype(api_->cheat_set)>(library_.resolve("retro_cheat_set"));
+    api_->invalidate_code = reinterpret_cast<decltype(api_->invalidate_code)>(library_.resolve("retro_kegarefusion_invalidate_code"));
     api_->manage_bram = reinterpret_cast<decltype(api_->manage_bram)>(library_.resolve("kegarefusion_manage_bram"));
     api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
@@ -284,6 +289,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     // The battery extension exposes formatted BRAM and its regional path.
     // GPX still owns initialization/formatting; the host owns atomic writes.
     saveMemorySizes_.fill(0);
+    loadCheats();
     return true;
 }
 bool LibretroHost::setDiscEjected(bool ejected, QString& error) {
@@ -313,6 +319,7 @@ bool LibretroHost::selectDisc(int index, QString& error) {
         error = QStringLiteral("Ядро не смогло прочитать выбранный диск."); return false;
     }
     discIndex_ = index; setDiscIdentity();
+    loadCheats();
     return setDiscEjected(false,error);
 }
 bool LibretroHost::changeDisc(const QString& path, QString& error) {
@@ -343,6 +350,7 @@ bool LibretroHost::changeDisc(const QString& path, QString& error) {
     discs_[discIndex_] = image;
     if (!refreshDiscFiles(error)) return false;
     setDiscIdentity();
+    loadCheats();
     return setDiscEjected(false,error);
 }
 bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
@@ -459,12 +467,14 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
+    loadCheats();
     return true;
 }
 void LibretroHost::unload() {
     if (loaded_) {
         QString error;
         if (!flushSaveRam(error) && message) message(error);
+        clearCoreCheats();
         api_->unload_game();
     }
     loaded_ = false;
@@ -476,7 +486,7 @@ void LibretroHost::unload() {
     controllerDevices_.fill(~0u);
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
-    batterySave_.clear();
+    batterySave_.clear(); cheats_.clear(); activeCheatCodes_.clear();
 }
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
@@ -486,7 +496,9 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     // libretro's fast-savestate or hard-disable-audio flags.
     videoEnabled_ = audioEnabled_ = true;
 }
-void LibretroHost::reset() { if (loaded_) { api_->reset(); audio_.clear(); } }
+void LibretroHost::reset() {
+    if (loaded_) { clearCoreCheats(); api_->reset(); applyCheats(); audio_.clear(); }
+}
 bool LibretroHost::hardReset(QString& error) {
     error.clear();
     if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
@@ -497,6 +509,7 @@ bool LibretroHost::hardReset(QString& error) {
     // Reuse the selected content already in memory: archives need no second
     // selection and moved/deleted ROM files do not affect a power cycle.
     if (!flushSaveRam(error)) return false;
+    clearCoreCheats();
     api_->unload_game();
     batterySave_.clear();
     loaded_ = false;
@@ -532,6 +545,59 @@ bool LibretroHost::hardReset(QString& error) {
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
+    applyCheats();
+    return true;
+}
+Cheats::Platform LibretroHost::cheatPlatform() const {
+    const bool x32 = loaded_ && api_->features && (api_->features() & 2u);
+    if (isCd()) return x32 ? Cheats::Platform::Cd32x : Cheats::Platform::SegaCd;
+    if (x32) return Cheats::Platform::Sega32x;
+    return contentExtension_ == "sms" || contentExtension_ == "gg" || contentExtension_ == "sg"
+        ? Cheats::Platform::MasterSystem : Cheats::Platform::MegaDrive;
+}
+bool LibretroHost::cheatsSupported() const {
+    return loaded_ && api_->cheat_reset && api_->cheat_set &&
+        (!(api_->features && (api_->features() & 2u)) || api_->invalidate_code);
+}
+QString LibretroHost::cheatSupportText() const {
+    if (!loaded_) return QStringLiteral("Сначала откройте игру.");
+    if (!cheatsSupported()) return QStringLiteral("Для читов требуется обновлённое ядро эмуляции.");
+    return Cheats::supportText(cheatPlatform());
+}
+void LibretroHost::clearCoreCheats() {
+    if (api_->cheat_reset) api_->cheat_reset();
+    activeCheatCodes_.clear();
+}
+void LibretroHost::loadCheats() {
+    clearCoreCheats();
+    QString error;
+    if (!cheats_.load(dataPath_ + "/cheats/" + gameKey_ + ".json",cheatPlatform(),error) && message)
+        message(error);
+    if (cheatsSupported()) applyCheats();
+    else if (message && std::any_of(cheats_.entries().begin(),cheats_.entries().end(),
+                                   [](const CheatEntry& entry) { return entry.enabled; }))
+        message(cheatSupportText());
+}
+void LibretroHost::applyCheats() {
+    if (!cheatsSupported()) return;
+    QList<QByteArray> codes;
+    for (const auto& entry : cheats_.entries()) if (entry.enabled) codes.append(entry.code.toLatin1());
+    if (codes == activeCheatCodes_) return;
+    clearCoreCheats();
+    for (qsizetype i = 0; i < codes.size(); ++i) api_->cheat_set(unsigned(i),true,codes[i].constData());
+    // GPX patches its own ROM copy; invalidate translated SH-2 instructions
+    // after both enabling and disabling ROM patches on an active 32X.
+    if (api_->invalidate_code) api_->invalidate_code();
+    activeCheatCodes_ = std::move(codes);
+}
+bool LibretroHost::setCheats(const CheatList& entries, QString& error, bool* activeChanged) {
+    error.clear();
+    if (activeChanged) *activeChanged = false;
+    if (!cheatsSupported()) { error = cheatSupportText(); return false; }
+    if (!cheats_.set(entries,error)) return false;
+    const auto previous = activeCheatCodes_;
+    applyCheats();
+    if (activeChanged) *activeChanged = previous != activeCheatCodes_;
     return true;
 }
 void LibretroHost::prepareCoreContent() {
@@ -625,7 +691,7 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
 }
 void LibretroHost::setButtons(unsigned port, unsigned mask) {
     if (port >= buttons_.size()) return;
-    if (controllerDevices_[port] == RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0))
+    if (controllerKinds_[port] == ControllerType::Pad && !controllerSixButton_[port])
         mask &= ~((1u << 2) | (1u << 9) | (1u << 10) | (1u << 11)); // Mode/X/Y/Z.
     buttons_[port] = controllerConnected_[port] ? mask : 0u;
 }
@@ -649,19 +715,65 @@ bool LibretroHost::setControllerSixButton(unsigned port, bool sixButton) {
     applyControllerPorts();
     return true;
 }
+bool LibretroHost::setControllerKind(unsigned player, ControllerType type) {
+    if (player >= 2 || int(type) < 0 || int(type) > int(ControllerType::Justifier) ||
+        controllerKinds_[player] == type) return false;
+    controllerKinds_[player] = type;
+    buttons_[player] = 0; gunAim_[player] = {};
+    applyControllerPorts();
+    return true;
+}
+void LibretroHost::setGunAim(unsigned player, int x, int y, bool offscreen) {
+    if (player < 2) gunAim_[player] = {int16_t(std::clamp(x,-32767,32767)),
+        int16_t(std::clamp(y,-32767,32767)),offscreen};
+}
 void LibretroHost::applyControllerPorts(bool force) {
     if (!loaded_) return;
-    const bool md = contentExtension_ != "sms" && contentExtension_ != "gg" && contentExtension_ != "sg";
-    for (unsigned port = 0; port < controllerConnected_.size(); ++port) {
-        const unsigned pad = md ? (controllerSixButton_[port]
-            ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
+    const bool sms = contentExtension_ == "sms";
+    const bool md = !sms && contentExtension_ != "gg" && contentExtension_ != "sg";
+    std::array<unsigned,2> devices{{RETRO_DEVICE_NONE,RETRO_DEVICE_NONE}};
+    callbackPlayers_.fill(-1);
+    unsigned callback = 0;
+    auto pad = [&](unsigned owner) -> unsigned {
+        return md ? (controllerSixButton_[owner] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
             : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)) : RETRO_DEVICE_JOYPAD;
-        const unsigned device = controllerConnected_[port] ? pad : RETRO_DEVICE_NONE;
-        // GPX resets its input protocol on this call. Preserve it on unchanged
-        // settings and state restores; configured input.system is not serialized.
-        if (force || controllerDevices_[port] != device) {
-            api_->set_controller_port_device(port, device);
-            controllerDevices_[port] = device;
+    };
+    int gun = -1;
+    if (md) for (unsigned i=0;i<2;++i)
+        if (controllerConnected_[i] && (controllerKinds_[i] == ControllerType::Menacer ||
+            controllerKinds_[i] == ControllerType::Justifier)) { gun = int(i); break; }
+    if (gun >= 0) {
+        // MD guns attach to hardware port B. A Justifier pair occupies one port.
+        for (unsigned i=0;i<2;++i) if (controllerConnected_[i] && controllerKinds_[i] == ControllerType::Pad) {
+            devices[0] = pad(i); callbackPlayers_[callback++] = int(i); break;
+        }
+        devices[1] = controllerKinds_[gun] == ControllerType::Menacer
+            ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 1)
+            : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 2);
+        callbackPlayers_[callback++] = gun;
+        const unsigned other = unsigned(gun) ^ 1u;
+        if (controllerKinds_[gun] == ControllerType::Justifier && controllerConnected_[other] &&
+            controllerKinds_[other] == ControllerType::Justifier) callbackPlayers_[callback] = int(other);
+    } else {
+        for (unsigned i=0;i<2;++i) if (controllerConnected_[i]) {
+            devices[i] = sms && controllerKinds_[i] == ControllerType::LightPhaser
+                ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 0) : pad(i);
+            callbackPlayers_[callback++] = int(i);
+        }
+    }
+    // With hardware port A empty, GPX numbers port B's pad as player zero.
+    // Seed that pad subtype before restoring the empty A port; this happens
+    // only when the topology/type changes, never on state restore or per frame.
+    if (devices[0] == RETRO_DEVICE_NONE && (devices[1] & RETRO_DEVICE_MASK) == RETRO_DEVICE_JOYPAD &&
+        (force || controllerDevices_ != devices)) {
+        api_->set_controller_port_device(0,devices[1]);
+        controllerDevices_[0] = ~0u;
+    }
+    for (unsigned port=0;port<2;++port) {
+        // Unchanged topology must not reset the emulated gun/pad protocol.
+        if (force || controllerDevices_[port] != devices[port]) {
+            api_->set_controller_port_device(port,devices[port]);
+            controllerDevices_[port] = devices[port];
         }
     }
 }
@@ -981,13 +1093,29 @@ size_t LibretroHost::audioBatch(const int16_t* data, size_t frames) {
 }
 void LibretroHost::inputPoll() {}
 int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsigned id) {
-    if (!active_ || port >= 2 || !active_->controllerConnected_[port] ||
-        (device & RETRO_DEVICE_MASK) != RETRO_DEVICE_JOYPAD) return 0;
-    auto mask = active_->buttons_[port];
-    // SMS Pause belongs to the console. GPX samples it on input.pad[0],
-    // so a binding on either connected player's pad reaches the same button.
+    if (!active_ || port >= active_->callbackPlayers_.size()) return 0;
+    const int owner = active_->callbackPlayers_[port];
+    const unsigned baseDevice = device & RETRO_DEVICE_MASK;
+    if (owner < 0 || !active_->controllerConnected_[owner])
+        return baseDevice == RETRO_DEVICE_LIGHTGUN && id == RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN;
+    auto mask = active_->buttons_[owner];
+    if (baseDevice == RETRO_DEVICE_LIGHTGUN) {
+        const auto& aim = active_->gunAim_[owner];
+        const bool reload = (mask & (1u << 2)) != 0;
+        switch (id) {
+        case RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X: return aim.x;
+        case RETRO_DEVICE_ID_LIGHTGUN_SCREEN_Y: return aim.y;
+        case RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN: return aim.offscreen || reload;
+        case RETRO_DEVICE_ID_LIGHTGUN_TRIGGER: return reload || (mask & (1u << 1));
+        case RETRO_DEVICE_ID_LIGHTGUN_AUX_A: return !!(mask & 1u);
+        case RETRO_DEVICE_ID_LIGHTGUN_AUX_B: return !!(mask & (1u << 8));
+        case RETRO_DEVICE_ID_LIGHTGUN_START: return !!(mask & (1u << 3));
+        default: return 0;
+        }
+    }
+    if (baseDevice != RETRO_DEVICE_JOYPAD) return 0;
     if (port == 0 && active_->contentExtension_ == "sms")
-        mask |= active_->buttons_[1] & (1u << RETRO_DEVICE_ID_JOYPAD_START);
+        mask |= (active_->buttons_[0] | active_->buttons_[1]) & (1u << RETRO_DEVICE_ID_JOYPAD_START);
     if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return int16_t(mask);
     return id < 16 && (mask & (1u << id)) ? 1 : 0;
 }

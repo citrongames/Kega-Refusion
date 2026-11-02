@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.7.5 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.8.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -21,6 +21,7 @@ else()
     target_compile_options(rom_archive PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
+    src/core/Cheats.cpp src/core/Cheats.h
     src/core/Mp3Stream.cpp src/core/Mp3Stream.h
     src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
     src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
@@ -37,6 +38,7 @@ target_link_libraries(video_renderer PUBLIC Qt6::Widgets Qt6::OpenGL Qt6::OpenGL
 add_executable(KegaRefusion WIN32
     assets/app.qrc
     src/ui/ControlsDialog.cpp src/ui/ControlsDialog.h
+    src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
     src/ui/ControllerDiagram.cpp src/ui/ControllerDiagram.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h

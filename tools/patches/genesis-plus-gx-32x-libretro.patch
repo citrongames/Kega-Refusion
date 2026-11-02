@@ -186,12 +186,17 @@
     fast_savestates = get_fast_savestates();
     if (size != STATE_SIZE)
        return FALSE;
-@@ -3479,6 +3539,46 @@
+@@ -3479,6 +3539,51 @@
  	/* apply ROM patches */
  	apply_cheats();
  }
 +
 +#ifdef KEGAREFUSION_32X
++RETRO_API void retro_kegarefusion_invalidate_code(void)
++{
++   kegarefusion_32x_invalidate_code();
++}
++
 +RETRO_API unsigned retro_kegarefusion_core_features(void)
 +{
 +   return kegarefusion_32x_features();

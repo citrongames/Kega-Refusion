@@ -12,6 +12,8 @@
 #include "DiscMedia.h"
 #include "RomArchive.h"
 #include "BatterySave.h"
+#include "Cheats.h"
+#include "../input/ControllerType.h"
 #include <QStringList>
 
 // Own on exactly one emulation thread. One libretro instance per process.
@@ -40,6 +42,12 @@ public:
     bool setRemoveSpriteLimit(bool enabled, QString& error);
     // Applies to the core's ROM copy at load/power cycle, never to source bytes.
     bool setAutoFixChecksum(bool enabled, QString& error);
+    const CheatList& cheats() const { return cheats_.entries(); }
+    Cheats::Platform cheatPlatform() const;
+    bool cheatsSupported() const;
+    QString cheatSupportText() const;
+    // activeChanged excludes descriptions and disabled-code edits.
+    bool setCheats(const CheatList& entries, QString& error, bool* activeChanged = nullptr);
     bool saveState(int slot, QString& error);
     enum class StateLoadError { None, Missing, Failed };
     bool loadState(int slot, QString& error, StateLoadError* failure = nullptr);
@@ -57,6 +65,8 @@ public:
     bool controllerConnected(unsigned port) const;
     bool setControllerSixButton(unsigned port, bool sixButton);
     bool controllerSixButton(unsigned port) const;
+    bool setControllerKind(unsigned player, ControllerType type);
+    void setGunAim(unsigned player, int x, int y, bool offscreen);
     bool loaded() const { return loaded_; }
     double fps() const { return av_.timing.fps; }
     int sampleRate() const { return int(av_.timing.sample_rate); }
@@ -72,6 +82,9 @@ private:
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
+    void loadCheats();
+    void applyCheats();
+    void clearCoreCheats();
     void applyControllerPorts(bool force = false);
     bool loadCd(const QString& path, QString& error);
     bool checkDiscBios(const DiscImage& image, QString& error) const;
@@ -107,8 +120,15 @@ private:
     std::array<bool,2> controllerConnected_{{true,false}};
     std::array<bool,2> controllerSixButton_{{true,true}};
     std::array<unsigned,2> controllerDevices_{{~0u,~0u}};
+    std::array<ControllerType,2> controllerKinds_{{ControllerType::Pad,ControllerType::Pad}};
+    // GPX compacts callback indices over connected devices; Justifiers add a third callback.
+    std::array<int,3> callbackPlayers_{{0,-1,-1}};
+    struct GunAim { int16_t x = 0, y = 0; bool offscreen = true; };
+    std::array<GunAim,2> gunAim_{};
     std::array<size_t,2> saveMemorySizes_{};
     BatterySave batterySave_;
+    Cheats::Store cheats_;
+    QList<QByteArray> activeCheatCodes_;
     retro_system_av_info av_{};
     retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;
     QImage frame_;

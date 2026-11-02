@@ -13,7 +13,7 @@
 
 namespace {
 constexpr int playerCount = 2;
-constexpr int targetCount = HardResetCommand + 1;
+constexpr int targetCount = FrameAdvanceCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
 
@@ -21,13 +21,29 @@ constexpr int mdTargets[] = {4, 5, 6, 7, 1, 0, 8, 10, 9, 11, 3, 2};
 constexpr int md3Targets[] = {4, 5, 6, 7, 1, 0, 8, 3};
 constexpr int smsTargets[] = {4, 5, 6, 7, 0, 8, 3};
 constexpr int sgTargets[] = {4, 5, 6, 7, 0, 8};
+constexpr int phaserTargets[] = {1, 2};
+constexpr int menacerTargets[] = {1, 0, 8, 3, 2};
+constexpr int justifierTargets[] = {1, 3, 2};
+ControllerType validControllerType(ConsoleProfile profile, ControllerType type) {
+    if (profile == ConsoleProfile::MegaDrive &&
+        (type == ControllerType::Menacer || type == ControllerType::Justifier)) return type;
+    if (profile == ConsoleProfile::MasterSystem && type == ControllerType::LightPhaser) return type;
+    return ControllerType::Pad;
+}
 struct TargetRange {
     const int* first;
     std::size_t count;
     const int* begin() const { return first; }
     const int* end() const { return first + count; }
 };
-TargetRange gameTargetRange(ConsoleProfile profile, bool sixButton = true) {
+TargetRange gameTargetRange(ConsoleProfile profile, bool sixButton = true,
+                            ControllerType type = ControllerType::Pad) {
+    switch (validControllerType(profile, type)) {
+    case ControllerType::LightPhaser: return {phaserTargets, 2};
+    case ControllerType::Menacer: return {menacerTargets, 5};
+    case ControllerType::Justifier: return {justifierTargets, 3};
+    case ControllerType::Pad: break;
+    }
     if (profile == ConsoleProfile::MegaDrive)
         return sixButton ? TargetRange{mdTargets, 12} : TargetRange{md3Targets, 8};
     if (profile == ConsoleProfile::SG1000) return {sgTargets, 6};
@@ -108,9 +124,9 @@ QString settingsPrefix(ConsoleProfile profile, int player) {
     return QStringLiteral("input/%1/player%2/").arg(profileId(profile)).arg(player + 1);
 }
 bool gameplayTarget(int target) { return target >= 0 && target < 16; }
-bool activeGameplayTarget(ConsoleProfile profile, bool sixButton, int target) {
-    return gameplayTarget(target) && (profile != ConsoleProfile::MegaDrive || sixButton ||
-           (target != 2 && target != 9 && target != 10 && target != 11));
+bool activeGameplayTarget(ConsoleProfile profile, const PlayerMapping& mapping, int target) {
+    const auto range = gameTargetRange(profile, mapping.sixButton, mapping.controllerType);
+    return std::find(range.begin(), range.end(), target) != range.end();
 }
 bool validPlayer(int player) { return player >= 0 && player < playerCount; }
 int legacyKeyboardKey(int key) {
@@ -135,7 +151,8 @@ QString guidString(SDL_Joystick* joystick) {
     return QString::fromLatin1(text);
 }
 SDL_GameControllerButton controllerButton(ConsoleProfile profile, int target) {
-    (void)profile;
+    if (profile == ConsoleProfile::MasterSystem && target == 1)
+        return SDL_CONTROLLER_BUTTON_A; // Light Phaser trigger.
     switch (target) {
     case 4: return SDL_CONTROLLER_BUTTON_DPAD_UP;
     case 5: return SDL_CONTROLLER_BUTTON_DPAD_DOWN;
@@ -189,6 +206,7 @@ struct InputManager::Impl {
     bool capture = false, captureArmed = false;
     int captureInstance = -1, capturePlayer = -1, neutralPolls = 0;
     QElapsedTimer captureTimer;
+    QElapsedTimer aimTimer;
     QVector<int> neutralAxes;
 
     explicit Impl(InputManager* parent, QString path) : owner(parent), settingsPath(std::move(path)) {
@@ -203,6 +221,10 @@ struct InputManager::Impl {
             m.deviceKey = settings.value(prefix + "device", m.deviceKey).toString();
             m.connected = settings.value(prefix + "connected", m.connected).toBool();
             m.sixButton = settings.value(prefix + "sixButton", m.sixButton).toBool();
+            m.controllerType = validControllerType(ConsoleProfile(p), static_cast<ControllerType>(
+                settings.value(prefix + "controllerType", int(m.controllerType)).toInt()));
+            m.aimSource = settings.value(prefix + "aimSource", int(m.aimSource)).toInt() == int(AimSource::LeftStick)
+                ? AimSource::LeftStick : AimSource::Mouse;
             m.deadzonePercent = std::clamp(settings.value(prefix + "deadzone", m.deadzonePercent).toInt(), 5, 60);
             for (int target = 0; target < targetCount; ++target) {
                 const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -353,13 +375,53 @@ struct InputManager::Impl {
                 active(device, axis(target <= 5 ? 1 : 0, dpadDirection(target)), deadzone, held);
             return hatPressed || stickPressed;
         }
-        return active(device, rawDefault(target), deadzone, held);
+        return active(device, rawDefault(profile == ConsoleProfile::MasterSystem && target == 1 ? 0 : target),
+                      deadzone, held);
+    }
+    void pollAim(const std::array<Device*, playerCount>& assigned) {
+        // Only poll() advances aim: key events and settings recomputations cannot
+        // multiply movement. Reuse its device assignments; pad-only input has no
+        // clock reads or extra SDL axis calls.
+        bool needed = false;
+        if (enabled && !capture) {
+            for (unsigned player = 0; player < playerCount; ++player) {
+                const auto& mapping = mappings[profileIndex(profile)][player];
+                needed |= mapping.connected && mapping.controllerType != ControllerType::Pad &&
+                          mapping.aimSource == AimSource::LeftStick && assigned[player];
+            }
+        }
+        if (!needed) { aimTimer.invalidate(); return; }
+        if (!aimTimer.isValid()) { aimTimer.start(); return; }
+        const double seconds = std::min(aimTimer.nsecsElapsed() * 1e-9, 0.032);
+        aimTimer.restart();
+        for (unsigned player = 0; player < playerCount; ++player) {
+            const auto& mapping = mappings[profileIndex(profile)][player];
+            const auto* device = assigned[player];
+            if (!mapping.connected || mapping.controllerType == ControllerType::Pad ||
+                mapping.aimSource != AimSource::LeftStick || !device) continue;
+            double x, y;
+            if (device->controller) {
+                x = SDL_GameControllerGetAxis(device->controller, SDL_CONTROLLER_AXIS_LEFTX) / 32768.0;
+                y = SDL_GameControllerGetAxis(device->controller, SDL_CONTROLLER_AXIS_LEFTY) / 32768.0;
+            } else {
+                if (SDL_JoystickNumAxes(device->joystick) < 2) continue;
+                x = SDL_JoystickGetAxis(device->joystick, 0) / 32768.0;
+                y = SDL_JoystickGetAxis(device->joystick, 1) / 32768.0;
+            }
+            const double length = std::hypot(x, y);
+            const double deadzone = mapping.deadzonePercent / 100.0;
+            if (length <= deadzone) continue;
+            constexpr double screenFractionsPerSecond = 0.65;
+            const double distance = (std::min(length, 1.0) - deadzone) / (1.0 - deadzone) *
+                                    screenFractionsPerSecond * seconds;
+            emit owner->aimMoved(player, x / length * distance, y / length * distance);
+        }
     }
     unsigned padMask(int player, Device* device) {
         if (!device) return 0;
         const auto& m = mappings[profileIndex(profile)][player];
         unsigned result = 0;
-        for (int target : gameTargetRange(profile, m.sixButton)) {
+        for (int target : gameTargetRange(profile, m.sixButton, m.controllerType)) {
             const auto configured = m.pad.value(target);
             bool& held = axisHeld[player][target];
             const bool pressed = configured.kind == PadBinding::Automatic ?
@@ -369,7 +431,7 @@ struct InputManager::Impl {
         }
         return result;
     }
-    void recompute() {
+    void recompute(bool updateAim = false) {
         const auto assigned = assignments();
         std::array<bool, targetCount - 16> nextCommands{};
         for (int player = 0; player < playerCount; ++player) {
@@ -381,7 +443,7 @@ struct InputManager::Impl {
             }
             unsigned mask = pad;
             for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
-                if (activeGameplayTarget(profile, m.sixButton, it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
+                if (activeGameplayTarget(profile, m, it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
             if (!enabled || capture || !m.connected) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
@@ -407,6 +469,7 @@ struct InputManager::Impl {
                 emit owner->commandChanged(command, value);
             }
         }
+        if (updateAim) pollAim(assigned);
     }
     void cancelCapture() {
         if (!capture) return;
@@ -485,17 +548,23 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (!validPlayer(player)) return;
     auto m = value;
     m.deadzonePercent = std::clamp(m.deadzonePercent, 5, 60);
+    m.controllerType = validControllerType(profile, m.controllerType);
+    if (m.aimSource != AimSource::LeftStick) m.aimSource = AimSource::Mouse;
     for (auto it = m.keyboard.begin(); it != m.keyboard.end(); ++it)
         it.value() = storedKeyboardKey(it.value());
     const auto defaults = defaultMapping(profile, player);
-    if (profile == d->profile && d->mappings[profileIndex(profile)][player].sixButton != m.sixButton)
+    const auto& previous = d->mappings[profileIndex(profile)][player];
+    if (profile == d->profile && (previous.sixButton != m.sixButton || previous.controllerType != m.controllerType))
         d->keys.clear(); // Release keys hidden by a type change, including their later key-up.
+    d->aimTimer.invalidate();
     d->mappings[profileIndex(profile)][player] = m;
     QSettings settings(d->settingsPath, QSettings::IniFormat);
     const QString prefix = settingsPrefix(profile, player);
     settings.setValue(prefix + "device", m.deviceKey);
     settings.setValue(prefix + "connected", m.connected);
     settings.setValue(prefix + "sixButton", m.sixButton);
+    settings.setValue(prefix + "controllerType", int(m.controllerType));
+    settings.setValue(prefix + "aimSource", int(m.aimSource));
     settings.setValue(prefix + "deadzone", m.deadzonePercent);
     for (int target = 0; target < targetCount; ++target) {
         const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -509,6 +578,8 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (profile == d->profile) {
         emit connectionChanged(unsigned(player), m.connected);
         emit controllerTypeChanged(unsigned(player), m.sixButton);
+        emit deviceTypeChanged(unsigned(player), int(m.controllerType));
+        emit configurationChanged();
     }
     d->axisHeld = {};
     d->recompute();
@@ -516,12 +587,23 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
 PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
     PlayerMapping m;
     m.connected = player == 0;
+    m.aimSource = player == 0 ? AimSource::Mouse : AimSource::LeftStick;
     for (int target : gameTargets(profile)) m.pad[target] = automatic(target);
+    // Keep hidden Phaser trigger/reload defaults alongside the SMS pad bindings;
+    // changing device type never destroys either set of assignments.
+    if (profile == ConsoleProfile::MasterSystem) {
+        m.pad[1] = automatic(1);
+        m.pad[2] = automatic(2);
+    }
     if (player == 0) {
         m.keyboard[4] = Qt::Key_Up; m.keyboard[5] = Qt::Key_Down;
         m.keyboard[6] = Qt::Key_Left; m.keyboard[7] = Qt::Key_Right;
         m.keyboard[0] = Qt::Key_X; m.keyboard[8] = Qt::Key_C;
         if (profile != ConsoleProfile::SG1000) m.keyboard[3] = Qt::Key_Return;
+        if (profile == ConsoleProfile::MasterSystem) {
+            m.keyboard[1] = Qt::Key_Z;
+            m.keyboard[2] = Qt::Key_Q;
+        }
         if (profile == ConsoleProfile::MegaDrive) {
             m.keyboard[1] = Qt::Key_Z; m.keyboard[10] = Qt::Key_A;
             m.keyboard[9] = Qt::Key_S; m.keyboard[11] = Qt::Key_D;
@@ -549,11 +631,17 @@ QString InputManager::profileName(ConsoleProfile profile) {
     }
     return {};
 }
-QVector<int> InputManager::gameTargets(ConsoleProfile profile, bool sixButton) {
-    const auto targets = gameTargetRange(profile, sixButton);
+QVector<int> InputManager::gameTargets(ConsoleProfile profile, bool sixButton, ControllerType type) {
+    const auto targets = gameTargetRange(profile, sixButton, type);
     return QVector<int>(targets.begin(), targets.end());
 }
-QString InputManager::targetName(ConsoleProfile profile, int target) {
+QString InputManager::targetName(ConsoleProfile profile, int target, ControllerType type) {
+    if (validControllerType(profile, type) != ControllerType::Pad) {
+        if (target == 1) return QStringLiteral("Курок");
+        if (target == 2) return QStringLiteral("Перезарядка");
+        if (target == 0) return QStringLiteral("Кнопка 2");
+        if (target == 8) return QStringLiteral("Кнопка 3");
+    }
     switch (target) {
     case 4: return QStringLiteral("Вверх");
     case 5: return QStringLiteral("Вниз");
@@ -573,6 +661,7 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
     case LoadCommand: return QStringLiteral("Загрузить состояние");
     case ResetCommand: return QStringLiteral("Мягкий сброс");
     case HardResetCommand: return QStringLiteral("Жёсткий сброс");
+    case FrameAdvanceCommand: return QStringLiteral("Следующий кадр");
     case FullscreenCommand: return QStringLiteral("Полный экран");
     case MuteCommand: return QStringLiteral("Без звука");
     case NextSlotCommand: return QStringLiteral("Следующий слот");
@@ -584,12 +673,14 @@ QString InputManager::targetName(ConsoleProfile profile, int target) {
 }
 void InputManager::setProfile(ConsoleProfile profile) {
     if (d->profile == profile) return;
-    d->profile = profile; d->axisHeld = {};
+    d->profile = profile; d->axisHeld = {}; d->aimTimer.invalidate();
     for (unsigned player = 0; player < playerCount; ++player) {
         const auto& mapping = d->mappings[profileIndex(profile)][player];
         emit connectionChanged(player, mapping.connected);
         emit controllerTypeChanged(player, mapping.sixButton);
+        emit deviceTypeChanged(player, int(mapping.controllerType));
     }
+    emit configurationChanged();
     d->recompute();
 }
 ConsoleProfile InputManager::profile() const { return d->profile; }
@@ -599,9 +690,16 @@ bool InputManager::isConnected(unsigned player) const {
 bool InputManager::sixButton(unsigned player) const {
     return player < playerCount && d->mappings[profileIndex(d->profile)][player].sixButton;
 }
+ControllerType InputManager::controllerType(unsigned player) const {
+    return player < playerCount ? d->mappings[profileIndex(d->profile)][player].controllerType : ControllerType::Pad;
+}
+bool InputManager::aimWithMouse(unsigned player) const {
+    return player < playerCount && d->mappings[profileIndex(d->profile)][player].aimSource == AimSource::Mouse;
+}
 void InputManager::setEnabled(bool enabled) {
     if (d->enabled == enabled) return;
     d->enabled = enabled;
+    d->aimTimer.invalidate();
     if (!enabled) d->keys.clear();
     d->commandBlocked.fill(true);
     d->recompute();
@@ -637,7 +735,8 @@ bool InputManager::reservedKeyboardKey(int key) {
     return (key >= Qt::Key_0 && key <= Qt::Key_9) ||
            key == Qt::Key_Tab || key == Qt::Key_Escape ||
            key == Qt::Key_P || key == Qt::Key_M || key == Qt::Key_R ||
-           key == Qt::Key_F5 || key == Qt::Key_F8 || key == Qt::Key_F12;
+           key == Qt::Key_F5 || key == Qt::Key_F8 || key == Qt::Key_F12 ||
+           key == Qt::Key_Period;
 }
 bool InputManager::keyEvent(int key, bool pressed) {
     key = legacyKeyboardKey(key);
@@ -646,7 +745,7 @@ bool InputManager::keyEvent(int key, bool pressed) {
     for (int player = 0; player < playerCount; ++player) {
         const auto& mapping = d->mappings[profileIndex(d->profile)][player];
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
-            if (activeGameplayTarget(d->profile, mapping.sixButton, it.key()) && it.value() == key && key != 0) bound = true;
+            if (activeGameplayTarget(d->profile, mapping, it.key()) && it.value() == key && key != 0) bound = true;
     }
     if (!bound) return false;
     if (!d->enabled || d->capture) return true;
@@ -682,6 +781,7 @@ void InputManager::beginCapture(const QString& deviceKey, int player) {
         }
     }
     d->captureTimer.start();
+    d->aimTimer.invalidate();
     d->recompute();
 }
 void InputManager::cancelCapture() { d->cancelCapture(); }
@@ -689,5 +789,5 @@ bool InputManager::capturing() const { return d->capture; }
 void InputManager::poll() {
     d->refreshDevices();
     d->updateCapture();
-    d->recompute();
+    d->recompute(true);
 }

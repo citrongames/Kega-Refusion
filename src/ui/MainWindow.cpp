@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 #include "AudioOutput.h"
 #include "ControlsDialog.h"
+#include "CheatsDialog.h"
+#include <cmath>
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
 #include "../core/SegaCdBios.h"
@@ -97,7 +99,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         qWarning("%s", qPrintable(text));
     });
     connect(input_, &InputManager::maskChanged, this, [this](unsigned port, unsigned mask) {
-        session_.setButtons(port, mask);
+        if (port < 2) { padMasks_[port] = mask; session_.setButtons(port,mask | gunMasks_[port]); }
     });
     connect(input_, &InputManager::connectionChanged, this, [this](unsigned port, bool connected) {
         session_.setControllerConnected(port, connected);
@@ -109,6 +111,22 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         session_.setControllerConnected(port, input_->isConnected(port));
         session_.setControllerSixButton(port, input_->sixButton(port));
     }
+    connect(input_, &InputManager::configurationChanged, this, &MainWindow::updateGunConfiguration);
+    connect(input_, &InputManager::aimMoved, this, [this](unsigned player, double dx, double dy) {
+        if (player >= 2 || input_->aimWithMouse(player)) return;
+        updateGunAim(player,gunAims_[player] + QPointF(dx,dy),false);
+    });
+    connect(view_, &GameView::gunAimChanged, this, [this](unsigned player,double x,double y,bool offscreen) {
+        updateGunAim(player,QPointF(x,y),offscreen);
+    });
+    connect(view_, &GameView::gunButtonsChanged, this, [this](unsigned player,unsigned mask) {
+        if (player >= 2) return;
+        const auto type = input_->controllerType(player);
+        if ((type == ControllerType::Justifier || type == ControllerType::LightPhaser) && (mask & 1u))
+            mask = (mask & ~1u) | (1u << 2); // Right mouse: an off-screen shot for reload.
+        gunMasks_[player] = mask;
+        session_.setButtons(player,padMasks_[player] | mask);
+    });
     connect(input_, &InputManager::commandChanged, this, &MainWindow::handleInputCommand);
     connect(input_, &InputManager::notification, this, [](const QString& text) {
         qInfo("%s", qPrintable(text));
@@ -138,6 +156,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
+    updateGunConfiguration();
+    connect(&session_, &EmulationSession::cheatsChanged, this,
+            [this](const CheatList& entries,int platform,bool supported,const QString& detail) {
+        cheats_ = entries; cheatPlatform_ = Cheats::Platform(platform); cheatsSupported_ = supported;
+        cheatsAction_->setEnabled(session_.hasGame() && supported && !loading_);
+        cheatsAction_->setToolTip(detail);
+    });
     connect(&session_, &EmulationSession::discStateChanged, this,
             [this](const QStringList& paths, int index, bool ejected) {
         discPaths_ = paths;
@@ -176,6 +201,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         currentRom_ = path;
         activeInputProfile_ = isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName));
         input_->setProfile(activeInputProfile_);
+        updateGunConfiguration();
         currentGameName_ = displayName(contentName);
         setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(currentGameName_));
         recentPaths_.removeAll(path);
@@ -293,6 +319,15 @@ void MainWindow::buildMenus() {
     connect(pauseAction_, &QAction::toggled, this, [this](bool paused) {
         session_.setPaused(paused);
     });
+    frameAdvanceAction_ = emulationMenu->addAction(QStringLiteral("Следующий кадр"));
+    frameAdvanceAction_->setShortcut(QKeySequence(Qt::Key_Period));
+    frameAdvanceAction_->setAutoRepeat(false);
+    frameAdvanceAction_->setEnabled(false);
+    shortcut(frameAdvanceAction_);
+    connect(frameAdvanceAction_, &QAction::triggered, this, [this] { session_.advanceFrame(); });
+    cheatsAction_ = emulationMenu->addAction(QStringLiteral("Читы…"));
+    cheatsAction_->setEnabled(false);
+    connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
     resetAction_ = emulationMenu->addAction(QStringLiteral("Мягкий сброс"));
     resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     resetAction_->setAutoRepeat(false);
@@ -867,6 +902,9 @@ void MainWindow::saveScreenshot() {
 
 void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
     loading_ = loading;
+    if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading);
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() && !loading);
+    if (loading) view_->setLightgunInputEnabled(false);
     view_->setLoading(loading, fileName);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading);
 }
@@ -1040,6 +1078,44 @@ void MainWindow::editSettings() {
     updateInputEnabled();
 }
 
+void MainWindow::editCheats() {
+    if (!session_.hasGame() || loading_ || !cheatsSupported_) return;
+    releaseInput();
+    CheatsDialog dialog(cheats_,cheatPlatform_,currentGameName_,this);
+    if (dialog.exec() == QDialog::Accepted && dialog.cheats() != cheats_)
+        session_.setCheats(dialog.cheats());
+    view_->setFocus();
+    updateInputEnabled();
+}
+
+void MainWindow::updateGunAim(unsigned player, QPointF position, bool offscreen) {
+    if (player >= 2 || !input_->isConnected(player) || input_->controllerType(player) == ControllerType::Pad) return;
+    offscreen = offscreen || position.x() < 0 || position.x() > 1 || position.y() < 0 || position.y() > 1;
+    position.setX(qBound(0.0,position.x(),1.0));
+    position.setY(qBound(0.0,position.y(),1.0));
+    gunAims_[player] = position;
+    view_->setLightgunAim(player,position,offscreen);
+    session_.setGunAim(player,int(std::lround(position.x()*65534-32767)),
+                       int(std::lround(position.y()*65534-32767)),offscreen);
+}
+
+void MainWindow::updateGunConfiguration() {
+    int mousePlayer = -1;
+    for (unsigned player=0;player<2;++player) {
+        session_.setControllerKind(player,input_->controllerType(player));
+        const bool gun = input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad;
+        view_->setLightgunEnabled(player,gun);
+        if (gun && input_->aimWithMouse(player) && mousePlayer < 0) mousePlayer = int(player);
+    }
+    view_->setMouseGunPlayer(mousePlayer);
+    for (unsigned player=0;player<2;++player) {
+        gunAims_[player] = QPointF(.5,.5);
+        if (input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad)
+            updateGunAim(player,gunAims_[player],input_->aimWithMouse(player));
+        else session_.setGunAim(player,0,0,true);
+    }
+}
+
 void MainWindow::editControls() {
     releaseInput();
     input_->setEnabled(false);
@@ -1050,6 +1126,7 @@ void MainWindow::editControls() {
 }
 
 void MainWindow::releaseInput() {
+    view_->setLightgunInputEnabled(false);
     fastForwardHeld_ = false;
     fastForwardPadHeld_ = false;
     rewindHeld_ = rewindPadHeld_ = false;
@@ -1063,11 +1140,14 @@ void MainWindow::releaseInput() {
 }
 
 void MainWindow::updateInputEnabled() {
+    if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading_);
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() && !loading_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     session_.setBackgroundPaused(pauseOnFocusLoss_ &&
         (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() && !loading_ &&
                          !QApplication::activeModalWidget() && !QApplication::activePopupWidget();
+    view_->setLightgunInputEnabled(enabled);
     input_->setEnabled(enabled);
     input_->poll();
 }
@@ -1091,6 +1171,7 @@ void MainWindow::updateRewind() {
 }
 
 void MainWindow::setPausedUi(bool paused) {
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(paused && session_.hasGame() && !loading_);
     if (pauseAction_) {
         const QSignalBlocker blocker(pauseAction_);
         pauseAction_->setChecked(paused);
@@ -1144,6 +1225,7 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
     }
     if (!pressed) return;
     switch (command) {
+    case FrameAdvanceCommand: if (frameAdvanceAction_->isEnabled()) frameAdvanceAction_->trigger(); break;
     case PauseCommand: if (pauseAction_->isEnabled()) pauseAction_->trigger(); break;
     case SaveCommand: if (saveAction_->isEnabled()) saveAction_->trigger(); break;
     case LoadCommand: if (loadAction_->isEnabled()) loadAction_->trigger(); break;
@@ -1196,6 +1278,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     QAction* commandAction = nullptr;
     if (modifiers == Qt::NoModifier) {
         if (key == Qt::Key_P) commandAction = pauseAction_;
+        else if (key == Qt::Key_Period) commandAction = frameAdvanceAction_;
         else if (key == Qt::Key_M) commandAction = muteAction_;
         else if (key == Qt::Key_F5) commandAction = saveAction_;
         else if (key == Qt::Key_F8) commandAction = loadAction_;

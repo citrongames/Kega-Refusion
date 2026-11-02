@@ -59,6 +59,11 @@ private:
     QComboBox* playerBox_ = nullptr;
     QComboBox* deviceBox_ = nullptr;
     QCheckBox* connectedBox_ = nullptr;
+    QLabel* deviceTypeLabel_ = nullptr;
+    QComboBox* deviceTypeBox_ = nullptr;
+    QLabel* aimSourceLabel_ = nullptr;
+    QComboBox* aimSourceBox_ = nullptr;
+    QLabel* aimHint_ = nullptr;
     QLabel* controllerTypeLabel_ = nullptr;
     QComboBox* controllerTypeBox_ = nullptr;
     QSlider* deadzoneSlider_ = nullptr;

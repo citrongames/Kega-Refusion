@@ -3,6 +3,7 @@
 
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QFocusEvent>
 #include <QPainter>
 #include <QGuiApplication>
 #include <QOpenGLWidget>
@@ -121,6 +122,7 @@ protected:
             QPainter painter(this);
             owner_->paintRaster(painter);
             owner_->paintOsd(painter);
+            owner_->paintCrosshairs(painter);
             owner_->paintLoading(painter);
             return;
         }
@@ -142,6 +144,7 @@ protected:
         }
         painter.endNativePainting();
         owner_->paintOsd(painter); // Native-resolution OSD is never filtered.
+        owner_->paintCrosshairs(painter);
         owner_->paintLoading(painter);
     }
 private:
@@ -158,6 +161,7 @@ private:
 
 GameView::GameView(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
     setMinimumSize(400, 280);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     const int fontId = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/osd.ttf"));
@@ -173,10 +177,16 @@ GameView::GameView(QWidget* parent) : QWidget(parent) {
 }
 
 QImage GameView::captureImage() {
-    // QWidget::grab does not include a composited QOpenGLWidget on every driver.
-    if (shaderView_ && shaderView_->isVisible() && shaderView_->isValid())
-        return shaderView_->grabFramebuffer();
-    return grab().toImage();
+    QImage image;
+    {
+        // Captures omit the aiming overlay while leaving on-screen reticles intact.
+        const QScopedValueRollback<bool> capture(capturingReticles_, true);
+        // QWidget::grab does not include a composited QOpenGLWidget on every driver.
+        image = shaderView_ && shaderView_->isVisible() && shaderView_->isValid()
+            ? shaderView_->grabFramebuffer() : grab().toImage();
+    }
+    if (guns_[0].enabled || guns_[1].enabled) repaintView();
+    return image;
 }
 
 QImage GameView::captureGameImage() {
@@ -203,6 +213,7 @@ QImage GameView::captureGameImage() {
 
 void GameView::setFrame(const QImage& frame, double aspectRatio) {
     frame_ = frame;
+    if (frame_.isNull()) clearMouseGun();
     ++frameCount_;
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
@@ -213,6 +224,7 @@ void GameView::setLoading(bool loading, const QString& fileName) {
     const QString name = loading ? fileName.left(220) : QString();
     if (loading_ == loading && loadingFileName_ == name) return;
     loading_ = loading;
+    if (loading_) clearMouseGun();
     loadingFileName_ = name;
     repaintView();
     if (loading && isVisible()) {
@@ -461,6 +473,76 @@ QRect GameView::openArea() const {
     return QRect(plusCenter.x() - 152, plusCenter.y() - 124, 304, 248);
 }
 
+void GameView::setLightgunEnabled(unsigned player, bool enabled) {
+    if (player >= 2 || guns_[player].enabled == enabled) return;
+    if (!enabled && mouseGunPlayer_ == int(player)) clearMouseGun();
+    guns_[player].enabled = enabled;
+    if (!enabled) guns_[player].hasAim = false;
+    repaintView();
+}
+
+void GameView::setLightgunAim(unsigned player, QPointF normalized, bool offscreen) {
+    if (player >= 2) return;
+    auto& gun = guns_[player];
+    const bool valid = qIsFinite(normalized.x()) && qIsFinite(normalized.y());
+    const QPointF aim = valid ? QPointF(qBound(0.0, normalized.x(), 1.0),
+                                        qBound(0.0, normalized.y(), 1.0)) : gun.aim;
+    offscreen = offscreen || !valid;
+    if (gun.hasAim && gun.aim == aim && gun.offscreen == offscreen) return;
+    gun.aim = aim;
+    gun.hasAim = valid;
+    gun.offscreen = offscreen;
+    repaintView();
+}
+
+void GameView::setMouseGunPlayer(int player) {
+    if (player < -1 || player > 1 || mouseGunPlayer_ == player) return;
+    clearMouseGun();
+    mouseGunPlayer_ = player;
+}
+
+void GameView::setLightgunInputEnabled(bool enabled) {
+    if (lightgunInputEnabled_ == enabled) return;
+    lightgunInputEnabled_ = enabled;
+    if (!enabled) clearMouseGun();
+}
+
+bool GameView::mouseGunAvailable() const {
+    return lightgunInputEnabled_ && mouseGunPlayer_ >= 0 && mouseGunPlayer_ < 2 &&
+           guns_[mouseGunPlayer_].enabled && !frame_.isNull() && !loading_;
+}
+
+void GameView::updateMouseAim(const QPointF& position) {
+    if (!mouseGunAvailable()) return;
+    const QRectF game = gameRect();
+    if (game.isEmpty()) return;
+    const bool offscreen = !game.contains(position);
+    const QPointF aim(qBound(0.0, (position.x() - game.left()) / game.width(), 1.0),
+                      qBound(0.0, (position.y() - game.top()) / game.height(), 1.0));
+    auto& gun = guns_[mouseGunPlayer_];
+    if (gun.hasAim && gun.aim == aim && gun.offscreen == offscreen) return;
+    gun.aim = aim;
+    gun.hasAim = true;
+    gun.offscreen = offscreen;
+    emit gunAimChanged(unsigned(mouseGunPlayer_), aim.x(), aim.y(), offscreen);
+    repaintView();
+}
+
+void GameView::clearMouseGun() {
+    if (mouseGunPlayer_ < 0 || mouseGunPlayer_ >= 2) return;
+    const unsigned player = unsigned(mouseGunPlayer_);
+    if (mouseGunButtons_) {
+        mouseGunButtons_ = 0;
+        emit gunButtonsChanged(player, 0);
+    }
+    auto& gun = guns_[player];
+    if (!gun.offscreen) {
+        gun.offscreen = true;
+        emit gunAimChanged(player, gun.aim.x(), gun.aim.y(), true);
+        repaintView();
+    }
+}
+
 void GameView::mousePressEvent(QMouseEvent* event) {
     if (!loading_ && frame_.isNull() && event->button() == Qt::LeftButton &&
         openArea().contains(event->position().toPoint())) {
@@ -468,7 +550,91 @@ void GameView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (mouseGunAvailable()) {
+        const unsigned bit = event->button() == Qt::LeftButton ? 1u << 1 :
+                             event->button() == Qt::RightButton ? 1u << 0 :
+                             event->button() == Qt::MiddleButton ? 1u << 3 : 0u;
+        if (bit) {
+            updateMouseAim(event->position());
+            if (!(mouseGunButtons_ & bit)) {
+                mouseGunButtons_ |= bit;
+                emit gunButtonsChanged(unsigned(mouseGunPlayer_), mouseGunButtons_);
+            }
+            event->accept();
+            return;
+        }
+    }
     QWidget::mousePressEvent(event);
+}
+
+void GameView::mouseReleaseEvent(QMouseEvent* event) {
+    const unsigned bit = event->button() == Qt::LeftButton ? 1u << 1 :
+                         event->button() == Qt::RightButton ? 1u << 0 :
+                         event->button() == Qt::MiddleButton ? 1u << 3 : 0u;
+    if (mouseGunPlayer_ >= 0 && mouseGunPlayer_ < 2 && bit && (mouseGunButtons_ & bit)) {
+        mouseGunButtons_ &= ~bit;
+        if (mouseGunAvailable()) updateMouseAim(event->position());
+        emit gunButtonsChanged(unsigned(mouseGunPlayer_), mouseGunButtons_);
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void GameView::mouseMoveEvent(QMouseEvent* event) {
+    if (mouseGunAvailable()) updateMouseAim(event->position());
+    QWidget::mouseMoveEvent(event);
+}
+
+void GameView::leaveEvent(QEvent* event) {
+    clearMouseGun();
+    QWidget::leaveEvent(event);
+}
+
+void GameView::focusOutEvent(QFocusEvent* event) {
+    clearMouseGun();
+    QWidget::focusOutEvent(event);
+}
+
+void GameView::paintCrosshairs(QPainter& painter) {
+    if (frame_.isNull() || loading_ || capturingGame_ || capturingReticles_) return;
+    const bool visible = (guns_[0].enabled && guns_[0].hasAim && !guns_[0].offscreen) ||
+                         (guns_[1].enabled && guns_[1].hasAim && !guns_[1].offscreen);
+    if (!visible) return;
+    const QRectF game = gameRect();
+    if (game.isEmpty()) return;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setClipRect(game, Qt::IntersectClip);
+    for (unsigned player = 0; player < 2; ++player) {
+        const auto& gun = guns_[player];
+        if (!gun.enabled || !gun.hasAim || gun.offscreen) continue;
+        const QPointF point(game.left() + gun.aim.x() * game.width(),
+                            game.top() + gun.aim.y() * game.height());
+        const QColor color = player == 0 ? QColor(66, 228, 238) : QColor(255, 135, 112);
+        const auto drawMarks = [&painter, &point] {
+            painter.drawEllipse(point, 8, 8);
+            painter.drawLine(QPointF(point.x() - 17, point.y()), QPointF(point.x() - 11, point.y()));
+            painter.drawLine(QPointF(point.x() + 11, point.y()), QPointF(point.x() + 17, point.y()));
+            painter.drawLine(QPointF(point.x(), point.y() - 17), QPointF(point.x(), point.y() - 11));
+            painter.drawLine(QPointF(point.x(), point.y() + 11), QPointF(point.x(), point.y() + 17));
+        };
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(0, 0, 0, 235), 5, Qt::SolidLine, Qt::RoundCap));
+        drawMarks();
+        painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap));
+        drawMarks();
+        const QPointF label = point + QPointF(12, player == 0 ? -13 : 22);
+        const QString number = player == 0 ? QStringLiteral("1") : QStringLiteral("2");
+        painter.setPen(QColor(0, 0, 0, 235));
+        painter.drawText(label + QPointF(-1, 0), number);
+        painter.drawText(label + QPointF(1, 0), number);
+        painter.drawText(label + QPointF(0, -1), number);
+        painter.drawText(label + QPointF(0, 1), number);
+        painter.setPen(color);
+        painter.drawText(label, number);
+    }
+    painter.restore();
 }
 
 void GameView::paintRaster(QPainter& painter) {
@@ -558,6 +724,7 @@ void GameView::paintEvent(QPaintEvent*) {
     }
     paintRaster(painter);
     paintOsd(painter);
+    paintCrosshairs(painter);
     paintLoading(painter);
 }
 

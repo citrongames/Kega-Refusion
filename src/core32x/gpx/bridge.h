@@ -5,6 +5,7 @@
 #include <stddef.h>
 extern int kegarefusion_32x_attached;
 unsigned kegarefusion_32x_features(void);
+void kegarefusion_32x_invalidate_code(void);
 int kegarefusion_32x_stats(uint64_t *, size_t);
 /* Called after GPX's normal system_init/reset and after reading validated BIOS.
    Returns zero on failure, no partial attachment is exposed. */

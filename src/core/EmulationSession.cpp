@@ -9,7 +9,7 @@
 #include <thread>
 
 EmulationSession::EmulationSession(QString corePath, QString dataPath, QObject* parent)
-    : QThread(parent), corePath_(std::move(corePath)), dataPath_(std::move(dataPath)) { start(); }
+    : QThread(parent), corePath_(std::move(corePath)), dataPath_(std::move(dataPath)) { qRegisterMetaType<CheatList>(); start(); }
 EmulationSession::~EmulationSession() { shutdown(); }
 void EmulationSession::enqueue(Command command) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -35,6 +35,20 @@ void EmulationSession::setControllerConnected(unsigned port, bool connected) {
 }
 void EmulationSession::setControllerSixButton(unsigned port, bool sixButton) {
     if (port < 2) enqueue({Type::ControllerType,{},int(port) | (sixButton ? 2 : 0)});
+}
+void EmulationSession::setControllerKind(unsigned player, ControllerType type) {
+    if (player < 2 && int(type) >= 0 && int(type) <= int(ControllerType::Justifier))
+        enqueue({Type::ControllerKind,{},int(player) | (int(type) << 1)});
+}
+void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) {
+    if (player >= 2) return;
+    const quint64 packed = quint16(std::clamp(x,-32767,32767)) |
+        (quint64(quint16(std::clamp(y,-32767,32767))) << 16) | (quint64(offscreen) << 32);
+    gunPositions_[player].store(packed);
+}
+void EmulationSession::advanceFrame() { enqueue({Type::FrameAdvance,{}}); }
+void EmulationSession::setCheats(const CheatList& cheats) {
+    Command command{Type::Cheats,{}}; command.cheats = cheats; enqueue(std::move(command));
 }
 void EmulationSession::updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available) {
     audioQueueUs_.store(queuedUsecs); audioTargetUs_.store(targetUsecs);
@@ -79,6 +93,16 @@ void EmulationSession::run() {
     using Clock = std::chrono::steady_clock;
     LibretroHost host(corePath_,dataPath_);
     host.message = [this](const QString& message) { emit notification(message); };
+    auto syncInput = [&] {
+        for (unsigned player=0;player<2;++player) {
+            host.setButtons(player,buttons_[player].load());
+            const quint64 aim = gunPositions_[player].load();
+            host.setGunAim(player,int16_t(aim & 0xffff),int16_t((aim >> 16) & 0xffff),bool(aim >> 32));
+        }
+    };
+    auto cheatStatus = [&] {
+        emit cheatsChanged(host.cheats(),int(host.cheatPlatform()),host.cheatsSupported(),host.cheatSupportText());
+    };
     bool lastDiscEjected = false;
     auto discStatus = [&] {
         lastDiscEjected = host.discEjected();
@@ -117,6 +141,7 @@ void EmulationSession::run() {
     while (!quitting_.load()) {
         std::deque<Command> pending;
         { std::lock_guard<std::mutex> lock(mutex_); pending.swap(commands_); }
+        bool frameRequested = false;
         for (const auto& command : pending) {
             QString error;
             switch (command.type) {
@@ -134,7 +159,22 @@ void EmulationSession::run() {
                     if (!host.loaded()) { clearHistory(); rewindStatus(false); }
                     emit errorOccurred(error);
                 }
-                loaded_.store(host.loaded()); discStatus();
+                loaded_.store(host.loaded()); discStatus(); cheatStatus();
+                break;
+            case Type::FrameAdvance:
+                if (host.loaded() && paused && !backgroundPaused_.load() && !rewind_.load()) frameRequested = true;
+                break;
+            case Type::Cheats: {
+                bool changed = false;
+                if (!host.setCheats(command.cheats,error,&changed)) emit errorOccurred(error);
+                else if (changed) { clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false); pacer.reset(nowNs()); }
+                cheatStatus();
+                break;
+            }
+            case Type::ControllerKind:
+                if (host.setControllerKind(unsigned(command.value & 1),ControllerType(command.value >> 1))) {
+                    clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false); pacer.reset(nowNs());
+                }
                 break;
             case Type::Pause:
                 paused = command.value != 0;
@@ -169,7 +209,7 @@ void EmulationSession::run() {
                 // Failed mounts can also disturb the drive; do not retain an
                 // older timeline across any attempted media operation.
                 clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
-                discStatus(); emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                discStatus(); cheatStatus(); emit stateSlotsChanged(-1,host.occupiedStateSlots());
                 if (ok) emit actionCompleted(command.type == Type::Eject ?
                     (command.value ? QStringLiteral("Привод открыт") : QStringLiteral("Привод закрыт")) :
                     QStringLiteral("Диск: %1").arg(QFileInfo(host.discPaths().value(host.discIndex())).completeBaseName()));
@@ -297,6 +337,19 @@ void EmulationSession::run() {
             if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
             lastBatteryCheck = batteryNow;
         }
+        if (frameRequested && host.loaded() && paused && !background) {
+            syncInput();
+            host.runFrame(true,false); // Exactly one video frame; no burst of queued sound.
+            if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
+            if (optionsPending) { optionsPending = false; clearHistory(); }
+            if (historyEnabled && historyHealthy && ++captureFrame % 2 == 0 &&
+                !history.capture(host.captureRewindState(),host.frame(),host.aspectRatio())) {
+                history.clear(); historyHealthy = false;
+            }
+            publishVideo(host.frame(),host.aspectRatio());
+            clearAudio(); pacer.reset(nowNs());
+            continue;
+        }
         if (!host.loaded() || nowPaused) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
         const bool fast = fastForward_.load();
         if (fast != fastLatched) {
@@ -307,7 +360,7 @@ void EmulationSession::run() {
         }
         const int factor = fast ? fastForwardFactor_.load() : 1;
         const bool present = !fast || nowNs() >= nextPresentationNs;
-        for (unsigned port = 0; port < 2; ++port) host.setButtons(port,buttons_[port].load());
+        syncInput();
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
         host.runFrame(!fast || present || optionsPending, !fast);

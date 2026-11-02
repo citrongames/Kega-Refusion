@@ -4,6 +4,7 @@
 
 #include <QElapsedTimer>
 #include <QImage>
+#include <QPointF>
 #include <QRect>
 #include <QString>
 #include <QTimer>
@@ -12,6 +13,7 @@
 
 class QPainter;
 class QMouseEvent;
+class QFocusEvent;
 class ShaderView;
 
 class GameView final : public QWidget {
@@ -41,16 +43,28 @@ public:
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
     void setRewindProgress(qint64 remainingMs, qint64 totalMs);
+    void setLightgunEnabled(unsigned player, bool enabled);
+    // Aim coordinates are normalized to [0, 1] within the displayed gameRect.
+    void setLightgunAim(unsigned player, QPointF normalized, bool offscreen = false);
+    void setMouseGunPlayer(int player); // -1 disables mouse aim; 0 and 1 select a player.
+    void setLightgunInputEnabled(bool enabled);
 
 signals:
     void shaderFailed(const QString& error);
     void openGameRequested();
+    void gunAimChanged(unsigned player, double x, double y, bool offscreen);
+    // Joypad bits: trigger = 1 << 1, auxiliary A = 1 << 0, start = 1 << 3.
+    void gunButtonsChanged(unsigned player, unsigned joypadMask);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
 
 private:
     friend class ShaderView;
@@ -60,6 +74,10 @@ private:
     QRectF gameRect() const;
     QRect openArea() const;
     void paintRaster(QPainter& painter);
+    void paintCrosshairs(QPainter& painter);
+    bool mouseGunAvailable() const;
+    void updateMouseAim(const QPointF& position);
+    void clearMouseGun();
     ShaderView* shaderView_ = nullptr;
     ShaderPreset shaderPreset_;
     bool gpuFailed_ = false;
@@ -86,6 +104,17 @@ private:
     bool integerScaling_ = false;
     bool osdEnabled_ = true;
     bool capturingGame_ = false;
+    bool capturingReticles_ = false;
+    struct GunState {
+        QPointF aim{0.5, 0.5};
+        bool enabled = false;
+        bool hasAim = false;
+        bool offscreen = true;
+    };
+    GunState guns_[2];
+    int mouseGunPlayer_ = -1;
+    unsigned mouseGunButtons_ = 0;
+    bool lightgunInputEnabled_ = false;
     bool loading_ = false;
     QString loadingFileName_;
     bool paused_ = false;

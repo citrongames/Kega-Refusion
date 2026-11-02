@@ -63,7 +63,10 @@ ControllerDiagram::ControllerDiagram(QWidget* parent) : QWidget(parent) {
     updateIllustration();
 }
 
-QSize ControllerDiagram::sizeHint() const { return QSize(410, 300); }
+QSize ControllerDiagram::sizeHint() const {
+    return QSize(410, controllerType_ == ControllerType::Menacer ? 440 :
+                      controllerType_ != ControllerType::Pad ? 360 : 300);
+}
 
 void ControllerDiagram::setProfile(ConsoleProfile profile) {
     if (profile_ == profile) {
@@ -86,13 +89,29 @@ void ControllerDiagram::setSixButton(bool sixButton) {
     if (sixButton_ == sixButton)
         return;
     sixButton_ = sixButton;
-    if (profile_ == ConsoleProfile::MegaDrive)
+    if (profile_ == ConsoleProfile::MegaDrive && controllerType_ == ControllerType::Pad)
         updateIllustration();
+}
+
+void ControllerDiagram::setControllerType(ControllerType type) {
+    if (controllerType_ == type) return;
+    controllerType_ = type;
+    setMinimumHeight(type == ControllerType::Menacer ? 340 : type != ControllerType::Pad ? 260 : 220);
+    updateGeometry();
+    selectedTarget_ = -1;
+    pressedMask_ = 0;
+    updateIllustration();
 }
 
 void ControllerDiagram::updateIllustration() {
     QString path;
-    switch (profile_) {
+    switch (controllerType_) {
+    case ControllerType::LightPhaser: path = QStringLiteral(":/controllers/phaser.png"); break;
+    case ControllerType::Menacer: path = QStringLiteral(":/controllers/menacer.png"); break;
+    case ControllerType::Justifier: path = QStringLiteral(":/controllers/justifier.png"); break;
+    case ControllerType::Pad: break;
+    }
+    if (controllerType_ == ControllerType::Pad) switch (profile_) {
     case ConsoleProfile::MegaDrive:
         path = sixButton_ ? QStringLiteral(":/controllers/md6.png")
                           : QStringLiteral(":/controllers/md3.png");
@@ -177,7 +196,36 @@ void ControllerDiagram::addDpad(QPointF center, qreal reach) {
 
 void ControllerDiagram::rebuildTargets() {
     areas_.clear();
-    switch (profile_) {
+    // These regions follow the button faces in the supplied 1536x1024 rasters.
+    // Other Menacer controls are shown separately below the side-view artwork.
+    switch (controllerType_) {
+    case ControllerType::LightPhaser: {
+        QPainterPath trigger;
+        trigger.addRoundedRect(QRectF(555, 446, 119, 122), 22, 22);
+        addArea(1, trigger);
+        break;
+    }
+    case ControllerType::Menacer: {
+        QPainterPath trigger;
+        trigger.moveTo(887, 450);
+        trigger.quadTo(932, 456, 930, 486);
+        trigger.quadTo(925, 523, 891, 538);
+        trigger.lineTo(866, 523);
+        trigger.quadTo(896, 499, 887, 450);
+        trigger.closeSubpath();
+        addArea(1, trigger);
+        break;
+    }
+    case ControllerType::Justifier: {
+        addCircle(3, QPointF(1152, 347), 35);
+        QPainterPath trigger;
+        trigger.addRoundedRect(QRectF(981, 500, 61, 145), 20, 20);
+        addArea(1, trigger);
+        break;
+    }
+    case ControllerType::Pad: break;
+    }
+    if (controllerType_ == ControllerType::Pad) switch (profile_) {
     case ConsoleProfile::MegaDrive:
         if (sixButton_) {
             addDpad(QPointF(355, 512), 150);
@@ -244,12 +292,33 @@ void ControllerDiagram::rebuildTargets() {
 }
 
 QRectF ControllerDiagram::illustrationArea() const {
-    const qreal footer = profile_ == ConsoleProfile::MasterSystem ? 72 : 28;
+    const qreal footer = controllerType_ == ControllerType::Menacer ? 138 :
+        (controllerType_ != ControllerType::Pad || profile_ == ConsoleProfile::MasterSystem ? 72 : 28);
     return QRectF(8, 34, qMax(1, width() - 16), qMax(qreal(1), height() - 34 - footer));
 }
 
 QRectF ControllerDiagram::consolePauseArea() const {
     return QRectF((width() - 196) / 2.0, height() - 66, 196, 32);
+}
+
+QRectF ControllerDiagram::extraButtonsArea() const {
+    const qreal panelWidth = qMin(qreal(320), qreal(width() - 16));
+    return QRectF((width() - panelWidth) / 2, height() - 111, panelWidth, 42);
+}
+
+QRectF ControllerDiagram::extraButtonArea(int target) const {
+    const int index = target == 0 ? 0 : target == 8 ? 1 : target == 3 ? 2 : -1;
+    if (index < 0 || !targets_.contains(target)) return {};
+    const QRectF panel = extraButtonsArea();
+    const qreal buttonWidth = (panel.width() - 16) / 3;
+    return QRectF(panel.left() + 4 + index * (buttonWidth + 4), panel.top() + 4,
+                  buttonWidth, panel.height() - 8);
+}
+
+QRectF ControllerDiagram::reloadArea() const {
+    if (controllerType_ == ControllerType::Pad || !targets_.contains(2)) return {};
+    const qreal buttonWidth = qMin(qreal(220), qreal(width() - 16));
+    return QRectF((width() - buttonWidth) / 2, height() - 63, buttonWidth, 32);
 }
 
 QTransform ControllerDiagram::drawingTransform() const {
@@ -297,8 +366,15 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
     painter.setFont(title);
     painter.setPen(palette().color(QPalette::Text));
     QString name = InputManager::profileName(profile_);
-    if (profile_ == ConsoleProfile::MegaDrive)
-        name += sixButton_ ? QStringLiteral(" · 6 кнопок") : QStringLiteral(" · 3 кнопки");
+    switch (controllerType_) {
+    case ControllerType::Pad:
+        if (profile_ == ConsoleProfile::MegaDrive)
+            name += sixButton_ ? QStringLiteral(" · 6 кнопок") : QStringLiteral(" · 3 кнопки");
+        break;
+    case ControllerType::LightPhaser: name += QStringLiteral(" · Light Phaser"); break;
+    case ControllerType::Menacer: name += QStringLiteral(" · Menacer"); break;
+    case ControllerType::Justifier: name += QStringLiteral(" · Justifier"); break;
+    }
     painter.drawText(QRectF(8, 4, width() - 16, 26), Qt::AlignCenter, name);
 
     if (illustration_.isNull()) {
@@ -313,7 +389,7 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
             drawHighlight(painter, area.target, area.shape);
         // SJ-150's image has no printed numbers. These are mapping hints below
         // the controller, rather than invented markings on its button faces.
-        if (profile_ == ConsoleProfile::SG1000) {
+        if (profile_ == ConsoleProfile::SG1000 && controllerType_ == ControllerType::Pad) {
             QFont labels = painter.font();
             labels.setPixelSize(64);
             labels.setBold(true);
@@ -327,7 +403,7 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
         painter.restore();
     }
 
-    if (profile_ == ConsoleProfile::MasterSystem && targets_.contains(3)) {
+    if (profile_ == ConsoleProfile::MasterSystem && controllerType_ == ControllerType::Pad && targets_.contains(3)) {
         const QRectF panel = consolePauseArea();
         const QRectF button(panel.right() - 87, panel.top() + 3, 83, panel.height() - 6);
         painter.setPen(QPen(palette().color(QPalette::Mid), 1));
@@ -352,6 +428,52 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
         painter.drawText(button, Qt::AlignCenter, QStringLiteral("PAUSE"));
     }
 
+    if (controllerType_ == ControllerType::Menacer) {
+        const QRectF panel = extraButtonsArea();
+        QFont font = painter.font();
+        font.setPointSizeF(9);
+        font.setBold(false);
+        painter.setFont(font);
+        painter.setPen(palette().color(QPalette::Text));
+        painter.drawText(QRectF(panel.left(), panel.top() - 22, panel.width(), 18),
+                         Qt::AlignCenter, QStringLiteral("Остальные кнопки"));
+        painter.setPen(QPen(palette().color(QPalette::Mid), 1));
+        painter.setBrush(palette().color(QPalette::AlternateBase));
+        painter.drawRoundedRect(panel, 6, 6);
+        for (int target : {0, 8, 3}) {
+            const QRectF button = extraButtonArea(target);
+            if (button.isEmpty()) continue;
+            painter.setBrush(palette().color(QPalette::Button));
+            painter.setPen(QPen(palette().color(QPalette::Mid), 1));
+            painter.drawRoundedRect(button, 5, 5);
+            QPainterPath outline;
+            outline.addRoundedRect(button, 5, 5);
+            drawHighlight(painter, target, outline);
+            painter.setPen(palette().color(QPalette::ButtonText));
+            painter.drawText(button, Qt::AlignCenter,
+                             InputManager::targetName(profile_, target, controllerType_));
+        }
+    }
+
+    const QRectF reload = reloadArea();
+    if (!reload.isEmpty()) {
+        // Reload is a frontend action (off-screen shot), not a button invented
+        // on the physical gun illustration.
+        QFont font = painter.font();
+        font.setPointSizeF(9);
+        font.setBold(false);
+        painter.setFont(font);
+        painter.setBrush(palette().color(QPalette::Button));
+        painter.setPen(QPen(palette().color(QPalette::Mid), 1));
+        painter.drawRoundedRect(reload, 5, 5);
+        QPainterPath outline;
+        outline.addRoundedRect(reload, 5, 5);
+        drawHighlight(painter, 2, outline);
+        painter.setPen(palette().color(QPalette::ButtonText));
+        painter.drawText(reload, Qt::AlignCenter,
+                         InputManager::targetName(profile_, 2, controllerType_));
+    }
+
     QColor hintColor = palette().color(QPalette::Text);
     hintColor.setAlpha(165);
     painter.setPen(hintColor);
@@ -360,7 +482,9 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
     hint.setBold(false);
     painter.setFont(hint);
     painter.drawText(QRect(8, height() - 24, width() - 16, 18), Qt::AlignCenter,
-                     QStringLiteral("Нажмите кнопку на рисунке для выбора"));
+                     controllerType_ == ControllerType::Pad || !areas_.isEmpty()
+                         ? QStringLiteral("Нажмите кнопку на рисунке для выбора")
+                         : QStringLiteral("Выберите кнопку в таблице"));
 }
 
 void ControllerDiagram::mousePressEvent(QMouseEvent* event) {
@@ -368,11 +492,25 @@ void ControllerDiagram::mousePressEvent(QMouseEvent* event) {
         QWidget::mousePressEvent(event);
         return;
     }
-    if (profile_ == ConsoleProfile::MasterSystem && targets_.contains(3) &&
+    if (profile_ == ConsoleProfile::MasterSystem && controllerType_ == ControllerType::Pad && targets_.contains(3) &&
         consolePauseArea().contains(event->position())) {
         emit targetClicked(3);
         event->accept();
         return;
+    }
+    if (reloadArea().contains(event->position())) {
+        emit targetClicked(2);
+        event->accept();
+        return;
+    }
+    if (controllerType_ == ControllerType::Menacer) {
+        for (int target : {0, 8, 3}) {
+            if (extraButtonArea(target).contains(event->position())) {
+                emit targetClicked(target);
+                event->accept();
+                return;
+            }
+        }
     }
     bool invertible = false;
     const QPointF point = drawingTransform().inverted(&invertible).map(event->position());

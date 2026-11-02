@@ -1,4 +1,5 @@
 #pragma once
+#include "ControllerType.h"
 #include <QObject>
 #include <QMap>
 #include <QSet>
@@ -12,7 +13,7 @@ enum class KeyboardScanCodes { Native, Windows, Xkb, Unavailable };
 enum class ConsoleProfile { MegaDrive, MasterSystem, GameGear, SG1000 };
 enum InputCommand { PauseCommand=16, FastForwardCommand, SaveCommand, LoadCommand,
                     ResetCommand, FullscreenCommand, MuteCommand, NextSlotCommand,
-                    PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand };
+                    PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand, FrameAdvanceCommand };
 struct PadBinding {
     enum Kind { None, Button, Axis, Hat, Automatic };
     Kind kind = None;
@@ -24,7 +25,9 @@ Q_DECLARE_METATYPE(PadBinding)
 struct InputDevice { int instanceId=-1; QString key; QString name; };
 struct PlayerMapping {
     bool connected = true; // Virtual port; defaultMapping disconnects player 2.
-    bool sixButton = true; // Mega Drive port type; bindings survive 3/6 changes.
+    bool sixButton = true; // Mega Drive pad type; bindings survive device changes.
+    ControllerType controllerType = ControllerType::Pad;
+    AimSource aimSource = AimSource::Mouse; // defaultMapping assigns player 2 a stick.
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
     QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key
@@ -41,12 +44,16 @@ public:
     static PlayerMapping defaultMapping(ConsoleProfile profile, int player);
     static QString bindingName(const PadBinding& binding);
     static QString profileName(ConsoleProfile profile);
-    static QVector<int> gameTargets(ConsoleProfile profile, bool sixButton = true);
-    static QString targetName(ConsoleProfile profile, int target);
+    static QVector<int> gameTargets(ConsoleProfile profile, bool sixButton = true,
+                                    ControllerType type = ControllerType::Pad);
+    static QString targetName(ConsoleProfile profile, int target,
+                              ControllerType type = ControllerType::Pad);
     void setProfile(ConsoleProfile profile);
     ConsoleProfile profile() const;
     bool isConnected(unsigned player) const;
     bool sixButton(unsigned player) const;
+    ControllerType controllerType(unsigned player) const;
+    bool aimWithMouse(unsigned player) const;
     void setEnabled(bool enabled); // release all outputs when unfocused or in modal dialogs
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native);
@@ -62,6 +69,9 @@ signals:
     void maskChanged(unsigned player, unsigned mask);
     void connectionChanged(unsigned player, bool connected);
     void controllerTypeChanged(unsigned player, bool sixButton);
+    void deviceTypeChanged(unsigned player, int type);
+    void configurationChanged();
+    void aimMoved(unsigned player, double dx, double dy); // screen fractions, includes elapsed time
     void commandChanged(int command, bool pressed);
     void captureReady(); // all inputs released; waiting for the new binding
     void bindingCaptured(const PadBinding& binding);

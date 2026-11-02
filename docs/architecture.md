@@ -116,9 +116,15 @@ Controller PNGs are embedded Qt resources, decoded only when their selected reso
 
 Rewind memory changes clear history on the worker. Limits count retained QByteArray capacities and live entry metadata; transient encode/decode/image buffers, Qt control blocks and allocator/deque bookkeeping are additional. No memory is preallocated to the selected ceiling. Rewind progress uses checkpoint cadence (two emulated frames per snapshot), freezes the starting available duration, and emits remaining milliseconds at most 10 times per second while held. Zero stays visible at the oldest checkpoint until release. The OSD toggle affects display only.
 
-## Deferred user ideas
-
-Remember for a later task, not implemented in 0.7.4: mouse aiming/light-gun support inside the game window, compact Game Genie/Action Replay entry, frame advance while paused. Per-port 3/6-button selection has now been implemented as explicitly requested.
-
-
 In 0.7.5 the buffer has only an enabled flag and a byte ceiling; it has no time/count limit. The session still captures every two frames and derives the OSD countdown from actual retained snapshots. `emulation/rewindEnabled` replaces the old duration setting: legacy zero migrates to disabled, nonzero to enabled, and the old key is removed once. The old seconds submenu is replaced by a recording toggle; the memory ceiling remains in emulator settings.
+
+
+## Light guns, cheats and frame advance (0.8.0)
+
+Controller kind and aim source are stored per system/player, independently of physical device selection and the retained pad bindings. MD guns attach to hardware port B: one Menacer, or a Justifier pair; an optional ordinary pad occupies port A. Host callback-to-player mapping accounts for GPX compact device numbering and the third callback slot for pad plus two Justifiers. SMS Light Phaser uses its native port. Port changes run on the worker and clear history/audio; unchanged topology does not reset protocols during state restoration. With only port B's pad present, the compact GPX pad subtype is seeded before restoring empty port A.
+
+GameView normalizes mouse positions against the actual game rectangle, including scaling and black bars. One logical gun can use the ordinary OS mouse; the other uses its assigned gamepad's left stick, or both use sticks. Stick integration uses elapsed poll time with a 32 ms cap and radial deadzone. The worker reads packed atomic coordinates and merges button masks without event-thread core calls. Reload is a virtual offscreen trigger action, avoiding dependence on available desktop space in fullscreen. Losing focus/loading clears held mouse buttons. There is no pointer capture/warp or global input hook. Two numbered colored reticles are drawn after raster/shader video and excluded from captures; OSD visibility does not affect aiming.
+
+Cheats::Store validates bounded lists (100 entries, 128 KiB file cap), normalizes native core formats and persists named per-game JSON atomically on changed lists only. No frame performs cheat file I/O. The host retains the active code sequence; description-only edits do not reapply patches or clear history. Core changes run between frames and clear rewind/audio. Soft/hard reset reapplies the retained list. Disc changes load that disc's list. The optional retro_kegarefusion_invalidate_code extension refreshes the 32X boot-page ROM shadow and invalidates SH2 translations only after patch changes, not per frame. No new SH2 RAM cheat format is advertised.
+
+Frame advance is a queued worker command accepted only for a loaded, manually paused, non-background, non-rewinding session. It executes one frame with video enabled and audio output suppressed, publishes the image and preserves manual pause. Rewind capture keeps its ordinary two-frame cadence. The physical period key is reserved and ignores autorepeat; the command is also gamepad-bindable.
