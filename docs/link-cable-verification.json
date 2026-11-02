@@ -286,6 +286,14 @@
     "linux/KegaRefusion": "1b931126636806850514851ef45bf392b0dd152b9d3269b261647a3e6e59481e",
     "linux/cores/genesis_plus_gx_libretro.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
     "linux/cores/genesis_plus_gx_libretro_linkpeer.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
-    "KegaRefusion-0.15.1-linux-x86_64.tar.gz": "2fe5e561fc5b9c868e6c0a3daff40a781c65ffb320128648afb334ada879ef31"
+    "KegaRefusion-0.15.1-linux-x86_64.tar.gz": "e6e52aa45f165237dda8726f1ee09523f215162a75eaa5a3b896bc57e24b6ee8"
+  },
+  "localization": {
+    "ru_en_keys_match": true,
+    "placeholder_check": "PASS",
+    "windows_and_linux_published_catalogs_match": true,
+    "link_label_ru": "Линк-кабель (две консоли Mega Drive)",
+    "readiness_osd_ru": "ОЖИДАНИЕ ИГРОКА",
+    "deployment": "External catalogs updated; executable unchanged; restart required"
   }
 }

@@ -740,10 +740,10 @@
     "неизвестной версии": "unknown version",
     "нет устройства": "no device",
     "ожидается образ BIOS размером 131072 байта": "expected a BIOS image of 131072 bytes",
-    "ошибка чтения MP3": "MP3 read error"
-  },
-  "Link Cable доступен для картриджей Mega Drive без Sega CD и 32X.": "Link Cable is available for Mega Drive cartridges without Sega CD or 32X.",
-  "Для Link Cable требуется обновлённое ядро.": "Link Cable requires an updated core.",
-  "Не найден модуль второй консоли Link Cable: %1": "The second Link Cable console module is missing: %1",
-  "Не удалось загрузить ROM во вторую консоль.": "Could not load the ROM into the second console."
+    "ошибка чтения MP3": "MP3 read error",
+    "Link Cable доступен для картриджей Mega Drive без Sega CD и 32X.": "Link Cable is available for Mega Drive cartridges without Sega CD or 32X.",
+    "Для Link Cable требуется обновлённое ядро.": "Link Cable requires an updated core.",
+    "Не найден модуль второй консоли Link Cable: %1": "The second Link Cable console module is missing: %1",
+    "Не удалось загрузить ROM во вторую консоль.": "Could not load the ROM into the second console."
+  }
 }
