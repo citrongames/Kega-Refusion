@@ -78,6 +78,8 @@ public:
     void acknowledgeNetworkDatagram() { auto n=networkQueuedDatagrams_.load();while(n>0&&!networkQueuedDatagrams_.compare_exchange_weak(n,n-1)){} }
     void acknowledgeNetworkSnapshot() { networkSnapshotPending_.store(false); }
     void receiveNetworkSnapshot(const QByteArray& snapshot);
+    void receiveNetworkRewindPreview(const QByteArray& bytes);
+    void acknowledgeNetworkRewindPreview() { networkPreviewPending_.store(false); }
     void setNetworkRoster(const QByteArray& roster);
     void setNetworkPeerId(quint64 id) { networkPeerId_.store(id); }
     void receiveNetworkDatagram(quint64 peer, const QByteArray& packet);
@@ -96,6 +98,7 @@ signals:
 #endif
     void networkDatagramReady(quint64 peer, const QByteArray& packet);
     void networkStepRequested(quint64 epoch);
+    void networkRewindPreviewReady(const QByteArray& preview);
     void networkSnapshotApplied(bool success, const QString& error);
     void networkResyncRequested();
     void networkGameLoading(const QString& path,int archiveIndex);
@@ -128,7 +131,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview};
     struct Command {
         Type type;
         QString path;
@@ -144,7 +147,7 @@ private:
     std::atomic_int networkMode_{0}, networkRole_{0};
     std::atomic_int networkQueuedDatagrams_{0};
     std::atomic<quint64> networkPeerId_{0};
-    std::atomic_bool networkSnapshotPending_{false};
+    std::atomic_bool networkSnapshotPending_{false}, networkPreviewPending_{false};
     std::atomic_bool networkWaiting_{false};
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);

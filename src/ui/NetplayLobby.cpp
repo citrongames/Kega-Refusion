@@ -102,11 +102,16 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     status_->setTextFormat(Qt::PlainText);
     status_->setWordWrap(true);
     top->addWidget(status_, 1);
+    stopWaiting_ = new QPushButton(t("Продолжить без отключившихся"), this);
+    stopWaiting_->setObjectName(QStringLiteral("netplayStopWaiting"));
+    stopWaiting_->hide();
+    top->addWidget(stopWaiting_);
     leave_ = new QPushButton(t("Выйти из сеанса"), this);
     leave_->setObjectName(QStringLiteral("netplayLeave"));
     top->addWidget(leave_);
     layout->addLayout(top);
     connect(leave_, &QPushButton::clicked, this, &NetplayLobby::leaveRequested);
+    connect(stopWaiting_, &QPushButton::clicked, this, &NetplayLobby::stopWaitingRequested);
 
     auto* inviteBox = new QGroupBox(t("Приглашение"), this);
     auto* inviteLayout = new QVBoxLayout(inviteBox);
@@ -134,24 +139,18 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     retryAddress_->setObjectName(QStringLiteral("netplayRetryAddress"));
     addressRow->addWidget(retryAddress_);
     inviteLayout->addLayout(addressRow);
-    auto* localInviteRow = new QHBoxLayout;
-    localInviteRow->addStretch();
-    copyLocalInvite_ = new QPushButton(t("Копировать для этого компьютера"), inviteBox);
-    copyLocalInvite_->setObjectName(QStringLiteral("netplayCopyLocalInvite"));
-    localInviteRow->addWidget(copyLocalInvite_);
+    auto* lanInviteRow = new QHBoxLayout;
+    lanInviteRow->addStretch();
     copyLanInvite_ = new QPushButton(t("Копировать для локальной сети"), inviteBox);
     copyLanInvite_->setObjectName(QStringLiteral("netplayCopyLanInvite"));
-    localInviteRow->addWidget(copyLanInvite_);
-    inviteLayout->addLayout(localInviteRow);
+    lanInviteRow->addWidget(copyLanInvite_);
+    inviteLayout->addLayout(lanInviteRow);
     layout->addWidget(inviteBox);
     connect(copyInvite_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("invite")).toString());
     });
     connect(copyWithPassword_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("inviteWithPassword")).toString());
-    });
-    connect(copyLocalInvite_, &QPushButton::clicked, this, [this] {
-        QApplication::clipboard()->setText(state_.value(QStringLiteral("localInvite")).toString());
     });
     connect(copyLanInvite_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("lanInvite")).toString());
@@ -392,6 +391,9 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
     status_->setText(status.isEmpty() ? (active ? t("Сетевой сеанс") : t("Нет сетевого сеанса"))
                                        : Localization::text(status));
     leave_->setEnabled(active);
+    const bool connectionWaiting = host && state.value(QStringLiteral("connectionWaiting")).toBool();
+    stopWaiting_->setVisible(connectionWaiting);
+    stopWaiting_->setEnabled(connectionWaiting);
     const QString invite = host ? state.value(QStringLiteral("invite")).toString() : QString();
     invite_->setText(invite);
     invite_->setPlaceholderText(host && invite.isEmpty() ? t("Определение адреса…")
@@ -402,9 +404,6 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
         !inviteWithPassword.isEmpty() && inviteWithPassword != invite;
     copyWithPassword_->setEnabled(hasPasswordInvite);
     copyWithPassword_->setVisible(hasPasswordInvite);
-    const QString localInvite = state.value(QStringLiteral("localInvite")).toString();
-    copyLocalInvite_->setVisible(host);
-    copyLocalInvite_->setEnabled(host && !localInvite.isEmpty());
     const QString lanInvite = state.value(QStringLiteral("lanInvite")).toString();
     copyLanInvite_->setVisible(host);
     copyLanInvite_->setEnabled(host && !lanInvite.isEmpty());

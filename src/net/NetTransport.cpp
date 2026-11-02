@@ -37,7 +37,7 @@ constexpr int kMaxFramesPerSecond = 4096;
 constexpr int kMaxBytesPerSecond = 128 * 1024 * 1024;
 constexpr int kDeadLinkMs = 5000;
 constexpr int kMaxBufferedBytes = 512 * 1024;
-constexpr int kProtocol = 2;
+constexpr int kProtocol = 3;
 constexpr int kHandshakeMs = 10000;
 constexpr quint8 kInternalKind = 0;
 
@@ -175,6 +175,7 @@ struct NetTransport::Connection {
     bool serverSide = false;
     bool authenticated = false;
     bool closing = false;
+    QString closeReason;
     QByteArray challenge;
     QByteArray pendingPublicKey;
     QString pendingNickname;
@@ -299,13 +300,13 @@ void NetTransport::attach(QSslSocket* socket, bool serverSide) {
     });
     connect(socket, &QSslSocket::readyRead, this, [this, connection] { read(connection); });
     connect(socket, &QSslSocket::disconnected, this, [this, connection] {
-        if (connections_.contains(connection) && !connection->serverSide &&
-            !connection->authenticated && connection->socket->bytesAvailable() > 0) read(connection);
+        if (connections_.contains(connection) && connection->socket->bytesAvailable() > 0)
+            read(connection);
         if (connections_.contains(connection)) close(connection, QStringLiteral("Disconnected"));
     });
     connect(socket, &QSslSocket::errorOccurred, this, [this, connection](QAbstractSocket::SocketError) {
-        if (connections_.contains(connection) && !connection->serverSide &&
-            !connection->authenticated && connection->socket->bytesAvailable() > 0) read(connection);
+        if (connections_.contains(connection) && connection->socket->bytesAvailable() > 0)
+            read(connection);
         if (connections_.contains(connection) && !connection->closing)
             close(connection, socketReason(connection->socket));
     });
@@ -327,8 +328,9 @@ void NetTransport::attach(QSslSocket* socket, bool serverSide) {
     });
     heartbeat->start();
     QPointer<QSslSocket> guard(socket);
-    QTimer::singleShot(kHandshakeMs, socket, [this, connection, guard] {
-        if (guard && connections_.contains(connection) && !connection->authenticated)
+    QTimer::singleShot(kHandshakeMs, this, [this, connection, guard] {
+        if (guard && connections_.contains(connection) && connection->socket == guard.data() &&
+            !connection->authenticated)
             close(connection, QStringLiteral("Authentication timed out"));
     });
 }
@@ -390,7 +392,11 @@ void NetTransport::read(Connection* connection) {
               (quint32(quint8(connection->receive[1])) << 16) |
               (quint32(quint8(connection->receive[2])) << 8) |
               quint32(quint8(connection->receive[3]))))))) {
-        QTimer::singleShot(0, socket, [this, connection] { if (connections_.contains(connection)) read(connection); });
+        QPointer<QSslSocket> guard(socket);
+        QTimer::singleShot(0, this, [this, connection, guard] {
+            if (guard && connections_.contains(connection) && connection->socket == guard.data())
+                read(connection);
+        });
     }
 }
 
@@ -424,7 +430,11 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
             }
             return;
         }
-        if (connection->serverSide) { close(connection, QStringLiteral("Unauthorized control message")); return; }
+        if (connection->serverSide) {
+            if (type == QStringLiteral("leave")) close(connection, QStringLiteral("Left session"));
+            else close(connection, QStringLiteral("Unauthorized control message"));
+            return;
+        }
         if (type == QStringLiteral("joined")) {
             const PeerInfo peer = parsePeer(object.value(QStringLiteral("peer")).toObject());
             if (peer.id) {
@@ -451,6 +461,8 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
             emit peerRoleChanged(id, Role(role));
         } else if (type == QStringLiteral("kick")) {
             close(connection, object.value(QStringLiteral("reason")).toString(QStringLiteral("Kicked by host")));
+        } else if (type == QStringLiteral("stop")) {
+            close(connection, QStringLiteral("Session stopped"));
         } else {
             close(connection, QStringLiteral("Invalid control message"));
         }
@@ -649,6 +661,8 @@ bool NetTransport::enqueue(Connection* connection, MessageKind kind, const QByte
         (quint8(kind) != kInternalKind && payload.size() > maxPayloadFor(kind)) ||
         connection->socket->state() != QAbstractSocket::ConnectedState ||
         !connection->socket->isEncrypted()) return false;
+    if (kind == MessageKind::Frame && connection->socket->bytesToWrite() > 64 * 1024)
+        return false;
     const qint64 length = payload.size() + 1;
     if (connection->socket->bytesToWrite() + length + 4 > kMaxQueuedBytes) {
         close(connection, QStringLiteral("Send queue limit exceeded"));
@@ -729,13 +743,19 @@ bool NetTransport::kick(quint64 peerId, bool persistentBan, bool banSession) {
         }
     }
     if (banSession) sessionBannedIdentities_.insert(connection->identityFingerprint);
+    const QString kickReason = QStringLiteral("Kicked by host");
+    connection->closeReason = kickReason;
+    connection->closing = true;
+    QPointer<NetTransport> self(this);
+    QPointer<QSslSocket> socket(connection->socket);
     sendControl(connection, json({{QStringLiteral("type"), QStringLiteral("kick")},
-        {QStringLiteral("reason"), QStringLiteral("Kicked by host")}}));
-    if (!connections_.contains(connection)) return true;
-    connection->socket->disconnectFromHost();
-    QPointer<QSslSocket> guard(connection->socket);
-    QTimer::singleShot(1000, connection->socket, [this, connection, guard] {
-        if (guard && connections_.contains(connection)) close(connection, QStringLiteral("Kicked by host"));
+        {QStringLiteral("reason"), kickReason}}));
+    if (!self || !socket || !connections_.contains(connection) || connection->socket != socket.data()) return true;
+    socket->disconnectFromHost();
+    if (!self || !socket || !connections_.contains(connection) || connection->socket != socket.data()) return true;
+    QTimer::singleShot(1000, this, [this, connection, socket] {
+        if (socket && connections_.contains(connection) && connection->socket == socket.data())
+            close(connection, QStringLiteral("Kicked by host"));
     });
     return true;
 }
@@ -788,20 +808,21 @@ bool NetTransport::setRole(quint64 peerId, Role role) {
 
 void NetTransport::close(Connection* connection, const QString& reason) {
     if (!connections_.remove(connection)) return;
+    const QString finalReason = connection->closeReason.isEmpty() ? reason : connection->closeReason;
     connection->closing = true;
     if (connection->authenticated && connection->serverSide) {
         auto it = sessionPeers_.find(connection->identityFingerprint);
         if (it != sessionPeers_.end() && it->id == connection->peerId) it->connected = false;
         const QByteArray left = json({{QStringLiteral("type"), QStringLiteral("left")},
-            {QStringLiteral("id"), QString::number(connection->peerId)}, {QStringLiteral("reason"), reason}});
+            {QStringLiteral("id"), QString::number(connection->peerId)}, {QStringLiteral("reason"), finalReason}});
         for (auto* other : QList<Connection*>(connections_.begin(), connections_.end()))
             if (connections_.contains(other) && other->authenticated) sendControl(other, left);
-        emit peerLeft(connection->peerId, reason);
+        emit peerLeft(connection->peerId, finalReason);
     } else if (connection->authenticated) {
         localPeerId_ = 0;
-        emit peerLeft(0, reason);
+        emit peerLeft(0, finalReason);
     } else if (!connection->serverSide) {
-        emit transportError(reason);
+        emit transportError(finalReason);
     }
     connection->socket->disconnect(this);
     connection->socket->abort();
@@ -813,8 +834,33 @@ void NetTransport::stop() {
     if (server_) { server_->close(); delete server_; server_ = nullptr; }
     const bool wasActive = hosting_ || !connections_.isEmpty();
     hosting_ = false;
-    for (auto* connection : QList<Connection*>(connections_.begin(), connections_.end()))
-        if (connections_.contains(connection)) close(connection, QStringLiteral("Session stopped"));
+    QPointer<NetTransport> self(this);
+    for (auto* connection : QList<Connection*>(connections_.begin(), connections_.end())) {
+        if (!connections_.contains(connection)) continue;
+        if (!connection->authenticated) {
+            close(connection, QStringLiteral("Session stopped"));
+            if (!self) return;
+            continue;
+        }
+        const bool serverSide = connection->serverSide;
+        connection->closeReason = serverSide ? QStringLiteral("Session stopped") : QStringLiteral("Left session");
+        connection->closing = true;
+        QPointer<QSslSocket> socket(connection->socket);
+        sendControl(connection, json({{QStringLiteral("type"),
+            serverSide ? QStringLiteral("stop") : QStringLiteral("leave")}}));
+        if (!self) return;
+        if (!socket || !connections_.contains(connection) || connection->socket != socket.data())
+            continue;
+        connections_.remove(connection);
+        // Keep the socket alive long enough to flush the explicit reason over TLS.
+        socket->setParent(nullptr);
+        connect(socket.data(), &QSslSocket::disconnected, socket.data(), &QObject::deleteLater);
+        connect(socket.data(), &QObject::destroyed, [connection] { delete connection; });
+        QTimer::singleShot(1000, socket.data(), [socket] {
+            if (socket) { socket->abort(); socket->deleteLater(); }
+        });
+        socket->disconnectFromHost();
+    }
     sessionPeers_.clear();
     bannedIdentities_.clear();
     sessionBannedIdentities_.clear();

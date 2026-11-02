@@ -47,6 +47,10 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(&session_,&EmulationSession::networkStepRequested,this,[this](quint64 epoch){
         if(active_&&hosting_)transport_.broadcast(MessageKind::Control,json({{"op","step"},{"epoch",QString::number(epoch)}}));
     });
+    connect(&session_,&EmulationSession::networkRewindPreviewReady,this,[this](const QByteArray& preview){
+        session_.acknowledgeNetworkRewindPreview();
+        if(active_&&hosting_)transport_.broadcast(MessageKind::Frame,preview);
+    });
     addressDiscovery_=new NetAddressDiscovery(this);
     connect(addressDiscovery_,&NetAddressDiscovery::finished,this,[this](const QString& address,const QString& detail){
         if(!active_||!hosting_||!automaticAddress_||!addressPending_)return;
@@ -76,6 +80,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(lobby_,&NetplayLobby::createRequested,this,&NetplayController::startHost);
     connect(lobby_,&NetplayLobby::joinRequested,this,&NetplayController::startJoin);
     connect(lobby_,&NetplayLobby::leaveRequested,this,&NetplayController::leaveSession);
+    connect(lobby_,&NetplayLobby::stopWaitingRequested,this,&NetplayController::stopWaiting);
     connect(lobby_,&NetplayLobby::selectRomRequested,this,&NetplayController::openRomRequested);
     connect(lobby_,&NetplayLobby::roleRequested,this,[this](const QString& text,const QString& role) {
         if(!active_ || !hosting_)return;
@@ -134,7 +139,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(&transport_,&NetTransport::connected,this,[this](const PeerInfo& self){
         if(!active_||hosting_)return;
         localId_=self.id;localRole_=int(self.role);session_.setNetworkRole(localRole_);session_.setNetworkPeerId(localId_);
-        reconnectTimer_.stop();reconnectAttempts_=0;status_=t("Подключено к хосту");
+        reconnectTimer_.stop();reconnectAttempts_=0;connectionLost_=false;status_=t("Подключено к хосту");
         compareContent();
         refreshLobby();
     });
@@ -153,7 +158,10 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     });
     connect(&transport_,&NetTransport::peerRoleChanged,this,[this](quint64 id,Role role){
         if(participants_.contains(id))participants_[id].insert("role",roleName(int(role)));
-        if(hosting_&&role==Role::Spectator)releasePeerCommands(id);
+        if(hosting_&&role==Role::Spectator){
+            releasePeerCommands(id);
+            if(disconnectedAt_.remove(id))participants_.remove(id);
+        }
         if(id==localId_){localRole_=int(role);session_.setNetworkRole(localRole_);}
         inputs_.remove(id);if(hosting_){updateRoster();updateWaiting();}refreshLobby();
     });
@@ -161,8 +169,8 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         if(!active_||stopping_)return;
         if(hosting_) {
             releasePeerCommands(id);datagrams_.removePeer(id);udpReadyPeers_.remove(id);
-            inputs_.remove(id);readyPeers_.remove(id);outgoingSnapshots_.remove(id);heldFrames_.remove(id);
-            const bool removed=reason.contains("kick",Qt::CaseInsensitive)||reason.contains("ban",Qt::CaseInsensitive);
+            inputs_.remove(id);readyPeers_.remove(id);outgoingSnapshots_.remove(id);outgoingOffsets_.remove(id);heldFrames_.remove(id);
+            const bool removed=reason==QStringLiteral("Left session")||reason.contains("kick",Qt::CaseInsensitive)||reason.contains("ban",Qt::CaseInsensitive);
             if(removed||roleValue(participants_.value(id).value("role").toString())==0) {
                 transport_.setRole(id,Role::Spectator);participants_.remove(id);disconnectedAt_.remove(id);
             } else {
@@ -174,12 +182,12 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
             gameReady_=false;session_.setNetworkWaiting(true);status_=t("Связь потеряна. Переподключение…");
             // An explicit host removal is final for this attempt; don't hammer a ban.
             if(reason.contains("kick",Qt::CaseInsensitive)||reason.contains("ban",Qt::CaseInsensitive)||reason.contains("stopped",Qt::CaseInsensitive)) {
-                status_=reason;reconnectTimer_.stop();
-            } else {reconnectAttempts_=0;reconnectTimer_.start();}
+                status_=reason;connectionLost_=remoteConnectionWaiting_=false;reconnectTimer_.stop();
+            } else {connectionLost_=true;reconnectAttempts_=0;reconnectTimer_.start();}
         }
         refreshLobby();
     });
-    connect(&transport_,&NetTransport::transportError,this,[this](const QString& error){status_=error;emit notice(error);refreshLobby();});
+    connect(&transport_,&NetTransport::transportError,this,[this](const QString& error){status_=error;if(!connectionLost_)emit notice(error);refreshLobby();});
     connect(&session_,&EmulationSession::networkModeFailed,this,[this](const QString& error){leaveSession();emit notice(error);});
     connect(&session_,&EmulationSession::networkCommandRequested,this,[this](const QByteArray& b){
         if(!active_)return;
@@ -293,7 +301,6 @@ void NetplayController::startHost(quint16 port,const QString& address,const QStr
     lanInvite_.clear();
     const auto connection=NetInterfaces::choose(connectionId_);
     if(!connection.ipv4.isEmpty()) {setHostAddress(connection.ipv4);lanInvite_=inviteWithPassword_;}
-    setHostAddress(QStringLiteral("127.0.0.1"));localInvite_=inviteWithPassword_;
     automaticAddress_=address.trimmed().isEmpty();addressPending_=false;addressRetry_=false;
     addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
     if(!automaticAddress_)setHostAddress(address);
@@ -320,15 +327,15 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
 }
 void NetplayController::leaveSession(){
     if(!active_)return;
-    stopping_=true;active_=false;
+    stopping_=true;active_=false;connectionLost_=remoteConnectionWaiting_=false;
     addressPending_=false;automaticAddress_=false;addressRetry_=false;addressDiscovery_->cancel();
-    invitationKey_.clear();invitationPassword_.clear();localInvite_.clear();lanInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
+    invitationKey_.clear();invitationPassword_.clear();lanInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
     inputTimer_.stop();reconnectTimer_.stop();snapshotTimer_.stop();
     datagrams_.stop();udpReadyPeers_.clear();rosterBytes_.clear();lastLobbyBytes_.clear();heldCommandOwners_.clear();
     transport_.stop();session_.setNetworkMode(0);session_.setNetworkWaiting(false);
     files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);
     QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(false);});
-    participants_.clear();inputs_.clear();readyPeers_.clear();filePending_.clear();outgoingSnapshots_.clear();heldFrames_.clear();disconnectedAt_.clear();
+    participants_.clear();inputs_.clear();readyPeers_.clear();filePending_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();disconnectedAt_.clear();
     incomingSnapshot_.clear();manifest_.clear();localManifest_.clear();
     hosting_=false;gameReady_=false;downloading_=false;snapshotRequested_=false;applyingEpoch_=incomingEpoch_=pendingIncomingEpoch_=0;incomingSize_=pendingIncomingSize_=0;fileChunkExpected_=false;stopping_=false;
     status_=t("Онлайн-сессия завершена");emit activeChanged(false);refreshLobby();lobby_->hide();
@@ -389,6 +396,14 @@ void NetplayController::updateWaiting(){
     session_.setNetworkWaiting(wait);
     if(!expired.isEmpty())refreshLobby();
 }
+void NetplayController::stopWaiting(){
+    if(!active_ || !hosting_ || disconnectedAt_.isEmpty())return;
+    const auto peers=disconnectedAt_.keys();
+    disconnectedAt_.clear();
+    for(auto id:peers)participants_.remove(id);
+    for(auto id:peers)transport_.setRole(id,Role::Spectator);
+    sendInput();refreshLobby();
+}
 void NetplayController::updateRoster(){
     if(!active_||!hosting_)return;
     QJsonArray roster;
@@ -438,7 +453,7 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     if(kind==MessageKind::Command&&hosting_){acceptCommand(peer,b);return;}
     if(kind==MessageKind::FileRequest&&hosting_&&allowDownloads_){if(filePending_.contains(peer))return;filePending_.insert(peer);QMetaObject::invokeMethod(files_,[this,peer,b]{files_->requestChunk(peer,b);});return;}
     if(kind==MessageKind::FileChunk&&!hosting_&&downloading_){if(!fileChunkExpected_)return;fileChunkExpected_=false;QMetaObject::invokeMethod(files_,[this,b]{files_->receiveChunk(b);});return;}
-    if(kind==MessageKind::Frame)return;
+    if(kind==MessageKind::Frame){if(!hosting_)session_.receiveNetworkRewindPreview(b);return;}
     if(kind==MessageKind::Content&&!hosting_){
         const auto o=QJsonDocument::fromJson(b).object();gameName_=o.value("name").toString().left(512);allowDownloads_=o.value("downloads").toBool();
         const auto next=QByteArray::fromBase64(o.value("manifest").toString().toLatin1());
@@ -500,6 +515,7 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     } else if(op=="file-error") {downloading_=false;files_->requestCancel();status_=o.value("text").toString().left(1024);emit notice(status_);refreshLobby();
     } else if(op=="notice") {emit notice(o.value("text").toString().left(1024));
     } else if(op=="lobby"){
+        remoteConnectionWaiting_=o.value("connectionWaiting").toBool();
         allowCommands_=o.value("allowCommands").toBool();
         const auto array=o.value("participants").toArray();if(array.size()>32)return;
         participants_.clear();for(const auto& value:array){auto participant=value.toObject();const auto id=participant.value("id").toString().toULongLong();participant.insert("local",id==localId_);participants_.insert(id,participant);}
@@ -507,9 +523,11 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     }
 }
 void NetplayController::refreshLobby(){
+    const bool waiting=active_ && (hosting_?!disconnectedAt_.isEmpty():connectionLost_||remoteConnectionWaiting_);
+    if(waiting!=connectionWaiting_){connectionWaiting_=waiting;emit connectionWaitingChanged(waiting);}
     QJsonArray list;auto ids=participants_.keys();std::sort(ids.begin(),ids.end());for(auto id:ids)list.append(participants_.value(id));
     if(hosting_) {
-        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_}});
+        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"connectionWaiting",waiting}});
         if(bytes!=lastLobbyBytes_){lastLobbyBytes_=bytes;transport_.broadcast(MessageKind::Control,bytes);}
     }
     QString romStatus=gameReady_?QStringLiteral("matched"):localManifest_.isEmpty()?QStringLiteral("missing"):QStringLiteral("verifying");
@@ -517,6 +535,6 @@ void NetplayController::refreshLobby(){
     if(downloading_)romStatus="downloading";
     QJsonObject rom{{"filename",gameName_},{"status",romStatus},{"progress",transferTotal_?double(transferDone_)*100.0/double(transferTotal_):0},
         {"canSelect",active_},{"canDownload",active_&&!hosting_&&allowDownloads_&&!manifest_.isEmpty()&&!downloading_},{"canCancel",downloading_}};
-    lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"localInvite",localInvite_},{"lanInvite",lanInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},{"connections",connections_},{"selectedConnectionId",connectionId_},
+    lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"connectionWaiting",waiting},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"lanInvite",lanInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},{"connections",connections_},{"selectedConnectionId",connectionId_},
         {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_}});
 }

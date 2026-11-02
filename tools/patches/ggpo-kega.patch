@@ -459,3 +459,17 @@ diff --git a/lib/ggpo/sync.h b/lib/ggpo/sync.h
     bool InRollback() { return _rollingback; }
     int GetPredictedFrames() { return _framecount - _last_confirmed_frame; }
  
+diff --git a/lib/ggpo/backends/p2p.cpp b/lib/ggpo/backends/p2p.cpp
+--- a/lib/ggpo/backends/p2p.cpp
++++ b/lib/ggpo/backends/p2p.cpp
+@@ -112,6 +112,10 @@
+       _poll.Pump(0);
+ 
+       PollUdpProtocolEvents();
++
++      // A local-only roster receives no remote sync event. All players have
++      // been registered before the first poll, so it can start here as well.
++      if (_synchronizing) CheckInitialSync();
+ 
+       if (!_synchronizing) {
+          _sync.CheckSimulation(timeout);

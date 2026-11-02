@@ -15,9 +15,8 @@ class QTableWidget;
 // A modeless view of an active direct-connection session. The networking layer
 // owns all state; this widget only renders snapshots and emits user requests.
 // setLobbyState() accepts:
-//   active, host, status, addressStatus, addressRetry, invite,
-//   inviteWithPassword, localInvite, lanInvite (local links include password
-//   when configured),
+//   active, host, status, connectionWaiting, addressStatus, addressRetry, invite,
+//   inviteWithPassword, lanInvite (LAN links include password when configured),
 //   connections: [{id, name, ipv4, physical}] for the create dialog;
 //   allowCommands, allowDownloads;
 //   participants: [{id, nickname, role, readiness, pingMs, local, host}];
@@ -39,6 +38,7 @@ signals:
                          const QString& password, const QString& connectionId);
     void joinRequested(const QString& invite, const QString& password);
     void leaveRequested();
+    void stopWaitingRequested();
     void roleRequested(const QString& peerId, const QString& role);
     void selectRomRequested(const QString& path);
     void downloadRomRequested();
@@ -68,10 +68,10 @@ private:
     QProgressBar* progress_ = nullptr;
     QPushButton* copyInvite_ = nullptr;
     QPushButton* copyWithPassword_ = nullptr;
-    QPushButton* copyLocalInvite_ = nullptr;
     QPushButton* copyLanInvite_ = nullptr;
     QPushButton* retryAddress_ = nullptr;
     QPushButton* leave_ = nullptr;
+    QPushButton* stopWaiting_ = nullptr;
     QPushButton* selectRom_ = nullptr;
     QPushButton* downloadRom_ = nullptr;
     QPushButton* cancelTransfer_ = nullptr;

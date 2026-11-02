@@ -32,6 +32,7 @@ signals:
     void activeChanged(bool);
     void openRomRequested(const QString&);
     void notice(const QString&);
+    void connectionWaitingChanged(bool waiting);
 private:
     void startHost(quint16, const QString&, const QString&, const QString& connectionId = {});
     void resolveHostAddress();
@@ -47,6 +48,7 @@ private:
     void queueSnapshot(quint64,const QByteArray&);
     void beginIncomingSnapshot(qsizetype size,quint64 epoch);
     void updateWaiting();
+    void stopWaiting();
     void updateRoster();
     void announceContent();
     void compareContent();
@@ -61,13 +63,14 @@ private:
     QByteArray rosterBytes_, lastLobbyBytes_;
     NetAddressDiscovery* addressDiscovery_=nullptr;
     QByteArray invitationKey_;
-    QString invitationPassword_,localInvite_,lanInvite_,addressStatus_,connectionId_;
+    QString invitationPassword_,lanInvite_,addressStatus_,connectionId_;
     QJsonArray connections_;
     bool automaticAddress_=false,addressPending_=false,addressRetry_=false;
     QThread fileThread_;
     NetTransferWorker* files_ = nullptr;
     QTimer inputTimer_, reconnectTimer_, snapshotTimer_;
     bool active_ = false, hosting_ = false, stopping_ = false;
+    bool connectionLost_=false, remoteConnectionWaiting_=false, connectionWaiting_=false;
     bool allowCommands_ = true, allowDownloads_ = false;
     bool gameReady_ = false, remoteGameOpen_ = false;
     QString invite_, inviteWithPassword_, gamePath_, gameName_, status_;

@@ -10,5 +10,5 @@ The pinned Flycast source archive has SHA-256:
 
 GGPO is licensed under MIT; see GGPO-LICENSE.txt. This integration extracts
 only the GGPO directory. It does not copy Flycast emulator integration code.
-The reproducible local transport, packet-bound, and confirmed-frame accessor changes are in
+The reproducible local transport, packet-bound, local-only startup, and confirmed-frame accessor changes are in
 `tools/patches/ggpo-kega.patch` and applied by `tools/prepare-ggpo.py`.
