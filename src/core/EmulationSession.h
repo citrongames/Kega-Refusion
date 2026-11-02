@@ -1,6 +1,7 @@
 #pragma once
 #include "RomArchive.h"
 #include "Cheats.h"
+#include "Achievements.h"
 #include "../input/ControllerType.h"
 #include <QThread>
 #include <QImage>
@@ -58,9 +59,18 @@ public:
     void setRewindMemoryMiB(int mebibytes);
     void setBackgroundPaused(bool paused);
     void requestSlotStatus(int selected);
+    void configureAchievements(bool enabled, bool hardcore);
+    void loginAchievements(QString user, QString password);
+    void logoutAchievements();
+    void requestAchievements();
+    void achievementResponse(quint64 id, int status, QByteArray body);
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void achievementsChanged(const AchievementsState& state);
+    void achievementNotice(const AchievementNotice& notice);
+    void achievementHttpRequest(const AchievementHttpRequest& request);
+    void achievementsHardcoreChanged(bool enabled);
     void movieCompatibilityWarning(const QString& message);
     void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length, double fps);
     void movieHardwareChanged(const QByteArray& controllersJson);
@@ -84,13 +94,15 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver };
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse };
     struct Command {
         Type type;
         QString path;
         int value = 0;
         std::optional<RomArchive::Entry> archiveEntry = std::nullopt;
         CheatList cheats{};
+        QByteArray bytes{};
+        quint64 requestId = 0;
     };
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);

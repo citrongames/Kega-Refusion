@@ -1,5 +1,7 @@
 #include "LibretroHost.h"
 #include <QSysInfo>
+#include <rc_hash.h>
+#include <rc_consoles.h>
 #include "RomArchive.h"
 #include "VideoFrameGeometry.h"
 #include "SegaCdBios.h"
@@ -36,6 +38,8 @@ struct LibretroHost::Api {
     const char* (*state_abi)() = nullptr;
     const char* (*recording_abi)() = nullptr;
     unsigned (*features)() = nullptr;
+    unsigned (*system_hw)() = nullptr;
+    bool (*get_cd_header)(void*, size_t) = nullptr;
     void (*invalidate_code)() = nullptr;
     using PapriumMusicCallback = std::uint64_t (*)(void*, unsigned, std::uint64_t,
                                                     std::int16_t*, std::size_t);
@@ -46,6 +50,8 @@ struct LibretroHost::Api {
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
+constexpr qsizetype maxAchievementProgressSize = 2 * 1024 * 1024;
+const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
 const QByteArray stateMagic("KRSTATE1", 8);
 bool validGeometry(const retro_game_geometry& geometry) {
@@ -150,6 +156,8 @@ bool LibretroHost::initialize(QString& error) {
     RESOLVE(unserialize); RESOLVE(get_memory_data); RESOLVE(get_memory_size);
 #undef RESOLVE
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
+    api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
+    api_->get_cd_header = reinterpret_cast<decltype(api_->get_cd_header)>(library_.resolve("retro_kegarefusion_cd_header"));
     api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
     api_->cheat_set = reinterpret_cast<decltype(api_->cheat_set)>(library_.resolve("retro_cheat_set"));
     api_->invalidate_code = reinterpret_cast<decltype(api_->invalidate_code)>(library_.resolve("retro_kegarefusion_invalidate_code"));
@@ -357,6 +365,7 @@ bool LibretroHost::selectDisc(int index, QString& error) {
         error = QStringLiteral("Ядро не смогло прочитать выбранный диск."); return false;
     }
     discIndex_ = index; setDiscIdentity();
+    achievementHashCache_.clear();
     loadCheats();
     return setDiscEjected(false,error);
 }
@@ -386,6 +395,7 @@ bool LibretroHost::changeDisc(const QString& path, QString& error) {
         return false;
     }
     discs_[discIndex_] = image;
+    achievementHashCache_.clear();
     if (!refreshDiscFiles(error)) return false;
     setDiscIdentity();
     loadCheats();
@@ -511,6 +521,11 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     return true;
 }
 void LibretroHost::unload() {
+    resetAchievementMemory();
+    achievementDescriptorCount_ = 0;
+    achievementConsoleCache_ = 0;
+    achievementHashCache_.clear();
+    achievementCdHeader_.clear();
     if (loaded_) {
         QString error;
         if (!flushSaveRam(error) && message) message(error);
@@ -538,11 +553,12 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     videoEnabled_ = audioEnabled_ = true;
 }
 void LibretroHost::reset() {
-    if (loaded_) { clearCoreCheats(); api_->reset(); applyCheats(); audio_.clear(); }
+    if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
 }
 bool LibretroHost::hardReset(QString& error) {
     error.clear();
     if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
+    achievementHashCache_.clear();
     if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
     // The active attachment also covers CHD, whose 32X header is core-detected.
     // Recheck user BIOS before unloading a working game for its power cycle.
@@ -550,6 +566,8 @@ bool LibretroHost::hardReset(QString& error) {
     // Reuse the selected content already in memory: archives need no second
     // selection and moved/deleted ROM files do not affect a power cycle.
     if (!flushSaveRam(error)) return false;
+    resetAchievementMemory();
+    achievementDescriptorCount_ = 0;
     clearCoreCheats();
     api_->unload_game();
     batterySave_.clear();
@@ -1013,6 +1031,135 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     return true;
 }
 QByteArray LibretroHost::movieCoreIdentity() const { return loaded_ ? recordingCoreHash_ : QByteArray(); }
+
+void LibretroHost::resetAchievementMemory() {
+    if (achievementMemoryInitialized_)
+        rc_libretro_memory_destroy(&achievementMemory_);
+    achievementMemoryInitialized_ = false;
+    achievementMemoryConsole_ = 0;
+}
+void LibretroHost::achievementCoreMemoryInfo(uint32_t id, rc_libretro_core_memory_info_t* info) {
+    if (!info) return;
+    info->data = nullptr;
+    info->size = 0;
+    auto* host = active_;
+    if (!host || !host->loaded_ || !host->api_->get_memory_data || !host->api_->get_memory_size) return;
+    info->data = static_cast<uint8_t*>(host->api_->get_memory_data(id));
+    if (!info->data) return;
+    info->size = id == RETRO_MEMORY_SAVE_RAM && host->saveMemorySizes_[0]
+        ? host->saveMemorySizes_[0] : host->api_->get_memory_size(id);
+}
+unsigned LibretroHost::achievementConsoleId() const {
+    if (!loaded_) return 0;
+    if (achievementConsoleCache_) return achievementConsoleCache_;
+    unsigned id = 0;
+    if (isCd()) id = RC_CONSOLE_SEGA_CD;
+    else if (api_->features && (api_->features() & 2u)) id = RC_CONSOLE_SEGA_32X;
+    else if (api_->system_hw) {
+        switch (api_->system_hw()) {
+        case 0x01: case 0x02: case 0x03: id = RC_CONSOLE_SG1000; break;
+        case 0x10: case 0x20: case 0x21: id = RC_CONSOLE_MASTER_SYSTEM; break;
+        case 0x40: case 0x41: id = RC_CONSOLE_GAME_GEAR; break;
+        case 0x80: case 0x81: case 0x82: id = RC_CONSOLE_MEGA_DRIVE; break;
+        case 0x84: id = RC_CONSOLE_SEGA_CD; break;
+        default: break;
+        }
+    } else if (contentExtension_ == "sms") id = RC_CONSOLE_MASTER_SYSTEM;
+    else if (contentExtension_ == "gg") id = RC_CONSOLE_GAME_GEAR;
+    else if (contentExtension_ == "sg") id = RC_CONSOLE_SG1000;
+    else id = RC_CONSOLE_MEGA_DRIVE;
+    achievementConsoleCache_ = id;
+    return id;
+}
+void* LibretroHost::achievementCdOpenTrack(const char*, uint32_t track) {
+    auto* host = active_;
+    return host && track == 1 && host->achievementCdHeader_.size() == 512
+        ? host->achievementCdHeader_.data() : nullptr;
+}
+size_t LibretroHost::achievementCdReadSector(void* track, uint32_t sector, void* buffer, size_t count) {
+    if (!track || !buffer || sector != 0 || count > 512) return 0;
+    std::memcpy(buffer, track, count);
+    return count;
+}
+void LibretroHost::achievementCdCloseTrack(void*) {}
+uint32_t LibretroHost::achievementCdFirstSector(void*) { return 0; }
+QString LibretroHost::achievementHash(QString& error) const {
+    error.clear();
+    if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return {}; }
+    if (!achievementHashCache_.isEmpty()) return achievementHashCache_;
+    const unsigned console = achievementConsoleId();
+    if (!console) { error = QStringLiteral("Не удалось определить систему для достижений."); return {}; }
+    const QByteArray path = isCd() ? QDir::toNativeSeparators(discs_[discIndex_].path).toUtf8()
+        : (archiveMember_.isEmpty() ? contentName_.toUtf8() : archiveMember_);
+    rc_hash_iterator_t iterator{};
+    rc_hash_initialize_iterator(&iterator, path.constData(),
+        isCd() ? nullptr : reinterpret_cast<const uint8_t*>(content_.constData()),
+        isCd() ? 0 : size_t(content_.size()));
+    if (isCd() && api_->get_cd_header) {
+        achievementCdHeader_.resize(512);
+        if (!api_->get_cd_header(achievementCdHeader_.data(), 512)) {
+            achievementCdHeader_.clear();
+            rc_hash_destroy_iterator(&iterator);
+            error = QStringLiteral("Ядро не предоставило заголовок текущего диска.");
+            return {};
+        }
+        iterator.callbacks.cdreader.open_track_iterator = nullptr;
+        iterator.callbacks.cdreader.open_track = achievementCdOpenTrack;
+        iterator.callbacks.cdreader.read_sector = achievementCdReadSector;
+        iterator.callbacks.cdreader.close_track = achievementCdCloseTrack;
+        iterator.callbacks.cdreader.first_track_sector = achievementCdFirstSector;
+    } else if (isCd() && QFileInfo(discs_[discIndex_].path).suffix().compare("chd", Qt::CaseInsensitive) == 0) {
+        rc_hash_destroy_iterator(&iterator);
+        error = QStringLiteral("Для достижений CHD требуется ядро с доступом к заголовку диска.");
+        return {};
+    }
+    char hash[33]{};
+    const bool success = rc_hash_generate(hash, console, &iterator) != 0;
+    rc_hash_destroy_iterator(&iterator);
+    achievementCdHeader_.clear();
+    if (!success) {
+        error = QStringLiteral("Не удалось вычислить хеш RetroAchievements для этой игры.");
+        return {};
+    }
+    achievementHashCache_ = QString::fromLatin1(hash);
+    return achievementHashCache_;
+}
+uint32_t LibretroHost::readAchievementMemory(uint32_t address, uint8_t* buffer, uint32_t count) {
+    if (!loaded_ || !buffer || !count) return 0;
+    const unsigned console = achievementConsoleId();
+    if (!console) return 0;
+    if (!achievementMemoryInitialized_ || achievementMemoryConsole_ != console) {
+        resetAchievementMemory();
+        retro_memory_map map{};
+        map.descriptors = achievementDescriptorCount_ ? achievementDescriptors_.data() : nullptr;
+        map.num_descriptors = achievementDescriptorCount_;
+        rc_libretro_memory_init(&achievementMemory_, &map, achievementCoreMemoryInfo, console);
+        achievementMemoryInitialized_ = true;
+        achievementMemoryConsole_ = console;
+    }
+    return rc_libretro_memory_read(&achievementMemory_, address, buffer, count);
+}
+QString LibretroHost::achievementHardcoreBlockReason() const {
+    if (!loaded_) return QStringLiteral("Сначала откройте игру.");
+    if (!activeCheatCodes_.isEmpty())
+        return QStringLiteral("Отключите активные читы для хардкорных достижений.");
+    if (discs_.isEmpty() && coreContent_ != content_)
+        return QStringLiteral("Отключите исправление контрольной суммы ROM для хардкорных достижений.");
+    const auto fastCd = variables_.find("genesis_plus_gx_cd_latency");
+    if (isCd() && fastCd != variables_.end() && fastCd->second == "disabled")
+        return QStringLiteral("Отключите быструю загрузку CD для хардкорных достижений.");
+    const auto spriteLimit = variables_.find("genesis_plus_gx_no_sprite_limit");
+    if (spriteLimit != variables_.end() && spriteLimit->second == "enabled")
+        return QStringLiteral("Включите ограничение спрайтов для хардкорных достижений.");
+    const auto* disallowed = rc_libretro_get_disallowed_settings("Genesis Plus GX");
+    for (const auto& [key,value] : variables_) {
+        if (disallowed && !rc_libretro_is_setting_allowed(disallowed, key.constData(), value.constData()))
+            return QStringLiteral("Параметр ядра %1 = %2 несовместим с хардкорными достижениями.")
+                .arg(QString::fromUtf8(key), QString::fromUtf8(value));
+    }
+    return {};
+}
+
 bool LibretroHost::acceptsLegacyMovieCore(const QByteArray& identity) const {
     if (identity == exactCoreHash_) return true;
     if (recordingAbi_ != "kegarefusion-recording-v1") return false;
@@ -1299,8 +1446,25 @@ QByteArray LibretroHost::stateCoreIdentity() const {
 bool LibretroHost::saveState(int slot, QString& error) {
     if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
     if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед сохранением состояния."); return false; }
-    const auto payload = serialize();
+    QByteArray payload = serialize();
     if (payload.isEmpty()) { error = QStringLiteral("Ядро не смогло сохранить состояние."); return false; }
+    const QByteArray progress = captureAchievementProgress ? captureAchievementProgress() : QByteArray();
+    if (progress.size() > maxAchievementProgressSize ||
+        (!progress.isEmpty() && payload.size() > maxStateSize - 16 - progress.size())) {
+        error = QStringLiteral("Прогресс достижений слишком велик для сохранения."); return false;
+    }
+    if (!progress.isEmpty()) {
+        QByteArray wrapped;
+        wrapped.reserve(16 + payload.size() + progress.size());
+        wrapped.append(achievementStateMagic);
+        const quint32 nativeSize = qToBigEndian(quint32(payload.size()));
+        const quint32 progressSize = qToBigEndian(quint32(progress.size()));
+        wrapped.append(reinterpret_cast<const char*>(&nativeSize), sizeof(nativeSize));
+        wrapped.append(reinterpret_cast<const char*>(&progressSize), sizeof(progressSize));
+        wrapped.append(payload);
+        wrapped.append(progress);
+        payload = std::move(wrapped);
+    }
     QByteArray bytes = stateMagic + romHash_ + stateCoreIdentity() + digest(payload);
     quint32 size = qToBigEndian(quint32(payload.size()));
     bytes.append(reinterpret_cast<const char*>(&size), sizeof(size));
@@ -1329,7 +1493,21 @@ bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) 
     const quint32 size = qFromBigEndian<quint32>(bytes.constData() + 104);
     const auto payload = bytes.mid(stateHeaderSize);
     if (size != quint32(payload.size()) || bytes.mid(72,32) != digest(payload)) { error = QStringLiteral("Сохранение повреждено."); return false; }
-    if (!unserialize(payload)) { error = QStringLiteral("Ядро отклонило сохранение."); return false; }
+    QByteArray native = payload;
+    QByteArray progress;
+    if (payload.startsWith(achievementStateMagic)) {
+        if (payload.size() < 16) { error = QStringLiteral("Повреждён прогресс достижений в сохранении."); return false; }
+        const quint32 nativeSize = qFromBigEndian<quint32>(payload.constData() + 8);
+        const quint32 progressSize = qFromBigEndian<quint32>(payload.constData() + 12);
+        if (!nativeSize || nativeSize > maxStateSize || progressSize > maxAchievementProgressSize ||
+            quint64(nativeSize) + quint64(progressSize) + 16 != quint64(payload.size())) {
+            error = QStringLiteral("Повреждён прогресс достижений в сохранении."); return false;
+        }
+        native = payload.mid(16, nativeSize);
+        progress = payload.mid(16 + nativeSize, progressSize);
+    }
+    if (!unserialize(native)) { error = QStringLiteral("Ядро отклонило сохранение."); return false; }
+    if (restoreAchievementProgress) restoreAchievementProgress(progress);
     if (failure) *failure = StateLoadError::None;
     audio_.clear();
     return true;
@@ -1470,8 +1648,22 @@ bool LibretroHost::environment(unsigned command, void* data) {
     case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL:
     case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
     case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO:
-    case RETRO_ENVIRONMENT_SET_MEMORY_MAPS:
     case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS: return true;
+    case RETRO_ENVIRONMENT_SET_MEMORY_MAPS: {
+        if (!data) return false;
+        const auto* map = static_cast<const retro_memory_map*>(data);
+        if (map->num_descriptors > h->achievementDescriptors_.size() ||
+            (map->num_descriptors && !map->descriptors)) return false;
+        h->resetAchievementMemory();
+        h->achievementDescriptorCount_ = unsigned(map->num_descriptors);
+        for (unsigned i = 0; i < h->achievementDescriptorCount_; ++i) {
+            h->achievementDescriptors_[i] = map->descriptors[i];
+            // The core's descriptor array is stack-local. Only pointer values
+            // to core-owned memory survive the callback, not descriptor text.
+            h->achievementDescriptors_[i].addrspace = nullptr;
+        }
+        return true;
+    }
     default: return false;
     }
 }

@@ -2,6 +2,7 @@
 
 #include "GameView.h"
 #include "../core/Cheats.h"
+#include "../core/Achievements.h"
 #include <array>
 
 #include <QMainWindow>
@@ -17,6 +18,7 @@ class QDropEvent;
 class QMenu;
 class QTimer;
 class AudioOutput;
+class AchievementNetwork;
 class EmulationSession;
 class InputManager;
 enum class ConsoleProfile;
@@ -48,6 +50,7 @@ private:
     void editSettings(int initialPage = 0);
     void editControls();
     void editCheats();
+    void showAchievements();
     void updateGunConfiguration();
     void updateGunAim(unsigned player, QPointF position, bool offscreen);
     bool applyShaderPreset(const QString& path);
@@ -70,6 +73,7 @@ private:
     QString dataPath_;
     GameView* view_ = nullptr;
     AudioOutput* audio_ = nullptr;
+    AchievementNetwork* achievementNetwork_ = nullptr;
     InputManager* input_ = nullptr;
     ConsoleProfile activeInputProfile_{};
     QTimer* inputTimer_ = nullptr;
@@ -92,6 +96,9 @@ private:
     QAction* frameAdvanceAction_ = nullptr;
     QAction* cheatsAction_ = nullptr;
     CheatList cheats_;
+    AchievementsState achievementsState_;
+    bool achievementsHardcore_ = false;
+    bool achievementNotifications_ = true;
     Cheats::Platform cheatPlatform_ = Cheats::Platform::MegaDrive;
     bool cheatsSupported_ = false;
     std::array<unsigned,3> padMasks_{}, gunMasks_{};
@@ -107,6 +114,7 @@ private:
     QAction* screenshotAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* loadAction_ = nullptr;
+    QAction* osdAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
     QStringList recentPaths_;

@@ -1,6 +1,6 @@
 # Architecture and current boundary
 
-Kega Refusion 0.10.1 is a standalone C++17 / Qt6 Widgets application for Linux and Windows. It supports cartridge and Sega CD image loading and input recordings through a pinned Genesis Plus GX libretro core; it is not yet the complete feature list from info.txt.
+Kega Refusion 0.11.0 is a standalone C++17 / Qt6 Widgets application for Linux and Windows. It supports cartridge and Sega CD image loading and input recordings through a pinned Genesis Plus GX libretro core; it is not yet the complete feature list from info.txt.
 
 ## Ownership
 
@@ -18,7 +18,7 @@ Genesis Plus GX declares platform-dependent serialization. The first state forma
 
 ## Deferred scope
 
-Other specialized peripherals, netplay, achievements, video capture, Lua and debugging tools are not implemented. These will be added in testable steps. No promise of full ROM collection compatibility or all-platform movie determinism is made from generated-ROM checks.
+Other specialized peripherals, netplay, video capture, Lua and debugging tools are not implemented. These will be added in testable steps. No promise of full ROM collection compatibility or all-platform movie determinism is made from generated-ROM checks.
 
 Normal core file-state restoration resets sound resampler history, so immediate PCM bytes after loading a state are not guaranteed identical. The core fast-savestate flag keeps audio history only in global process memory and must not be enabled for file states or assumed to support a history of multiple snapshots. A dedicated full-audio serialization solution is needed before claiming audio-exact rollback.
 
@@ -159,3 +159,18 @@ All active movie modes, including the finished pause, guard normal battery files
 The timeline is run-length encoded with a 64 MiB budget for input runs (1,048,576 distinct-frame runs, about 4 h 51 min at 60 frames/s in the changing-every-frame case); repeated input extends the duration. Reaching the run limit pauses and saves the accumulated recording. There is no per-frame disk I/O: the movie is written at creation and stop/close, and an explicit slot action writes its own state. Atomic movie replacement validates the previous file and keeps one `.bak` prior version. Full file checksums protect `.krm` and external slots; loading validates sizes and identities before restoring the core.
 
 Plugin discovery occurs before `QApplication` loads its platform plugin. The executable directory is resolved from the native module path (`GetModuleFileNameW` on Windows, `/proc/self/exe` on Linux); a packaged `plugins/` directory takes priority while installed Qt paths remain available. Packaging no longer creates `qt.conf` and removes only the previously generated file with its exact known contents; custom files are preserved.
+
+
+## RetroAchievements (0.11.0)
+
+`AchievementsClient` owns the pinned rcheevos `rc_client` on the emulation worker. `AchievementNetwork` owns GUI-thread Qt Network requests and an image-only disk cache. Requests/responses cross queued signals; neither HTTP nor image decoding runs inside a core frame. The constructor does not emit requests before the GUI connects its handlers. Anonymous/disabled operation makes no service requests. Every emulated forward frame, including skipped presentation frames at fast-forward, evaluates the achievement runtime. While paused/loading it idles at 100 ms intervals. Loading has a 15-second watchdog. Tables are rebuilt on relevant state changes or explicit requests, not every frame.
+
+Host memory descriptors are copied when registered by libretro (the native core may use stack-local descriptor arrays), then mapped through `rc_libretro`. The raw byte order follows the official libretro mapping. Cartridge identification uses the SDK hash over original content, without checksum autofix; CD identification uses the first 512 decoded bytes exposed by the native core, avoiding full-image hashing and drive-position changes. IDs and hashes are cached outside the per-frame memory-read path.
+
+Ordinary quick-state payloads optionally wrap native state and achievement progress in `KRHOST01` under the existing file digest. Existing raw payloads still load. In-memory rewind uses `KRACHRW1`, with its byte cost included in the existing memory budget. The achievement envelope `KRACT001` associates runtime progress with the game and signed-in account; file progress carries a digest, while trusted in-memory rewind avoids a redundant full-envelope digest. Progress is bounded at 2 MiB. Movie snapshots keep their original format; recorded-input playback/resume/fork suppresses evaluation, and movie slot loads reset condition counters.
+
+All public Hardcore entry points are gated by `AchievementsHardcoreApproved=false` until RA approves this client's unique User-Agent. Worker restrictions are authoritative: UI actions alone cannot bypass them. Entering Hardcore requires a power reset and disallows native state loads, rewind, frame advance, cheats and recorded-input replay. Fast-forward and saving a state are allowed. Core cheat/region/timing options are checked against the SDK and local extensions; repeated pause attempts demote the session to Softcore. Server award responses do not independently confirm the Hardcore flag, so local mode must not be presented as proof of server approval.
+
+Account persistence is separate from settings: username and reusable API token in `retroachievements-account.ini`, atomically replaced, no password or response logging. API responses are not disk-cached. Badge transfers have bounded bodies, image dimensions, concurrency and queues. Only official HTTPS API/badge endpoints are accepted; redirects are not followed. Qt's Windows Schannel TLS plugin is deployed with Qt Network.
+
+Achievement enablement and notification enablement are independent. OSD only receives game-ready, unlocked, and Hardcore-completion messages; global OSD disable suppresses them as well. There is no anonymous offline achievement-definition engine in this version.

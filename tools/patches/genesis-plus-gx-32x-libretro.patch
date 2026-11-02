@@ -104,7 +104,8 @@
      }
  
      if (orig_value != config.ntsc)
-@@ -2359,8 +2359,15 @@
+@@ -2345,8 +2392,15 @@
+ #endif
      audio_init(SOUND_FREQUENCY, 0);
      memcpy(temp, sram.sram, sizeof(temp));
 +#ifdef KEGAREFUSION_32X
@@ -119,8 +120,80 @@
      memcpy(sram.sram, temp, sizeof(temp));
      update_viewports = true;
    }
+@@ -2807,21 +2861,60 @@
  
-@@ -3196,7 +3243,7 @@
+ static void set_memory_maps(void)
+ {
+-   if (system_hw == SYSTEM_MCD)
+-   {
+-      const size_t SCD_BIT = 1ULL << 31ULL;
++   if (system_hw == SYSTEM_MCD || system_hw == SYSTEM_SG ||
++       system_hw == SYSTEM_SGII || system_hw == SYSTEM_SGII_RAM_EXT
++#ifdef KEGAREFUSION_32X
++       || kegarefusion_32x_attached
++#endif
++      )
++   {
+       const uint64_t mem = RETRO_MEMDESC_SYSTEM_RAM;
+       struct retro_memory_map mmaps;
+-      struct retro_memory_descriptor descs[] = {
+-         { mem, work_ram,        0,           0xFF0000, 0, 0, 0x10000, "68KRAM" },
+-         /* virtual address using SCD_BIT so all 512M of prg_ram can be accessed */
+-         /* at address $80020000 */
+-         { mem, scd.prg_ram,     0, SCD_BIT | 0x020000, 0, 0, 0x80000, "PRGRAM" },
+-         { mem, scd.word_ram_2M, 0,           0x200000, 0, 0, 0x40000, "WORDRAM" },
+-      };
+-
++      struct retro_memory_descriptor descs[5];
++      unsigned count = 0;
++
++      if (system_hw == SYSTEM_SG || system_hw == SYSTEM_SGII ||
++          system_hw == SYSTEM_SGII_RAM_EXT)
++      {
++         const size_t size = system_hw == SYSTEM_SG ? 0x400 :
++                             system_hw == SYSTEM_SGII ? 0x800 : 0x2000;
++         const int mapper = sms_cart_achievement_mapper();
++         descs[count++] = (struct retro_memory_descriptor)
++            { mem, work_ram, 0, 0xC000, 0, 0, size, "SG_RAM" };
++         if (mapper == 4)
++            descs[count++] = (struct retro_memory_descriptor)
++               { mem, work_ram + 0x2000, 0, 0x2000, 0, 0, 0x2000, "SG_EXT_A" };
++         else if (mapper == 3 || mapper == 2)
++            descs[count++] = (struct retro_memory_descriptor)
++               { mem, work_ram + 0x2000, 0, 0x8000, 0, 0,
++                 mapper == 3 ? 0x2000 : 0x800, "SG_CART_RAM" };
++      }
++      else
++         descs[count++] = (struct retro_memory_descriptor)
++            { mem, work_ram, 0, 0xFF0000, 0, 0, 0x10000, "68KRAM" };
++      if (system_hw == SYSTEM_MCD)
++      {
++         /* Synthetic address exposes all 512K PRG RAM outside its bank window. */
++         descs[count++] = (struct retro_memory_descriptor)
++            { mem, scd.prg_ram, 0, 0x80020000, 0, 0, 0x80000, "PRGRAM" };
++         descs[count++] = (struct retro_memory_descriptor)
++            { mem, scd.word_ram_2M, 0, 0x200000, 0, 0, 0x40000, "WORDRAM" };
++      }
++#ifdef KEGAREFUSION_32X
++      if (kegarefusion_32x_attached)
++      {
++         void *sdram = kegarefusion_32x_sdram();
++         if (sdram)
++            descs[count++] = (struct retro_memory_descriptor)
++               { mem, sdram, 0, 0x06000000, 0, 0, 0x40000, "32XRAM" };
++         /* A nonempty map disables libretro's generic SAVE_RAM fallback. */
++         if (sram.on)
++            descs[count++] = (struct retro_memory_descriptor)
++               { RETRO_MEMDESC_SAVE_RAM, sram.sram, 0, 0, 0, 0, 0x10000, "CART_RAM" };
++      }
++#endif
+       mmaps.descriptors = descs;
+-      mmaps.num_descriptors = sizeof(descs) / sizeof(descs[0]);
++      mmaps.num_descriptors = count;
+       environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmaps);
+    }
+ }
+@@ -3196,7 +3289,7 @@
  #define GIT_VERSION ""
  #endif
     info->library_version = "v1.7.4" GIT_VERSION;
@@ -129,7 +202,7 @@
     info->block_extract = false;
     info->need_fullpath = true;
  }
-@@ -3375,7 +3422,12 @@
+@@ -3375,7 +3468,12 @@
     input_reset();
  }
  
@@ -143,7 +216,7 @@
  
  extern int8 fast_savestates;
  
-@@ -3395,7 +3447,17 @@
+@@ -3395,7 +3493,17 @@
  }
  
  bool retro_serialize(void *data, size_t size)
@@ -162,7 +235,7 @@
     fast_savestates = get_fast_savestates();
     if (size != STATE_SIZE)
        return FALSE;
-@@ -3408,6 +3464,23 @@
+@@ -3408,6 +3516,23 @@
  
  bool retro_unserialize(const void *data, size_t size)
  {
@@ -186,7 +259,7 @@
     fast_savestates = get_fast_savestates();
     if (size != STATE_SIZE)
        return FALSE;
-@@ -3479,6 +3539,58 @@
+@@ -3479,6 +3604,71 @@
  	/* apply ROM patches */
  	apply_cheats();
  }
@@ -207,6 +280,19 @@
 +RETRO_API const char *retro_kegarefusion_recording_abi(void)
 +{
 +   return "kegarefusion-recording-v1";
++}
++
++/* Hardware identification and cached decoded CD header for achievements.
++ * Header retrieval never seeks the running drive or decodes audio. */
++RETRO_API unsigned retro_kegarefusion_system_hw(void)
++{
++   return system_hw;
++}
++
++RETRO_API bool retro_kegarefusion_cd_header(void *out, size_t size)
++{
++   return system_hw == SYSTEM_MCD &&
++          cdd_get_achievement_header((uint8 *)out, (unsigned)size) != 0;
 +}
 +
 +RETRO_API int retro_kegarefusion_core_stats(uint64_t *out, size_t count)
@@ -245,7 +331,7 @@
  
  bool retro_load_game(const struct retro_game_info *info)
  {
-@@ -3739,6 +3840,9 @@
+@@ -3739,6 +3929,9 @@
     audio_init(SOUND_FREQUENCY, 0);
     system_init();
     system_reset();
@@ -255,7 +341,7 @@
     is_running = false;
  
     if (system_hw == SYSTEM_MCD)
-@@ -3760,6 +3864,9 @@
+@@ -3760,6 +3953,9 @@
     return true;
  
  error:
@@ -265,7 +351,7 @@
     if (sms_ntsc)
        free(sms_ntsc);
     sms_ntsc  = NULL;
-@@ -3783,6 +3890,9 @@
+@@ -3783,6 +3979,9 @@
  
  void retro_unload_game(void) 
  {
@@ -275,18 +361,18 @@
  	/* Clear disk interface */
     int i;
     disk_count = 0;
-@@ -3930,6 +4040,11 @@
+@@ -3928,6 +4127,11 @@
+ #ifdef HAVE_OVERCLOCK
+    overclock_delay = OVERCLOCK_FRAME_DELAY;
     update_overclock();
- #endif
++#endif
 +#ifdef KEGAREFUSION_32X
 +   if (kegarefusion_32x_attached)
 +      kegarefusion_32x_soft_reset();
 +   else
-+#endif
+ #endif
     gen_reset(0);
  }
- 
- extern int8 audio_hard_disable;
 --- a/core/loadrom.c
 +++ b/core/loadrom.c
 @@ -576,7 +576,15 @@
@@ -305,3 +391,88 @@
    if (size < 0)
    {
      /* error opening file */
+--- a/core/cd_hw/cdd.c
++++ b/core/cd_hw/cdd.c
+@@ -387,6 +387,17 @@
+   return bufferptr;
+ }
+ 
++/* Cached decoded sector-zero data. Does not seek or disturb the live drive. */
++static uint8 achievement_header[512];
++static int achievement_header_valid;
++
++int cdd_get_achievement_header(uint8 *out, unsigned size)
++{
++  if (!out || size != sizeof(achievement_header) || !achievement_header_valid) return 0;
++  memcpy(out, achievement_header, sizeof(achievement_header));
++  return 1;
++}
++
+ int cdd_load(char *filename, char *header)
+ {
+   char fname[256+10];
+@@ -569,6 +580,8 @@
+ 
+       /* CD mounted */
+       cdd.loaded = HW_ADDON_MEGACD;
++      memcpy(achievement_header, header, sizeof(achievement_header));
++      achievement_header_valid = 1;
+       return 1;
+     }
+ 
+@@ -1295,6 +1308,11 @@
+     memcpy(&fname[strlen(fname) - 4], ".sub", 4);
+     cdd.toc.sub = cdStreamOpen(fname);
+ 
++    if (isCDfile)
++    {
++      memcpy(achievement_header, header, sizeof(achievement_header));
++      achievement_header_valid = 1;
++    }
+     /* return 1 if loaded file is CD image file */
+     return (isCDfile);
+   }
+@@ -1305,6 +1323,7 @@
+ 
+ void cdd_unload(void)
+ {
++  achievement_header_valid = 0;
+   if (cdd.loaded)
+   {
+     int i;
+--- a/core/cd_hw/cdd.h
++++ b/core/cd_hw/cdd.h
+@@ -132,6 +132,7 @@
+ extern int cdd_context_save(uint8 *state);
+ extern int cdd_context_load(uint8 *state, char *version);
+ extern int cdd_load(char *filename, char *header);
++extern int cdd_get_achievement_header(uint8 *out, unsigned size);
+ extern void cdd_unload(void);
+ extern void cdd_read_data(uint8 *dst, uint8 *subheader);
+ extern void cdd_seek_audio(int index, int lba);
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -810,6 +810,13 @@
+   }
+ }
+ 
++/* Only the SG-1000 expansion mappers use work_ram + 0x2000. */
++int sms_cart_achievement_mapper(void)
++{
++  return (cart_rom.mapper == MAPPER_RAM_2K || cart_rom.mapper == MAPPER_RAM_8K ||
++          cart_rom.mapper == MAPPER_RAM_8K_EXT1) ? cart_rom.mapper : 0;
++}
++
+ int sms_cart_ram_size(void)
+ {
+   if ((cart_rom.mapper == MAPPER_RAM_8K) || (cart_rom.mapper == MAPPER_RAM_8K_EXT1))
+--- a/core/cart_hw/sms_cart.h
++++ b/core/cart_hw/sms_cart.h
+@@ -48,6 +48,7 @@
+ extern void sms_cart_reset(void);
+ extern void sms_cart_switch(uint8 mode);
+ extern int sms_cart_ram_size(void);
++extern int sms_cart_achievement_mapper(void);
+ extern int sms_cart_region_detect(void);
+ extern int sms_cart_context_save(uint8 *state);
+ extern int sms_cart_context_load(uint8 *state);

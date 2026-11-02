@@ -7,6 +7,8 @@ extern int kegarefusion_32x_attached;
 unsigned kegarefusion_32x_features(void);
 void kegarefusion_32x_invalidate_code(void);
 int kegarefusion_32x_stats(uint64_t *, size_t);
+/* Direct SDRAM pointer is valid only while the 32X attachment is loaded. */
+void *kegarefusion_32x_sdram(void);
 /* Called after GPX's normal system_init/reset and after reading validated BIOS.
    Returns zero on failure, no partial attachment is exposed. */
 int kegarefusion_32x_attach(const uint8_t *bios_g, const uint8_t *bios_m, const uint8_t *bios_s);

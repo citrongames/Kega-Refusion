@@ -1,6 +1,8 @@
 #include "EmulationSession.h"
 #include "LibretroHost.h"
 #include "MovieSession.h"
+#include "AchievementsClient.h"
+#include <QtEndian>
 #include "RewindBuffer.h"
 #include "FramePacer.h"
 #include <QFileInfo>
@@ -10,7 +12,10 @@
 #include <thread>
 
 EmulationSession::EmulationSession(QString corePath, QString dataPath, QObject* parent)
-    : QThread(parent), corePath_(std::move(corePath)), dataPath_(std::move(dataPath)) { qRegisterMetaType<CheatList>(); start(); }
+    : QThread(parent), corePath_(std::move(corePath)), dataPath_(std::move(dataPath)) {
+    qRegisterMetaType<CheatList>(); qRegisterMetaType<AchievementsState>();
+    qRegisterMetaType<AchievementNotice>(); qRegisterMetaType<AchievementHttpRequest>(); start();
+}
 EmulationSession::~EmulationSession() { shutdown(); }
 void EmulationSession::enqueue(Command command) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -97,12 +102,87 @@ void EmulationSession::setRewindEnabled(bool enabled) { rewindEnabled_.store(ena
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
 void EmulationSession::requestSlotStatus(int selected) { enqueue({Type::Slots,{},selected}); }
+void EmulationSession::configureAchievements(bool enabled, bool hardcore) {
+    enqueue({Type::AchievementsConfigure,{},(enabled ? 1 : 0) | (hardcore ? 2 : 0)});
+}
+void EmulationSession::loginAchievements(QString user, QString password) {
+    Command command{Type::AchievementsLogin,std::move(user)};
+    command.bytes = password.toUtf8(); enqueue(std::move(command));
+}
+void EmulationSession::logoutAchievements() { enqueue({Type::AchievementsLogout,{}}); }
+void EmulationSession::requestAchievements() { enqueue({Type::AchievementsRefresh,{}}); }
+void EmulationSession::achievementResponse(quint64 id, int status, QByteArray body) {
+    if (body.size() > 8*1024*1024) { body.clear(); status = 0; }
+    Command command{Type::AchievementsResponse,{},status};
+    command.requestId = id; command.bytes = std::move(body); enqueue(std::move(command));
+}
 void EmulationSession::shutdown() { quitting_.store(true); if (isRunning()) wait(); }
 void EmulationSession::run() {
     using Clock = std::chrono::steady_clock;
     LibretroHost host(corePath_,dataPath_);
     host.message = [this](const QString& message) { emit notification(message); };
     MovieSession movie(host, dataPath_);
+    AchievementsState achievementState;
+    bool achievementEnabled = false, achievementHardcoreRequested = false;
+    bool achievementHardcore = false, achievementResetRequested = false;
+    bool achievementPolicyRejected = false;
+    bool achievementSuppressed = false;
+    QString achievementStatusOverride;
+    AchievementsClient achievements(dataPath_, {
+        [&](uint32_t address, uint8_t* buffer, uint32_t count) {
+            return host.readAchievementMemory(address,buffer,count);
+        },
+        [this](const AchievementHttpRequest& request) { emit achievementHttpRequest(request); },
+        [&](const AchievementsState& state) {
+            achievementState = state;
+            if (!achievementStatusOverride.isEmpty()) achievementState.status = achievementStatusOverride;
+            if (achievementSuppressed) achievementState.status = QStringLiteral("Учёт достижений отключён для воспроизведённой записи управления.");
+            emit achievementsChanged(achievementState);
+            const bool hardcore = state.enabled && state.loggedIn && state.hardcore && host.loaded() && !achievementSuppressed;
+            if (hardcore && !host.achievementHardcoreBlockReason().isEmpty()) {
+                achievementPolicyRejected = true;
+                achievementStatusOverride = QStringLiteral("Hardcore недоступен: %1").arg(host.achievementHardcoreBlockReason());
+            }
+            if (hardcore != achievementHardcore) {
+                if (hardcore && !achievementPolicyRejected) achievementResetRequested = true;
+                achievementHardcore = hardcore;
+                emit achievementsHardcoreChanged(hardcore);
+            }
+        },
+        [this](const AchievementNotice& notice) { emit achievementNotice(notice); },
+        [&] { achievementResetRequested = true; }
+    });
+    host.captureAchievementProgress = [&] {
+        return achievementSuppressed ? QByteArray() : achievements.saveProgress();
+    };
+    host.restoreAchievementProgress = [&](const QByteArray& progress) { achievements.restoreProgress(progress); };
+    const auto loadAchievements = [&](bool changedMedia = false) {
+        if (!achievementEnabled || !host.loaded()) { achievements.unloadGame(); achievements.refresh(); return; }
+        if (!achievements.wantsGame()) return;
+        QString hashError;
+        const auto hash = host.achievementHash(hashError);
+        if (hash.isEmpty()) {
+            achievements.unloadGame(); achievementStatusOverride = hashError; achievements.refresh(); return;
+        }
+        if (changedMedia) achievements.changeMedia(hash,host.achievementConsoleId());
+        else achievements.loadGame(hash,host.achievementConsoleId());
+        achievements.refresh();
+    };
+    const auto configureAchievements = [&] {
+        achievementStatusOverride.clear();
+        const auto blocked = achievementHardcoreRequested && host.loaded()
+            ? host.achievementHardcoreBlockReason() : QString();
+        if (!blocked.isEmpty()) achievementStatusOverride = QStringLiteral("Hardcore недоступен: %1").arg(blocked);
+        if (achievementSuppressed && achievementHardcoreRequested)
+            achievementStatusOverride = QStringLiteral("Завершите запись управления перед включением Hardcore.");
+        if (achievementHardcoreRequested && !AchievementsHardcoreApproved)
+            achievementStatusOverride = QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. Учёт работает в Softcore.");
+        achievements.configure(achievementEnabled,achievementHardcoreRequested && AchievementsHardcoreApproved &&
+            blocked.isEmpty() && !achievementSuppressed);
+        achievements.refresh();
+    };
+    auto nextAchievementIdle = Clock::now();
+    bool lastAchievementBackground = false;
     auto liveInput = [&] {
         MovieInput input;
         for (unsigned player = 0; player < 3; ++player) {
@@ -175,6 +255,7 @@ void EmulationSession::run() {
         if (movie.recording() && !error.isEmpty()) {
             QString saveError;
             if (movie.finish(false,saveError)) {
+                achievementSuppressed = false; achievements.reset(); achievements.refresh();
                 movieBoundary();
                 error += QStringLiteral("\nЗаписанная часть записи сохранена; игра оставлена на паузе.");
             } else error += QStringLiteral("\n") + saveError;
@@ -191,7 +272,29 @@ void EmulationSession::run() {
         } else movieStatus();
     };
     auto captureHistory = [&] {
-        return movie.active() ? movie.captureRewind() : host.captureRewindState();
+        const auto state = movie.active() ? movie.captureRewind() : host.captureRewindState();
+        const auto progress = achievementSuppressed ? QByteArray() : achievements.saveProgress(false);
+        if (progress.isEmpty() || state.isEmpty()) return state;
+        QByteArray wrapped("KRACHRW1",8);
+        for (quint32 length : {quint32(state.size()),quint32(progress.size())}) {
+            const auto encoded = qToBigEndian(length);
+            wrapped.append(reinterpret_cast<const char*>(&encoded),4);
+        }
+        wrapped += state; wrapped += progress;
+        return wrapped;
+    };
+    auto restoreHistory = [&](const QByteArray& packed, QString& error) {
+        QByteArray state = packed, progress;
+        if (packed.startsWith("KRACHRW1")) {
+            if (packed.size() < 16) return false;
+            const auto stateSize = qFromBigEndian<quint32>(packed.constData()+8);
+            const auto progressSize = qFromBigEndian<quint32>(packed.constData()+12);
+            if (progressSize > 2*1024*1024 || quint64(stateSize)+progressSize+16 != quint64(packed.size())) return false;
+            state = packed.mid(16,stateSize); progress = packed.mid(16+stateSize,progressSize);
+        }
+        const bool ok = movie.active() ? movie.restoreRewind(state,error) : host.restoreRewindState(state);
+        if (ok) achievements.restoreProgress(progress,true);
+        return ok;
     };
     while (!quitting_.load()) {
         std::deque<Command> pending;
@@ -199,6 +302,18 @@ void EmulationSession::run() {
         bool frameRequested = false;
         for (const auto& command : pending) {
             QString error;
+            if (achievementHardcore) {
+                const bool prohibited = command.type == Type::Restore || command.type == Type::FrameAdvance ||
+                    command.type == Type::MoviePlay || command.type == Type::MovieResume || command.type == Type::MovieFork ||
+                    command.type == Type::Cheats || command.type == Type::Region ||
+                    (command.type == Type::Checksum && command.value) ||
+                    (command.type == Type::CdLoading && command.value) ||
+                    (command.type == Type::SpriteLimit && command.value);
+                if (prohibited) {
+                    achievementStatusOverride = QStringLiteral("Это действие недоступно в Hardcore. Переключите режим в настройках достижений.");
+                    achievements.refresh(); continue;
+                }
+            }
             if (movie.active()) {
                 // Recorded hardware/logic is fixed; pause, speed, input bindings and rewind remain live.
                 bool blocked = false;
@@ -226,6 +341,25 @@ void EmulationSession::run() {
                 }
             }
             switch (command.type) {
+            case Type::AchievementsConfigure:
+                achievementEnabled = bool(command.value & 1);
+                achievementHardcoreRequested = bool(command.value & 2);
+                configureAchievements();
+                if (host.loaded()) loadAchievements();
+                clearHistory();
+                break;
+            case Type::AchievementsLogin:
+                achievementStatusOverride.clear();
+                achievements.login(command.path,QString::fromUtf8(command.bytes));
+                if (host.loaded()) loadAchievements();
+                break;
+            case Type::AchievementsLogout:
+                achievementStatusOverride.clear(); achievements.logout(); clearHistory();
+                break;
+            case Type::AchievementsRefresh: achievements.refresh(); break;
+            case Type::AchievementsResponse:
+                achievements.respond(command.requestId,command.value,command.bytes);
+                break;
             case Type::MovieRecord:
             case Type::MoviePlay:
             case Type::MovieResume:
@@ -238,6 +372,8 @@ void EmulationSession::run() {
                     if (!host.loaded()) emit gameClosed();
                     emit errorOccurred(error); break;
                 }
+                achievementSuppressed = command.type != Type::MovieRecord;
+                achievements.reset(); achievements.refresh();
                 releaseButtons(); movieBoundary(); optionsPending = false;
                 if ((command.type == Type::MoviePlay || command.type == Type::MovieResume) &&
                     !host.movieCompatibilityWarning().isEmpty()) {
@@ -252,6 +388,7 @@ void EmulationSession::run() {
             case Type::MovieTakeOver:
                 if (movie.active()) {
                     if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
+                    achievementSuppressed = false; achievements.reset(); achievements.refresh();
                     movieBoundary(); cheatStatus(); discStatus();
                     if (command.type == Type::MovieTakeOver) { paused = false; emit pausedChanged(false); }
                 } else movieStatus(true); // Acknowledge stop after a failed pending start (window-close handshake).
@@ -264,6 +401,7 @@ void EmulationSession::run() {
                 if (host.load(command.path,error,command.value,
                               command.archiveEntry ? &*command.archiveEntry : nullptr)) {
                     loaded_.store(true); releaseButtons(); paused = false;
+                    achievementSuppressed = false; configureAchievements(); loadAchievements();
                     rewind_.store(false); rewindStatus(false); clearHistory();
                     clearAudio();
                     emit gameLoaded(host.gamePath(),host.fps(),host.contentName());
@@ -274,7 +412,9 @@ void EmulationSession::run() {
                     if (!host.loaded()) { clearHistory(); rewindStatus(false); }
                     emit errorOccurred(error);
                 }
-                loaded_.store(host.loaded()); discStatus(); cheatStatus();
+                loaded_.store(host.loaded());
+                if (!host.loaded()) { achievements.unloadGame(); achievements.refresh(); }
+                discStatus(); cheatStatus();
                 break;
             case Type::Close:
                 if (movie.active()) {
@@ -286,7 +426,8 @@ void EmulationSession::run() {
                     emit errorOccurred(error);
                     break;
                 }
-                host.unload();
+                achievements.unloadGame(); achievementSuppressed = false;
+                host.unload(); achievements.refresh();
                 loaded_.store(false);
                 releaseButtons();
                 for (auto& aim : gunPositions_) aim.store(quint64(1) << 32);
@@ -323,6 +464,7 @@ void EmulationSession::run() {
             case Type::FrameAdvance:
                 if (movie.mode() == MovieSession::Finished) {
                     if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
+                    achievementSuppressed = false; achievements.reset(); achievements.refresh();
                     movieBoundary(); cheatStatus();
                 }
                 if (host.loaded() && paused && !backgroundPaused_.load() && !rewind_.load()) frameRequested = true;
@@ -340,8 +482,13 @@ void EmulationSession::run() {
                 }
                 break;
             case Type::Pause:
+                if (command.value && achievementHardcore && !achievements.canPause()) {
+                    achievementStatusOverride = QStringLiteral("Частые паузы: Hardcore отключён для этой сессии.");
+                    achievements.configure(achievementEnabled,false); achievements.refresh();
+                }
                 if (!command.value && movie.mode() == MovieSession::Finished) {
                     if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
+                    achievementSuppressed = false; achievements.reset(); achievements.refresh();
                     movieBoundary(); cheatStatus();
                 }
                 paused = command.value != 0;
@@ -351,7 +498,7 @@ void EmulationSession::run() {
                 break;
             case Type::Reset:
                 if (host.loaded()) {
-                    host.reset(); clearHistory(); clearAudio();
+                    host.reset(); achievements.reset(); clearHistory(); clearAudio();
                     emit actionCompleted(QStringLiteral("Сброс"));
                     pacer.reset(nowNs());
                 }
@@ -359,6 +506,7 @@ void EmulationSession::run() {
             case Type::HardReset:
                 if (host.loaded()) {
                     if (host.hardReset(error)) {
+                        achievements.reset();
                         clearHistory(); clearAudio(); rewindStatus(false);
                         emit actionCompleted(QStringLiteral("Перезапуск питания"));
                         emit stateSlotsChanged(-1,host.occupiedStateSlots());
@@ -377,6 +525,7 @@ void EmulationSession::run() {
                 // older timeline across any attempted media operation.
                 clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
                 discStatus(); cheatStatus(); emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                if (ok && command.type != Type::Eject) loadAchievements(true);
                 if (ok) emit actionCompleted(command.type == Type::Eject ?
                     (command.value ? QStringLiteral("Привод открыт") : QStringLiteral("Привод закрыт")) :
                     QStringLiteral("Диск: %1").arg(QFileInfo(host.discPaths().value(host.discIndex())).completeBaseName()));
@@ -417,6 +566,7 @@ void EmulationSession::run() {
                                                  : host.setBlarggFilter(command.value,error)) {
                     if (command.type == Type::Region && host.isCd()) {
                         if (!host.hardReset(error)) emit errorOccurred(error);
+                        achievements.reset();
                         loaded_.store(host.loaded()); discStatus();
                     }
                     optionsPending = true; clearHistory(); clearAudio();
@@ -432,6 +582,7 @@ void EmulationSession::run() {
                 if (movie.active()) {
                     bool missing = false; QImage frame; double aspect = host.aspectRatio();
                     if (movie.loadSlot(command.value,frame,aspect,missing,error)) {
+                        achievements.reset();
                         clearHistory(); clearAudio();
                         if (!frame.isNull()) publishVideo(frame,aspect);
                         movieStatus(true);
@@ -453,18 +604,44 @@ void EmulationSession::run() {
             case Type::Slots: slotStatus(command.value); break;
             }
         }
-        const bool requestedHistoryEnabled = rewindEnabled_.load();
+        if (Clock::now() >= nextAchievementIdle) {
+            achievements.idle(); nextAchievementIdle = Clock::now() + std::chrono::milliseconds(100);
+        }
+        if (achievementPolicyRejected) {
+            achievementPolicyRejected = false; achievementResetRequested = false;
+            achievements.configure(achievementEnabled,false); achievements.refresh();
+        }
+        if (achievementResetRequested) {
+            achievementResetRequested = false;
+            QString resetError;
+            const bool hadGame = host.loaded();
+            if (hadGame && host.hardReset(resetError)) {
+                achievements.reset(); clearHistory(); clearAudio(); pacer.reset(nowNs());
+            } else if (hadGame) {
+                achievementStatusOverride = resetError;
+                achievements.configure(achievementEnabled,false); achievements.refresh();
+                loaded_.store(host.loaded());
+                if (!host.loaded()) { achievements.unloadGame(); emit gameClosed(); }
+            }
+        }
+        const bool requestedHistoryEnabled = rewindEnabled_.load() && !achievementHardcore;
         const int requestedHistoryMemoryMiB = rewindMemoryMiB_.load();
         if (historyEnabled != requestedHistoryEnabled || historyMemoryMiB != requestedHistoryMemoryMiB) {
             historyEnabled = requestedHistoryEnabled; historyMemoryMiB = requestedHistoryMemoryMiB;
             clearHistory();
         }
         const bool background = backgroundPaused_.load();
-        const bool nowPaused = host.loaded() && (paused || background);
+        if (background && !lastAchievementBackground && achievementHardcore && !achievements.canPause()) {
+            achievementStatusOverride = QStringLiteral("Частые паузы: Hardcore отключён для этой сессии.");
+            achievements.configure(achievementEnabled,false); achievements.refresh();
+        }
+        lastAchievementBackground = background;
+        const bool achievementLoading = achievementEnabled && achievements.loading();
+        const bool nowPaused = host.loaded() && (paused || background || achievementLoading);
         if (nowPaused != effectivePaused) {
             effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); clearAudio(); pacer.reset(nowNs());
         }
-        const bool reverse = rewind_.load() && historyEnabled && host.loaded() && !background && !optionsPending;
+        const bool reverse = rewind_.load() && historyEnabled && host.loaded() && !background && !achievementLoading && !achievementHardcore && !optionsPending;
         if (reverse != rewindLatched) {
             rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
             if (reverse) {
@@ -485,7 +662,7 @@ void EmulationSession::run() {
             double aspect = 4.0 / 3.0;
             if (history.stepBack(state,frame,aspect)) {
                 QString restoreError;
-                if (movie.active() ? movie.restoreRewind(state,restoreError) : host.restoreRewindState(state)) {
+                if (restoreHistory(state,restoreError)) {
                     captureFrame = 0; publishVideo(frame,aspect); movieStatus();
                 } else {
                     clearHistory(); historyHealthy = false;
@@ -513,15 +690,16 @@ void EmulationSession::run() {
             if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
             lastBatteryCheck = batteryNow;
         }
-        const bool stepHeld = frameAdvanceHeld_.load() && host.loaded() && paused && !background;
+        const bool stepHeld = frameAdvanceHeld_.load() && host.loaded() && paused && !background && !achievementLoading && !achievementHardcore;
         if (stepHeld && !stepHeldLatched) nextHeldFrameNs = nowNs() + 350000000;
         if (stepHeld && stepHeldLatched && nowNs() >= nextHeldFrameNs) {
             frameRequested = true; nextHeldFrameNs = nowNs() + 33333333;
         }
         stepHeldLatched = stepHeld;
-        if (frameRequested && host.loaded() && paused && !background) {
+        if (frameRequested && host.loaded() && paused && !background && !achievementLoading && !achievementHardcore) {
             if (!beforeFrame()) continue;
             host.runFrame(true,false); // Exactly one video frame; no burst of queued sound.
+            if (!achievementSuppressed) achievements.frame();
             afterFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
             if (optionsPending) { optionsPending = false; clearHistory(); }
@@ -548,6 +726,7 @@ void EmulationSession::run() {
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
         host.runFrame(!fast || present || optionsPending, !fast);
+        if (!achievementSuppressed) achievements.frame();
         afterFrame();
         if (host.isCd() && host.discEjected() != lastDiscEjected) {
             clearHistory(); discStatus();
@@ -577,6 +756,8 @@ void EmulationSession::run() {
     if (movie.active()) {
         if (!movie.finish(true,movieError)) emit errorOccurred(movieError);
     }
+    achievements.unloadGame();
+    host.captureAchievementProgress = {}; host.restoreAchievementProgress = {};
     host.unload();
     loaded_.store(false);
 }

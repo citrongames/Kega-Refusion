@@ -1,17 +1,18 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.10.1 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.11.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Multimedia OpenGL OpenGLWidgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Multimedia OpenGL OpenGLWidgets Network)
 find_package(SDL2 2.0.14 REQUIRED CONFIG)
 add_library(input_backend STATIC src/input/InputManager.h src/input/InputManager.cpp)
 target_include_directories(input_backend PUBLIC src)
 target_compile_definitions(input_backend PUBLIC SDL_MAIN_HANDLED)
 target_link_libraries(input_backend PUBLIC Qt6::Core SDL2::SDL2)
 include(cmake/ArchiveDependencies.cmake)
+include(cmake/AchievementsDependencies.cmake)
 add_library(rom_archive STATIC src/core/RomArchive.cpp src/core/RomArchive.h)
 target_include_directories(rom_archive PUBLIC src)
 target_link_libraries(rom_archive PUBLIC Qt6::Core PRIVATE kega_archive)
@@ -22,6 +23,7 @@ else()
 endif()
 add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/Cheats.cpp src/core/Cheats.h
+    src/core/AchievementsClient.cpp src/core/AchievementsClient.h src/core/Achievements.h
     src/core/Mp3Stream.cpp src/core/Mp3Stream.h
     src/core/PapriumMusic.cpp src/core/PapriumMusic.h
     src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
@@ -34,7 +36,7 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/BatterySave.cpp src/core/BatterySave.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive)
+target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive rcheevos)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)
 target_include_directories(video_renderer PUBLIC src)
@@ -43,11 +45,13 @@ add_executable(KegaRefusion WIN32
     assets/app.qrc
     src/ui/ControlsPage.cpp src/ui/ControlsPage.h
     src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
+    src/ui/AchievementsDialog.cpp src/ui/AchievementsDialog.h
+    src/ui/AchievementNetwork.cpp src/ui/AchievementNetwork.h
     src/ui/ControllerDiagram.cpp src/ui/ControllerDiagram.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
-target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer Qt6::Widgets Qt6::Multimedia)
+target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer Qt6::Widgets Qt6::Multimedia Qt6::Network)
 if(MSVC)
     target_compile_options(core_host PRIVATE /W4 /utf-8)
     target_compile_options(video_renderer PRIVATE /W4 /utf-8)
@@ -76,8 +80,13 @@ if(BUILD_TESTING)
     add_executable(archive_tests tests/archive_tests.cpp)
     target_link_libraries(archive_tests PRIVATE rom_archive kega_archive)
     add_test(NAME archive_tests COMMAND archive_tests)
+    add_executable(achievements_client_tests tests/achievements_client_tests.cpp)
+    target_link_libraries(achievements_client_tests PRIVATE core_host)
+    add_test(NAME achievements_client_tests COMMAND achievements_client_tests)
     add_executable(movie_integration_tests tests/movie_integration_tests.cpp)
     target_link_libraries(movie_integration_tests PRIVATE core_host)
+    add_executable(achievements_host_tests tests/achievements_host_tests.cpp)
+    target_link_libraries(achievements_host_tests PRIVATE core_host)
     add_executable(movie_tape_tests tests/movie_tape_tests.cpp)
     target_link_libraries(movie_tape_tests PRIVATE core_host)
     add_test(NAME movie_tape_tests COMMAND movie_tape_tests)

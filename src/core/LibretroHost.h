@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <libretro.h>
+#include <rc_libretro.h>
 #include "DiscMedia.h"
 #include "RomArchive.h"
 #include "BatterySave.h"
@@ -67,6 +68,12 @@ public:
     bool restoreMovieConfiguration(QString& error);
     QByteArray movieGameIdentity() const;
     QByteArray movieCoreIdentity() const;
+    unsigned achievementConsoleId() const;
+    QString achievementHash(QString& error) const;
+    uint32_t readAchievementMemory(uint32_t address, uint8_t* buffer, uint32_t count);
+    QString achievementHardcoreBlockReason() const;
+    std::function<QByteArray()> captureAchievementProgress;
+    std::function<void(const QByteArray&)> restoreAchievementProgress;
     const QString& movieCompatibilityWarning() const { return movieCompatibilityWarning_; }
     void setMoviePlayback(bool playback) { moviePlayback_ = playback; }
     bool flushSaveRam(QString& error);
@@ -112,6 +119,12 @@ private:
     QString saveReadPath(const QString& directory, const QString& suffix) const;
     bool restoreSaveRam(QString& error);
     bool updateSaveRam(qint64 nowMs, bool force, QString& error);
+    void resetAchievementMemory();
+    static void achievementCoreMemoryInfo(uint32_t id, rc_libretro_core_memory_info_t* info);
+    static void* achievementCdOpenTrack(const char* path, uint32_t track);
+    static size_t achievementCdReadSector(void* track, uint32_t sector, void* buffer, size_t count);
+    static void achievementCdCloseTrack(void* track);
+    static uint32_t achievementCdFirstSector(void* track);
     static bool environment(unsigned command, void* data);
     static void video(const void* data, unsigned width, unsigned height, size_t pitch);
     static void audioSample(int16_t left, int16_t right);
@@ -129,6 +142,14 @@ private:
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};
     retro_disk_control_callback disk_{};
+    std::array<retro_memory_descriptor,8> achievementDescriptors_{};
+    unsigned achievementDescriptorCount_ = 0;
+    rc_libretro_memory_regions_t achievementMemory_{};
+    unsigned achievementMemoryConsole_ = 0;
+    mutable unsigned achievementConsoleCache_ = 0;
+    bool achievementMemoryInitialized_ = false;
+    mutable QString achievementHashCache_;
+    mutable QByteArray achievementCdHeader_;
     QVector<DiscImage> discs_;
     int discIndex_ = 0;
     bool contentInfoActive_ = false;

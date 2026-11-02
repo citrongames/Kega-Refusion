@@ -2,6 +2,8 @@
 #include "AudioOutput.h"
 #include "ControlsPage.h"
 #include "CheatsDialog.h"
+#include "AchievementsDialog.h"
+#include "AchievementNetwork.h"
 #include <cmath>
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
@@ -36,6 +38,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMediaDevices>
 #include <QMenu>
 #include <QMenuBar>
@@ -53,8 +56,8 @@
 #include <optional>
 
 namespace {
-constexpr int kBiosSettingsPage = 5;
-constexpr int kControlsSettingsPage = 6;
+constexpr int kBiosSettingsPage = 6;
+constexpr int kControlsSettingsPage = 7;
 
 QString shaderParameterPrefix(const QString& path) {
     const auto key = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex();
@@ -153,6 +156,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         settings_.remove(QStringLiteral("emulation/rewindSeconds"));
     }
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
+    achievementNotifications_ = settings_.value(QStringLiteral("achievements/notifications"), true).toBool();
     region_ = qBound(0, settings_.value(QStringLiteral("emulation/region"), 0).toInt(), 3);
     blarggFilter_ = qBound(0, settings_.value(QStringLiteral("view/blarggFilter"), 0).toInt(), 4);
     session_.setRegion(region_);
@@ -189,11 +193,54 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             [this](const QString& message) {
         view_->showOsd(message, 10000, QStringLiteral("recordingCompatibility"));
     });
+    achievementNetwork_ = new AchievementNetwork(dataPath_, this);
+    connect(&session_, &EmulationSession::achievementHttpRequest,
+            achievementNetwork_, &AchievementNetwork::perform);
+    connect(achievementNetwork_, &AchievementNetwork::response,
+            &session_, &EmulationSession::achievementResponse);
+    connect(&session_, &EmulationSession::achievementsChanged, this,
+            [this](const AchievementsState& state) { achievementsState_ = state; });
+    connect(&session_, &EmulationSession::achievementNotice, this,
+            [this](const AchievementNotice& notice) {
+        if (!achievementNotifications_ ||
+            (notice.kind == AchievementNotice::Completed && !notice.hardcore)) return;
+        QString message;
+        int duration = 5000;
+        if (notice.kind == AchievementNotice::GameReady) {
+            message = QStringLiteral("ДОСТИЖЕНИЯ: %1 — %2").arg(notice.title, notice.description);
+        } else if (notice.kind == AchievementNotice::Unlocked) {
+            message = QStringLiteral("ДОСТИЖЕНИЕ ОТКРЫТО: %1").arg(notice.title);
+            duration = 7000;
+        } else if (notice.kind == AchievementNotice::Completed) {
+            message = QStringLiteral("МАСТЕРСТВО: %1").arg(notice.title);
+            duration = 8000;
+        }
+        if (!message.isEmpty())
+            view_->showOsd(message, duration, QStringLiteral("achievement"));
+    });
+    connect(&session_, &EmulationSession::achievementsHardcoreChanged, this,
+            [this](bool enabled) {
+        if (achievementsHardcore_ == enabled) return;
+        achievementsHardcore_ = enabled;
+        if (enabled) {
+            frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
+            session_.setFrameAdvanceHeld(false);
+            rewindHeld_ = rewindPadHeld_ = false;
+            if (rewindAction_->isChecked()) rewindAction_->setChecked(false);
+            updateRewind();
+        }
+        updateMovieActions();
+        updateInputEnabled();
+    });
+    session_.configureAchievements(
+        settings_.value(QStringLiteral("achievements/enabled"), true).toBool(),
+        AchievementsHardcoreApproved &&
+            settings_.value(QStringLiteral("achievements/hardcore"), false).toBool());
     connect(&session_, &EmulationSession::cheatsChanged, this,
             [this](const CheatList& entries,int platform,bool supported,const QString& detail) {
         cheats_ = entries; cheatPlatform_ = Cheats::Platform(platform); cheatsSupported_ = supported;
         cheatsAction_->setEnabled(session_.hasGame() && supported && !loading_ &&
-                                  movieMode_ == 0);
+                                  movieMode_ == 0 && !achievementsHardcore_);
         cheatsAction_->setToolTip(detail);
     });
     connect(&session_, &EmulationSession::discStateChanged, this,
@@ -455,6 +502,9 @@ void MainWindow::buildMenus() {
     cheatsAction_ = emulationMenu->addAction(QStringLiteral("Читы…"));
     cheatsAction_->setEnabled(false);
     connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
+    QAction* achievementsAction = emulationMenu->addAction(QStringLiteral("Достижения…"));
+    achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
+    connect(achievementsAction, &QAction::triggered, this, &MainWindow::showAchievements);
     resetAction_ = emulationMenu->addAction(QStringLiteral("Сброс"));
     resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     resetAction_->setAutoRepeat(false);
@@ -539,6 +589,7 @@ void MainWindow::buildMenus() {
         rewindAction_->setEnabled(rewindEnabled_);
         saveAction_->setEnabled(true);
         loadAction_->setEnabled(true);
+        updateMovieActions();
     });
 
     QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&Вид"));
@@ -611,6 +662,15 @@ void MainWindow::buildMenus() {
     shaderParametersAction_ = shaderMenu->addAction(QStringLiteral("Параметры…"));
     connect(shaderParametersAction_, &QAction::triggered, this, &MainWindow::editShaderParameters);
     updateShaderActions();
+    viewMenu->addSeparator();
+    osdAction_ = viewMenu->addAction(QStringLiteral("Экранные сообщения (OSD)"));
+    osdAction_->setObjectName(QStringLiteral("osdAction"));
+    osdAction_->setCheckable(true);
+    osdAction_->setChecked(settings_.value(QStringLiteral("view/osd"), true).toBool());
+    connect(osdAction_, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("view/osd"), enabled);
+        view_->setOsdEnabled(enabled);
+    });
     viewMenu->addSeparator();
     fullscreenAction_ = viewMenu->addAction(QStringLiteral("Полный экран"));
     fullscreenAction_->setShortcut(QKeySequence(QStringLiteral("Alt+Return")));
@@ -832,9 +892,10 @@ void MainWindow::saveScreenshot() {
 void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
     loading_ = loading;
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading &&
-                                                  movieMode_ == 0);
+                                                  movieMode_ == 0 && !achievementsHardcore_);
     updateMovieActions();
-    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() && !loading);
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() &&
+                                                       !loading && !achievementsHardcore_);
     if (loading) view_->setLightgunInputEnabled(false);
     view_->setLoading(loading, fileName);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading);
@@ -949,7 +1010,7 @@ void MainWindow::editSettings(int initialPage) {
     navigation->setSpacing(4);
     navigation->addItems({QStringLiteral("Общие"), QStringLiteral("Игры"),
                           QStringLiteral("Перемотка"), QStringLiteral("Запись"),
-                          QStringLiteral("Звук"), QStringLiteral("BIOS"),
+                          QStringLiteral("Достижения"), QStringLiteral("Звук"), QStringLiteral("BIOS"),
                           QStringLiteral("Управление")});
     auto* pages = new QStackedWidget(&dialog);
     pages->setObjectName(QStringLiteral("settingsPages"));
@@ -991,7 +1052,7 @@ void MainWindow::editSettings(int initialPage) {
     screenshotFormat->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
     screenshotFormat->setCurrentIndex(jpeg ? 1 : 0);
     general->addRow(QStringLiteral("Формат скриншотов:"), screenshotFormat);
-    const bool osdEnabled = settings_.value(QStringLiteral("view/osd"), true).toBool();
+    const bool osdEnabled = osdAction_->isChecked();
     auto* showOsd = new QCheckBox(QStringLiteral("Показывать экранные сообщения (OSD)"), &dialog);
     showOsd->setObjectName(QStringLiteral("osdEnabled"));
     showOsd->setChecked(osdEnabled);
@@ -1039,9 +1100,16 @@ void MainWindow::editSettings(int initialPage) {
         "Уменьшает мигание спрайтов; в отдельных играх может нарушать графические эффекты."));
     games->addRow(QStringLiteral("Лимит спрайтов:"), spriteLimit);
     const bool movieActive = movieMode_ != 0;
-    checksum->setEnabled(!movieActive);
-    cdLoading->setEnabled(!movieActive);
-    spriteLimit->setEnabled(!movieActive);
+    checksum->setEnabled(!movieActive && !achievementsHardcore_);
+    cdLoading->setEnabled(!movieActive && !achievementsHardcore_);
+    spriteLimit->setEnabled(!movieActive && !achievementsHardcore_);
+    connect(&session_, &EmulationSession::achievementsHardcoreChanged, &dialog,
+            [this, checksum, cdLoading, spriteLimit](bool active) {
+        const bool editable = movieMode_ == 0 && !active;
+        checksum->setEnabled(editable);
+        cdLoading->setEnabled(editable);
+        spriteLimit->setEnabled(editable);
+    });
 
     auto* rewind = addPage(QStringLiteral("Перемотка"),
         QStringLiteral("Запись истории игры для возврата к предыдущим кадрам."));
@@ -1076,6 +1144,125 @@ void MainWindow::editSettings(int initialPage) {
     recordingCounterUnit->addItem(QStringLiteral("Кадры"), QStringLiteral("frames"));
     recordingCounterUnit->setCurrentIndex(counterUnit == QLatin1String("frames") ? 1 : 0);
     recording->addRow(QStringLiteral("Счётчик на экране:"), recordingCounterUnit);
+
+    const bool achievementEnabled = settings_.value(QStringLiteral("achievements/enabled"), true).toBool();
+    const bool achievementHardcoreRequested = settings_.value(QStringLiteral("achievements/hardcore"), false).toBool();
+    bool achievementEnabledApplied = achievementEnabled;
+    bool achievementHardcoreApplied = achievementHardcoreRequested;
+    auto* achievements = addPage(QStringLiteral("Достижения"),
+        QStringLiteral("RetroAchievements: учёт достижений доступен после входа в аккаунт."));
+    auto* achievementEnabledBox = new QCheckBox(QStringLiteral("Включить достижения"), &dialog);
+    achievementEnabledBox->setObjectName(QStringLiteral("achievementsEnabled"));
+    achievementEnabledBox->setChecked(achievementEnabled);
+    achievements->addRow(achievementEnabledBox);
+    auto* achievementMode = new QComboBox(&dialog);
+    achievementMode->setObjectName(QStringLiteral("achievementMode"));
+    achievementMode->addItem(QStringLiteral("Softcore"), false);
+    achievementMode->addItem(QStringLiteral("Hardcore"), true);
+    if (!AchievementsHardcoreApproved) {
+        achievementMode->setItemData(1, 0, Qt::UserRole - 1);
+        achievementMode->setItemData(1, QStringLiteral(
+            "Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. Сейчас доступен Softcore."),
+            Qt::ToolTipRole);
+    }
+    achievementMode->setCurrentIndex(AchievementsHardcoreApproved && achievementHardcoreRequested ? 1 : 0);
+    achievementMode->setEnabled(achievementEnabled);
+    connect(achievementEnabledBox, &QCheckBox::toggled, achievementMode, &QWidget::setEnabled);
+    achievements->addRow(QStringLiteral("Режим:"), achievementMode);
+    auto* achievementToasts = new QCheckBox(QStringLiteral("Показывать уведомления о достижениях"), &dialog);
+    achievementToasts->setObjectName(QStringLiteral("achievementNotifications"));
+    achievementToasts->setChecked(achievementNotifications_);
+    achievementToasts->setToolTip(QStringLiteral("При выключенных уведомлениях достижения продолжают засчитываться."));
+    achievements->addRow(achievementToasts);
+    auto* accountStatus = new QLabel(achievementsState_.status.isEmpty()
+        ? QStringLiteral("Войдите в RetroAchievements.") : achievementsState_.status, &dialog);
+    accountStatus->setObjectName(QStringLiteral("achievementAccountStatus"));
+    accountStatus->setWordWrap(true);
+    achievements->addRow(accountStatus);
+    auto* achievementUser = new QLineEdit(&dialog);
+    achievementUser->setObjectName(QStringLiteral("achievementUsername"));
+    achievementUser->setText(achievementsState_.username);
+    achievements->addRow(QStringLiteral("Имя пользователя:"), achievementUser);
+    auto* achievementPassword = new QLineEdit(&dialog);
+    achievementPassword->setObjectName(QStringLiteral("achievementPassword"));
+    achievementPassword->setEchoMode(QLineEdit::Password);
+    achievements->addRow(QStringLiteral("Пароль:"), achievementPassword);
+    auto* accountButtons = new QWidget(&dialog);
+    auto* accountButtonsLayout = new QHBoxLayout(accountButtons);
+    accountButtonsLayout->setContentsMargins(0, 0, 0, 0);
+    auto* loginButton = new QPushButton(QStringLiteral("Войти"), accountButtons);
+    auto* logoutButton = new QPushButton(QStringLiteral("Выйти"), accountButtons);
+    logoutButton->setEnabled(achievementsState_.loggedIn);
+    accountButtonsLayout->addWidget(loginButton);
+    accountButtonsLayout->addWidget(logoutButton);
+    accountButtonsLayout->addStretch();
+    achievements->addRow(accountButtons);
+    auto* accountHint = new QLabel(&dialog);
+    accountHint->setWordWrap(true);
+    achievements->addRow(accountHint);
+    const auto updateAccountControls = [this, achievementEnabledBox,
+                                        achievementUser, achievementPassword, loginButton,
+                                        logoutButton, accountHint] {
+        const bool active = achievementEnabledBox->isChecked();
+        achievementUser->setEnabled(active);
+        achievementPassword->setEnabled(active);
+        loginButton->setEnabled(active);
+        logoutButton->setEnabled(active && achievementsState_.loggedIn);
+        accountHint->setText(active
+            ? QStringLiteral("Вход и выход применяются сразу.")
+            : QStringLiteral("Включите достижения для входа в аккаунт."));
+    };
+    connect(achievementEnabledBox, &QCheckBox::toggled, &dialog, updateAccountControls);
+    updateAccountControls();
+    connect(loginButton, &QPushButton::clicked, &dialog,
+            [this, achievementEnabledBox, achievementMode, achievementUser,
+             achievementPassword, accountStatus, &achievementEnabledApplied,
+             &achievementHardcoreApplied] {
+        if (!achievementEnabledBox->isChecked()) return;
+        const QString user = achievementUser->text().trimmed();
+        const QString password = achievementPassword->text();
+        if (user.isEmpty() || password.isEmpty()) {
+            accountStatus->setText(QStringLiteral("Введите имя пользователя и пароль."));
+            return;
+        }
+        const bool hardcore = AchievementsHardcoreApproved &&
+                              achievementMode->currentData().toBool();
+        if (!achievementEnabledApplied || hardcore != achievementHardcoreApplied) {
+            settings_.setValue(QStringLiteral("achievements/enabled"), true);
+            settings_.setValue(QStringLiteral("achievements/hardcore"), hardcore);
+            session_.configureAchievements(true, hardcore);
+            achievementEnabledApplied = true;
+            achievementHardcoreApplied = hardcore;
+        }
+        session_.loginAchievements(user, password);
+        achievementPassword->clear();
+        accountStatus->setText(QStringLiteral("Вход в RetroAchievements…"));
+    });
+    connect(logoutButton, &QPushButton::clicked, &dialog, [this, accountStatus] {
+        session_.logoutAchievements();
+        accountStatus->setText(QStringLiteral("Выход из RetroAchievements…"));
+    });
+    connect(&session_, &EmulationSession::achievementsChanged, &dialog,
+            [accountStatus, updateAccountControls](const AchievementsState& state) {
+        accountStatus->setText(state.status);
+        updateAccountControls();
+    });
+    const QString hardcoreHelp = AchievementsHardcoreApproved
+        ? QStringLiteral("Hardcore отключает загрузку состояния, перемотку и следующий кадр; "
+                         "включение режима перезапускает текущую игру.")
+        : QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. "
+                         "Сейчас доступен Softcore.");
+    auto* achievementHelp = new QLabel(QStringLiteral(
+        "Пароль не сохраняется; после входа хранится только токен. "
+        "Вход и выход выполняются сразу; остальные изменения — после «ОК». ") + hardcoreHelp, &dialog);
+    achievementHelp->setWordWrap(true);
+    achievements->addRow(achievementHelp);
+    auto* accountFile = new QLabel(QStringLiteral("Файл входа: %1").arg(
+        QDir::toNativeSeparators(QDir(dataPath_).filePath(QStringLiteral("retroachievements-account.ini")))), &dialog);
+    accountFile->setTextFormat(Qt::PlainText);
+    accountFile->setWordWrap(true);
+    accountFile->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    achievements->addRow(accountFile);
 
     auto* sound = addPage(QStringLiteral("Звук"),
         QStringLiteral("Устройство воспроизведения звука игры."));
@@ -1284,9 +1471,18 @@ void MainWindow::editSettings(int initialPage) {
     if (dialog.exec() == QDialog::Accepted) {
         if ((screenshotFormat->currentIndex() == 1) != jpeg)
             settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
-        if (showOsd->isChecked() != osdEnabled) {
-            settings_.setValue(QStringLiteral("view/osd"), showOsd->isChecked());
-            view_->setOsdEnabled(showOsd->isChecked());
+        osdAction_->setChecked(showOsd->isChecked());
+        const bool selectedAchievements = achievementEnabledBox->isChecked();
+        const bool selectedHardcore = achievementMode->currentData().toBool();
+        if (selectedAchievements != achievementEnabledApplied ||
+            selectedHardcore != achievementHardcoreApplied) {
+            settings_.setValue(QStringLiteral("achievements/enabled"), selectedAchievements);
+            settings_.setValue(QStringLiteral("achievements/hardcore"), selectedHardcore);
+            session_.configureAchievements(selectedAchievements, selectedHardcore);
+        }
+        if (achievementToasts->isChecked() != achievementNotifications_) {
+            achievementNotifications_ = achievementToasts->isChecked();
+            settings_.setValue(QStringLiteral("achievements/notifications"), achievementNotifications_);
         }
         const QString selectedCounterUnit = recordingCounterUnit->currentData().toString();
         if (selectedCounterUnit != counterUnit) {
@@ -1300,17 +1496,17 @@ void MainWindow::editSettings(int initialPage) {
             session_.setFastForwardFactor(selectedSpeed);
             view_->setFastForwardFactor(selectedSpeed);
         }
-        if (checksum->isChecked() != fixChecksum) {
+        if (checksum->isEnabled() && checksum->isChecked() != fixChecksum) {
             settings_.setValue(QStringLiteral("emulation/autoFixChecksum"), checksum->isChecked());
             session_.setAutoFixChecksum(checksum->isChecked());
         }
         const bool selectedFastCd = cdLoading->currentData().toBool();
-        if (selectedFastCd != fastCd) {
+        if (cdLoading->isEnabled() && selectedFastCd != fastCd) {
             settings_.setValue(QStringLiteral("emulation/fastCdLoading"), selectedFastCd);
             session_.setFastCdLoading(selectedFastCd);
         }
         const bool selectedNoSpriteLimit = spriteLimit->currentData().toBool();
-        if (selectedNoSpriteLimit != noSpriteLimit) {
+        if (spriteLimit->isEnabled() && selectedNoSpriteLimit != noSpriteLimit) {
             settings_.setValue(QStringLiteral("emulation/removeSpriteLimit"), selectedNoSpriteLimit);
             session_.setRemoveSpriteLimit(selectedNoSpriteLimit);
         }
@@ -1322,7 +1518,7 @@ void MainWindow::editSettings(int initialPage) {
                 rewindHeld_ = rewindPadHeld_ = false;
                 rewindAction_->setChecked(false);
             }
-            rewindAction_->setEnabled(session_.hasGame() && rewindEnabled_);
+            rewindAction_->setEnabled(session_.hasGame() && rewindEnabled_ && !achievementsHardcore_);
             updateRewind();
         }
         if (rewindMemory->value() != memoryMiB) {
@@ -1336,11 +1532,28 @@ void MainWindow::editSettings(int initialPage) {
         }
     }
     view_->setFocus();
+    updateMovieActions();
+    updateInputEnabled();
+}
+
+void MainWindow::showAchievements() {
+    releaseInput();
+    AchievementsDialog dialog(this);
+    dialog.setState(achievementsState_);
+    connect(&session_, &EmulationSession::achievementsChanged,
+            &dialog, &AchievementsDialog::setState);
+    connect(&dialog, &AchievementsDialog::badgeRequested,
+            achievementNetwork_, &AchievementNetwork::requestBadge);
+    connect(achievementNetwork_, &AchievementNetwork::badgeReady,
+            &dialog, &AchievementsDialog::setBadge);
+    session_.requestAchievements();
+    dialog.exec();
+    view_->setFocus();
     updateInputEnabled();
 }
 
 void MainWindow::editCheats() {
-    if (!session_.hasGame() || loading_ || !cheatsSupported_) return;
+    if (!session_.hasGame() || loading_ || !cheatsSupported_ || achievementsHardcore_) return;
     releaseInput();
     CheatsDialog dialog(cheats_,cheatPlatform_,currentGameName_,this);
     if (dialog.exec() == QDialog::Accepted && dialog.cheats() != cheats_)
@@ -1436,23 +1649,27 @@ void MainWindow::updateMovieActions() {
     const bool ready = game && !moviePending_;
     movieMenu_->setEnabled(game);
     movieRecordAction_->setEnabled(ready && movieMode_ == 0);
-    movieResumeAction_->setEnabled(ready && movieMode_ == 0);
-    moviePlayAction_->setEnabled(ready && movieMode_ == 0);
+    movieResumeAction_->setEnabled(ready && movieMode_ == 0 && !achievementsHardcore_);
+    moviePlayAction_->setEnabled(ready && movieMode_ == 0 && !achievementsHardcore_);
     movieTakeoverAction_->setEnabled(ready && (movieMode_ == 2 || movieMode_ == 3));
-    movieRerecordAction_->setEnabled(ready && (movieMode_ == 2 || movieMode_ == 3));
+    movieRerecordAction_->setEnabled(ready && !achievementsHardcore_ &&
+                                     (movieMode_ == 2 || movieMode_ == 3));
     movieStopAction_->setEnabled(ready && protectedMovie);
     const QString stopLabel = movieMode_ == 1
         ? QStringLiteral("Сохранить и закончить запись")
         : QStringLiteral("Остановить воспроизведение");
     if (movieStopAction_->text() != stopLabel) movieStopAction_->setText(stopLabel);
-    if (regionMenu_) regionMenu_->setEnabled(!protectedMovie && !moviePending_);
+    if (regionMenu_) regionMenu_->setEnabled(!protectedMovie && !moviePending_ &&
+                                             !achievementsHardcore_);
     if (blarggMenu_) blarggMenu_->setEnabled(!protectedMovie && !moviePending_);
     if (resetAction_) resetAction_->setEnabled(game && !protectedMovie && !moviePending_);
     if (hardResetAction_) hardResetAction_->setEnabled(game && !protectedMovie && !moviePending_);
-    if (cheatsAction_) cheatsAction_->setEnabled(game && cheatsSupported_ && !protectedMovie && !moviePending_);
+    if (cheatsAction_) cheatsAction_->setEnabled(game && cheatsSupported_ && !protectedMovie &&
+                                                !moviePending_ && !achievementsHardcore_);
     if (saveAction_) saveAction_->setEnabled(game && !moviePending_);
-    if (loadAction_) loadAction_->setEnabled(game && !moviePending_);
-    if (rewindAction_) rewindAction_->setEnabled(game && rewindEnabled_ && !moviePending_);
+    if (loadAction_) loadAction_->setEnabled(game && !moviePending_ && !achievementsHardcore_);
+    if (rewindAction_) rewindAction_->setEnabled(game && rewindEnabled_ &&
+                                                !moviePending_ && !achievementsHardcore_);
     if (changeDiscAction_) changeDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_);
     if (ejectDiscAction_) ejectDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_);
     if (discMenu_) discMenu_->setEnabled(discPaths_.size() > 1 && !protectedMovie && !moviePending_);
@@ -1489,8 +1706,9 @@ void MainWindow::releaseInput() {
 void MainWindow::updateInputEnabled() {
     if (closeGameAction_) closeGameAction_->setEnabled(session_.hasGame() && !loading_);
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading_ &&
-                                                  movieMode_ == 0);
-    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() && !loading_);
+                                                  movieMode_ == 0 && !achievementsHardcore_);
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() &&
+        pauseAction_->isChecked() && !loading_ && !achievementsHardcore_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     session_.setBackgroundPaused(QApplication::activeModalWidget() || (pauseOnFocusLoss_ &&
         (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive)));
@@ -1514,14 +1732,15 @@ void MainWindow::updateFastForward() {
 }
 
 void MainWindow::updateRewind() {
-    const bool enabled = rewindEnabled_ && (rewindHeld_ || rewindPadHeld_ ||
+    const bool enabled = rewindEnabled_ && !achievementsHardcore_ && (rewindHeld_ || rewindPadHeld_ ||
         (rewindAction_ && rewindAction_->isChecked()));
     session_.setRewind(enabled);
     updateFastForward();
 }
 
 void MainWindow::setPausedUi(bool paused) {
-    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(paused && session_.hasGame() && !loading_);
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(paused && session_.hasGame() &&
+                                                             !loading_ && !achievementsHardcore_);
     if (!paused) {
         frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
         session_.setFrameAdvanceHeld(false);

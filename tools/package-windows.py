@@ -93,6 +93,7 @@ def main() -> None:
         Path("cores/genesis_plus_gx_libretro.dll"): core,
         Path("plugins/platforms/qwindows.dll"): qt_root / "plugins/platforms/qwindows.dll",
         Path("plugins/imageformats/qjpeg.dll"): qt_root / "plugins/imageformats/qjpeg.dll",
+        Path("plugins/tls/qschannelbackend.dll"): qt_root / "plugins/tls/qschannelbackend.dll",
         Path("plugins/multimedia/ffmpegmediaplugin.dll"): qt_root / "plugins/multimedia/ffmpegmediaplugin.dll",
         Path("plugins/multimedia/windowsmediaplugin.dll"): qt_root / "plugins/multimedia/windowsmediaplugin.dll",
     }
@@ -151,6 +152,7 @@ def main() -> None:
     shutil.copy2(root / "assets/fonts/OFL.txt", notices / "PressStart2P-OFL.txt")
     shutil.copy2(root / "third_party/SDL2-LICENSE.txt", notices / "SDL2-LICENSE.txt")
     shutil.copy2(root / "third_party/minimp3/LICENSE", notices / "minimp3-CC0.txt")
+    shutil.copy2(root / "third_party/rcheevos/LICENSE", notices / "rcheevos-LICENSE.txt")
     for name in ("libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt", "gdapt-NOTICE.txt"):
         shutil.copy2(root / "third_party" / name, notices / name)
 

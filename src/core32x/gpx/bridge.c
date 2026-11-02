@@ -53,6 +53,10 @@ typedef struct Gpx32x {
 
 } Gpx32x;
 static Gpx32x *ctx;
+void *kegarefusion_32x_sdram(void) {
+    Kega32xBus *bus=ctx && ctx->machine?kega32x_machine_bus(ctx->machine):NULL;
+    return bus && bus->memory ? bus->memory->sdram : NULL;
+}
 /* GPX config.ntsc is an enable flag, not the selected preset. Options are
    received before attachment too; ordinary MD/CD never allocate this table. */
 static unsigned requested_filter_preset;

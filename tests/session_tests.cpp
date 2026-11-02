@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QUrlQuery>
 #include <QtEndian>
 #include <atomic>
 #include <cstdio>
@@ -17,10 +18,11 @@ void waitFor(const std::function<bool()>& predicate){
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  try {
+ const bool achievementsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--achievements");
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || fastOnly || checksumOnly || portsOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || fastOnly || checksumOnly || portsOnly || achievementsOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  const auto path=temp.filePath("original.md");QFile file(path);require(file.open(QIODevice::WriteOnly) && file.write(rom)==rom.size(),"ROM fixture");file.close();
@@ -32,6 +34,40 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(achievementsOnly){
+  int requests=0, gameNotices=0;AchievementsState achievementState;bool hardcore=false;
+  QObject::connect(&session,&EmulationSession::achievementsChanged,&app,[&](const AchievementsState& s){achievementState=s;});
+  QObject::connect(&session,&EmulationSession::achievementsHardcoreChanged,&app,[&](bool value){hardcore=value;});
+  QObject::connect(&session,&EmulationSession::achievementNotice,&app,[&](const AchievementNotice& n){if(n.kind==AchievementNotice::GameReady)++gameNotices;});
+  QObject::connect(&session,&EmulationSession::achievementHttpRequest,&app,[&](const AchievementHttpRequest& request){
+   ++requests;const QUrlQuery query(QString::fromUtf8(request.postData));
+   const auto operation=query.queryItemValue("r");QByteArray reply;
+   if(operation=="login2") reply=R"({"Success":true,"User":"Fixture","Token":"FixtureToken","Score":0,"SoftcoreScore":0,"Messages":0,"Permissions":1,"AccountType":"Registered"})";
+   else if(operation=="achievementsets") reply=R"({"Success":true,"GameId":1234,"Title":"Original Fixture","ConsoleId":1,"ImageIconUrl":"https://retroachievements.org/Images/112233.png","RichPresenceGameId":1234,"RichPresencePatch":"","Sets":[{"AchievementSetId":1111,"GameId":1234,"Title":null,"Type":"core","ImageIconUrl":"https://retroachievements.org/Images/112233.png","Achievements":[{"ID":5501,"Title":"Fixture","Description":"Synthetic condition","Flags":3,"Points":5,"MemAddr":"0xH0001=3","Author":"Fixture","BadgeName":"00234","Created":1367266583,"Modified":1376929305}],"Leaderboards":[]}]})";
+   else if(operation=="startsession" || operation=="ping") reply=R"({"Success":true})";
+   else {++errors;std::fprintf(stderr,"Unexpected mock API operation: %s\n",qPrintable(operation));reply=R"({"Success":false,"Error":"Unexpected mock operation"})";}
+   session.achievementResponse(request.id,200,reply);
+  });
+  session.configureAchievements(true,true); // Unapproved public Hardcore must stay disabled.
+  session.requestAchievements();waitFor([&]{return achievementState.enabled;});
+  require(requests==0 && !hardcore && !achievementState.hardcore,"anonymous or unapproved Hardcore enabled");
+  session.loginAchievements("Fixture","TestPassword");
+  waitFor([&]{return achievementState.gameId==1234 && !achievementState.loading && gameNotices==1;});
+  require(!hardcore && !achievementState.hardcore,"Hardcore approval gate bypassed by login");
+  const int initial=frames;waitFor([&]{return frames>initial+5;});
+  session.setPaused(true);waitFor([&]{return paused;});
+  session.saveState(0);waitFor([&]{return actions==1;});
+  const QDir states(temp.path()+"/states");const auto files=states.entryList({"*.slot0.krs"},QDir::Files);
+  require(files.size()==1,"achievement state missing");
+  QFile stateFile(states.filePath(files.first()));require(stateFile.open(QIODevice::ReadOnly),"achievement state read");
+  require(stateFile.readAll().contains("KRACT001"),"worker failed to embed achievement progress");stateFile.close();
+  session.loadState(0);waitFor([&]{return actions==2;});
+  session.configureAchievements(false,false);waitFor([&]{return !achievementState.enabled;});
+  const int sent=requests;session.setPaused(false);waitFor([&]{return !paused && frames>initial+12;});
+  require(requests==sent && errors==0,"disabled achievements sent requests or disturbed worker");
+  session.shutdown();
+  std::puts("Achievement worker: no anonymous HTTP, approval gate, synthetic login/game, native state progress and disable/resume passed");return 0;
+ }
  if(portsOnly){
   std::atomic<bool> reversed{false};
   QObject::connect(&session,&EmulationSession::rewindingChanged,&app,[&](bool value){reversed=value;},Qt::DirectConnection);
