@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.12.0 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.13.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -17,6 +17,7 @@ target_link_libraries(localization PUBLIC Qt6::Core)
 target_link_libraries(input_backend PUBLIC localization)
 include(cmake/ArchiveDependencies.cmake)
 include(cmake/AchievementsDependencies.cmake)
+include(cmake/NetplayDependencies.cmake)
 add_library(rom_archive STATIC src/core/RomArchive.cpp src/core/RomArchive.h)
 target_include_directories(rom_archive PUBLIC src)
 target_link_libraries(rom_archive PUBLIC Qt6::Core localization PRIVATE kega_archive)
@@ -37,10 +38,11 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/MovieTape.cpp src/core/MovieTape.h
     src/core/MovieSession.cpp src/core/MovieSession.h
     src/core/FramePacer.cpp src/core/FramePacer.h
-    src/core/BatterySave.cpp src/core/BatterySave.h)
+    src/core/BatterySave.cpp src/core/BatterySave.h
+    src/net/NetplayTimeline.cpp src/net/NetplayTimeline.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos)
+target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)
 target_include_directories(video_renderer PUBLIC src)
@@ -52,10 +54,16 @@ add_executable(KegaRefusion WIN32
     src/ui/AchievementsDialog.cpp src/ui/AchievementsDialog.h
     src/ui/AchievementNetwork.cpp src/ui/AchievementNetwork.h
     src/ui/ControllerDiagram.cpp src/ui/ControllerDiagram.h
+    src/net/NetTransport.cpp src/net/NetTransport.h
+    src/net/NetFileTransfer.cpp src/net/NetFileTransfer.h
+    src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
+    src/net/NetplayController.cpp src/net/NetplayController.h
+    src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h
+    src/ui/NetplaySettingsPage.cpp src/ui/NetplaySettingsPage.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
-target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network)
+target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
 add_custom_command(TARGET KegaRefusion POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/languages" "$<TARGET_FILE_DIR:KegaRefusion>/languages")
@@ -70,6 +78,19 @@ else()
 endif()
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(netplay_session_tests tests/netplay_session_tests.cpp
+        src/core/EmulationSession.cpp src/core/EmulationSession.h
+        src/net/NetplayController.cpp src/net/NetplayController.h
+        src/net/NetTransport.cpp src/net/NetTransport.h
+        src/net/NetFileTransfer.cpp src/net/NetFileTransfer.h
+        src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
+        src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h)
+    target_link_libraries(netplay_session_tests PRIVATE core_host Qt6::Widgets Qt6::Network OpenSSL::Crypto)
+    add_executable(netplay_timeline_tests tests/netplay_timeline_tests.cpp)
+    target_link_libraries(netplay_timeline_tests PRIVATE core_host)
+    add_executable(net_file_tests tests/net_file_tests.cpp src/net/NetFileTransfer.cpp)
+    target_link_libraries(net_file_tests PRIVATE rom_archive Qt6::Core localization)
+    add_test(NAME net_file_tests COMMAND net_file_tests)
     add_executable(localization_tests tests/localization_tests.cpp)
     target_link_libraries(localization_tests PRIVATE localization Qt6::Core)
     add_test(NAME localization_tests COMMAND localization_tests)

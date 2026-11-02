@@ -1,0 +1,433 @@
+#include "NetplayLobby.h"
+
+#include "i18n/Localization.h"
+
+#include <QApplication>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QCloseEvent>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFileDialog>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QHeaderView>
+#include <QJsonArray>
+#include <QLabel>
+#include <QLineEdit>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QSignalBlocker>
+#include <QSpinBox>
+#include <QTableWidget>
+#include <QVBoxLayout>
+
+namespace {
+QString t(const char* source) { return Localization::text(QString::fromUtf8(source)); }
+
+QString roleName(const QString& role) {
+    if (role == QLatin1String("player1")) return t("Игрок 1");
+    if (role == QLatin1String("player2")) return t("Игрок 2");
+    if (role == QLatin1String("spectator")) return t("Зритель");
+    return t("Не выбрана");
+}
+
+QString readinessName(const QString& readiness) {
+    if (readiness == QLatin1String("ready")) return t("Готов");
+    if (readiness == QLatin1String("waiting")) return t("Ожидание");
+    if (readiness == QLatin1String("rom-missing")) return t("Нет ROM");
+    if (readiness == QLatin1String("rom-mismatch")) return t("ROM не совпадает");
+    if (readiness == QLatin1String("transferring")) return t("Передача ROM");
+    if (readiness == QLatin1String("reconnecting")) return t("Переподключение");
+    if (readiness == QLatin1String("syncing")) return t("Синхронизация");
+    if (readiness == QLatin1String("disconnected")) return t("Отключён");
+    return readiness.isEmpty() ? t("Ожидание") : readiness;
+}
+
+QString romStatusName(const QString& status) {
+    if (status == QLatin1String("matched")) return t("ROM совпадает");
+    if (status == QLatin1String("missing")) return t("Выберите ROM или запросите загрузку");
+    if (status == QLatin1String("mismatch")) return t("ROM не совпадает с игрой хоста");
+    if (status == QLatin1String("downloading")) return t("Загрузка ROM");
+    if (status == QLatin1String("uploading")) return t("Отправка ROM");
+    if (status == QLatin1String("verifying")) return t("Проверка ROM");
+    if (status == QLatin1String("cancelled")) return t("Передача отменена");
+    if (status == QLatin1String("failed")) return t("Не удалось передать ROM");
+    return status.isEmpty() ? t("ROM не выбран") : status;
+}
+
+void setCell(QTableWidget* table, int row, int column, const QString& value) {
+    auto* item = table->item(row, column);
+    if (!item) {
+        item = new QTableWidgetItem(value);
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+        table->setItem(row, column, item);
+    } else if (item->text() != value) {
+        item->setText(value);
+    }
+}
+}
+
+NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
+    setObjectName(QStringLiteral("netplayLobby"));
+    setWindowTitle(t("Сетевое лобби — Kega Refusion"));
+    setAttribute(Qt::WA_DeleteOnClose, false);
+    setMinimumSize(620, 520);
+    resize(720, 650);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(16, 14, 16, 14);
+    layout->setSpacing(10);
+
+    auto* top = new QHBoxLayout;
+    status_ = new QLabel(t("Нет сетевого сеанса"), this);
+    status_->setObjectName(QStringLiteral("netplayStatus"));
+    status_->setTextFormat(Qt::PlainText);
+    status_->setWordWrap(true);
+    top->addWidget(status_, 1);
+    leave_ = new QPushButton(t("Выйти из сеанса"), this);
+    leave_->setObjectName(QStringLiteral("netplayLeave"));
+    top->addWidget(leave_);
+    layout->addLayout(top);
+    connect(leave_, &QPushButton::clicked, this, &NetplayLobby::leaveRequested);
+
+    auto* inviteBox = new QGroupBox(t("Приглашение"), this);
+    auto* inviteLayout = new QHBoxLayout(inviteBox);
+    invite_ = new QLineEdit(inviteBox);
+    invite_->setObjectName(QStringLiteral("netplayInvite"));
+    invite_->setReadOnly(true);
+    invite_->setPlaceholderText(t("Доступно после создания сеанса"));
+    inviteLayout->addWidget(invite_, 1);
+    copyInvite_ = new QPushButton(t("Копировать"), inviteBox);
+    copyInvite_->setObjectName(QStringLiteral("netplayCopyInvite"));
+    inviteLayout->addWidget(copyInvite_);
+    copyWithPassword_ = new QPushButton(t("С паролем"), inviteBox);
+    copyWithPassword_->setObjectName(QStringLiteral("netplayCopyWithPassword"));
+    copyWithPassword_->setToolTip(t("Копировать приглашение вместе с паролем доступа"));
+    inviteLayout->addWidget(copyWithPassword_);
+    layout->addWidget(inviteBox);
+    connect(copyInvite_, &QPushButton::clicked, this, [this] {
+        QApplication::clipboard()->setText(state_.value(QStringLiteral("invite")).toString());
+    });
+    connect(copyWithPassword_, &QPushButton::clicked, this, [this] {
+        QApplication::clipboard()->setText(state_.value(QStringLiteral("inviteWithPassword")).toString());
+    });
+
+    auto* roleRow = new QHBoxLayout;
+    roleRow->addWidget(new QLabel(t("Роль выбранного участника:"), this));
+    role_ = new QComboBox(this);
+    role_->setObjectName(QStringLiteral("netplayLocalRole"));
+    role_->addItem(t("Игрок 1"), QStringLiteral("player1"));
+    role_->addItem(t("Игрок 2"), QStringLiteral("player2"));
+    role_->addItem(t("Зритель"), QStringLiteral("spectator"));
+    roleRow->addWidget(role_);
+    roleRow->addStretch();
+    layout->addLayout(roleRow);
+    auto* roleHelp = new QLabel(t("Участник управляет назначенным ему портом с помощью своего первого контроллера."), this);
+    roleHelp->setObjectName(QStringLiteral("netplayRoleHelp"));
+    roleHelp->setWordWrap(true);
+    layout->addWidget(roleHelp);
+    connect(role_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        const QString id = selectedPeerId();
+        if (index >= 0 && !id.isEmpty() && state_.value(QStringLiteral("host")).toBool())
+            emit roleRequested(id, role_->itemData(index).toString());
+    });
+
+    participantsTitle_ = new QLabel(t("Участники"), this);
+    auto headingFont = participantsTitle_->font();
+    headingFont.setBold(true);
+    participantsTitle_->setFont(headingFont);
+    layout->addWidget(participantsTitle_);
+    participants_ = new QTableWidget(0, 4, this);
+    participants_->setObjectName(QStringLiteral("netplayParticipants"));
+    participants_->setHorizontalHeaderLabels({t("Имя"), t("Роль"), t("Готовность"), t("Пинг")});
+    participants_->verticalHeader()->hide();
+    participants_->horizontalHeader()->setStretchLastSection(false);
+    participants_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    participants_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    participants_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    participants_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    participants_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    participants_->setSelectionMode(QAbstractItemView::SingleSelection);
+    participants_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layout->addWidget(participants_, 1);
+    connect(participants_, &QTableWidget::itemSelectionChanged,
+            this, &NetplayLobby::updateModerationButtons);
+
+    auto* moderation = new QHBoxLayout;
+    kick_ = new QPushButton(t("Отключить"), this);
+    kick_->setObjectName(QStringLiteral("netplayKick"));
+    sessionBan_ = new QPushButton(t("Запретить до конца сеанса"), this);
+    sessionBan_->setObjectName(QStringLiteral("netplaySessionBan"));
+    permanentBan_ = new QPushButton(t("Запретить навсегда"), this);
+    permanentBan_->setObjectName(QStringLiteral("netplayPermanentBan"));
+    moderation->addWidget(kick_);
+    moderation->addWidget(sessionBan_);
+    moderation->addWidget(permanentBan_);
+    moderation->addStretch();
+    layout->addLayout(moderation);
+    connect(kick_, &QPushButton::clicked, this, [this] {
+        const QString id = selectedPeerId();
+        if (!id.isEmpty()) emit kickRequested(id);
+    });
+    connect(sessionBan_, &QPushButton::clicked, this, [this] {
+        const QString id = selectedPeerId();
+        if (!id.isEmpty()) emit banRequested(id, false);
+    });
+    connect(permanentBan_, &QPushButton::clicked, this, [this] {
+        const QString id = selectedPeerId();
+        if (!id.isEmpty()) emit banRequested(id, true);
+    });
+
+    auto* romBox = new QGroupBox(t("Игра и ROM"), this);
+    auto* romLayout = new QVBoxLayout(romBox);
+    romName_ = new QLabel(t("Игра не выбрана"), romBox);
+    romName_->setObjectName(QStringLiteral("netplayRomName"));
+    romName_->setTextFormat(Qt::PlainText);
+    romName_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    romName_->setWordWrap(true);
+    romStatus_ = new QLabel(t("ROM не выбран"), romBox);
+    romStatus_->setObjectName(QStringLiteral("netplayRomStatus"));
+    romStatus_->setTextFormat(Qt::PlainText);
+    romStatus_->setWordWrap(true);
+    romLayout->addWidget(romName_);
+    romLayout->addWidget(romStatus_);
+    progress_ = new QProgressBar(romBox);
+    progress_->setObjectName(QStringLiteral("netplayTransferProgress"));
+    progress_->setRange(0, 100);
+    romLayout->addWidget(progress_);
+    auto* romButtons = new QHBoxLayout;
+    selectRom_ = new QPushButton(t("Выбрать свой ROM…"), romBox);
+    selectRom_->setObjectName(QStringLiteral("netplaySelectRom"));
+    downloadRom_ = new QPushButton(t("Запросить загрузку"), romBox);
+    downloadRom_->setObjectName(QStringLiteral("netplayDownloadRom"));
+    cancelTransfer_ = new QPushButton(t("Отменить передачу"), romBox);
+    cancelTransfer_->setObjectName(QStringLiteral("netplayCancelTransfer"));
+    romButtons->addWidget(selectRom_);
+    romButtons->addWidget(downloadRom_);
+    romButtons->addWidget(cancelTransfer_);
+    romButtons->addStretch();
+    romLayout->addLayout(romButtons);
+    layout->addWidget(romBox);
+    connect(selectRom_, &QPushButton::clicked, this, [this] {
+        const QString path = QFileDialog::getOpenFileName(
+            this, t("Выбрать ROM для сетевой игры"), {},
+            t("Игры (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.zip *.7z *.cue *.iso *.chd *.m3u);;Все файлы (*)"));
+        if (!path.isEmpty()) emit selectRomRequested(path);
+    });
+    connect(downloadRom_, &QPushButton::clicked, this, &NetplayLobby::downloadRomRequested);
+    connect(cancelTransfer_, &QPushButton::clicked, this, &NetplayLobby::cancelTransferRequested);
+
+    auto* hostBox = new QGroupBox(t("Права участников"), this);
+    auto* hostLayout = new QVBoxLayout(hostBox);
+    allowCommands_ = new QCheckBox(t("Разрешить игровые команды всем игрокам"), hostBox);
+    allowCommands_->setObjectName(QStringLiteral("netplayAllowCommands"));
+    allowCommands_->setToolTip(t("Если выключено, игровые команды доступны только хосту"));
+    allowDownloads_ = new QCheckBox(t("Разрешить скачивание ROM у хоста"), hostBox);
+    allowDownloads_->setObjectName(QStringLiteral("netplayAllowDownloads"));
+    hostLayout->addWidget(allowCommands_);
+    hostLayout->addWidget(allowDownloads_);
+    layout->addWidget(hostBox);
+    connect(allowCommands_, &QCheckBox::toggled, this, &NetplayLobby::allowCommandsRequested);
+    connect(allowDownloads_, &QCheckBox::toggled, this, &NetplayLobby::allowDownloadsRequested);
+
+    setLobbyState({});
+}
+
+void NetplayLobby::showCreateDialog() {
+    auto* dialog = new QDialog(this, Qt::Window);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowModality(Qt::NonModal);
+    dialog->setWindowTitle(t("Создать сетевой сеанс"));
+    auto* layout = new QVBoxLayout(dialog);
+    auto* form = new QFormLayout;
+    auto* port = new QSpinBox(dialog);
+    port->setObjectName(QStringLiteral("netplayCreatePort"));
+    port->setRange(1, 65535);
+    port->setValue(33445);
+    form->addRow(t("Порт:"), port);
+    auto* address = new QLineEdit(dialog);
+    address->setObjectName(QStringLiteral("netplayAdvertisedAddress"));
+    address->setText(state_.value(QStringLiteral("suggestedAddress")).toString());
+    address->setPlaceholderText(t("Публичный адрес или имя хоста"));
+    form->addRow(t("Адрес для приглашения:"), address);
+    auto* password = new QLineEdit(dialog);
+    password->setObjectName(QStringLiteral("netplayCreatePassword"));
+    password->setEchoMode(QLineEdit::Password);
+    form->addRow(t("Пароль (необязательно):"), password);
+    layout->addLayout(form);
+    auto* hint = new QLabel(t("Прямое подключение: адрес и порт должны быть доступны другим участникам. Сервис ретрансляции не используется."), dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+    auto* error = new QLabel(dialog);
+    error->setWordWrap(true);
+    layout->addWidget(error);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(t("Создать"));
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, [this, dialog, port, address, password, error] {
+        const QString advertised = address->text().trimmed();
+        if (advertised.isEmpty() || advertised.contains(QRegularExpression(QStringLiteral("\\s")))) {
+            error->setText(t("Введите доступный другим участникам адрес без пробелов."));
+            address->setFocus();
+            return;
+        }
+        emit createRequested(quint16(port->value()), advertised, password->text());
+        dialog->accept();
+        show();
+        raise();
+        activateWindow();
+    });
+    dialog->show();
+}
+
+void NetplayLobby::showJoinDialog() {
+    auto* dialog = new QDialog(this, Qt::Window);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowModality(Qt::NonModal);
+    dialog->setWindowTitle(t("Присоединиться к сетевой игре"));
+    auto* layout = new QVBoxLayout(dialog);
+    auto* form = new QFormLayout;
+    auto* invite = new QLineEdit(dialog);
+    invite->setObjectName(QStringLiteral("netplayJoinInvite"));
+    invite->setPlaceholderText(t("Вставьте приглашение от хоста"));
+    form->addRow(t("Приглашение:"), invite);
+    auto* password = new QLineEdit(dialog);
+    password->setObjectName(QStringLiteral("netplayJoinPassword"));
+    password->setEchoMode(QLineEdit::Password);
+    form->addRow(t("Пароль (если нужен):"), password);
+    layout->addLayout(form);
+    auto* error = new QLabel(dialog);
+    layout->addWidget(error);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(t("Присоединиться"));
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, [this, dialog, invite, password, error] {
+        if (invite->text().trimmed().isEmpty()) {
+            error->setText(t("Вставьте приглашение от хоста."));
+            invite->setFocus();
+            return;
+        }
+        emit joinRequested(invite->text().trimmed(), password->text());
+        dialog->accept();
+        show();
+        raise();
+        activateWindow();
+    });
+    dialog->show();
+    invite->setFocus();
+}
+
+void NetplayLobby::setLobbyState(const QJsonObject& state) {
+    state_ = state;
+    const bool active = state.value(QStringLiteral("active")).toBool();
+    const bool host = active && state.value(QStringLiteral("host")).toBool();
+    const QString status = state.value(QStringLiteral("status")).toString();
+    status_->setText(status.isEmpty() ? (active ? t("Сетевой сеанс") : t("Нет сетевого сеанса"))
+                                       : Localization::text(status));
+    leave_->setEnabled(active);
+    const QString invite = host ? state.value(QStringLiteral("invite")).toString() : QString();
+    invite_->setText(invite);
+    copyInvite_->setEnabled(!invite.isEmpty());
+    const QString inviteWithPassword = state.value(QStringLiteral("inviteWithPassword")).toString();
+    const bool hasPasswordInvite = host && !inviteWithPassword.isEmpty() && inviteWithPassword != invite;
+    copyWithPassword_->setEnabled(hasPasswordInvite);
+    copyWithPassword_->setVisible(hasPasswordInvite);
+
+    updateParticipants(state);
+
+    const QJsonObject rom = state.value(QStringLiteral("rom")).toObject();
+    const QString fileName = rom.value(QStringLiteral("filename")).toString();
+    romName_->setText(fileName.isEmpty() ? t("Игра не выбрана") : fileName);
+    const QString romMessage = rom.value(QStringLiteral("message")).toString();
+    romStatus_->setText(romMessage.isEmpty() ? romStatusName(rom.value(QStringLiteral("status")).toString())
+                                          : Localization::text(romMessage));
+    const bool transferring = rom.value(QStringLiteral("canCancel")).toBool();
+    progress_->setVisible(transferring);
+    if (transferring) progress_->setValue(qBound(0, rom.value(QStringLiteral("progress")).toInt(), 100));
+    selectRom_->setEnabled(active && rom.value(QStringLiteral("canSelect")).toBool());
+    downloadRom_->setEnabled(active && rom.value(QStringLiteral("canDownload")).toBool());
+    cancelTransfer_->setEnabled(active && transferring);
+
+    {
+        const QSignalBlocker commandsBlocker(allowCommands_);
+        const QSignalBlocker downloadsBlocker(allowDownloads_);
+        allowCommands_->setChecked(state.value(QStringLiteral("allowCommands")).toBool());
+        allowDownloads_->setChecked(state.value(QStringLiteral("allowDownloads")).toBool());
+    }
+    allowCommands_->setEnabled(host);
+    allowDownloads_->setEnabled(host);
+    updateModerationButtons();
+}
+
+void NetplayLobby::updateParticipants(const QJsonObject& state) {
+    const QJsonArray entries = state.value(QStringLiteral("participants")).toArray();
+    const int count = qMin(entries.size(), 32);
+    participantsTitle_->setText(t("Участники (%1)").arg(entries.size()));
+    const QString selection = selectedPeerId();
+    const QSignalBlocker blocker(participants_);
+    if (participants_->rowCount() != count) participants_->setRowCount(count);
+    int selectedRow = -1;
+    for (int row = 0; row < count; ++row) {
+        const QJsonObject peer = entries.at(row).toObject();
+        const QString id = peer.value(QStringLiteral("id")).toString();
+        QString name = peer.value(QStringLiteral("nickname")).toString();
+        if (peer.value(QStringLiteral("host")).toBool()) name += t(" (хост)");
+        if (peer.value(QStringLiteral("local")).toBool()) name += t(" (вы)");
+        setCell(participants_, row, 0, name);
+        auto* nameCell = participants_->item(row, 0);
+        const bool local = peer.value(QStringLiteral("local")).toBool();
+        const QString role = peer.value(QStringLiteral("role")).toString();
+        if (nameCell->data(Qt::UserRole).toString() != id) nameCell->setData(Qt::UserRole, id);
+        if (nameCell->data(Qt::UserRole + 1).toBool() != local)
+            nameCell->setData(Qt::UserRole + 1, local);
+        if (nameCell->data(Qt::UserRole + 2).toString() != role)
+            nameCell->setData(Qt::UserRole + 2, role);
+        setCell(participants_, row, 1, roleName(role));
+        setCell(participants_, row, 2, readinessName(peer.value(QStringLiteral("readiness")).toString()));
+        const int ping = peer.value(QStringLiteral("pingMs")).toInt(-1);
+        setCell(participants_, row, 3, ping < 0 ? QStringLiteral("—") : t("%1 мс").arg(ping));
+        if (!selection.isEmpty() && id == selection) selectedRow = row;
+    }
+    if (selectedRow >= 0 && participants_->currentRow() != selectedRow)
+        participants_->selectRow(selectedRow);
+    else if (selectedRow < 0)
+        participants_->clearSelection();
+}
+
+QString NetplayLobby::selectedPeerId() const {
+    const int row = participants_->currentRow();
+    auto* item = row >= 0 ? participants_->item(row, 0) : nullptr;
+    return item && item->isSelected() ? item->data(Qt::UserRole).toString() : QString();
+}
+
+void NetplayLobby::updateModerationButtons() {
+    const int row = participants_->currentRow();
+    auto* item = row >= 0 ? participants_->item(row, 0) : nullptr;
+    const bool canAssignRole = state_.value(QStringLiteral("active")).toBool() &&
+        state_.value(QStringLiteral("host")).toBool() && item && item->isSelected() &&
+        !item->data(Qt::UserRole).toString().isEmpty();
+    {
+        const QSignalBlocker blocker(role_);
+        role_->setCurrentIndex(item && item->isSelected()
+            ? role_->findData(item->data(Qt::UserRole + 2).toString()) : -1);
+    }
+    role_->setEnabled(canAssignRole);
+    const bool allowed = state_.value(QStringLiteral("active")).toBool() &&
+        state_.value(QStringLiteral("host")).toBool() && item && item->isSelected() &&
+        !item->data(Qt::UserRole).toString().isEmpty() &&
+        !item->data(Qt::UserRole + 1).toBool();
+    kick_->setEnabled(allowed);
+    sessionBan_->setEnabled(allowed);
+    permanentBan_->setEnabled(allowed);
+}
+
+void NetplayLobby::closeEvent(QCloseEvent* event) {
+    hide();
+    event->ignore();
+}

@@ -21,6 +21,7 @@ class AudioOutput;
 class AchievementNetwork;
 class EmulationSession;
 class InputManager;
+class NetplayController;
 enum class ConsoleProfile;
 
 class MainWindow final : public QMainWindow {
@@ -75,6 +76,8 @@ private:
     AudioOutput* audio_ = nullptr;
     AchievementNetwork* achievementNetwork_ = nullptr;
     InputManager* input_ = nullptr;
+    NetplayController* netplay_ = nullptr;
+    QAction* netplayLeaveAction_ = nullptr;
     ConsoleProfile activeInputProfile_{};
     QTimer* inputTimer_ = nullptr;
     QMenu* recentMenu_ = nullptr;

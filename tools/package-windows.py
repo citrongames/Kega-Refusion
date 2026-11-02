@@ -2,6 +2,7 @@
 """Copy a Qt/MinGW Windows build and its transitive DLLs into a test folder."""
 
 import argparse
+import filecmp
 import re
 import shutil
 import subprocess
@@ -86,6 +87,13 @@ def main() -> None:
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
 
+    openssl_root = Path.home() / ".cache/kegarefusion-openssl/3.5.8/openssl-3.5.8"
+    openssl_dlls = ("libcrypto-3-x64.dll", "libssl-3-x64.dll")
+    if any(not (openssl_root / name).is_file() for name in openssl_dlls):
+        subprocess.run(["python3", str(root / "tools/prepare-openssl-windows.py")], check=True)
+    if not (openssl_root / "LICENSE.txt").is_file():
+        raise SystemExit("Missing OpenSSL license: " + str(openssl_root / "LICENSE.txt"))
+
     sdl_root = root / "build/deps/SDL2-2.32.10/x86_64-w64-mingw32"
     sources = {
         Path("SDL2.dll"): sdl_root / "bin/SDL2.dll",
@@ -94,6 +102,9 @@ def main() -> None:
         Path("plugins/platforms/qwindows.dll"): qt_root / "plugins/platforms/qwindows.dll",
         Path("plugins/imageformats/qjpeg.dll"): qt_root / "plugins/imageformats/qjpeg.dll",
         Path("plugins/tls/qschannelbackend.dll"): qt_root / "plugins/tls/qschannelbackend.dll",
+        Path("plugins/tls/qopensslbackend.dll"): qt_root / "plugins/tls/qopensslbackend.dll",
+        Path("libcrypto-3-x64.dll"): openssl_root / "libcrypto-3-x64.dll",
+        Path("libssl-3-x64.dll"): openssl_root / "libssl-3-x64.dll",
         Path("plugins/multimedia/ffmpegmediaplugin.dll"): qt_root / "plugins/multimedia/ffmpegmediaplugin.dll",
         Path("plugins/multimedia/windowsmediaplugin.dll"): qt_root / "plugins/multimedia/windowsmediaplugin.dll",
     }
@@ -145,6 +156,7 @@ def main() -> None:
     notices.mkdir()
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
+    shutil.copy2(openssl_root / "LICENSE.txt", notices / "OpenSSL-LICENSE.txt")
     paprium_notices = notices / "paprium"
     paprium_notices.mkdir()
     for name in ("LICENSE", "PROVENANCE.md"):
@@ -174,6 +186,10 @@ def main() -> None:
         if source.is_file():
             target = destination / source.relative_to(stage)
             target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink():
+                raise SystemExit(f"Refusing to replace destination symlink: {target}")
+            if target.is_file() and filecmp.cmp(source, target, shallow=False):
+                continue
             shutil.copy2(source, target)
     generated_qt_conf = destination / "qt.conf"
     if generated_qt_conf.is_file() and generated_qt_conf.read_bytes() == b"[Paths]\nPlugins = plugins\n":

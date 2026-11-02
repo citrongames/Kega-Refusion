@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "LibretroHost.h"
+#include <zlib.h>
 #include <QSysInfo>
 #include <rc_hash.h>
 #include <rc_consoles.h>
@@ -201,7 +202,7 @@ bool LibretroHost::initialize(QString& error) {
     }
     active_ = this;
     systemPath_ = QDir::toNativeSeparators(dataPath_ + "/bios").toUtf8();
-    savePath_ = QDir::toNativeSeparators(dataPath_ + "/saves").toUtf8();
+    savePath_ = QDir::toNativeSeparators(storageRoot() + "/saves").toUtf8();
     api_->set_environment(environment);
     api_->set_video_refresh(video);
     api_->set_audio_sample(audioSample);
@@ -892,6 +893,62 @@ double LibretroHost::aspectRatio() const {
     return av_.geometry.base_height ? double(av_.geometry.base_width) / av_.geometry.base_height : 4.0 / 3.0;
 }
 QSize LibretroHost::nativeVideoSize() const { return VideoFrameGeometry::nativeSize(frame_); }
+QByteArray LibretroHost::netplayDigest() const {
+    if (!loaded_) return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    for (unsigned id : {RETRO_MEMORY_SYSTEM_RAM, RETRO_MEMORY_VIDEO_RAM, RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
+        // The core trims reported SRAM after its first frame; use the same
+        // fixed allocation bounds as snapshots so restoring frame zero hashes identically.
+        const auto size=id==RETRO_MEMORY_SAVE_RAM?saveMemorySizes_[0]:id==RETRO_MEMORY_RTC?saveMemorySizes_[1]:api_->get_memory_size(id);
+        const auto* data=api_->get_memory_data(id);
+        if (data && size && size<=64*1024*1024) hash.addData(QByteArrayView(static_cast<const char*>(data),qsizetype(size)));
+    }
+    if (api_->get_bram) for (unsigned i=0;i<2;++i) {
+        const void* data=nullptr; size_t size=0; const char* path=nullptr;
+        if (api_->get_bram(i,&data,&size,&path) && data && size<=1024*1024)
+            hash.addData(QByteArrayView(static_cast<const char*>(data),qsizetype(size)));
+    }
+    return hash.result();
+}
+QByteArray LibretroHost::unpackNetworkState(const QByteArray& packed) {
+    if(packed.size()<5 || packed.size()>128*1024*1024)return {};
+    const auto length=qFromBigEndian<quint32>(packed.constData());
+    if(length<128||length>128*1024*1024)return {};
+    QByteArray result(qsizetype(length),Qt::Uninitialized);uLongf actual=length;
+    // qUncompress treats the prefix as a size hint and may grow beyond it.
+    // A fixed zlib destination enforces the network allocation limit.
+    if(::uncompress(reinterpret_cast<Bytef*>(result.data()),&actual,
+        reinterpret_cast<const Bytef*>(packed.constData()+4),uLong(packed.size()-4))!=Z_OK||actual!=length)return {};
+    return result;
+}
+bool LibretroHost::setNetplayStorage(const QString& scope,QString& error) {
+    if (!scope.isEmpty() && (scope.size()!=32 || QByteArray::fromHex(scope.toLatin1()).toHex()!=scope.toLatin1())) {
+        error=QStringLiteral("Invalid network storage identity"); return false;
+    }
+    const QString next=scope.isEmpty()?QString():dataPath_+QStringLiteral("/netplay/sessions/")+scope;
+    const QString destination=next.isEmpty()?dataPath_:next;
+    for (const auto* directory:{"saves","states"}) if (!QDir().mkpath(destination+QLatin1Char('/')+QLatin1String(directory))) {
+        error=QStringLiteral("Cannot create network save directory");return false;
+    }
+    if (!flushSaveRam(error)) return false;
+    const auto state=loaded_?captureMovieState():QByteArray();
+    if (loaded_ && state.isEmpty()) {error=QStringLiteral("Cannot preserve game state for network session");return false;}
+    const auto previousRoot=netplaySaveRoot_;const auto previousPath=savePath_;
+    netplaySaveRoot_=next;savePath_=QDir::toNativeSeparators(destination+QStringLiteral("/saves")).toUtf8();
+    if(loaded_) {
+        const bool playback=moviePlayback_;moviePlayback_=true;
+        bool ok=hardReset(error);
+        if(ok)ok=restoreMovieState(state,error);
+        if(!ok) {
+            const auto originalError=error;netplaySaveRoot_=previousRoot;savePath_=previousPath;
+            QString rollbackError;
+            if(!hardReset(rollbackError)||!restoreMovieState(state,rollbackError))unload();
+            error=originalError;
+        }
+        moviePlayback_=playback;return ok;
+    }
+    return true;
+}
 QByteArray LibretroHost::serialize() const {
     if (!loaded_) return {};
     const size_t size = api_->serialize_size();
@@ -906,9 +963,9 @@ bool LibretroHost::unserialize(const QByteArray& state) {
     applyControllerPorts();
     return true;
 }
-QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + QStringLiteral(".slot%1.krs").arg(slot); }
+QString LibretroHost::statePath(int slot) const { return storageRoot() + "/states/" + gameKey_ + QStringLiteral(".slot%1.krs").arg(slot); }
 QString LibretroHost::saveReadPath(const QString& directory, const QString& suffix) const {
-    const QString prefix = dataPath_ + QLatin1Char('/') + directory + QLatin1Char('/');
+    const QString prefix = storageRoot() + QLatin1Char('/') + directory + QLatin1Char('/');
     const QString preferred = prefix + gameKey_ + suffix;
     const QFileInfo existing(preferred);
     // A present but invalid new file must be reported, never masked by a legacy
@@ -1317,6 +1374,18 @@ QJsonObject LibretroHost::movieConfiguration() const {
         {QStringLiteral("cheats"),cheatsJson},
         {QStringLiteral("bios"),movieBiosFingerprints()}};
 }
+bool LibretroHost::prepareNetwork(const QJsonObject& configuration,QString& error) {
+    // The coordinator has matched the complete canonical media manifest. Safe
+    // CUE downloads rename track paths, so recording filename identities differ.
+    auto local=configuration;
+    local.insert(QStringLiteral("gameIdentity"),QString::fromLatin1(movieGameIdentity().toHex()));
+    return prepareMovie(local,error);
+}
+bool LibretroHost::restoreNetworkState(const QByteArray& state,QString& error) {
+    if(state.size()<128 || !state.startsWith("KRMOV002")) return false;
+    auto local=state; local.replace(8,32,romHash_);
+    return restoreMovieState(local,error);
+}
 bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error) {
     error.clear();
     movieCompatibilityWarning_.clear();
@@ -1625,7 +1694,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         const auto data = api_->get_memory_data(id);
         if (!size || !data) continue;
-        const auto path = dataPath_ + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
+        const auto path = storageRoot() + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
         if (size > size_t(maxStateSize)) {
             error = Localization::text(QStringLiteral("Ядро вернуло неверный размер памяти сохранения.")); return false;
         }

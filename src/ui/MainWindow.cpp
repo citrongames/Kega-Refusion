@@ -5,6 +5,8 @@
 #include "CheatsDialog.h"
 #include "AchievementsDialog.h"
 #include "AchievementNetwork.h"
+#include "NetplaySettingsPage.h"
+#include "net/NetplayController.h"
 #include <cmath>
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
@@ -23,6 +25,8 @@
 #include <QDateTime>
 #include <QFile>
 #include <QImageWriter>
+#include <QJsonArray>
+#include <QJsonArray>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QFormLayout>
@@ -62,6 +66,7 @@
 namespace {
 constexpr int kBiosSettingsPage = 6;
 constexpr int kControlsSettingsPage = 7;
+constexpr int kNetplaySettingsPage = 8;
 
 // Small native line icons; created only when opening settings, with palette-aware selection.
 QIcon settingsSectionIcon(int section, const QPalette& palette) {
@@ -107,6 +112,11 @@ QIcon settingsSectionIcon(int section, const QPalette& palette) {
             path.cubicTo(8,16,7,19,5,19);path.cubicTo(1,19,3,7,7,7);
             p.drawPath(path);p.drawLine(6,10,6,14);p.drawLine(4,12,8,12);
             p.setBrush(color);p.drawEllipse(QPointF(16,12),1,1);p.drawEllipse(QPointF(19,10),1,1);break;
+        case 8: // connected peers
+            p.drawLine(QPointF(7,8),QPointF(17,6));p.drawLine(QPointF(7,8),QPointF(13,18));
+            p.drawLine(QPointF(17,6),QPointF(13,18));
+            p.setBrush(color);p.drawEllipse(QPointF(7,8),2,2);
+            p.drawEllipse(QPointF(17,6),2,2);p.drawEllipse(QPointF(13,18),2,2);break;
         }
         p.end();icon.addPixmap(image,mode);
     }
@@ -229,13 +239,22 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRewindEnabled(rewindEnabled_);
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
+    netplay_ = new NetplayController(session_, dataPath_, settings_, this);
+    connect(netplay_, &NetplayController::openRomRequested, this, &MainWindow::openRom);
+    connect(netplay_, &NetplayController::notice, this, [this](const QString& text) {
+        view_->showOsd(Localization::text(text), 3000, QStringLiteral("netplay"));
+    });
+    connect(netplay_, &NetplayController::activeChanged, this, [this](bool active) {
+        if (netplayLeaveAction_) netplayLeaveAction_->setEnabled(active);
+        updateInputEnabled();
+    });
     buildMenus();
     for (QAction* action : menuBar()->actions()) {
         QMenu* menu = action->menu();
         if (!menu) continue;
         connect(menu, &QMenu::aboutToShow, this, [this] {
             menuPauseActive_ = true;
-            session_.setBackgroundPaused(true);
+            if (!netplay_->active()) session_.setBackgroundPaused(true);
             releaseInput();
         });
         connect(menu, &QMenu::aboutToHide, this, [this] {
@@ -432,7 +451,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         view_->showOsd(text, 2000, QStringLiteral("action"));
     });
     connect(&session_, &EmulationSession::actionNotice, this, [this](const QString& text) {
-        view_->showOsd(text, 2000, QStringLiteral("action"));
+        view_->showOsd(Localization::text(text), 2000, QStringLiteral("action"));
     });
     connect(&session_, &EmulationSession::errorOccurred, this, [this](const QString& text) {
         if (loading_) input_->setProfile(activeInputProfile_);
@@ -452,6 +471,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 }
 
 MainWindow::~MainWindow() {
+    if (netplay_) netplay_->leaveSession();
     // The direct audio producer must stop before QObject destroys AudioOutput.
     session_.shutdown();
 }
@@ -838,6 +858,29 @@ void MainWindow::buildMenus() {
         audio_->setVolume(value);
         settings_.setValue(QStringLiteral("audio/volume"), value);
     });
+    QMenu* onlineMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Сетевая игра")));
+    onlineMenu->setObjectName(QStringLiteral("onlineMenu"));
+    QAction* createSessionAction = onlineMenu->addAction(Localization::text(QStringLiteral("Создать сеанс…")));
+    createSessionAction->setObjectName(QStringLiteral("netplayCreateAction"));
+    connect(createSessionAction, &QAction::triggered, netplay_, &NetplayController::createSession);
+    QAction* joinSessionAction = onlineMenu->addAction(Localization::text(QStringLiteral("Присоединиться…")));
+    joinSessionAction->setObjectName(QStringLiteral("netplayJoinAction"));
+    connect(joinSessionAction, &QAction::triggered, netplay_, &NetplayController::joinSession);
+    createSessionAction->setEnabled(!netplay_->active());
+    joinSessionAction->setEnabled(!netplay_->active());
+    connect(netplay_, &NetplayController::activeChanged, this,
+            [createSessionAction, joinSessionAction](bool active) {
+        createSessionAction->setEnabled(!active);
+        joinSessionAction->setEnabled(!active);
+    });
+    QAction* showLobbyAction = onlineMenu->addAction(Localization::text(QStringLiteral("Лобби")));
+    showLobbyAction->setObjectName(QStringLiteral("netplayLobbyAction"));
+    connect(showLobbyAction, &QAction::triggered, netplay_, &NetplayController::showLobby);
+    onlineMenu->addSeparator();
+    netplayLeaveAction_ = onlineMenu->addAction(Localization::text(QStringLiteral("Выйти из сеанса")));
+    netplayLeaveAction_->setObjectName(QStringLiteral("netplayLeaveAction"));
+    netplayLeaveAction_->setEnabled(netplay_->active());
+    connect(netplayLeaveAction_, &QAction::triggered, netplay_, &NetplayController::leaveSession);
     QMenu* settingsMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Настройки")));
     QAction* emulatorSettingsAction = settingsMenu->addAction(Localization::text(QStringLiteral("Настройки эмулятора…")));
     emulatorSettingsAction->setObjectName(QStringLiteral("emulatorSettingsAction"));
@@ -1145,7 +1188,8 @@ void MainWindow::editSettings(int initialPage) {
     navigation->addItems({Localization::text(QStringLiteral("Общие")), Localization::text(QStringLiteral("Игры")),
                           Localization::text(QStringLiteral("Перемотка")), Localization::text(QStringLiteral("Запись")),
                           Localization::text(QStringLiteral("Достижения")), Localization::text(QStringLiteral("Звук")), QStringLiteral("BIOS"),
-                          Localization::text(QStringLiteral("Управление"))});
+                          Localization::text(QStringLiteral("Управление")),
+                          Localization::text(QStringLiteral("Сетевая игра"))});
     for (int row = 0; row < navigation->count(); ++row)
         navigation->item(row)->setIcon(settingsSectionIcon(row, dialog.palette()));
     auto* pages = new QStackedWidget(&dialog);
@@ -1657,6 +1701,15 @@ void MainWindow::editSettings(int initialPage) {
     controlsViewport->setWidgetResizable(true);
     controlsViewport->setFrameShape(QFrame::NoFrame);
     pages->addWidget(controlsViewport);
+    auto* netplaySettings = new NetplaySettingsPage(pages);
+    netplaySettings->setNickname(netplay_->nickname());
+    netplaySettings->setBannedPeers(netplay_->bannedPeers());
+    connect(netplaySettings, &NetplaySettingsPage::unbanRequested, &dialog,
+            [this, netplaySettings](const QString& fingerprint) {
+        netplay_->unban(fingerprint);
+        netplaySettings->setBannedPeers(netplay_->bannedPeers());
+    });
+    pages->addWidget(netplaySettings);
     ControlsPage* controls = nullptr;
     connect(navigation, &QListWidget::currentRowChanged, &dialog,
             [this, pages, controlsViewport, &controls, &biosCreated, createBiosPage](int row) {
@@ -1673,7 +1726,7 @@ void MainWindow::editSettings(int initialPage) {
         }
         pages->setCurrentIndex(row);
     });
-    navigation->setCurrentRow(qBound(0, initialPage, kControlsSettingsPage));
+    navigation->setCurrentRow(qBound(0, initialPage, kNetplaySettingsPage));
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
     buttons->button(QDialogButtonBox::Ok)->setText(Localization::text(QStringLiteral("ОК")));
@@ -1689,6 +1742,9 @@ void MainWindow::editSettings(int initialPage) {
     layout->addWidget(buttons);
 
     if (dialog.exec() == QDialog::Accepted) {
+        const QString selectedNickname = netplaySettings->nickname();
+        if (!selectedNickname.isEmpty() && selectedNickname != netplay_->nickname())
+            netplay_->setNickname(selectedNickname);
         if ((screenshotFormat->currentIndex() == 1) != jpeg)
             settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
         osdAction_->setChecked(showOsd->isChecked());
@@ -1955,8 +2011,9 @@ void MainWindow::updateInputEnabled() {
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     const bool modalActive = QApplication::activeModalWidget();
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
-    session_.setBackgroundPaused(modalActive || popupActive || (pauseOnFocusLoss_ &&
-        (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive)));
+    session_.setBackgroundPaused(!netplay_->active() &&
+        (modalActive || popupActive || (pauseOnFocusLoss_ &&
+        (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive))));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() &&
                          !loading_ && !moviePending_ && !modalActive && !popupActive;
     view_->setLightgunInputEnabled(enabled);
@@ -2071,7 +2128,7 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == this && event->type() == QEvent::WindowBlocked) {
-        session_.setBackgroundPaused(true);
+        if (!netplay_->active()) session_.setBackgroundPaused(true);
         releaseInput();
     }
     if ((watched == this || watched == view_) &&

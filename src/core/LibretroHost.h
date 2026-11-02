@@ -58,6 +58,9 @@ public:
     enum class StateLoadError { None, Missing, Failed };
     bool loadState(int slot, QString& error, StateLoadError* failure = nullptr);
     QByteArray serialize() const;
+    QByteArray netplayDigest() const;
+    static QByteArray unpackNetworkState(const QByteArray& packed);
+    bool setNetplayStorage(const QString& scope, QString& error);
     bool unserialize(const QByteArray& state);
     unsigned occupiedStateSlots() const;
     QByteArray captureRewindState() const;
@@ -67,6 +70,8 @@ public:
     // trusted is only for snapshots retained inside RewindBuffer, never files.
     bool restoreMovieState(const QByteArray& state, QString& error, bool trusted = false);
     QJsonObject movieConfiguration() const;
+    bool prepareNetwork(const QJsonObject& configuration, QString& error);
+    bool restoreNetworkState(const QByteArray& state, QString& error);
     bool prepareMovie(const QJsonObject& configuration, QString& error);
     bool restoreMovieConfiguration(QString& error);
     QByteArray movieGameIdentity() const;
@@ -141,6 +146,8 @@ private:
     static thread_local LibretroHost* active_;
     QLibrary library_;
     std::unique_ptr<Api> api_;
+    QString netplaySaveRoot_;
+    QString storageRoot() const { return netplaySaveRoot_.isEmpty() ? dataPath_ : netplaySaveRoot_; }
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
     QString movieCompatibilityWarning_;
     QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_, exactCoreHash_, recordingAbi_, recordingCoreHash_;

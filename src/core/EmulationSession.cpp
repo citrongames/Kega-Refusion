@@ -1,6 +1,11 @@
 #include "i18n/Localization.h"
 #include "EmulationSession.h"
 #include "LibretroHost.h"
+#include "net/NetplayTimeline.h"
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QBuffer>
+#include <QImageReader>
 #include "MovieSession.h"
 #include "AchievementsClient.h"
 #include <QtEndian>
@@ -20,8 +25,12 @@ EmulationSession::EmulationSession(QString corePath, QString dataPath, QObject* 
 }
 EmulationSession::~EmulationSession() { shutdown(); }
 void EmulationSession::enqueue(Command command) {
+    if(command.type==Type::Load&&networkMode_.load())emit networkGameLoading(command.path,command.value);
+    if (networkMode_.load() && !command.networkAuthorized && networkShared(command.type)) {
+        emit networkCommandRequested(encodeNetworkCommand(command)); return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    commands_.push_back(std::move(command));
+    if (commands_.size()<2048) commands_.push_back(std::move(command));
 }
 void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue({Type::Load,path,archiveIndex}); }
 void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry) {
@@ -56,7 +65,9 @@ void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) 
     gunPositions_[player].store(packed);
 }
 void EmulationSession::advanceFrame() { enqueue({Type::FrameAdvance,{}}); }
-void EmulationSession::setFrameAdvanceHeld(bool held) { frameAdvanceHeld_.store(held); }
+void EmulationSession::setFrameAdvanceHeld(bool held) {
+    if(networkMode_.load()) enqueue({Type::NetStepHold,{},held?1:0}); else frameAdvanceHeld_.store(held);
+}
 void EmulationSession::startMovieRecording(const QString& path) { enqueue({Type::MovieRecord,path}); }
 void EmulationSession::playMovie(const QString& path) { enqueue({Type::MoviePlay,path}); }
 void EmulationSession::resumeMovieRecording(const QString& path) { enqueue({Type::MovieResume,path}); }
@@ -97,9 +108,16 @@ void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
 }
 void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < 3) buttons_[port].store(mask & 0xffffu); }
 void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store(0); }
-void EmulationSession::setFastForward(bool enabled) { fastForward_.store(enabled); }
-void EmulationSession::setFastForwardFactor(int factor) { fastForwardFactor_.store(factor == 0 ? 0 : std::clamp(factor, 2, 32)); }
-void EmulationSession::setRewind(bool enabled) { rewind_.store(enabled); }
+void EmulationSession::setFastForward(bool enabled) {
+    if (networkMode_.load()) enqueue({Type::NetFast,{},enabled?1:0}); else fastForward_.store(enabled);
+}
+void EmulationSession::setFastForwardFactor(int factor) {
+    factor=factor==0?0:std::clamp(factor,2,32);
+    if(networkMode_.load()) enqueue({Type::NetFactor,{},factor}); else fastForwardFactor_.store(factor);
+}
+void EmulationSession::setRewind(bool enabled) {
+    if (networkMode_.load()) enqueue({Type::NetReverse,{},enabled?1:0}); else rewind_.store(enabled);
+}
 void EmulationSession::setRewindEnabled(bool enabled) { rewindEnabled_.store(enabled); }
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
@@ -121,6 +139,75 @@ void EmulationSession::achievementResponse(quint64 id, int status, QByteArray bo
     Command command{Type::AchievementsResponse,{},status};
     command.requestId = id; command.bytes = std::move(body); enqueue(std::move(command));
 }
+bool EmulationSession::networkShared(Type t) {
+    switch(t) {
+    case Type::Close: case Type::Pause: case Type::Reset: case Type::HardReset:
+    case Type::Region: case Type::Filter: case Type::CdLoading: case Type::SpriteLimit:
+    case Type::Checksum: case Type::Port: case Type::ControllerType: case Type::ControllerKind:
+    case Type::FrameAdvance: case Type::Cheats: case Type::Save: case Type::Restore:
+    case Type::DiscIndex: case Type::Eject: case Type::Expansions: case Type::NetFast: case Type::NetReverse: case Type::NetFactor: case Type::NetStepHold: return true;
+    default:return false;
+    }
+}
+QByteArray EmulationSession::encodeNetworkCommand(const Command& c) {
+    QJsonObject o{{"type",int(c.type)},{"value",c.value}};
+    if (c.type==Type::Cheats) {
+        QJsonArray a; for (const auto& e:c.cheats) a.append(QJsonObject{{"code",e.code},{"description",e.description},{"enabled",e.enabled}});
+        o.insert("cheats",a);
+    }
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+void EmulationSession::applyNetworkCommand(const QByteArray& bytes) {
+    if (networkMode_.load()!=1 || bytes.size()>64*1024) return;
+    const auto o=QJsonDocument::fromJson(bytes).object();
+    const int t=o.value("type").toInt(-1), v=o.value("value").toInt();
+    if (t<0 || t>int(Type::NetStepHold) || !networkShared(Type(t))) return;
+    Command c{Type(t),{},v}; c.networkAuthorized=true;
+    if ((c.type==Type::Save || c.type==Type::Restore) && (v<0 || v>9)) return;
+    if (c.type==Type::Region && (v<0 || v>3)) return;
+    if (c.type==Type::Filter && (v<0 || v>4)) return;
+    if ((c.type==Type::ControllerKind || c.type==Type::ControllerType || c.type==Type::Port) && (v<0 || v>int(ControllerType::Justifier)*4+2 || (v&3)>2)) return;
+    if (c.type==Type::Cheats) {
+        const auto a=o.value("cheats").toArray(); if(a.size()>256) return;
+        for (const auto& v:a) { const auto e=v.toObject();
+            const auto code=e.value("code").toString(), description=e.value("description").toString();
+            if(code.size()>256 || description.size()>512) return;
+            c.cheats.push_back({code,description,e.value("enabled").toBool()});
+        }
+    }
+    const auto now=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if(c.type==Type::Save){if(now-lastNetworkSaveMs_<1000)return;lastNetworkSaveMs_=now;}
+    if(c.type==Type::Restore||c.type==Type::Reset||c.type==Type::HardReset){if(now-lastNetworkHeavyMs_<200)return;lastNetworkHeavyMs_=now;}
+    enqueue(std::move(c));
+}
+void EmulationSession::setNetworkMode(int mode,const QString& scope) {
+    networkMode_.store(mode); networkWaiting_.store(mode==2);
+    enqueue({Type::NetMode,scope,mode});
+}
+QByteArray EmulationSession::networkLocalInput() const {
+    MovieInput in; for(unsigned i=0;i<3;++i) { in.buttons[i]=quint16(buttons_[i].load()); in.aim[i]=gunPositions_[i].load(); }
+    return NetplayTimeline::inputBytes(in);
+}
+void EmulationSession::setNetworkInput(const QByteArray& bytes) {
+    MovieInput input; if(!NetplayTimeline::parseInput(bytes,input)) return;
+    std::lock_guard<std::mutex> lock(networkMutex_); networkInput_=bytes;
+}
+void EmulationSession::receiveNetworkSlots(unsigned mask) {
+    if(networkMode_.load()==2)enqueue({Type::NetSlots,{},int(mask&0x3ff)});
+}
+void EmulationSession::closeNetworkGame() {
+    if(networkMode_.load()!=2)return;
+    Command c{Type::Close,{}};c.networkAuthorized=true;enqueue(std::move(c));
+}
+void EmulationSession::requestNetworkSnapshot() { enqueue({Type::NetSnapshot,{}}); }
+void EmulationSession::receiveNetworkSnapshot(const QByteArray& bytes) {
+    if(bytes.size()>128*1024*1024) return;
+    Command c{Type::NetReceiveState,{}};c.bytes=bytes;enqueue(std::move(c));
+}
+void EmulationSession::receiveNetworkFrame(const QByteArray& bytes) {
+    if(bytes.size()!=46 && bytes.size()!=78) return;
+    Command c{Type::NetReceiveFrame,{}};c.bytes=bytes;enqueue(std::move(c));
+}
 void EmulationSession::shutdown() { quitting_.store(true); if (isRunning()) wait(); }
 void EmulationSession::run() {
     using Clock = std::chrono::steady_clock;
@@ -141,7 +228,7 @@ void EmulationSession::run() {
         [&](const AchievementsState& state) {
             achievementState = state;
             if (!achievementStatusOverride.isEmpty()) achievementState.status = achievementStatusOverride;
-            if (achievementSuppressed) achievementState.status = Localization::text(QStringLiteral("Учёт достижений отключён для воспроизведённой записи управления."));
+            if (achievementSuppressed) achievementState.status = Localization::text(QStringLiteral("Учёт достижений отключён для записи управления или онлайн-сессии."));
             emit achievementsChanged(achievementState);
             const bool hardcore = state.enabled && state.loggedIn && state.hardcore && host.loaded() && !achievementSuppressed;
             if (hardcore && !host.achievementHardcoreBlockReason().isEmpty()) {
@@ -162,7 +249,7 @@ void EmulationSession::run() {
     };
     host.restoreAchievementProgress = [&](const QByteArray& progress) { achievements.restoreProgress(progress); };
     const auto loadAchievements = [&](bool changedMedia = false) {
-        if (!achievementEnabled || !host.loaded()) { achievements.unloadGame(); achievements.refresh(); return; }
+        if (achievementSuppressed || !achievementEnabled || !host.loaded()) { achievements.unloadGame(); achievements.refresh(); return; }
         if (!achievements.wantsGame()) return;
         QString hashError;
         const auto hash = host.achievementHash(hashError);
@@ -240,13 +327,42 @@ void EmulationSession::run() {
     FrameWaiter waiter;
     pacer.reset(nowNs());
     auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
+    NetplayTimeline networkTimeline;
+    int networkMode=0, loadedArchiveIndex=-1;
+    unsigned networkSlots=0;
+    quint64 networkEpoch=0, networkPosition=0;
+    bool networkDirty=false, networkReady=false;
+    QJsonObject lastNetworkConfiguration;
+    qint64 nextNetworkRewind=0;
+    auto networkSnapshot=[&] {
+        if(networkMode!=1 || !host.loaded()) return;
+        if(networkSnapshotPending_.exchange(true)) {networkDirty=true;return;}
+        const auto state=host.captureMovieState();
+        if(state.isEmpty()) {
+            networkSnapshotPending_.store(false);networkDirty=false;networkWaiting_.store(true);
+            emit networkModeFailed(QStringLiteral("Не удалось синхронизировать состояние игры."));return;
+        }
+        QJsonObject metadata{{"epoch",QString::number(++networkEpoch)},{"configuration",host.movieConfiguration()},
+            {"paused",paused},{"fast",fastForward_.load()},{"factor",fastForwardFactor_.load()},
+            {"rewinding",rewind_.load()},{"slots",int(host.occupiedStateSlots())}};
+        if(!host.frame().isNull()) {
+            QByteArray preview; QBuffer buffer(&preview); buffer.open(QIODevice::WriteOnly);
+            if(host.frame().save(&buffer,"PNG") && preview.size()<=2*1024*1024) {
+                metadata.insert("image",QString::fromLatin1(preview.toBase64())); metadata.insert("aspect",host.aspectRatio());
+            }
+        }
+        const auto json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
+        QByteArray packet; const auto n=qToBigEndian(quint32(json.size()));
+        packet.append(reinterpret_cast<const char*>(&n),4); packet+=json; packet+=qCompress(state,1);
+        networkPosition=0; networkDirty=false; emit networkSnapshotReady(packet);
+    };
     auto lastBatteryCheck = Clock::now();
     bool optionsPending = false, fastLatched = false;
     qint64 nextPresentationNs = 0;
     qint64 nextMovieStatusNs = 0, nextHeldFrameNs = 0;
     bool stepHeldLatched = false;
     auto slotStatus = [&](int selected = -1) {
-        emit stateSlotsChanged(selected, movie.active() ? movie.occupiedSlots() : host.occupiedStateSlots());
+        emit stateSlotsChanged(selected, networkMode==2?networkSlots:movie.active() ? movie.occupiedSlots() : host.occupiedStateSlots());
     };
     auto movieStatus = [&](bool force = false) {
         if (force || (movie.active() && nowNs() >= nextMovieStatusNs)) {
@@ -264,6 +380,23 @@ void EmulationSession::run() {
     };
     auto beforeFrame = [&] {
         QString error;
+        if(networkMode) {
+            MovieInput input;
+            if(networkMode==1) {
+                if(networkQueuedFrames_.load()>=64) {std::this_thread::sleep_for(std::chrono::milliseconds(1));return false;}
+                QByteArray merged; { std::lock_guard<std::mutex> lock(networkMutex_); merged=networkInput_; }
+                if(!NetplayTimeline::parseInput(merged,input)) input={};
+                networkQueuedFrames_.fetch_add(1);
+                emit networkFrameReady(NetplayTimeline::frameBytes(networkEpoch,networkPosition,input,
+                    networkPosition%120==0?host.netplayDigest():QByteArray()));
+            } else {
+                if(!networkReady) return false;
+                const auto result=networkTimeline.beforeFrame(host,liveInput(),networkRole_.load(),input,error);
+                if(result==NetplayTimeline::Wait) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); return false; }
+                if(result==NetplayTimeline::Resync) { networkReady=false; emit networkResyncRequested(); return false; }
+            }
+            NetplayTimeline::apply(host,input); return true;
+        }
         if (movie.beforeFrame(liveInput(), error)) return true;
         paused = true; frameAdvanceHeld_.store(false);
         clearAudio(); emit pausedChanged(true);
@@ -279,6 +412,7 @@ void EmulationSession::run() {
         return false;
     };
     auto afterFrame = [&] {
+        if(networkMode) { ++networkPosition; if(networkMode==2) networkTimeline.afterFrame(); return; }
         movie.afterFrame();
         if (movie.mode() == MovieSession::Finished) {
             paused = true; frameAdvanceHeld_.store(false);
@@ -317,6 +451,12 @@ void EmulationSession::run() {
         bool frameRequested = false;
         for (const auto& command : pending) {
             QString error;
+            if(networkMode && (command.type==Type::MovieRecord || command.type==Type::MoviePlay ||
+                command.type==Type::MovieResume || command.type==Type::MovieFork || command.type==Type::Disc)) {
+                emit actionNotice(QStringLiteral("Завершите онлайн-сессию перед этим действием.")); continue;
+            }
+            if(networkMode==1 && command.networkAuthorized && command.type!=Type::Save && command.type!=Type::NetStepHold)
+                networkDirty=true;
             if (achievementHardcore) {
                 const bool prohibited = command.type == Type::Restore || command.type == Type::FrameAdvance ||
                     command.type == Type::MoviePlay || command.type == Type::MovieResume || command.type == Type::MovieFork ||
@@ -356,6 +496,84 @@ void EmulationSession::run() {
                 }
             }
             switch (command.type) {
+            case Type::NetMode: {
+                if(movie.active() && !movie.finish(false,error)) {networkMode_.store(networkMode);emit networkModeFailed(error);break;}
+                if(command.value==0) {
+                    // Do not allow a later offline unload to write the online battery into solo saves.
+                    if(networkMode && host.loaded()) { host.unload(); loaded_.store(false); emit gameClosed(); }
+                    host.restoreMovieConfiguration(error);
+                    if(!host.setNetplayStorage({},error))emit errorOccurred(error);
+                } else if(!host.setNetplayStorage(command.path,error)) {
+                    networkMode_.store(networkMode);loaded_.store(host.loaded());
+                    if(!host.loaded())emit gameClosed();
+                    emit networkModeFailed(error);break;
+                }
+                emit movieHardwareChanged({});
+                networkMode=command.value; networkReady=networkMode==1; networkDirty=networkMode==1;
+                networkEpoch=networkPosition=0; networkTimeline.reset(0); lastNetworkConfiguration={};
+                achievementSuppressed=networkMode!=0;
+                achievements.unloadGame(); configureAchievements();
+                if(!networkMode && host.loaded()) loadAchievements();
+                clearHistory(); clearAudio(); fastForward_.store(false); rewind_.store(false);
+                pacer.reset(nowNs());
+                if(networkMode && host.loaded()) emit networkGameSource(host.gamePath(),loadedArchiveIndex);
+                break;
+            }
+            case Type::NetSnapshot: if(networkMode==1) networkDirty=true; break;
+            case Type::NetReceiveFrame:
+                if(networkMode==2 && paused) frameRequested=true;
+                if(networkMode==2 && networkReady && !networkTimeline.ingest(command.bytes)) {
+                    networkReady=false; emit networkResyncRequested();
+                }
+                break;
+            case Type::NetReceiveState: {
+                if(networkMode!=2 || !host.loaded()) { emit networkSnapshotApplied(false,QStringLiteral("Сначала откройте игру хоста.")); break; }
+                const auto& b=command.bytes;
+                bool ok=false;
+                if(b.size()>=8) {
+                    const quint32 n=qFromBigEndian<quint32>(b.constData());
+                    if(n<=4*1024*1024 && quint64(n)+8<=quint64(b.size()) && qFromBigEndian<quint32>(b.constData()+4+n)<=128*1024*1024) {
+                        const auto meta=QJsonDocument::fromJson(b.mid(4,n)).object();
+                        const auto config=meta.value("configuration").toObject();
+                        bool epochValid=false; const auto epoch=meta.value("epoch").toString().toULongLong(&epochValid);
+                        const auto state=LibretroHost::unpackNetworkState(b.mid(4+n));
+                        if(epochValid && epoch && !state.isEmpty()) {
+                            const auto current=host.movieConfiguration();
+                            if(config.value("coreIdentity")!=current.value("coreIdentity") || config.value("coreVersion")!=current.value("coreVersion"))
+                                error=QStringLiteral("Для онлайн-игры нужны одинаковые версии Kega Refusion и совместимые ядра.");
+                            else {
+                                ok=config==lastNetworkConfiguration || host.prepareNetwork(config,error);
+                                if(ok) ok=host.restoreNetworkState(state,error);
+                            }
+                            if(ok) {
+                                lastNetworkConfiguration=config; networkEpoch=epoch; networkPosition=0;
+                                networkTimeline.reset(epoch); networkReady=true; networkWaiting_.store(false);
+                                paused=meta.value("paused").toBool() || meta.value("rewinding").toBool(); fastForward_.store(meta.value("fast").toBool());
+                                fastForwardFactor_.store(std::clamp(meta.value("factor").toInt(4),0,32));
+                                networkSlots=unsigned(meta.value("slots").toInt())&0x3ff;
+                                emit pausedChanged(paused);emit stateSlotsChanged(-1,networkSlots);
+                                emit movieHardwareChanged(QJsonDocument(config.value("controllers").toArray()).toJson(QJsonDocument::Compact));
+                                clearHistory(); clearAudio(); pacer.reset(nowNs()); cheatStatus(); discStatus();
+                                QByteArray preview=QByteArray::fromBase64(meta.value("image").toString().toLatin1());
+                                if(!preview.isEmpty()) {
+                                QBuffer imageBuffer(&preview);imageBuffer.open(QIODevice::ReadOnly);
+                                QImageReader reader(&imageBuffer,"PNG");const auto size=reader.size();
+                                if(size.isValid()&&size.width()<=2048&&size.height()<=2048) {
+                                    const auto image=reader.read();if(!image.isNull())publishVideo(image,meta.value("aspect").toDouble(4.0/3.0));
+                                }
+                                }
+                            }
+                        }
+                    }
+                }
+                if(!ok) { networkReady=false; if(error.isEmpty()) error=QStringLiteral("Повреждено состояние онлайн-игры."); }
+                emit networkSnapshotApplied(ok,error); break;
+            }
+            case Type::NetSlots: networkSlots=unsigned(command.value)&0x3ff;slotStatus();break;
+            case Type::NetFactor: fastForwardFactor_.store(command.value==0?0:std::clamp(command.value,2,32)); break;
+            case Type::NetStepHold: frameAdvanceHeld_.store(command.value!=0); break;
+            case Type::NetFast: fastForward_.store(command.value!=0); break;
+            case Type::NetReverse: rewind_.store(command.value!=0); break;
             case Type::PerformanceMetrics:
                 if (performanceMetricsEnabled != (command.value != 0)) {
                     performanceMetricsEnabled = command.value != 0;
@@ -431,7 +649,12 @@ void EmulationSession::run() {
                 if (host.load(command.path,error,command.value,
                               command.archiveEntry ? &*command.archiveEntry : nullptr)) {
                     loaded_.store(true); releaseButtons(); paused = false;
-                    achievementSuppressed = false; configureAchievements(); loadAchievements();
+                    achievementSuppressed = networkMode!=0; configureAchievements();
+                    if(!networkMode) loadAchievements();
+                    networkReady=networkMode==1; networkDirty=networkMode==1;
+                    lastNetworkConfiguration={};
+                    loadedArchiveIndex=command.value;
+                    if(networkMode) emit networkGameSource(command.path,command.value);
                     rewind_.store(false); rewindStatus(false); clearHistory();
                     clearAudio();
                     resetMetrics();
@@ -440,7 +663,8 @@ void EmulationSession::run() {
                     emit pausedChanged(false);
                     pacer.reset(nowNs());
                 } else {
-                    if (!host.loaded()) { clearHistory(); rewindStatus(false); }
+                    if (!host.loaded()) { clearHistory(); rewindStatus(false); emit gameClosed(); }
+                    else if(networkMode)emit networkGameSource(host.gamePath(),loadedArchiveIndex);
                     emit errorOccurred(error);
                 }
                 loaded_.store(host.loaded());
@@ -457,7 +681,7 @@ void EmulationSession::run() {
                     emit errorOccurred(error);
                     break;
                 }
-                achievements.unloadGame(); achievementSuppressed = false;
+                achievements.unloadGame(); achievementSuppressed = networkMode!=0;
                 host.unload(); achievements.refresh();
                 loaded_.store(false);
                 releaseButtons();
@@ -635,6 +859,10 @@ void EmulationSession::run() {
             case Type::Slots: slotStatus(command.value); break;
             }
         }
+        if(networkDirty && networkMode==1 && host.loaded()) networkSnapshot();
+        if(networkMode && (networkWaiting_.load() || (networkMode==2 && !networkReady))) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2)); continue;
+        }
         if (Clock::now() >= nextAchievementIdle) {
             achievements.idle(); nextAchievementIdle = Clock::now() + std::chrono::milliseconds(100);
         }
@@ -655,13 +883,13 @@ void EmulationSession::run() {
                 if (!host.loaded()) { achievements.unloadGame(); emit gameClosed(); }
             }
         }
-        const bool requestedHistoryEnabled = rewindEnabled_.load() && !achievementHardcore;
+        const bool requestedHistoryEnabled = rewindEnabled_.load() && !achievementHardcore && networkMode!=2;
         const int requestedHistoryMemoryMiB = rewindMemoryMiB_.load();
         if (historyEnabled != requestedHistoryEnabled || historyMemoryMiB != requestedHistoryMemoryMiB) {
             historyEnabled = requestedHistoryEnabled; historyMemoryMiB = requestedHistoryMemoryMiB;
             clearHistory();
         }
-        const bool background = backgroundPaused_.load();
+        const bool background = !networkMode && backgroundPaused_.load();
         if (background && !lastAchievementBackground && achievementHardcore && !achievements.canPause()) {
             achievementStatusOverride = Localization::text(QStringLiteral("Частые паузы: Hardcore отключён для этой сессии."));
             achievements.configure(achievementEnabled,false); achievements.refresh();
@@ -707,6 +935,7 @@ void EmulationSession::run() {
                 QString restoreError;
                 if (restoreHistory(state,restoreError)) {
                     captureFrame = 0; publishVideo(frame,aspect); movieStatus();
+                    if(networkMode==1 && nowNs()>=nextNetworkRewind) { networkSnapshot(); nextNetworkRewind=nowNs()+100000000; }
                 } else {
                     clearHistory(); historyHealthy = false;
                     emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
@@ -733,7 +962,7 @@ void EmulationSession::run() {
             if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
             lastBatteryCheck = batteryNow;
         }
-        const bool stepHeld = frameAdvanceHeld_.load() && host.loaded() && paused && !background && !achievementLoading && !achievementHardcore;
+        const bool stepHeld = networkMode!=2 && frameAdvanceHeld_.load() && host.loaded() && paused && !background && !achievementLoading && !achievementHardcore;
         if (stepHeld && !stepHeldLatched) nextHeldFrameNs = nowNs() + 350000000;
         if (stepHeld && stepHeldLatched && nowNs() >= nextHeldFrameNs) {
             frameRequested = true; nextHeldFrameNs = nowNs() + 33333333;

@@ -67,9 +67,32 @@ public:
     void logoutAchievements();
     void requestAchievements();
     void achievementResponse(quint64 id, int status, QByteArray body);
+    // Network commands cross to the core only through this worker queue.
+    void setNetworkMode(int mode, const QString& storageId = {}); // 0 off, 1 host, 2 client
+    bool networkActive() const { return networkMode_.load()!=0; }
+    void setNetworkRole(int role) { networkRole_.store(role); }
+    QByteArray networkLocalInput() const;
+    void setNetworkInput(const QByteArray& input);
+    void setNetworkWaiting(bool waiting) { networkWaiting_.store(waiting); }
+    void requestNetworkSnapshot();
+    void closeNetworkGame();
+    void receiveNetworkSlots(unsigned mask);
+    void acknowledgeNetworkFrame() { auto n=networkQueuedFrames_.load(); while(n>0&&!networkQueuedFrames_.compare_exchange_weak(n,n-1)){} }
+    void acknowledgeNetworkSnapshot() { networkSnapshotPending_.store(false); }
+    void receiveNetworkSnapshot(const QByteArray& snapshot);
+    void receiveNetworkFrame(const QByteArray& frame);
+    void applyNetworkCommand(const QByteArray& command);
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void networkModeFailed(const QString& error);
+    void networkCommandRequested(const QByteArray& command);
+    void networkSnapshotReady(const QByteArray& snapshot);
+    void networkFrameReady(const QByteArray& frame);
+    void networkSnapshotApplied(bool success, const QString& error);
+    void networkResyncRequested();
+    void networkGameLoading(const QString& path,int archiveIndex);
+    void networkGameSource(const QString& path, int archiveIndex);
     void achievementsChanged(const AchievementsState& state);
     void achievementNotice(const AchievementNotice& notice);
     void achievementHttpRequest(const AchievementHttpRequest& request);
@@ -98,7 +121,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions };
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots};
     struct Command {
         Type type;
         QString path;
@@ -107,7 +130,16 @@ private:
         CheatList cheats{};
         QByteArray bytes{};
         quint64 requestId = 0;
+        bool networkAuthorized = false;
     };
+    static bool networkShared(Type type);
+    static QByteArray encodeNetworkCommand(const Command& command);
+    std::atomic_int networkMode_{0}, networkRole_{0}, networkQueuedFrames_{0};
+    std::atomic_bool networkSnapshotPending_{false};
+    std::atomic_bool networkWaiting_{false};
+    mutable std::mutex networkMutex_;
+    QByteArray networkInput_;
+    qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);
     QString corePath_, dataPath_;

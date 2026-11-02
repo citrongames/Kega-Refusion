@@ -212,3 +212,23 @@ Game FPS remains a normal-speed estimate from controller polling: games may read
 ### FPS presentation follow-up (2026-11-02)
 
 The overlay now contains only one-decimal numbers: emulation `59.9`, game estimate `~29.9`; labels and percentage display were removed. Menu/settings text and both catalogs match. Linux and Windows application builds succeeded; the focused `osd_tests --fps-only` check passed. The refreshed testbuild EXE matches SHA-256 `af89e98b26c2f85f887a9bbe390ddd4e6c378d1d8e527348ce64b705f2ef227b`; the native core is unchanged. Windows was not launched. Temporary package staging was removed.
+
+
+## 0.13.0 — direct netplay
+
+- TLS-PSK loopback: IPv4 and IPv6, Ed25519 challenge, wrong key rejection,
+  reconnect identity, host role assignment, session/persistent ban and unban,
+  RTT and liveness. No external service was used.
+- `net_file_tests`: bounded manifest/chunk parsing, hashes, interrupted transfer
+  resume, no overwrite, CUE/M3U rewriting and outside-root/symlink rejection.
+- `netplay_timeline_tests`: original generated 68000 ROM against the real core;
+  frame-zero snapshot roundtrip, four delayed frames, corrected and final memory
+  digests, merged input and spectator waiting. SRAM digest uses fixed snapshot
+  allocation sizes, avoiding the core's first-frame reported-size transition.
+- `netplay_session_tests`: two independent processes, real core, initial spectator
+  role, host-assigned shared player role, OR input, remote pause/unpause, reset,
+  quick save/load, rewind, game change within the same lobby, consented transfer
+  and launch of another generated ROM. No copyrighted game data in fixtures.
+- Windows is cross-built and packaged with Qt OpenSSL backend and pinned DLLs;
+  the Windows application is not launched by automation. Internet paths and
+  cross-platform game compatibility remain user-side validation.

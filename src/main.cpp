@@ -13,6 +13,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QTimer>
+#include <QSslSocket>
 #include <QtGlobal>
 #include <QElapsedTimer>
 #include <QOpenGLWidget>
@@ -61,6 +62,10 @@ void configurePluginPaths() {
 int main(int argc, char* argv[]) {
     configurePluginPaths(); // The platform plugin loads in QApplication's constructor.
     QApplication app(argc, argv);
+    // Select before achievements or any other SSL client initializes a backend.
+    // Direct netplay uses PSK ciphers supplied by the bundled OpenSSL backend.
+    if(QSslSocket::availableBackends().contains(QStringLiteral("openssl")))
+        QSslSocket::setActiveBackend(QStringLiteral("openssl"));
     QApplication::setApplicationName(QStringLiteral("Kega Refusion"));
     QApplication::setOrganizationName(QStringLiteral("Kega Refusion"));
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
