@@ -1,4 +1,5 @@
 #include <archive.h>
+#include <zlib.h>
 #include <archive_entry.h>
 #include "core/RewindBuffer.h"
 #include "core/LibretroHost.h"
@@ -10,6 +11,7 @@
 #include <QFile>
 #include <QImage>
 #include <QTemporaryDir>
+#include <QSysInfo>
 
 #include <cmath>
 #include <cstring>
@@ -677,6 +679,77 @@ void testCoreOptionsAndReset(const QString& corePath) {
     require(readFile(save) == oversized, "hard reset overwrote rejected user SRAM");
 }
 
+// Original diagnostic ROM; a four-byte CRC fixup selects the same compatibility
+// rule as an identified cartridge without embedding any game code or data.
+QByteArray makeVmvBusRom(bool identified) {
+    auto rom = makeTestRom(); rom.append(QByteArray(0x200000-rom.size(), char(0)));
+    putLong(rom,0x1a4,quint32(rom.size()-1));
+    rom[0x18e]=rom[0x18f]=0;
+    int pc=0x200;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    const auto writeWord=[&](quint16 value,quint32 address){
+        word(0x33fc);word(value);word(quint16(address>>16));word(quint16(address));};
+    const auto writeByte=[&](quint16 value,quint32 address){
+        word(0x13fc);word(value);word(quint16(address>>16));word(quint16(address));};
+    writeWord(0x100,0xa11100); // Request Z80 bus, then release reset with bus held.
+    writeWord(0x100,0xa11200);
+    writeByte(0x18,0xa00000); writeByte(0xfe,0xa00001); // Z80: JR $.
+    writeWord(0,0xa11100); // Z80 runs; a normal cartridge cannot access its bus.
+    const int loop=pc;
+    writeByte(0x5a,0xa01000);
+    word(0x1039);word(0xa0);word(0x1000); // MOVE.B ZRAM,D0.
+    word(0x13c0);word(0xff);word(0); // Store observed bus byte in work RAM.
+    word(quint16(0x6000|((loop-(pc+2))&0xff)));
+    const auto crc=[&](){return quint32(crc32(0,reinterpret_cast<const Bytef*>(rom.constData()),0x10000));};
+    constexpr int fix=0xfffc;
+    for(int i=0;i<4;++i)rom[fix+i]=0;
+    const quint32 base=crc();quint32 basis[32]{}, combinations[32]{};
+    for(unsigned bit=0;bit<32;++bit){
+        rom[fix+int(bit/8)]=char(1u<<(bit%8));
+        quint32 value=crc()^base, combination=quint32(1)<<bit;
+        rom[fix+int(bit/8)]=0;
+        for(int pivot=31;pivot>=0;--pivot)if(value&(quint32(1)<<pivot)){
+            if(basis[pivot]){value^=basis[pivot];combination^=combinations[pivot];}
+            else{basis[pivot]=value;combinations[pivot]=combination;break;}
+        }
+    }
+    quint32 delta=0xe302585a^base, solution=0;
+    for(int pivot=31;pivot>=0;--pivot)if(delta&(quint32(1)<<pivot)){
+        require(basis[pivot]!=0,"CRC fixup matrix is singular");
+        delta^=basis[pivot];solution^=combinations[pivot];
+    }
+    for(int i=0;i<4;++i)rom[fix+i]=char(solution>>(8*i));
+    require(crc()==0xe302585a,"generated compatibility fingerprint is wrong");
+    if(!identified)rom[0xfff0]=char(quint8(rom[0xfff0])^1); // Same program, ordinary bus policy.
+    return rom;
+}
+
+void testVmvBusCompatibility(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"VMV temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"VMV core inspection failed");
+    using Memory=void* (*)(unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory!=nullptr,"VMV memory API missing");
+    for(bool identified:{true,false,true}){
+        const auto rom=makeVmvBusRom(identified);
+        const QString path=temp.path()+"/bus.md";writeFile(path,rom);
+        require(host.setAutoFixChecksum(true,error) && host.load(path,error),"VMV fixture load failed");
+        const auto check=[&](){
+            for(int i=0;i<3;++i)host.runFrame();
+            const auto* ram=static_cast<const unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+            require(ram!=nullptr,"VMV RAM missing");
+            const unsigned byte=ram[QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0];
+            require((byte==0x5a)==identified,"Z80 bus compatibility leaked or disappeared");
+        };
+        check();
+        const auto state=host.serialize();require(!state.isEmpty(),"VMV state missing");
+        host.runFrame();require(host.unserialize(state),"VMV state restore failed");check();
+        host.reset();check();require(host.hardReset(error),"VMV power reset failed");check();
+        require(readFile(path)==rom,"VMV fixture source was modified");
+    }
+}
+
 void testChecksumFix(const QString& corePath) {
     QTemporaryDir temp; require(temp.isValid(), "checksum test temp failed");
     const auto rom = makeChecksumRom();
@@ -1040,9 +1113,9 @@ int main(int argc, char** argv) {
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
-                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only"))) &&
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -1050,6 +1123,10 @@ int main(int argc, char** argv) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));
             std::puts("network OPLL snapshot process passed"); return 0;
+        }
+        if (mode == QLatin1String("--vmv-audio")) {
+            testVmvBusCompatibility(QString::fromLocal8Bit(argv[1]));
+            std::puts("ROM-scoped Z80 access, reset, state restore and isolation passed"); return 0;
         }
         if (mode == QLatin1String("--checksum-only")) {
             testChecksumFix(QString::fromLocal8Bit(argv[1]));
@@ -1082,6 +1159,7 @@ int main(int argc, char** argv) {
         testArchiveCore(QString::fromLocal8Bit(argv[1]));
         testCoreOptionsAndReset(QString::fromLocal8Bit(argv[1]));
         testChecksumFix(QString::fromLocal8Bit(argv[1]));
+        testVmvBusCompatibility(QString::fromLocal8Bit(argv[1]));
         testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
         std::puts("core integration tests passed");
         return 0;

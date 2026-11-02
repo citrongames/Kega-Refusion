@@ -2430,6 +2430,12 @@
         "core_preserves_checksum": false,
         "header_after": "0B96",
         "loses_exact_database_match": false
+      },
+      "audio_compatibility": {
+        "version": "0.14.4",
+        "rule": "PicoDrive no_z80_bus_lock equivalent",
+        "report": "docs/vmv-audio-compatibility.txt",
+        "specific_brick_freeze_verified": false
       }
     },
     {
@@ -4654,6 +4660,12 @@
         "core_preserves_checksum": false,
         "header_after": "506D",
         "loses_exact_database_match": false
+      },
+      "audio_compatibility": {
+        "version": "0.14.4",
+        "rule": "PicoDrive no_z80_bus_lock equivalent",
+        "report": "docs/vmv-audio-compatibility.txt",
+        "specific_brick_freeze_verified": false
       }
     },
     {
@@ -9457,6 +9469,12 @@
         "core_preserves_checksum": false,
         "header_after": "EA07",
         "loses_exact_database_match": false
+      },
+      "audio_compatibility": {
+        "version": "0.14.4",
+        "rule": "PicoDrive no_z80_bus_lock equivalent",
+        "report": "docs/vmv-audio-compatibility.txt",
+        "specific_brick_freeze_verified": false
       }
     },
     {

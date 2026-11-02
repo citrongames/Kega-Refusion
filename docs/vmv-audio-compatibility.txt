@@ -1,0 +1,109 @@
+V.M.V.: совместимость звукового драйвера Mario 3 / Mario 4 / Ben 10
+Дата: 2026-11-02. Исправление приложения: 0.14.4.
+
+ЗАПРОС И РЕЗУЛЬТАТ
+Пользователь сообщил о пропадании звука/музыки или зависании в родственных
+играх, в частности при разрушении кирпича большим Марио. Нужен охват всех
+подтверждённых ROM из сборников, а не только присланных примеров.
+
+Перенесено поведение PicoDrive no_z80_bus_lock для трёх известных образов:
+Ben 10, полная Mario 3 Around the World, Mario 4 Space Odyssey.
+Проверено всё дерево D:/emulation/Sega Mega Drive/ToCheck: 1329 файлов .md,
+6 совпадений, 3 разных содержимых. Все совпадения перечислены ниже.
+Шесть отдельно присланных Mario-файлов — три разных содержимых: две копии
+полной Mario 3, две копии её демо и две копии Mario 4.
+
+Это исправление известной совместимости звуковой шины. Само сообщённое
+зависание на кирпиче в проверке не воспроизведено. Прямой вызов найденного
+PCM-эффекта после загрузки полной Mario 3 завершился как в исходном, так
+и в новом ядре; он не доказывает устранение конкретного зависания.
+Приёмка этого эпизода остаётся за проверкой естественного игрового действия.
+
+КАК РАБОТАЕТ ИСПРАВЛЕНИЕ
+PicoDrive позволяет этим драйверам обращаться от 68000 к RAM Z80/YM2612,
+даже когда обычная проверка владения шиной это запрещает. В нашем ядре
+выбираются существующие обработчики страницы A0; обычная задержка доступа,
+BUSREQ/BUSACK, RESET и порядок исполнения процессоров сохранены.
+Обработчики выбираются при переходах шины, сбросе и загрузке состояния.
+На каждом чтении/записи дополнительной проверки совместимости нет.
+
+Распознавание: точный размер и CRC первых 64 КиБ в нормальном порядке
+байтов. Два байта checksum 0x18E/0x18F при вычислении ключа считаются нулями,
+поэтому включённый автофикс checksum не отключает правило. ROM на диске
+и в памяти не патчится этим исправлением. Распознавание выполняется один
+раз при инициализации картриджа, использует буфер 1 КиБ на стеке.
+Флаг вычисляется заново при загрузке игры и сбрасывается перед инициализацией
+следующей. Формат сохраняемого состояния и ABI записей не изменены.
+
+Размер   CRC32 первых 64 КиБ   CRC32 с нормализацией   Полный CRC32
+1 МиБ    6732AAB4         6732AAB4                C8BE0B26  Ben 10
+2 МиБ    E302585A         E302585A                6F630EBD  Mario 3 full
+2 МиБ    20ED0DE8         B8C4FF2D                96B0ECD9  Mario 4
+
+Демо Mario 3 (CRC32 69F5B02F, CRC32 первых 64 КиБ 27C6012B) не входит в известное правило
+PicoDrive. В нём найден родственный PCM-путь, однако это не доказывает
+необходимость того же исключения. Правило для демо пока не добавлялось.
+Death Caliber, Deer Hunter, Iraq War и Harry Potter не включены по одному
+признаку общего автора/похожего движка: соответствующих правил или прямого
+подтверждения такого же нарушения владения шиной для них не найдено.
+
+ПРОВЕРКА
+- Пользователь проверил Windows-билд 0.14.4 и подтвердил: «звук не исчезает».
+  Конкретный ROM и устранение зависания на кирпиче отдельно не уточнялись.
+- Реальное ядро: core_integration_tests --vmv-audio, PASS.
+  Использован оригинальный диагностический ROM без игрового кода; CRC-fixup
+  выбирает известную ветку совместимости. Проверены чтение/запись ZRAM при
+  работающем Z80, мягкий сброс, питание, восстановление состояния и переход
+  special -> ordinary -> special без утечки разрешения на обычные игры.
+  Автофикс checksum был включён. Исходные файлы остались неизменными.
+- Короткий запуск полной Mario 3 на базовом ядре и одно сравнение прямого
+  вызова PCM-эффекта на базовом/новом ядре. Оба вызова вернулись; зависший PC
+  не получен. Не выполнялось длительное прохождение до кирпича.
+- Сборки Linux и Windows. Windows GUI не запускался: пользователь проверяет
+  игру самостоятельно. Изменения сравнивались с первичным PicoDrive кодом.
+
+ФАЙЛЫ, К КОТОРЫМ ПРИМЕНЯЕТСЯ ПРАВИЛО
+D:/emulation/Sega Mega Drive/ToCheck/my-pirate/Ben 10 (Unl)[Rus].md
+  CRC32 C8BE0B26; SHA256 337596272374d3fc4a831660af57f2931f19beb590b3cb8c783ca2d2df0d7e65
+D:/emulation/Sega Mega Drive/ToCheck/my-pirate/Mario 3 (Unl)[Rus] [a1].md
+  CRC32 6F630EBD; SHA256 650556c1cadecadca83cff481778baee59f1bc8795166481ef46f292091e159c
+D:/emulation/Sega Mega Drive/ToCheck/my-pirate/Mario 4 (Unl)[Rus].md
+  CRC32 96B0ECD9; SHA256 c39b682b5ab037be20e983abbe025a90de3303d28c44e0305c54f811640085d4
+D:/emulation/Sega Mega Drive/ToCheck/omonim-homebrew/Ben 10 (R) (Unl) [!].md
+  CRC32 C8BE0B26; SHA256 337596272374d3fc4a831660af57f2931f19beb590b3cb8c783ca2d2df0d7e65
+D:/emulation/Sega Mega Drive/ToCheck/omonim-homebrew/Mario 3 - Around the World (R) (Unl) [!].md
+  CRC32 6F630EBD; SHA256 650556c1cadecadca83cff481778baee59f1bc8795166481ef46f292091e159c
+D:/emulation/Sega Mega Drive/ToCheck/omonim-homebrew/Mario 4 - Space Odyssey (R) (Unl) [!].md
+  CRC32 96B0ECD9; SHA256 c39b682b5ab037be20e983abbe025a90de3303d28c44e0305c54f811640085d4
+
+ПЕРВИЧНЫЕ ИСТОЧНИКИ
+PicoDrive revision 26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee:
+правила и обработчики, на которых основано поведение:
+https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/carthw.cfg#L603-L619
+https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/memory.c#L825-L867
+
+MAME revision 079ac58c453b09a3ffd8267d1c611b4d2c63795b:
+для точных full Mario 3 / Mario 4 записано периодическое исчезновение BGM
+из-за 68K-записей в YM2612 без владения шиной. Это подтверждает дефект
+музыкальной совместимости, но не тождественно воспроизведённому зависанию.
+Для Mario 4 отдельно описан сбой магазина; он не проверялся этим изменением.
+https://github.com/mamedev/mame/blob/079ac58c453b09a3ffd8267d1c611b4d2c63795b/hash/megadriv.xml#L39373-L39429
+
+ПРИЛОЖЕНИЕ: СТАТИЧЕСКИЙ ПУТЬ ЭФФЕКТА И ПРЯМАЯ ПРОВЕРКА
+VMV Mario audio static and focused headless evidence (2026-11-02)
+Temporary probe scripts, captures and inventories named below were removed after
+this evidence was recorded; only build/package/focused-test logs were retained.
+
+ROM inventory: inventory.json. Six supplied paths are three SHA-unique 2 MiB ROMs:
+full Mario 3 CRC32 6F630EBD; demo Mario 3 69F5B02F; Mario 4 96B0ECD9. Originals read only.
+
+Static 68000 code, absolute ROM offsets:
+- Full Mario 3: upward tile-collision code at 0x4EE4-0x4F10 clears a map word when $FFA06E=1 and tile ID d5=1. In the subsequent hit path, 0x5094-0x50B4 selects PCM when d7=1, $FFA06E=1, $FF5CAC=0: it pushes length $162C and ROM sample pointer $45504, then JSR $50FB0. If $FF5CAC=1 it calls sound-effect table routine $3590 with ID 6 (0x50BC-0x50CE).
+- Demo Mario 3 equivalent: 0x4F10-0x4F3C tile map path; 0x50C0-0x50E6 PCM selector; sample $455B8, length $162C, helper $51064. Alternative sound ID 6 at 0x50E8-0x50F6.
+- Mario 4 equivalent PCM selector: 0x56DA-0x5718 (with $FF5CC4=0), sample $582FC, length $162C, helper $670F0; alternative sound ID 6 at 0x571A-0x572C. This appears in the upward collision routine beginning 0x4F52. Mario 4's player status is in a per-player structure at $FFA19A, versus $FFA06E in Mario 3.
+- PCM helpers $50FB0/$51064/$670F0 request Z80 bus ($A11100 := $0100), write a 24-bit sample pointer to $A01524..26, set $A01521 := 1 and 16-bit length in $A01527..28, then release bus ($A11100 := 0). No explicit bus-grant poll within these helpers. Another unrelated utility at Mario 3 demo 0x27FA-0x2820 does poll bit 8 of $A11100. This contrast alone does not establish a hang; the core may grant synchronously.
+
+Headless injection probe:
+- Scratch script probe.py dynamically loads one core per process. Baseline binary baseline.so is untouched; candidate was build/linux/core/genesis_plus_gx_libretro.so. A read-only full Mario 3 ROM boots through the public libretro API. At frame 500 after normal boot, temporary CPU debug state directly invoked the ROM's exact PCM helper $50FB0 with its observed ROM sample pointer $45504 and length $162C. A work-RAM trampoline cleaned the injected arguments and returned to the saved PC. No ROM file was edited.
+- Both baseline and candidate ran through frame 530. The helper returned: stack pointer restored to $FFFFFFC4 and PC returned to the ordinary loop near $1224/$122C. Screenshots from before and after are inject-base2-f*.png and inject-cand3-f*.png. This is a synthetic isolated helper call, not a natural brick collision. It does not reproduce the reported freeze, and it cannot prove that the candidate fixes it.
+- No natural brick-break sound trigger or frozen PC was captured. Treat the observed Pico-equivalent Z80 bus quirk as a compatibility change whose effect on the reported freeze remains unconfirmed.

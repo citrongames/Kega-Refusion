@@ -1,0 +1,190 @@
+--- a/core/genesis.h
++++ b/core/genesis.h
+@@ -64,6 +64,8 @@
+ extern uint8 zram[0x2000];
+ extern uint32 zbank;
+ extern uint8 zstate;
++/* Per-ROM compatibility; recomputed at load, not serialized. */
++extern uint8 gen_z80_bus_unlocked;
+ extern uint8 pico_current;
+ extern uint8_t cart_size;
+ 
+@@ -73,6 +75,7 @@
+ extern void gen_tmss_w(unsigned int offset, unsigned int data);
+ extern void gen_bankswitch_w(unsigned int data);
+ extern unsigned int gen_bankswitch_r(void);
++extern void gen_set_z80_bus_access(int granted);
+ extern void gen_zbusreq_w(unsigned int state, unsigned int cycles);
+ extern void gen_zreset_w(unsigned int state, unsigned int cycles);
+ extern void gen_zbank_w(unsigned int state);
+--- a/core/genesis.c
++++ b/core/genesis.c
+@@ -50,6 +50,7 @@
+ uint8 work_ram[0x10000];  /* 68K RAM  */
+ uint8 zram[0x2000];       /* Z80 RAM  */
+ uint32 zbank;             /* Z80 bank window address */
++uint8 gen_z80_bus_unlocked; /* Identified V.M.V. audio drivers only. */
+ uint8 zstate;             /* Z80 bus state (d0 = /RESET, d1 = BUSREQ, d2 = WAIT) */
+ uint8 pico_current;       /* PICO current page */
+ 
+@@ -63,6 +64,7 @@
+ 
+ void gen_init(void)
+ {
++  gen_z80_bus_unlocked = 0;
+   int i;
+ 
+   /* initialize Z80 */
+@@ -300,10 +302,7 @@
+     }
+ 
+     /* Z80 bus is released & Z80 is reseted */
+-    m68k.memory_map[0xa0].read8   = m68k_read_bus_8;
+-    m68k.memory_map[0xa0].read16  = m68k_read_bus_16;
+-    m68k.memory_map[0xa0].write8  = m68k_unused_8_w;
+-    m68k.memory_map[0xa0].write16 = m68k_unused_16_w;
++    gen_set_z80_bus_access(0);
+     zstate = 0;
+ 
+     /* assume default bank is $000000-$007FFF */
+@@ -468,6 +467,27 @@
+ /* Z80 Bus controller chip functions (Genesis mode)                      */
+ /* ----------------------------------------------------------------------*/
+ 
++/* PicoDrive's no_z80_bus_lock behavior: grant A0 access for identified
++ * V.M.V. drivers, without changing BUSREQ/BUSACK or CPU synchronization.
++ * Select handlers at bus transitions; no compatibility branch per access. */
++void gen_set_z80_bus_access(int granted)
++{
++  if (granted || gen_z80_bus_unlocked)
++  {
++    m68k.memory_map[0xa0].read8   = z80_read_byte;
++    m68k.memory_map[0xa0].read16  = z80_read_word;
++    m68k.memory_map[0xa0].write8  = z80_write_byte;
++    m68k.memory_map[0xa0].write16 = z80_write_word;
++  }
++  else
++  {
++    m68k.memory_map[0xa0].read8   = m68k_read_bus_8;
++    m68k.memory_map[0xa0].read16  = m68k_read_bus_16;
++    m68k.memory_map[0xa0].write8  = m68k_unused_8_w;
++    m68k.memory_map[0xa0].write16 = m68k_unused_16_w;
++  }
++}
++
+ void gen_zbusreq_w(unsigned int data, unsigned int cycles)
+ {
+   if (data)  /* !ZBUSREQ asserted */
+@@ -479,10 +499,7 @@
+       z80_run(cycles);
+ 
+       /* enable 68k access to Z80 bus */
+-      m68k.memory_map[0xa0].read8   = z80_read_byte;
+-      m68k.memory_map[0xa0].read16  = z80_read_word;
+-      m68k.memory_map[0xa0].write8  = z80_write_byte;
+-      m68k.memory_map[0xa0].write16 = z80_write_word;
++      gen_set_z80_bus_access(1);
+     }
+ 
+     /* update Z80 bus status */
+@@ -497,10 +514,7 @@
+       Z80.cycles = ((cycles + 14) / 15) * 15;
+ 
+       /* disable 68k access to Z80 bus */
+-      m68k.memory_map[0xa0].read8   = m68k_read_bus_8;
+-      m68k.memory_map[0xa0].read16  = m68k_read_bus_16;
+-      m68k.memory_map[0xa0].write8  = m68k_unused_8_w;
+-      m68k.memory_map[0xa0].write16 = m68k_unused_16_w;
++      gen_set_z80_bus_access(0);
+     }
+ 
+     /* update Z80 bus status */
+@@ -527,10 +541,7 @@
+     else if (zstate == 2)
+     {
+       /* enable 68k access to Z80 bus */
+-      m68k.memory_map[0xa0].read8   = z80_read_byte;
+-      m68k.memory_map[0xa0].read16  = z80_read_word;
+-      m68k.memory_map[0xa0].write8  = z80_write_byte;
+-      m68k.memory_map[0xa0].write16 = z80_write_word;
++      gen_set_z80_bus_access(1);
+ 
+       /* reset Z80 & YM2612 */
+       z80_reset();
+@@ -553,10 +564,7 @@
+     else if (zstate == 3)
+     {
+       /* disable 68k access to Z80 bus */
+-      m68k.memory_map[0xa0].read8   = m68k_read_bus_8;
+-      m68k.memory_map[0xa0].read16  = m68k_read_bus_16;
+-      m68k.memory_map[0xa0].write8  = m68k_unused_8_w;
+-      m68k.memory_map[0xa0].write16 = m68k_unused_16_w;
++      gen_set_z80_bus_access(0);
+     }
+ 
+     /* stop YM2612 */
+--- a/core/state.c
++++ b/core/state.c
+@@ -83,20 +83,7 @@
+     load_param(zram, sizeof(zram));
+     load_param(&zstate, sizeof(zstate));
+     load_param(&zbank, sizeof(zbank));
+-    if (zstate == 3)
+-    {
+-      m68k.memory_map[0xa0].read8   = z80_read_byte;
+-      m68k.memory_map[0xa0].read16  = z80_read_word;
+-      m68k.memory_map[0xa0].write8  = z80_write_byte;
+-      m68k.memory_map[0xa0].write16 = z80_write_word;
+-    }
+-    else
+-    {
+-      m68k.memory_map[0xa0].read8   = m68k_read_bus_8;
+-      m68k.memory_map[0xa0].read16  = m68k_read_bus_16;
+-      m68k.memory_map[0xa0].write8  = m68k_unused_8_w;
+-      m68k.memory_map[0xa0].write16 = m68k_unused_16_w;
+-    }
++    gen_set_z80_bus_access(zstate == 3);
+   }
+   else
+   {
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -353,6 +353,29 @@
+           Cart Hardware initialization 
+ *************************************************************/
+ 
++/* Match the canonical first 64 KiB used by PicoDrive's cartridge database.
++ * Ignore only the optional checksum header correction. READ_BYTE makes this
++ * independent of the host/core ROM byte order; no ROM bytes are changed. */
++static int md_cart_vmv_z80_bus_quirk(void)
++{
++  uint8 block[1024];
++  uint32 crc = 0;
++  unsigned int offset, i;
++  if ((cart.romsize != 0x100000) && (cart.romsize != 0x200000)) return 0;
++  for (offset = 0; offset < 0x10000; offset += sizeof(block))
++  {
++    for (i = 0; i < sizeof(block); i++)
++      block[i] = READ_BYTE(cart.rom, offset + i);
++    if (!offset) block[0x18e] = block[0x18f] = 0;
++    crc = crc32(crc, block, sizeof(block));
++  }
++  /* Ben 10, Mario 3 Around the World (full), Mario 4 Space Odyssey.
++   * Original prefix CRCs: E302585A / 20ED0DE8. The latter becomes B8C4FF2D
++   * after excluding the checksum field. Demo revisions are not implied. */
++  return ((cart.romsize == 0x100000) && (crc == 0x6732aab4)) ||
++         ((cart.romsize == 0x200000) && ((crc == 0xe302585a) || (crc == 0xb8c4ff2d)));
++}
++
+ void md_cart_init(void)
+ {
+   int i;
+@@ -427,6 +449,8 @@
+ 
+   /* ROM is mirrored each 2^k bytes */
+   cart.mask = size - 1;
++
++  gen_z80_bus_unlocked = md_cart_vmv_z80_bus_quirk();
+ 
+   /* no special external hardware required by default */
+   cart.special = 0;
