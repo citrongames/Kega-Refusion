@@ -138,7 +138,6 @@ private:
     bool metricsReady_ = false;
     bool gameFpsAvailable_ = false;
     double emulatedFps_ = 0.0;
-    double speedPercent_ = 0.0;
     double gameFps_ = 0.0;
     QStringList metricsLines_;
     bool capturingGame_ = false;

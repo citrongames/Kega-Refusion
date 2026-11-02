@@ -207,3 +207,8 @@ Current evidence retained only: linux-0.4.0.log, windows-0.4.0.log, native-tests
 - Deployed Windows core SHA-256: `14191adad7713e1685b5ec19595ce9ee472a7a13cb0f7a19542c36f949a1fb2c`.
 
 Game FPS remains a normal-speed estimate from controller polling: games may read input even when their gameplay logic is stalled, or skip reads during menus/cutscenes. CD cartridge Mode 1 is limited by the native core to ROMs up to 8 MiB. These checks do not claim every commercial cartridge/peripheral combination is compatible. Task-specific launchers/cache probes and package staging were removed; source tests, useful incremental outputs, final screenshots and compact logs were retained under `build`.
+
+
+### FPS presentation follow-up (2026-11-02)
+
+The overlay now contains only one-decimal numbers: emulation `59.9`, game estimate `~29.9`; labels and percentage display were removed. Menu/settings text and both catalogs match. Linux and Windows application builds succeeded; the focused `osd_tests --fps-only` check passed. The refreshed testbuild EXE matches SHA-256 `af89e98b26c2f85f887a9bbe390ddd4e6c378d1d8e527348ce64b705f2ef227b`; the native core is unchanged. Windows was not launched. Temporary package staging was removed.

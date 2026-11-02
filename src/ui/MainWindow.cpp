@@ -777,7 +777,7 @@ void MainWindow::buildMenus() {
         settings_.setValue(QStringLiteral("view/osd"), enabled);
         view_->setOsdEnabled(enabled);
     });
-    fpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS эмуляции и скорость")));
+    fpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS эмуляции")));
     fpsAction_->setObjectName(QStringLiteral("emulationFpsAction"));
     fpsAction_->setCheckable(true);
     fpsAction_->setChecked(settings_.value(QStringLiteral("view/emulationFps"), false).toBool());
@@ -1196,7 +1196,7 @@ void MainWindow::editSettings(int initialPage) {
         "Изменение языка применяется после перезапуска. Если перевода нет, используется английский.")), &dialog);
     languageHelp->setWordWrap(true);
     general->addRow(languageHelp);
-    auto* emulationFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS эмуляции и скорость в процентах")), &dialog);
+    auto* emulationFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS эмуляции")), &dialog);
     emulationFps->setObjectName(QStringLiteral("emulationFps"));
     emulationFps->setChecked(fpsAction_->isChecked());
     general->addRow(emulationFps);
@@ -1205,7 +1205,7 @@ void MainWindow::editSettings(int initialPage) {
     gameFps->setChecked(gameFpsAction_->isChecked());
     general->addRow(gameFps);
     auto* fpsHelp = new QLabel(Localization::text(QStringLiteral(
-        "100% — нормальная скорость эмуляции. Оценка FPS игры учитывает кадры, в которых игра читает управление; "
+        "Число без префикса — FPS эмуляции, с ~ — оценка FPS игры. Оценка учитывает кадры, в которых игра читает управление; "
         "частота игровой логики может отличаться. Оценка приведена к нормальной скорости игры. Счётчики включаются независимо от OSD.")), &dialog);
     fpsHelp->setWordWrap(true);
     general->addRow(fpsHelp);

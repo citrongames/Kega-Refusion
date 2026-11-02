@@ -469,10 +469,9 @@ void GameView::setGameFpsEnabled(bool enabled) {
     repaintView();
 }
 
-void GameView::setPerformanceMetrics(double emulatedFps, double speedPercent,
+void GameView::setPerformanceMetrics(double emulatedFps, double /* speedPercent */,
                                      double gameFps, bool gameFpsAvailable) {
     emulatedFps_ = emulatedFps;
-    speedPercent_ = speedPercent;
     gameFps_ = gameFps;
     gameFpsAvailable_ = gameFpsAvailable;
     metricsReady_ = true;
@@ -484,17 +483,11 @@ void GameView::setPerformanceMetrics(double emulatedFps, double speedPercent,
 
 void GameView::rebuildPerformanceMetrics() {
     metricsLines_.clear();
-    if (performanceMetricsEnabled_) {
-        metricsLines_.append(metricsReady_
-            ? Localization::text(QStringLiteral("ЭМУ %1 FPS · %2%")).arg(emulatedFps_, 0, 'f', 1)
-                                     .arg(speedPercent_, 0, 'f', 0)
-            : Localization::text(QStringLiteral("ЭМУ —")));
-    }
-    if (gameFpsEnabled_) {
-        metricsLines_.append(gameFpsAvailable_
-            ? Localization::text(QStringLiteral("ИГРА (ОПРОС) ~%1 FPS")).arg(gameFps_, 0, 'f', 1)
-            : Localization::text(QStringLiteral("ИГРА (ОПРОС) —")));
-    }
+    if (performanceMetricsEnabled_)
+        metricsLines_.append(metricsReady_ ? QString::number(emulatedFps_, 'f', 1) : QStringLiteral("—"));
+    if (gameFpsEnabled_)
+        metricsLines_.append(gameFpsAvailable_ ? QStringLiteral("~") + QString::number(gameFps_, 'f', 1)
+                                             : QStringLiteral("~—"));
 }
 
 void GameView::setMutedStatus(bool muted) {
