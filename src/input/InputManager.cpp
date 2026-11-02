@@ -239,6 +239,7 @@ struct InputManager::Impl {
                 settings.value(prefix + "controllerType", int(m.controllerType)).toInt()));
             m.aimSource = settings.value(prefix + "aimSource", int(m.aimSource)).toInt() == int(AimSource::LeftStick)
                 ? AimSource::LeftStick : AimSource::Mouse;
+            m.showCrosshair = settings.value(prefix + "showCrosshair", true).toBool();
             m.deadzonePercent = std::clamp(settings.value(prefix + "deadzone", m.deadzonePercent).toInt(), 5, 60);
             for (int target = 0; target < targetCount; ++target) {
                 const QString key = prefix + QStringLiteral("pad/%1").arg(target);
@@ -278,6 +279,7 @@ struct InputManager::Impl {
                 (mdPortB.aimSource == defaultB.aimSource ||
                  (mdPortB.controllerType == ControllerType::Pad &&
                   mdPortB.aimSource == AimSource::LeftStick)) &&
+                mdPortB.showCrosshair == defaultB.showCrosshair &&
                 mdPortB.deviceKey == defaultB.deviceKey &&
                 mdPortB.deadzonePercent == defaultB.deadzonePercent &&
                 mdPortB.pad == defaultB.pad && mdPortB.keyboard == defaultB.keyboard &&
@@ -291,6 +293,7 @@ struct InputManager::Impl {
                     chained.sixButton == defaultChained.sixButton &&
                     chained.controllerType == defaultChained.controllerType &&
                     chained.aimSource == defaultChained.aimSource &&
+                    chained.showCrosshair == defaultChained.showCrosshair &&
                     chained.deviceKey == defaultChained.deviceKey &&
                     chained.deadzonePercent == defaultChained.deadzonePercent &&
                     chained.pad == defaultChained.pad && chained.keyboard == defaultChained.keyboard &&
@@ -657,6 +660,8 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     settings.setValue(prefix + "sixButton", m.sixButton);
     settings.setValue(prefix + "controllerType", int(m.controllerType));
     settings.setValue(prefix + "aimSource", int(m.aimSource));
+    if (m.showCrosshair) settings.remove(prefix + "showCrosshair");
+    else settings.setValue(prefix + "showCrosshair", false);
     settings.setValue(prefix + "deadzone", m.deadzonePercent);
     for (int target = 0; target < targetCount; ++target) {
         const QString key = prefix + QStringLiteral("pad/%1").arg(target);

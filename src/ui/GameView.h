@@ -46,6 +46,7 @@ public:
     void setRewindProgress(qint64 remainingMs, qint64 totalMs);
     void setLightgunEnabled(unsigned player, bool enabled, unsigned gunNumber = 1);
     // Aim coordinates are normalized to [0, 1] within the displayed gameRect.
+    void setCrosshairVisible(unsigned player, bool visible);
     void setLightgunAim(unsigned player, QPointF normalized, bool offscreen = false);
     void setMouseGunPlayer(int player); // -1 disables mouse aim; 0/1 select console ports; 2 selects the chained second Justifier.
     void setLightgunInputEnabled(bool enabled);
@@ -109,6 +110,7 @@ private:
     struct GunState {
         QPointF aim{0.5, 0.5};
         bool enabled = false;
+        bool crosshairVisible = true;
         bool hasAim = false;
         bool offscreen = true;
         unsigned number = 1; // Display number is independent of the input slot.

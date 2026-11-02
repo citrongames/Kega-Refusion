@@ -191,11 +191,14 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     aimRow->addWidget(aimSourceBox_);
     aimRow->addStretch(1);
     scope->addLayout(aimRow, 3, 2, 1, 2);
+    showCrosshairBox_ = new QCheckBox(QStringLiteral("Показывать прицел"), this);
+    showCrosshairBox_->setObjectName(QStringLiteral("showCrosshairBox"));
+    scope->addWidget(showCrosshairBox_, 4, 0, 1, 4);
     aimHint_ = new QLabel(QStringLiteral(
         "Мышь доступна одному пистолету; для второго выберите левый стик. "
         "Прицелы: первый пистолет — голубой, второй — оранжевый."), this);
     aimHint_->setWordWrap(true);
-    scope->addWidget(aimHint_, 4, 0, 1, 4);
+    scope->addWidget(aimHint_, 5, 0, 1, 4);
     mainLayout->addLayout(scope);
 
     tabs_ = new QTabWidget(this);
@@ -316,6 +319,11 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
         drafts_[key].controllerType = ControllerType::Justifier;
         dirty_.insert(key);
         refreshContents();
+    });
+    connect(showCrosshairBox_, &QCheckBox::toggled, this, [this](bool visible) {
+        if (refreshing_) return;
+        draft().showCrosshair = visible;
+        dirty_.insert(draftKey());
     });
     connect(aimSourceBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
         if (refreshing_) return;
@@ -557,6 +565,8 @@ void ControlsDialog::refreshContents() {
         (md ? QStringLiteral("Пистолет подключается ко второму порту консоли. Для меню T2 и Lethal Enforcers нужен геймпад в первом порту. ") : QString()) +
         QStringLiteral("Прицелы: первый пистолет — голубой, второй — оранжевый."));
     aimHint_->setVisible(mapping.connected && gun);
+    showCrosshairBox_->setVisible(mapping.connected && gun);
+    showCrosshairBox_->setChecked(mapping.showCrosshair);
     gameTable_->setColumnHidden(3, !gun);
     refreshDevices();
     deadzoneSlider_->setValue(qBound(5, mapping.deadzonePercent, 60));

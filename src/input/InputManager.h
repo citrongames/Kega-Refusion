@@ -28,6 +28,7 @@ struct PlayerMapping {
     bool sixButton = true; // Mega Drive pad type; bindings survive device changes.
     ControllerType controllerType = ControllerType::Pad;
     AimSource aimSource = AimSource::Mouse; // The chained second Justifier defaults to a stick.
+    bool showCrosshair = true;
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
     QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key

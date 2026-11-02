@@ -496,6 +496,12 @@ void GameView::setLightgunEnabled(unsigned player, bool enabled, unsigned gunNum
     repaintView();
 }
 
+void GameView::setCrosshairVisible(unsigned player, bool visible) {
+    if (player >= kGunSlots || guns_[player].crosshairVisible == visible) return;
+    guns_[player].crosshairVisible = visible;
+    repaintView();
+}
+
 void GameView::setLightgunAim(unsigned player, QPointF normalized, bool offscreen) {
     if (player >= kGunSlots) return;
     auto& gun = guns_[player];
@@ -612,7 +618,7 @@ void GameView::focusOutEvent(QFocusEvent* event) {
 void GameView::paintCrosshairs(QPainter& painter) {
     if (frame_.isNull() || loading_ || capturingGame_ || capturingReticles_) return;
     const bool visible = std::any_of(std::begin(guns_), std::end(guns_),
-        [](const GunState& gun) { return gun.enabled && gun.hasAim && !gun.offscreen; });
+        [](const GunState& gun) { return gun.enabled && gun.crosshairVisible && gun.hasAim && !gun.offscreen; });
     if (!visible) return;
     const QRectF game = gameRect();
     if (game.isEmpty()) return;
@@ -622,7 +628,7 @@ void GameView::paintCrosshairs(QPainter& painter) {
     unsigned drawn = 0;
     for (unsigned player = 0; player < kGunSlots && drawn < 2; ++player) {
         const auto& gun = guns_[player];
-        if (!gun.enabled || !gun.hasAim || gun.offscreen) continue;
+        if (!gun.enabled || !gun.crosshairVisible || !gun.hasAim || gun.offscreen) continue;
         ++drawn;
         const QPointF point(game.left() + gun.aim.x() * game.width(),
                             game.top() + gun.aim.y() * game.height());
@@ -639,15 +645,7 @@ void GameView::paintCrosshairs(QPainter& painter) {
         drawMarks();
         painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap));
         drawMarks();
-        const QPointF label = point + QPointF(12, gun.number == 1 ? -13 : 22);
-        const QString number = gun.number == 1 ? QStringLiteral("1") : QStringLiteral("2");
-        painter.setPen(QColor(0, 0, 0, 235));
-        painter.drawText(label + QPointF(-1, 0), number);
-        painter.drawText(label + QPointF(1, 0), number);
-        painter.drawText(label + QPointF(0, -1), number);
-        painter.drawText(label + QPointF(0, 1), number);
-        painter.setPen(color);
-        painter.drawText(label, number);
+
     }
     painter.restore();
 }

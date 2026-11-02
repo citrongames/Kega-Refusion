@@ -1122,6 +1122,7 @@ void MainWindow::updateGunConfiguration() {
     for (unsigned player=0;player<3;++player) {
         session_.setControllerKind(player,input_->controllerType(player));
         const bool gun = input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad;
+        view_->setCrosshairVisible(player,input_->mapping(input_->profile(),int(player)).showCrosshair);
         view_->setLightgunEnabled(player,gun, input_->profile() == ConsoleProfile::MegaDrive ? player : player + 1);
         if (gun && input_->aimWithMouse(player) && mousePlayer < 0) mousePlayer = int(player);
     }

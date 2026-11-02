@@ -140,3 +140,6 @@ A focused original 68000 handshake fixture checks Menacer/Justifier identificati
 
 
 The controller UI now follows physical MD ports: slot 0 is port A (pad/none); slot 1 is port B (pad/none/Menacer/Justifier). The optional second Justifier is slot 2 chained to slot 1, with its own bindings and aim source. It is exposed by a checkbox for port B Justifier, not by replacing port A. Three fixed input/aim slots pass through the UI, worker and host; queued port IDs use two bits. Callback mapping still accounts for GPX compact numbering and always-unrolled Justifier pair; an unconnected second gun returns neutral/offscreen input. Displayed crosshair numbers are independent of input slot indices, so the first gun remains cyan 1 and the second orange 2. The existing Light Phaser port arrangement for Master System is retained.
+
+
+In 0.8.2 crosshairs use color without numeric labels. A per-system/input-slot showCrosshair preference defaults to true and is stored only when hidden. GameView gates only overlay painting, independently of gun connection, aim/button input, and OSD visibility. The control dialog edits this preference through its existing apply/cancel workflow.
