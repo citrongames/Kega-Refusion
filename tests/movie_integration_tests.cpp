@@ -11,6 +11,7 @@
 #include <QtEndian>
 #include <cstdio>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -207,8 +208,12 @@ void integration(const QString& core) {
     // A valid movie envelope can still contain a corrupt native snapshot.
     // Preparation has already reset the core when that snapshot is rejected;
     // the failed start must put the former live game back exactly.
+    // A restored user region option is pending until one normal frame. Settle
+    // it before comparing the failed-start rollback against a stable baseline.
+    step(movie,host,memory,inputFor(0),error);
     const auto beforeFailedPlay=host.captureMovieState();
     const auto beforeFailedConfig=host.movieConfiguration();
+    const double beforeFailedFps=host.fps();
     require(!beforeFailedPlay.isEmpty() && !host.frame().isNull(),
             "failed-start baseline unavailable");
     const auto batteryPart=[](const QByteArray& state) {
@@ -219,7 +224,11 @@ void integration(const QString& core) {
     const QByteArray beforeRam(static_cast<const char*>(memory(RETRO_MEMORY_SYSTEM_RAM)),64*1024);
     std::vector<QByteArray> expectedAfterFailure;
     for (int i=0;i<4;++i) expectedAfterFailure.push_back(step(movie,host,memory,inputFor(i),error));
+    require(std::abs(host.fps()-beforeFailedFps)<1e-9,
+            "reference frames changed settled region timing");
     require(host.restoreMovieState(beforeFailedPlay,error),qPrintable(error));
+    require(std::abs(host.fps()-beforeFailedFps)<1e-9,
+            "reference state restore changed settled region timing");
     auto corruptInitial=beforeFailedPlay;
     corruptInitial[corruptInitial.size()-1] ^= 1;
     MovieTape badTape;
@@ -228,7 +237,8 @@ void integration(const QString& core) {
             badTape.save(badPath,error),qPrintable(error));
     require(!movie.play(badPath,false,error),"corrupt initial state was accepted");
     error.clear();
-    require(host.loaded() && host.movieConfiguration()==beforeFailedConfig,
+    require(host.loaded() && host.movieConfiguration()==beforeFailedConfig &&
+            std::abs(host.fps()-beforeFailedFps)<1e-9,
             "failed playback did not restore live configuration");
     require(batteryPart(host.captureMovieState())==beforeBattery &&
             QByteArray(static_cast<const char*>(memory(RETRO_MEMORY_SYSTEM_RAM)),64*1024)==beforeRam,
@@ -298,14 +308,197 @@ void integration(const QString& core) {
         std::chrono::duration<double,std::milli>(fullEnd-nativeEnd).count()/60.0,
         static_cast<long long>(host.serialize().size()/1024),
         static_cast<long long>(host.captureMovieState().size()/1024));
+
+    // Region is pending until the power reset at record start. The file must
+    // retain the actual post-reset cadence, including any fractional part.
+    for (const int region : {2,3}) {
+        const QString ratePath=temp.filePath(QStringLiteral("region-%1.krm").arg(region));
+        require(host.setRegion(region,error),qPrintable(error));
+        require(movie.startRecording(ratePath,error),qPrintable(error));
+        const double actual=host.fps();
+        require(std::abs(actual-(region==3 ? 50.0 : 60.0))<1.0,
+                "record start did not apply requested PAL/NTSC region");
+        require(std::abs(movie.frameRate()-actual)<1e-9,
+                "active movie rate differs from post-reset core rate");
+        MovieTape rateTape;
+        require(rateTape.load(ratePath,error),qPrintable(error));
+        require(std::abs(rateTape.metadata().value(QStringLiteral("frameRate")).toDouble()-actual)<1e-9,
+                "initial movie file stored the pre-reset frame rate");
+        for (int i=0;i<3;++i) {
+            require(movie.beforeFrame(inputFor(i),error),qPrintable(error));
+            host.runFrame(true,false); movie.afterFrame();
+        }
+        require(movie.finish(false,error),qPrintable(error));
+        require(rateTape.load(ratePath,error) && rateTape.resumeFrame()==3,qPrintable(error));
+        require(movie.play(ratePath,true,error),qPrintable(error));
+        require(movie.recording() && movie.position()==3 &&
+                std::abs(movie.frameRate()-actual)<1e-9 && std::abs(host.fps()-actual)<1e-9,
+                "resumed movie lost its recorded fractional frame rate");
+        require(movie.finish(false,error),qPrintable(error));
+    }
+}
+
+QByteArray legacySnapshot(const QByteArray& state, const QByteArray& legacyHash) {
+    require(state.size() >= 128 && state.startsWith("KRMOV002") && legacyHash.size() == 32,
+            "legacy snapshot source invalid");
+    QByteArray old = state;
+    old.replace(0,8,"KRMOV001");
+    old.replace(40,32,legacyHash);
+    // The native payload and its digest at offset 96 are unchanged.
+    return old;
+}
+struct RecordedSequence {
+    std::vector<QByteArray> frames;
+    std::vector<QByteArray> future;
+};
+void verifyPlayback(const QString& core, const QString& romPath, const QString& moviePath,
+                    const QString& dataPath, const RecordedSequence& expected,
+                    bool expectWarning) {
+    QString error;
+    require(QDir().mkpath(dataPath),"compatibility playback data directory failed");
+    const QString workingMovie=dataPath+QStringLiteral("/working.krm");
+    writeFile(workingMovie,readFile(moviePath));
+    LibretroHost host(core,dataPath);
+    require(host.load(romPath,error),qPrintable(error));
+    QLibrary library(core);
+    const auto memory=reinterpret_cast<Memory>(library.resolve("retro_get_memory_data"));
+    require(memory,"playback core memory API missing");
+    MovieSession movie(host,dataPath);
+    require(movie.play(workingMovie,false,error),qPrintable(error));
+    require(host.movieCompatibilityWarning().isEmpty() != expectWarning,
+            "unexpected core compatibility warning on playback");
+    for (size_t i=0;i<expected.frames.size();++i) {
+        MovieInput decoy=inputFor(int(i),true); decoy.buttons[0]=0xffff;
+        require(step(movie,host,memory,decoy,error)==expected.frames[i],
+                "cross-build replay video or CPU/RAM diverged");
+    }
+    require(movie.mode()==MovieSession::Finished && movie.position()==expected.frames.size(),
+            "cross-build playback did not finish at recorded length");
+    require(movie.finish(false,error),qPrintable(error));
+    require(movie.play(workingMovie,true,error),qPrintable(error));
+    require(host.movieCompatibilityWarning().isEmpty() != expectWarning,
+            "unexpected core compatibility warning on resume");
+    require(movie.recording() && movie.position()==expected.frames.size(),
+            "cross-build resume cursor mismatch");
+    for (size_t i=0;i<expected.future.size();++i)
+        require(step(movie,host,memory,inputFor(int(expected.frames.size()+i),true),error)==
+                expected.future[i], "cross-build resumed future diverged");
+    require(movie.finish(false,error),qPrintable(error));
+}
+void compatibility(const QString& currentCore, const QString& legacyCore) {
+    QTemporaryDir temp; require(temp.isValid(),"compatibility temporary directory failed");
+    const QString romPath=temp.filePath("compatibility.md");
+    const QString legacyPath=temp.filePath("legacy.krm");
+    const QString modernPath=temp.filePath("modern.krm");
+    const QString unknownOptionPath=temp.filePath("unknown-option.krm");
+    const QString appendedCore=temp.filePath("same-contract-appended.so");
+    const QString changedCore=temp.filePath("other-contract.so");
+    writeFile(romPath,makeInputRom());
+    const QByteArray legacyHash=QCryptographicHash::hash(readFile(legacyCore),QCryptographicHash::Sha256);
+    require(legacyHash.toHex()=="83c593f3138f24439520fd91f7b9f1251b35cd0d63087cdc4f9dc9476e3b529a",
+            "legacy fixture is not the verified original Linux core");
+    QString error;
+    RecordedSequence legacyExpected;
+    {
+        LibretroHost host(legacyCore,temp.filePath("old-data"));
+        require(host.load(romPath,error),qPrintable(error));
+        QLibrary library(legacyCore);
+        const auto memory=reinterpret_cast<Memory>(library.resolve("retro_get_memory_data"));
+        require(memory,"legacy core memory API missing");
+        MovieSession movie(host,temp.filePath("old-data"));
+        const QString source=temp.filePath("old-source.krm");
+        require(movie.startRecording(source,error),qPrintable(error));
+        MovieTape sourceTape;
+        require(sourceTape.load(source,error),qPrintable(error));
+        for (int i=0;i<12;++i)
+            legacyExpected.frames.push_back(step(movie,host,memory,inputFor(i),error));
+        const QByteArray savedEnd=host.captureMovieState();
+        for (int i=12;i<16;++i)
+            legacyExpected.future.push_back(step(movie,host,memory,inputFor(i,true),error));
+        require(movie.finish(false,error),qPrintable(error));
+        QJsonObject oldMetadata=sourceTape.metadata();
+        oldMetadata.insert(QStringLiteral("version"),1);
+        oldMetadata.insert(QStringLiteral("coreIdentity"),QString::fromLatin1(legacyHash.toHex()));
+        oldMetadata.remove(QStringLiteral("coreBuild"));
+        oldMetadata.remove(QStringLiteral("coreVersion"));
+        oldMetadata.remove(QStringLiteral("coreCompatibility"));
+        oldMetadata.remove(QStringLiteral("frameRate"));
+        MovieTape legacyMovie;
+        require(legacyMovie.create(oldMetadata,legacySnapshot(sourceTape.initialState(),legacyHash),error),
+                qPrintable(error));
+        for (int i=0;i<12;++i) require(legacyMovie.append(inputFor(i),error),qPrintable(error));
+        require(legacyMovie.setResumeState(legacySnapshot(savedEnd,legacyHash),12,error) &&
+                legacyMovie.save(legacyPath,error),qPrintable(error));
+    }
+    verifyPlayback(currentCore,romPath,legacyPath,temp.filePath("legacy-play-data"),
+                   legacyExpected,false);
+
+    RecordedSequence modernExpected;
+    {
+        LibretroHost host(currentCore,temp.filePath("modern-data"));
+        require(host.load(romPath,error),qPrintable(error));
+        QLibrary library(currentCore);
+        const auto memory=reinterpret_cast<Memory>(library.resolve("retro_get_memory_data"));
+        require(memory,"current core memory API missing");
+        MovieSession movie(host,temp.filePath("modern-data"));
+        require(movie.startRecording(modernPath,error),qPrintable(error));
+        for (int i=0;i<12;++i)
+            modernExpected.frames.push_back(step(movie,host,memory,inputFor(i),error));
+        require(movie.finish(false,error),qPrintable(error));
+        for (int i=12;i<16;++i)
+            modernExpected.future.push_back(step(movie,host,memory,inputFor(i,true),error));
+    }
+    // A newer recording can mention a core option this build does not know.
+    // Keep replay available and warn about the ignored value.
+    MovieTape modernTape, unknownOptionMovie;
+    require(modernTape.load(modernPath,error),qPrintable(error));
+    QJsonObject unknownMetadata=modernTape.metadata();
+    QJsonObject unknownOptions=unknownMetadata.value(QStringLiteral("options")).toObject();
+    unknownOptions.insert(QStringLiteral("kegarefusion_test_future_option"),QStringLiteral("on"));
+    unknownMetadata.insert(QStringLiteral("options"),unknownOptions);
+    require(unknownOptionMovie.create(unknownMetadata,modernTape.initialState(),error),qPrintable(error));
+    for (int i=0;i<12;++i) require(unknownOptionMovie.append(inputFor(i),error),qPrintable(error));
+    require(unknownOptionMovie.setResumeState(modernTape.resumeState(),12,error) &&
+            unknownOptionMovie.save(unknownOptionPath,error),qPrintable(error));
+    verifyPlayback(currentCore,romPath,unknownOptionPath,temp.filePath("unknown-option-data"),
+                   modernExpected,true);
+    const QByteArray currentBytes=readFile(currentCore);
+    writeFile(appendedCore,currentBytes+QByteArrayLiteral("compatible-rebuild-padding"));
+    require(QCryptographicHash::hash(currentBytes,QCryptographicHash::Sha256) !=
+            QCryptographicHash::hash(readFile(appendedCore),QCryptographicHash::Sha256),
+            "appended core did not change binary hash");
+    verifyPlayback(appendedCore,romPath,modernPath,temp.filePath("appended-data"),
+                   modernExpected,false);
+
+    const QByteArray oldAbi("kegarefusion-recording-v1");
+    const QByteArray newAbi("kegarefusion-recording-v9");
+    require(currentBytes.count(oldAbi)==1 && oldAbi.size()==newAbi.size(),
+            "recording ABI marker not uniquely present in current core");
+    QByteArray changedBytes=currentBytes;
+    changedBytes.replace(oldAbi,newAbi);
+    writeFile(changedCore,changedBytes);
+    QLibrary changedLibrary(changedCore);
+    const auto abi=reinterpret_cast<const char*(*)()>(changedLibrary.resolve("retro_kegarefusion_recording_abi"));
+    require(abi && QByteArray(abi())==newAbi,"mutated core did not export changed ABI");
+    verifyPlayback(changedCore,romPath,modernPath,temp.filePath("changed-modern-data"),
+                   modernExpected,true);
+    verifyPlayback(changedCore,romPath,legacyPath,temp.filePath("changed-legacy-data"),
+                   legacyExpected,true);
 }
 }
 int main(int argc, char** argv) {
     QCoreApplication app(argc,argv);
-    if (argc!=2) { std::fprintf(stderr,"usage: movie_integration_tests CORE\n"); return 2; }
+    if (argc!=2 && argc!=3) {
+        std::fprintf(stderr,"usage: movie_integration_tests CORE [LEGACY_CORE]\n"); return 2;
+    }
     try {
-        integration(QString::fromLocal8Bit(argv[1]));
-        std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard and fork passed");
+        if (argc==3) {
+            compatibility(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
+            std::puts("Movie core compatibility: legacy, compatible rebuild, and advisory mismatch passed");
+        } else {
+            integration(QString::fromLocal8Bit(argv[1]));
+            std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard and fork passed");
+        }
         return 0;
     } catch (const std::exception& failure) {
         std::fprintf(stderr,"FAIL: %s\n",failure.what()); return 1;

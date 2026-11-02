@@ -186,7 +186,7 @@
     fast_savestates = get_fast_savestates();
     if (size != STATE_SIZE)
        return FALSE;
-@@ -3479,6 +3539,51 @@
+@@ -3479,6 +3539,58 @@
  	/* apply ROM patches */
  	apply_cheats();
  }
@@ -200,6 +200,13 @@
 +RETRO_API unsigned retro_kegarefusion_core_features(void)
 +{
 +   return kegarefusion_32x_features();
++}
++
++/* Compatible rebuilds and optimizations keep this ABI unchanged.
++ * Bump only for incompatible state layout or deterministic execution changes. */
++RETRO_API const char *retro_kegarefusion_recording_abi(void)
++{
++   return "kegarefusion-recording-v1";
 +}
 +
 +RETRO_API int retro_kegarefusion_core_stats(uint64_t *out, size_t count)
@@ -238,7 +245,7 @@
  
  bool retro_load_game(const struct retro_game_info *info)
  {
-@@ -3739,6 +3833,9 @@
+@@ -3739,6 +3840,9 @@
     audio_init(SOUND_FREQUENCY, 0);
     system_init();
     system_reset();
@@ -248,7 +255,7 @@
     is_running = false;
  
     if (system_hw == SYSTEM_MCD)
-@@ -3760,6 +3857,9 @@
+@@ -3760,6 +3864,9 @@
     return true;
  
  error:
@@ -258,7 +265,7 @@
     if (sms_ntsc)
        free(sms_ntsc);
     sms_ntsc  = NULL;
-@@ -3783,6 +3883,9 @@
+@@ -3783,6 +3890,9 @@
  
  void retro_unload_game(void) 
  {
@@ -268,7 +275,7 @@
  	/* Clear disk interface */
     int i;
     disk_count = 0;
-@@ -3930,6 +4033,11 @@
+@@ -3930,6 +4040,11 @@
     update_overclock();
  #endif
 +#ifdef KEGAREFUSION_32X

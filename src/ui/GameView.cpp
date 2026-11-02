@@ -16,9 +16,21 @@
 #include <memory>
 #include <QtMath>
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 namespace {
+quint64 movieSeconds(quint64 frame, double fps) {
+    return quint64(double(frame) / fps);
+}
+QString movieTime(quint64 frame, double fps) {
+    const quint64 seconds = movieSeconds(frame, fps);
+    return QStringLiteral("%1:%2:%3")
+        .arg(seconds / 3600, 2, 10, QLatin1Char('0'))
+        .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0'))
+        .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+}
+
 QStringList wrapOsd(const QString& text, const QFontMetrics& metrics,
                     int maxWidth, int maxLines) {
     QStringList lines;
@@ -321,12 +333,24 @@ void GameView::setRewindStatus(bool enabled) {
     repaintView();
 }
 
-void GameView::setMovieStatus(int mode, quint64 frame, quint64 length) {
-    if (movieMode_ == mode && movieFrame_ == frame && movieLength_ == length) return;
+void GameView::setMovieCounterAsTime(bool enabled) {
+    if (movieCounterAsTime_ == enabled) return;
+    movieCounterAsTime_ = enabled;
+    if (osdEnabled_ && (movieMode_ == 1 || movieMode_ == 2)) repaintView();
+}
+
+void GameView::setMovieStatus(int mode, quint64 frame, quint64 length, double fps) {
+    if (!std::isfinite(fps) || fps <= 0.0 || fps > 1000.0) fps = 60.0;
+    const bool changed = mode != movieMode_ || ((mode == 1 || mode == 2) &&
+        (movieCounterAsTime_
+            ? movieSeconds(frame, fps) != movieSeconds(movieFrame_, movieFps_) ||
+              (mode == 2 && movieSeconds(length, fps) != movieSeconds(movieLength_, movieFps_))
+            : frame != movieFrame_ || (mode == 2 && length != movieLength_)));
     movieMode_ = mode;
     movieFrame_ = frame;
     movieLength_ = length;
-    if (osdEnabled_) repaintView();
+    movieFps_ = fps;
+    if (changed && osdEnabled_) repaintView();
 }
 
 void GameView::setRewindProgress(qint64 remainingMs, qint64 totalMs) {
@@ -393,12 +417,16 @@ void GameView::paintOsd(QPainter& painter) {
     };
 
     int y = margin;
+    const auto counter = [this](quint64 frame) {
+        return movieCounterAsTime_ ? movieTime(frame, movieFps_) : QString::number(frame);
+    };
+    const QString unit = movieCounterAsTime_ ? QStringLiteral("ВРЕМЯ") : QStringLiteral("КАДР");
     if (movieMode_ == 1)
-        y += drawPanel({QStringLiteral("ЗАПИСЬ МУВИКА"),
-                        QStringLiteral("КАДР %1").arg(movieFrame_)}, margin, y, true) + 4;
+        y += drawPanel({QStringLiteral("ЗАПИСЬ"),
+                        QStringLiteral("%1 %2").arg(unit, counter(movieFrame_))}, margin, y, true) + 4;
     else if (movieMode_ == 2)
-        y += drawPanel({QStringLiteral("ВОСПРОИЗВЕДЕНИЕ МУВИКА"),
-                        QStringLiteral("КАДР %1 / %2").arg(movieFrame_).arg(movieLength_)},
+        y += drawPanel({QStringLiteral("ВОСПРОИЗВЕДЕНИЕ"),
+                        QStringLiteral("%1 %2 / %3").arg(unit, counter(movieFrame_), counter(movieLength_))},
                        margin, y, true) + 4;
     if (paused_)
         y += drawPanel({QStringLiteral("ПАУЗА")}, margin, y, true) + 4;
@@ -457,7 +485,18 @@ void GameView::paintOsd(QPainter& painter) {
         }
     }
     for (const Notice& notice : notices_) {
-        const QStringList lines = wrapOsd(notice.text, fm, maxTextWidth, 2);
+        QStringList lines;
+        if (notice.category == QLatin1String("recordingCompatibility")) {
+            for (const QString& part : notice.text.split(QLatin1Char('\n'))) {
+                for (const QString& line : wrapOsd(part, fm, maxTextWidth, 2)) {
+                    if (lines.size() == 6) break;
+                    lines.append(line);
+                }
+                if (lines.size() == 6) break;
+            }
+        } else {
+            lines = wrapOsd(notice.text, fm, maxTextWidth, 2);
+        }
         const int panelHeight = lines.size() * lineHeight + 2 * pad;
         if (y + panelHeight > height() - margin) break;
         y += drawPanel(lines, margin, y, false) + 4;

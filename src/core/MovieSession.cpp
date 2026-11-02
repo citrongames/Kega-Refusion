@@ -22,11 +22,11 @@ constexpr qsizetype MaxSlot = MaxSnapshot + MaxPrefix + MaxPixels + 256;
 QByteArray hash(const QByteArray& bytes) { return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256); }
 bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
     if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
-        error = QStringLiteral("Не удалось создать папку сохранения мувика."); return false;
+        error = QStringLiteral("Не удалось создать папку сохранения записи."); return false;
     }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        error = QStringLiteral("Не удалось записать сохранение мувика: %1").arg(file.errorString()); return false;
+        error = QStringLiteral("Не удалось записать сохранение записи: %1").arg(file.errorString()); return false;
     }
     return true;
 }
@@ -56,17 +56,18 @@ MovieSession::MovieSession(LibretroHost& host, QString dataPath)
     : host_(host), dataPath_(std::move(dataPath)) {}
 
 bool MovieSession::startRecording(const QString& path, QString& error) {
-    if (active() || !host_.loaded()) { error = QStringLiteral("Сначала откройте игру и закончите текущий мувик."); return false; }
+    if (active() || !host_.loaded()) { error = QStringLiteral("Сначала откройте игру и закончите текущую запись."); return false; }
     if (!host_.flushSaveRam(error)) return false;
     const int previousDisc = host_.discIndex();
     const auto previous = host_.captureMovieState();
-    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед началом мувика."); return false; }
+    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед началом записи."); return false; }
     host_.setMoviePlayback(true); // Movie editing must not write imported/rewound battery data to normal saves.
-    const auto config = host_.movieConfiguration();
+    auto config = host_.movieConfiguration();
     if (!host_.prepareMovie(config, error)) {
         restorePreviousSession(host_, previous, previousDisc, false, error);
         return false;
     }
+    config = host_.movieConfiguration(); // Power reset has applied the recorded region and actual frame rate.
     const auto initial = host_.captureMovieState();
     MovieTape candidate;
     // Normalize the record start through exactly the same restoration path as replay.
@@ -74,7 +75,7 @@ bool MovieSession::startRecording(const QString& path, QString& error) {
         !candidate.create(config, initial, error) ||
         !candidate.setResumeState(initial, 0, error) || !candidate.save(path, error)) {
         restorePreviousSession(host_, previous, previousDisc, true, error);
-        if (error.isEmpty()) error = QStringLiteral("Не удалось подготовить начальное состояние мувика.");
+        if (error.isEmpty()) error = QStringLiteral("Не удалось подготовить начальное состояние записи.");
         return false;
     }
     tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
@@ -83,16 +84,16 @@ bool MovieSession::startRecording(const QString& path, QString& error) {
 }
 
 bool MovieSession::play(const QString& path, bool resumeRecording, QString& error) {
-    if (active() || !host_.loaded()) { error = QStringLiteral("Сначала откройте игру и закончите текущий мувик."); return false; }
+    if (active() || !host_.loaded()) { error = QStringLiteral("Сначала откройте игру и закончите текущую запись."); return false; }
     MovieTape candidate;
     if (!candidate.load(path, error)) return false;
     if (resumeRecording && candidate.resumeState().isEmpty()) {
-        error = QStringLiteral("В этом мувике нет точки продолжения. Воспроизведите его и выберите запись с нужного места."); return false;
+        error = QStringLiteral("В этой записи нет точки продолжения. Воспроизведите его и выберите запись с нужного места."); return false;
     }
     if (!host_.flushSaveRam(error)) return false;
     const int previousDisc = host_.discIndex();
     const auto previous = host_.captureMovieState();
-    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой мувика."); return false; }
+    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи."); return false; }
     host_.setMoviePlayback(true); // Preparing replay must not flush imported movie battery data.
     const bool prepared = host_.prepareMovie(candidate.metadata(), error);
     if (!prepared || !host_.restoreMovieState(
@@ -108,9 +109,9 @@ bool MovieSession::play(const QString& path, bool resumeRecording, QString& erro
 }
 
 bool MovieSession::rerecord(const QString& path, QString& error) {
-    if (!readOnly()) { error = QStringLiteral("Сначала включите воспроизведение мувика."); return false; }
+    if (!readOnly()) { error = QStringLiteral("Сначала включите воспроизведение записи."); return false; }
     if (QFileInfo(path).absoluteFilePath() == QFileInfo(path_).absoluteFilePath()) {
-        error = QStringLiteral("Выберите новое имя: исходный мувик останется без изменений."); return false;
+        error = QStringLiteral("Выберите новое имя: исходная запись останется без изменений."); return false;
     }
     MovieTape candidate = tape_;
     if (!candidate.forkAt(cursor_, error) ||
@@ -146,7 +147,7 @@ bool MovieSession::beforeFrame(const MovieInput& live, QString& error) {
         if (!tape_.append(live, error)) return false;
         input = live;
     } else if (!tape_.inputAt(cursor_, input)) {
-        error = QStringLiteral("Мувик не содержит ожидаемый кадр."); return false;
+        error = QStringLiteral("Запись не содержит ожидаемый кадр."); return false;
     }
     applyInput(host_, input);
     return true;
@@ -155,6 +156,9 @@ void MovieSession::afterFrame() {
     if (!active() || mode_ == Finished) return;
     ++cursor_;
     if (mode_ == Playback && cursor_ == tape_.size()) mode_ = Finished;
+}
+double MovieSession::frameRate() const {
+    return active() ? tape_.metadata().value(QStringLiteral("frameRate")).toDouble(host_.fps()) : host_.fps();
 }
 QByteArray MovieSession::controllers() const {
     return active() ? QJsonDocument(tape_.metadata().value(QStringLiteral("controllers")).toArray()).toJson(QJsonDocument::Compact) : QByteArray();
@@ -172,16 +176,16 @@ unsigned MovieSession::occupiedSlots() const {
 }
 
 bool MovieSession::saveSlot(int slot, QString& error) {
-    if (!active() || slot < 0 || slot > 9) { error = QStringLiteral("Нет активного мувика."); return false; }
+    if (!active() || slot < 0 || slot > 9) { error = QStringLiteral("Нет активной записи."); return false; }
     const auto state = host_.captureMovieState();
     const auto prefix = tape_.checkpoint(cursor_, error);
     if (state.isEmpty() || state.size() > MaxSnapshot || prefix.isEmpty() || prefix.size() > MaxPrefix) {
-        if (error.isEmpty()) error = QStringLiteral("Состояние мувика слишком велико или недоступно.");
+        if (error.isEmpty()) error = QStringLiteral("Состояние записи слишком велико или недоступно.");
         return false;
     }
     const auto frame = host_.frame().convertToFormat(QImage::Format_RGB32);
     const auto native = VideoFrameGeometry::nativeSize(host_.frame());
-    if (frame.sizeInBytes() > MaxPixels) { error = QStringLiteral("Кадр мувика слишком велик."); return false; }
+    if (frame.sizeInBytes() > MaxPixels) { error = QStringLiteral("Кадр записи слишком велик."); return false; }
     const auto pixels = frame.isNull() ? QByteArray() : qCompress(frame.constBits(), frame.sizeInBytes(), 1);
     QByteArray payload;
     QDataStream stream(&payload, QIODevice::WriteOnly);
@@ -197,15 +201,15 @@ bool MovieSession::saveSlot(int slot, QString& error) {
 
 bool MovieSession::loadSlot(int slot, QImage& frame, double& aspect, bool& missing, QString& error) {
     missing = false;
-    if (!active() || slot < 0 || slot > 9) { error = QStringLiteral("Нет активного мувика."); return false; }
+    if (!active() || slot < 0 || slot > 9) { error = QStringLiteral("Нет активной записи."); return false; }
     QFile file(slotPath(slot));
     if (!file.open(QIODevice::ReadOnly)) {
         missing = !QFileInfo::exists(file.fileName());
-        error = missing ? QStringLiteral("Сохранение мувика в слоте %1 не найдено").arg(slot)
-                        : QStringLiteral("Не удалось прочитать сохранение мувика: %1").arg(file.errorString());
+        error = missing ? QStringLiteral("Сохранение записи в слоте %1 не найдено").arg(slot)
+                        : QStringLiteral("Не удалось прочитать сохранение записи: %1").arg(file.errorString());
         return false;
     }
-    const auto bad = [&] { error = QStringLiteral("Сохранение мувика повреждено или несовместимо."); return false; };
+    const auto bad = [&] { error = QStringLiteral("Сохранение записи повреждено или несовместимо."); return false; };
     if (file.size() < 76 || file.size() > MaxSlot) return bad();
     const auto data = file.readAll();
     if (data.size() != file.size() || data.left(8) != QByteArrayLiteral("KRMSLOT1") || data.mid(8,32) != hash(data.mid(40))) return bad();

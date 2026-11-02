@@ -28,6 +28,7 @@ public:
     quint64 length() const { return tape_.size(); }
     QString path() const { return path_; }
     QByteArray controllers() const;
+    double frameRate() const;
 private:
     QString slotPath(int slot) const;
     bool saveRecording(QString& error);

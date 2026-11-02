@@ -948,7 +948,7 @@ void ControlsPage::setHardwareConfigurationLocked(bool locked) {
     controllerTypeBox_->setEnabled(!locked);
     secondJustifierBox_->setEnabled(!locked);
     const QString hint = locked
-        ? QStringLiteral("Тип и подключение контроллеров берутся из мувика до окончания записи или воспроизведения.")
+        ? QStringLiteral("Тип и подключение контроллеров заданы записью управления до её остановки.")
         : QString();
     deviceTypeBox_->setToolTip(hint);
     controllerTypeBox_->setToolTip(hint);

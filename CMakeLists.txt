@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.10.0 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.10.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -33,6 +33,7 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/FramePacer.cpp src/core/FramePacer.h
     src/core/BatterySave.cpp src/core/BatterySave.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
+target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
 target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)

@@ -44,7 +44,8 @@ public:
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
     void setRewindProgress(qint64 remainingMs, qint64 totalMs);
-    void setMovieStatus(int mode, quint64 frame, quint64 length);
+    void setMovieCounterAsTime(bool enabled);
+    void setMovieStatus(int mode, quint64 frame, quint64 length, double fps);
     void setLightgunEnabled(unsigned player, bool enabled, unsigned gunNumber = 1);
     // Aim coordinates are normalized to [0, 1] within the displayed gameRect.
     void setCrosshairVisible(unsigned player, bool visible);
@@ -130,6 +131,8 @@ private:
     bool rewinding_ = false;
     int movieMode_ = 0;
     quint64 movieFrame_ = 0, movieLength_ = 0;
+    double movieFps_ = 60.0;
+    bool movieCounterAsTime_ = true;
     QString rewindTime_;
     StateSlots stateSlots_;
     QVector<Notice> notices_;

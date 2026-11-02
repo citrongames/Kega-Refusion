@@ -427,6 +427,29 @@ void testStateSlotExpiry() {
     prepare(clean);
     require(render(view) == render(clean), "slot/status expiry left pixels behind");
 }
+
+// Validate that the OSD counter uses the stored frame rate and keeps warning lines.
+void testRecordingOsd() {
+    GameView view;
+    prepare(view);
+    const QImage clean = render(view);
+    view.setMovieStatus(1, 2996, 0, 59.922743);
+    const QImage ntscTime = render(view);
+    require(ntscTime != clean, "recording time counter did not render");
+    view.setMovieStatus(1, 2996, 0, 49.701459);
+    const QImage palTime = render(view);
+    require(palTime != ntscTime, "recording time ignored the stored frame rate");
+    view.setMovieCounterAsTime(false);
+    require(render(view) != palTime, "frame-count preference did not change the counter");
+
+    view.setMovieStatus(0, 0, 0, 60.0);
+    view.showOsd(QStringLiteral("Запись: 0.10.0 / ядро 123456789abc\n"
+                                "Сейчас: 0.10.1 / ядро 123456789abc\n"
+                                "Возможна рассинхронизация"),
+                 10000, QStringLiteral("recordingCompatibility"));
+    const QRect notice = changedBounds(clean, render(view));
+    require(notice.height() > 60, "compatibility warning lost its explicit lines");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -439,6 +462,10 @@ int main(int argc, char** argv) {
         if (app.arguments().contains(QStringLiteral("--mute-only"))) {
             testMuteStatus();
             std::puts("mute OSD passed"); return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--recording-only"))) {
+            testRecordingOsd();
+            std::puts("recording OSD passed"); return 0;
         }
         testMuteStatus();
         if (app.arguments().contains(QStringLiteral("--aspect-only"))) {

@@ -61,7 +61,8 @@ public:
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
-    void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length);
+    void movieCompatibilityWarning(const QString& message);
+    void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length, double fps);
     void movieHardwareChanged(const QByteArray& controllersJson);
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);

@@ -53,8 +53,8 @@
 #include <optional>
 
 namespace {
-constexpr int kBiosSettingsPage = 4;
-constexpr int kControlsSettingsPage = 5;
+constexpr int kBiosSettingsPage = 5;
+constexpr int kControlsSettingsPage = 6;
 
 QString shaderParameterPrefix(const QString& path) {
     const auto key = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex();
@@ -95,6 +95,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     setAcceptDrops(true);
     view_ = new GameView(this);
     view_->setOsdEnabled(settings_.value(QStringLiteral("view/osd"), true).toBool());
+    view_->setMovieCounterAsTime(settings_.value(QStringLiteral("recording/counterUnit"),
+        QStringLiteral("time")).toString() != QLatin1String("frames"));
     view_->setAcceptDrops(true);
     view_->installEventFilter(this);
     setCentralWidget(view_);
@@ -169,18 +171,23 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         input_->setMovieControllers(controllersJson);
     });
     connect(&session_, &EmulationSession::movieStatusChanged, this,
-            [this](int mode, const QString& path, quint64 frame, quint64 length) {
-        if (moviePending_ && (mode == moviePendingMode_ ||
-                              (moviePendingMode_ == 2 && mode == 3)))
-            moviePending_ = false;
+            [this](int mode, const QString& path, quint64 frame, quint64 length, double fps) {
+        const bool completed = moviePending_ && (mode == moviePendingMode_ ||
+                                (moviePendingMode_ == 2 && mode == 3));
+        const bool changed = movieMode_ != mode || moviePath_ != path;
+        if (completed) moviePending_ = false;
         movieMode_ = mode;
         moviePath_ = path;
-        view_->setMovieStatus(mode, frame, length);
-        updateMovieActions();
+        view_->setMovieStatus(mode, frame, length, fps);
+        if (completed || changed) updateMovieActions();
         if (closeAfterMovie_ && mode == 0) {
             closeAfterMovie_ = false;
             QTimer::singleShot(0, this, [this] { close(); });
         }
+    });
+    connect(&session_, &EmulationSession::movieCompatibilityWarning, this,
+            [this](const QString& message) {
+        view_->showOsd(message, 10000, QStringLiteral("recordingCompatibility"));
     });
     connect(&session_, &EmulationSession::cheatsChanged, this,
             [this](const CheatList& entries,int platform,bool supported,const QString& detail) {
@@ -312,12 +319,13 @@ void MainWindow::buildMenus() {
         if (!session_.hasGame() || loading_) return;
         releaseInput();
         loading_ = true; // Block new opens until the worker has flushed and unloaded.
+        updateMovieActions();
         updateInputEnabled();
         session_.closeGame();
     });
     recentMenu_ = fileMenu->addMenu(QStringLiteral("Недавние игры"));
     updateRecentMenu();
-    movieMenu_ = fileMenu->addMenu(QStringLiteral("Мувик"));
+    movieMenu_ = fileMenu->addMenu(QStringLiteral("Запись"));
     movieMenu_->setObjectName(QStringLiteral("movieMenu"));
     movieRecordAction_ = movieMenu_->addAction(QStringLiteral("Начать запись…"));
     movieRecordAction_->setObjectName(QStringLiteral("movieRecord"));
@@ -334,8 +342,8 @@ void MainWindow::buildMenus() {
     connect(movieResumeAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString directory = QDir(dataPath_).filePath(QStringLiteral("movies"));
-        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Продолжить запись мувика"),
-            directory, QStringLiteral("Мувики Kega Refusion (*.krm);;Все файлы (*)"));
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Продолжить запись управления"),
+            directory, QStringLiteral("Записи управления (*.krm);;Все файлы (*)"));
         view_->setFocus();
         if (path.isEmpty()) return;
         moviePending_ = true;
@@ -348,8 +356,8 @@ void MainWindow::buildMenus() {
     connect(moviePlayAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString directory = QDir(dataPath_).filePath(QStringLiteral("movies"));
-        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Воспроизвести мувик"),
-            directory, QStringLiteral("Мувики Kega Refusion (*.krm);;Все файлы (*)"));
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Воспроизвести запись управления"),
+            directory, QStringLiteral("Записи управления (*.krm);;Все файлы (*)"));
         view_->setFocus();
         if (path.isEmpty()) return;
         moviePending_ = true;
@@ -718,11 +726,12 @@ void MainWindow::editShaderParameters() {
 void MainWindow::updateDiscMenu() {
     if (!discMenu_) return;
     const bool hasDisc = !discPaths_.isEmpty();
-    changeDiscAction_->setEnabled(hasDisc);
-    ejectDiscAction_->setEnabled(hasDisc);
+    const bool discCommandsEnabled = hasDisc && movieMode_ == 0 && !moviePending_;
+    changeDiscAction_->setEnabled(discCommandsEnabled);
+    ejectDiscAction_->setEnabled(discCommandsEnabled);
     ejectDiscAction_->setChecked(hasDisc && discEjected_);
     discMenu_->clear();
-    discMenu_->setEnabled(discPaths_.size() > 1 && movieMode_ == 0);
+    discMenu_->setEnabled(discPaths_.size() > 1 && movieMode_ == 0 && !moviePending_);
     for (int index = 0; index < discPaths_.size(); ++index) {
         QAction* action = discMenu_->addAction(
             QStringLiteral("%1. %2").arg(index + 1).arg(QFileInfo(discPaths_[index]).fileName()));
@@ -939,8 +948,9 @@ void MainWindow::editSettings(int initialPage) {
     navigation->setFixedWidth(190);
     navigation->setSpacing(4);
     navigation->addItems({QStringLiteral("Общие"), QStringLiteral("Игры"),
-                          QStringLiteral("Перемотка"), QStringLiteral("Звук"),
-                          QStringLiteral("BIOS"), QStringLiteral("Управление")});
+                          QStringLiteral("Перемотка"), QStringLiteral("Запись"),
+                          QStringLiteral("Звук"), QStringLiteral("BIOS"),
+                          QStringLiteral("Управление")});
     auto* pages = new QStackedWidget(&dialog);
     pages->setObjectName(QStringLiteral("settingsPages"));
     content->addWidget(navigation);
@@ -1054,7 +1064,18 @@ void MainWindow::editSettings(int initialPage) {
     rewind->addRow(rewindHelp);
     rewindMemory->setToolTip(QStringLiteral(
         "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно."));
-    // The history memory limit remains adjustable while a movie is active.
+    // The history memory limit remains adjustable while a recording is active.
+
+    auto* recording = addPage(QStringLiteral("Запись"),
+        QStringLiteral("Формат счётчика записи и воспроизведения на экране игры."));
+    const QString counterUnit = settings_.value(QStringLiteral("recording/counterUnit"),
+        QStringLiteral("time")).toString();
+    auto* recordingCounterUnit = new QComboBox(&dialog);
+    recordingCounterUnit->setObjectName(QStringLiteral("recordingCounterUnit"));
+    recordingCounterUnit->addItem(QStringLiteral("Время (чч:мм:сс)"), QStringLiteral("time"));
+    recordingCounterUnit->addItem(QStringLiteral("Кадры"), QStringLiteral("frames"));
+    recordingCounterUnit->setCurrentIndex(counterUnit == QLatin1String("frames") ? 1 : 0);
+    recording->addRow(QStringLiteral("Счётчик на экране:"), recordingCounterUnit);
 
     auto* sound = addPage(QStringLiteral("Звук"),
         QStringLiteral("Устройство воспроизведения звука игры."));
@@ -1267,6 +1288,11 @@ void MainWindow::editSettings(int initialPage) {
             settings_.setValue(QStringLiteral("view/osd"), showOsd->isChecked());
             view_->setOsdEnabled(showOsd->isChecked());
         }
+        const QString selectedCounterUnit = recordingCounterUnit->currentData().toString();
+        if (selectedCounterUnit != counterUnit) {
+            settings_.setValue(QStringLiteral("recording/counterUnit"), selectedCounterUnit);
+            view_->setMovieCounterAsTime(selectedCounterUnit == QLatin1String("time"));
+        }
         const int selectedSpeed = speed->currentData().toInt();
         if (selectedSpeed != fastForwardFactor_) {
             fastForwardFactor_ = selectedSpeed;
@@ -1358,8 +1384,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
     releaseInput();
     const QDir movies(QDir(dataPath_).filePath(QStringLiteral("movies")));
     if (!QDir().mkpath(movies.absolutePath())) {
-        QMessageBox::warning(this, QStringLiteral("Мувик"),
-            QStringLiteral("Не удалось создать папку мувиков: %1").arg(movies.absolutePath()));
+        QMessageBox::warning(this, QStringLiteral("Запись"),
+            QStringLiteral("Не удалось создать папку записей: %1").arg(movies.absolutePath()));
         view_->setFocus();
         return {};
     }
@@ -1372,8 +1398,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz")) +
         (branch ? QStringLiteral("-branch") : QString()) + QStringLiteral(".krm"));
     QString path = QFileDialog::getSaveFileName(this,
-        branch ? QStringLiteral("Продолжить запись в новый мувик") : QStringLiteral("Начать запись мувика"),
-        proposal, QStringLiteral("Мувики Kega Refusion (*.krm)"), nullptr,
+        branch ? QStringLiteral("Записывать с этого места в новый файл") : QStringLiteral("Начать запись управления"),
+        proposal, QStringLiteral("Записи управления (*.krm)"), nullptr,
         QFileDialog::DontConfirmOverwrite);
     view_->setFocus();
     if (path.isEmpty()) return {};
@@ -1382,7 +1408,7 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
     path = file.absoluteFilePath();
     // A branch is always a new file; leave source movies and earlier recordings intact.
     if (file.exists()) {
-        QMessageBox::warning(this, QStringLiteral("Мувик"),
+        QMessageBox::warning(this, QStringLiteral("Запись"),
             QStringLiteral("Файл уже существует. Выберите новое имя: %1").arg(path));
         return {};
     }
@@ -1395,7 +1421,7 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
 #endif
         if (QDir::cleanPath(path).compare(QDir::cleanPath(QFileInfo(moviePath_).absoluteFilePath()),
                                           sensitivity) == 0) {
-            QMessageBox::warning(this, QStringLiteral("Мувик"),
+            QMessageBox::warning(this, QStringLiteral("Запись"),
                 QStringLiteral("Для продолжения записи выберите новый файл."));
             return {};
         }
@@ -1464,7 +1490,6 @@ void MainWindow::updateInputEnabled() {
     if (closeGameAction_) closeGameAction_->setEnabled(session_.hasGame() && !loading_);
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading_ &&
                                                   movieMode_ == 0);
-    updateMovieActions();
     if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() && !loading_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     session_.setBackgroundPaused(QApplication::activeModalWidget() || (pauseOnFocusLoss_ &&

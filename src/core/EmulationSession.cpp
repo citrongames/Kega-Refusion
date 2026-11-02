@@ -156,7 +156,7 @@ void EmulationSession::run() {
     };
     auto movieStatus = [&](bool force = false) {
         if (force || (movie.active() && nowNs() >= nextMovieStatusNs)) {
-            emit movieStatusChanged(int(movie.mode()), movie.path(), movie.position(), movie.length());
+            emit movieStatusChanged(int(movie.mode()), movie.path(), movie.position(), movie.length(), movie.frameRate());
             nextMovieStatusNs = nowNs() + 100000000;
         }
     };
@@ -176,7 +176,7 @@ void EmulationSession::run() {
             QString saveError;
             if (movie.finish(false,saveError)) {
                 movieBoundary();
-                error += QStringLiteral("\nЗаписанная часть мувика сохранена; игра оставлена на паузе.");
+                error += QStringLiteral("\nЗаписанная часть записи сохранена; игра оставлена на паузе.");
             } else error += QStringLiteral("\n") + saveError;
         }
         if (!error.isEmpty()) emit errorOccurred(error);
@@ -187,7 +187,7 @@ void EmulationSession::run() {
         if (movie.mode() == MovieSession::Finished) {
             paused = true; frameAdvanceHeld_.store(false);
             clearAudio(); emit pausedChanged(true); movieStatus(true);
-            emit actionNotice(QStringLiteral("Мувик завершён"));
+            emit actionNotice(QStringLiteral("Воспроизведение завершено"));
         } else movieStatus();
     };
     auto captureHistory = [&] {
@@ -221,7 +221,7 @@ void EmulationSession::run() {
                 default: break;
                 }
                 if (blocked) {
-                    emit actionNotice(QStringLiteral("Сначала завершите мувик: параметры консоли зафиксированы в записи."));
+                    emit actionNotice(QStringLiteral("Сначала завершите запись: параметры консоли зафиксированы в записи."));
                     continue;
                 }
             }
@@ -239,6 +239,11 @@ void EmulationSession::run() {
                     emit errorOccurred(error); break;
                 }
                 releaseButtons(); movieBoundary(); optionsPending = false;
+                if ((command.type == Type::MoviePlay || command.type == Type::MovieResume) &&
+                    !host.movieCompatibilityWarning().isEmpty()) {
+                    emit movieCompatibilityWarning(host.movieCompatibilityWarning());
+                    emit notification(host.movieCompatibilityWarning());
+                }
                 paused = movie.mode() == MovieSession::Finished;
                 emit pausedChanged(paused);
                 break;

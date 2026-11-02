@@ -16,3 +16,8 @@
 - Do not add heavy work, file reads/writes, or avoidable allocations to per-frame/input/audio paths. Poll or recompute only when needed; measure concrete regressions.
 - Apply these requirements to existing features as well as new ones. Clean task scratch outputs while preserving useful incremental builds and user data.
 - After a completed, verified change, commit and push it to the project's private repository.
+
+## Input recording compatibility
+- Preserve the recording compatibility contract across compatible rebuilds/optimizations. Change it deliberately when native state layout or deterministic execution changes; retain old file readers where feasible.
+- Core-version mismatch is advisory: show the recorded and current version/build and attempt playback/resume. Do not reject solely because a core binary or compatibility ID differs. Validate file bounds/checksums, game identity and the actual native-state decoder independently.
+- Save the actual post-power-reset region frame rate in recording metadata. OSD time derives from recorded frames/rate, not wall-clock time or an assumed 60 Hz; legacy files use the restored core rate.

@@ -67,6 +67,7 @@ public:
     bool restoreMovieConfiguration(QString& error);
     QByteArray movieGameIdentity() const;
     QByteArray movieCoreIdentity() const;
+    const QString& movieCompatibilityWarning() const { return movieCompatibilityWarning_; }
     void setMoviePlayback(bool playback) { moviePlayback_ = playback; }
     bool flushSaveRam(QString& error);
     bool pollSaveRam(qint64 nowMs, QString& error);
@@ -92,6 +93,7 @@ public:
     std::function<void(const QString&)> message;
 private:
     QByteArray stateCoreIdentity() const;
+    bool acceptsLegacyMovieCore(const QByteArray& identity) const;
     QJsonObject movieBiosFingerprints() const;
     struct Api;
     bool initialize(QString& error);
@@ -122,7 +124,8 @@ private:
     QLibrary library_;
     std::unique_ptr<Api> api_;
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
-    QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_, exactCoreHash_;
+    QString movieCompatibilityWarning_;
+    QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_, exactCoreHash_, recordingAbi_, recordingCoreHash_;
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};
     retro_disk_control_callback disk_{};
