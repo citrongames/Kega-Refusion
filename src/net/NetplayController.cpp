@@ -353,7 +353,7 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
 }
 void NetplayController::leaveSession(){
     if(!active_)return;
-    stopping_=true;active_=false;connectionLost_=remoteConnectionWaiting_=false;
+    stopping_=true;active_=false;connectionLost_=remoteConnectionWaiting_=remoteReadinessWaiting_=false;
     addressPending_=false;automaticAddress_=false;addressRetry_=false;addressDiscovery_->cancel();
     invitationKey_.clear();invitationPassword_.clear();lanInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
     inputTimer_.stop();reconnectTimer_.stop();snapshotTimer_.stop();
@@ -436,7 +436,18 @@ void NetplayController::updateWaiting(){
     }
     for(auto id:expired){transport_.setRole(id,Role::Spectator);participants_.remove(id);disconnectedAt_.remove(id);}
     session_.setNetworkWaiting(wait);
-    if(!expired.isEmpty())refreshLobby();
+    if(!expired.isEmpty() || participantReadinessWaiting()!=readinessWaiting_)refreshLobby();
+}
+bool NetplayController::participantReadinessWaiting() const {
+    if(!active_)return false;
+    if(!hosting_)return remoteReadinessWaiting_;
+    if(gamePath_.isEmpty())return false;
+    for(auto it=outgoingSnapshots_.cbegin();it!=outgoingSnapshots_.cend();++it)
+        if(!disconnectedAt_.contains(it.key()))return true;
+    for(auto it=participants_.cbegin();it!=participants_.cend();++it)
+        if(it.key() && roleValue(it->value("role").toString()) &&
+            !readyPeers_.contains(it.key()) && !disconnectedAt_.contains(it.key()))return true;
+    return false;
 }
 void NetplayController::stopWaiting(){
     if(!active_ || !hosting_ || disconnectedAt_.isEmpty())return;
@@ -564,6 +575,7 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     } else if(op=="notice") {emit notice(o.value("text").toString().left(1024));
     } else if(op=="lobby"){
         remoteConnectionWaiting_=o.value("connectionWaiting").toBool();
+        remoteReadinessWaiting_=o.value("readinessWaiting").toBool();
         allowCommands_=o.value("allowCommands").toBool();
         applyLinkCableConfiguration(o.value("linkCable").toBool());
         const auto array=o.value("participants").toArray();if(array.size()>32)return;
@@ -574,9 +586,11 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
 void NetplayController::refreshLobby(){
     const bool waiting=active_ && (hosting_?!disconnectedAt_.isEmpty():connectionLost_||remoteConnectionWaiting_);
     if(waiting!=connectionWaiting_){connectionWaiting_=waiting;emit connectionWaitingChanged(waiting);}
+    const bool readinessWaiting=participantReadinessWaiting();
+    if(readinessWaiting!=readinessWaiting_){readinessWaiting_=readinessWaiting;emit readinessWaitingChanged(readinessWaiting);}
     QJsonArray list;auto ids=participants_.keys();std::sort(ids.begin(),ids.end());for(auto id:ids)list.append(participants_.value(id));
     if(hosting_) {
-        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"linkCable",linkCable_},{"connectionWaiting",waiting}});
+        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"linkCable",linkCable_},{"connectionWaiting",waiting},{"readinessWaiting",readinessWaiting}});
         if(bytes!=lastLobbyBytes_){lastLobbyBytes_=bytes;transport_.broadcast(MessageKind::Control,bytes);}
     }
     QString romStatus=gameReady_?QStringLiteral("matched"):localManifest_.isEmpty()?QStringLiteral("missing"):QStringLiteral("verifying");

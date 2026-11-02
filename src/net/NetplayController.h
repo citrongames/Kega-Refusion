@@ -33,6 +33,7 @@ signals:
     void openRomRequested(const QString&);
     void notice(const QString&);
     void connectionWaitingChanged(bool waiting);
+    void readinessWaitingChanged(bool waiting);
 private:
     void startHost(quint16, const QString&, const QString&, const QString& connectionId = {});
     void resolveHostAddress();
@@ -48,6 +49,7 @@ private:
     void queueSnapshot(quint64,const QByteArray&);
     void beginIncomingSnapshot(qsizetype size,quint64 epoch);
     void updateWaiting();
+    bool participantReadinessWaiting() const;
     void stopWaiting();
     void updateRoster();
     void announceContent();
@@ -72,6 +74,7 @@ private:
     QTimer inputTimer_, reconnectTimer_, snapshotTimer_;
     bool active_ = false, hosting_ = false, stopping_ = false;
     bool connectionLost_=false, remoteConnectionWaiting_=false, connectionWaiting_=false;
+    bool remoteReadinessWaiting_=false, readinessWaiting_=false;
     bool allowCommands_ = true, allowDownloads_ = false;
     bool linkCable_ = false;
     bool gameReady_ = false, remoteGameOpen_ = false;

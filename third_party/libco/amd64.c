@@ -17,7 +17,13 @@
 extern "C" {
 #endif
 
-static thread_local long long co_active_buffer[64];
+/* The Win64 swap uses movaps for XMM6-15. MinGW emulated TLS otherwise
+ * requests only alignof(long long), so the primary context may be 8 mod 16. */
+#if defined(_MSC_VER)
+__declspec(align(16)) static thread_local long long co_active_buffer[64];
+#else
+static thread_local long long co_active_buffer[64] __attribute__((aligned(16)));
+#endif
 static thread_local cothread_t co_active_handle = 0;
 #ifndef CO_USE_INLINE_ASM
 static void (*co_swap)(cothread_t, cothread_t)  = 0;
@@ -124,7 +130,7 @@ static void co_init(void) {}
 
 static void crash(void)
 {
-  assert(0); /* called only if cothread_t entrypoint returns */
+  abort(); /* entrypoints must never return, including release builds */
 }
 
 cothread_t co_active(void)
@@ -162,6 +168,11 @@ cothread_t co_create(unsigned int size, void (*entrypoint)(void))
    if ((handle = (cothread_t)malloc(size)))
    {
       long long *p = (long long*)((char*)handle + size); /* seek to top of stack */
+#ifdef _WIN32
+      /* Win64 entrypoints own 32 bytes of home space above their return
+       * address, even before calling another function. Keep it in the stack. */
+      p -= 4;
+#endif
       *--p = (long long)crash;                           /* crash if entrypoint returns */
       *--p = (long long)entrypoint;                      /* start of function */
       *(long long*)handle = (long long)p;                /* stack pointer */

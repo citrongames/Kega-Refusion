@@ -61,6 +61,29 @@ void waitMs(int duration) {
     loop.exec();
 }
 
+void testReadinessWaiting() {
+    GameView view,disconnected;
+    prepare(view);prepare(disconnected);
+    const auto baseline=render(view),clean=view.captureGameImage();
+    view.setReadinessWaiting(true);
+    const auto waiting=render(view);
+    require(waiting!=baseline,"player readiness waiting OSD missing");
+    require(view.captureGameImage()==clean,"readiness waiting leaked into clean screenshot");
+    view.setReadinessWaiting(true);
+    require(render(view)==waiting,"unchanged readiness waiting changed OSD");
+    view.setOsdEnabled(false);
+    require(render(view)==baseline,"readiness waiting ignored disabled OSD");
+    view.setOsdEnabled(true);
+    require(render(view)==waiting,"persistent readiness waiting missing after enabling OSD");
+    view.setConnectionWaiting(true);disconnected.setConnectionWaiting(true);
+    require(render(view)==render(disconnected),"readiness waiting obscured actual connection loss");
+    require(render(view)!=waiting,"readiness waiting falsely labelled connection loss");
+    view.setConnectionWaiting(false);
+    require(render(view)==waiting,"readiness waiting not restored after connection recovery");
+    view.setReadinessWaiting(false);
+    require(render(view)==baseline,"readiness waiting OSD persisted after becoming ready");
+}
+
 void testFpsOverlays() {
     GameView view;
     prepare(view);
@@ -604,6 +627,10 @@ void testAchievementPopup(bool positionsOnly = false) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--readiness-only"))) {
+            testReadinessWaiting();
+            std::puts("player readiness waiting OSD, release, connection priority and disabled OSD passed");return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--fps-only"))) {
             testFpsOverlays();
             std::puts("FPS overlay independence and clean capture passed"); return 0;
@@ -646,6 +673,7 @@ int main(int argc, char** argv) {
             std::puts("filtered square-pixel geometry passed"); return 0;
         }
         testFpsOverlays();
+        testReadinessWaiting();
         testGameBorders();
         testCleanScreenshot();
         testFilteredSquarePixels();

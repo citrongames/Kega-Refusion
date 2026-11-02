@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QDateTime>
 #include <QSslSocket>
 #include <QJsonDocument>
 #include <QtEndian>
@@ -19,6 +20,51 @@
 #include <stdexcept>
 class NetplayScenario {
 public:
+    static void verifyReadinessWaiting(NetplayController& c) {
+        const auto require=[](bool value,const char* text){if(!value)throw std::runtime_error(text);};
+        QObject observer;int changes=0;bool waiting=false;
+        QObject::connect(&c,&NetplayController::readinessWaitingChanged,&observer,[&](bool value){waiting=value;++changes;});
+        c.active_=c.hosting_=true;c.gameReady_=true;c.gamePath_=QStringLiteral("readiness-fixture.md");
+        c.participants_.insert(7,QJsonObject{{"id","7"},{"role","spectator"},{"readiness","rom-missing"}});
+        c.updateWaiting();c.refreshLobby();
+        require(!waiting&&changes==0,"missing ROM spectator unexpectedly blocks readiness");
+        c.participants_[7].insert("role","player2");c.updateWaiting();
+        require(waiting&&changes==1&&!c.connectionWaiting_,"unloaded player2 has no readiness indication or is labelled disconnected");
+        for(int i=0;i<5;++i){c.updateWaiting();c.refreshLobby();}
+        require(changes==1,"unchanged readiness emitted repeated signals");
+        c.readyPeers_.insert(7);c.updateWaiting();
+        require(!waiting&&changes==2,"ready player did not clear waiting");
+        c.readyPeers_.remove(7);c.updateWaiting();
+        require(waiting&&changes==3,"player becoming unready did not restore waiting");
+        c.participants_[7].insert("role","spectator");c.updateWaiting();
+        require(!waiting&&changes==4,"spectator reassignment did not clear waiting");
+        c.outgoingSnapshots_.insert(7,QByteArray("snapshot"));c.updateWaiting();
+        require(waiting&&changes==5,"snapshot synchronization lacks waiting indication");
+        c.outgoingSnapshots_.clear();c.updateWaiting();
+        require(!waiting&&changes==6,"snapshot completion did not clear waiting");
+        c.participants_[7].insert("role","player2");c.disconnectedAt_.insert(7,QDateTime::currentMSecsSinceEpoch());
+        c.updateWaiting();c.refreshLobby();
+        require(!waiting&&c.connectionWaiting_,"real disconnect should use connection loss rather than loading status");
+        c.disconnectedAt_.clear();c.updateWaiting();c.refreshLobby();
+        require(waiting&&!c.connectionWaiting_,"reconnected unready player did not return to loading status");
+        c.participants_.remove(7);c.updateWaiting();
+        require(!waiting,"participant exit did not clear waiting");
+        c.participants_.insert(7,QJsonObject{{"id","7"},{"role","player2"}});c.updateWaiting();
+        require(waiting,"player wait missing before closing host ROM");
+        c.gamePath_.clear();c.refreshLobby();require(!waiting,"closed host ROM retained readiness OSD");
+        c.gamePath_=QStringLiteral("readiness-fixture.md");c.refreshLobby();
+        require(waiting,"player wait missing before leaving lobby");
+        c.leaveSession();require(!waiting,"lobby exit did not clear readiness OSD");
+        c.active_=true;c.hosting_=false;
+        const auto lobby=[](bool ready){return QJsonDocument(QJsonObject{{"op","lobby"},{"participants",QJsonArray{}},
+            {"readinessWaiting",ready},{"connectionWaiting",false}}).toJson(QJsonDocument::Compact);};
+        c.receive(0,kega::net::MessageKind::Control,lobby(true));
+        require(waiting&&!c.connectionWaiting_,"client did not receive host readiness waiting");
+        const int before=changes;c.receive(0,kega::net::MessageKind::Control,lobby(true));
+        require(changes==before,"repeated lobby packet repeated readiness signal");
+        c.receive(0,kega::net::MessageKind::Control,lobby(false));
+        require(!waiting,"client did not clear host readiness waiting");c.leaveSession();
+    }
     static QByteArray debug(NetplayController& c){return QJsonDocument(QJsonObject{{"status",c.status_},{"manifestBytes",c.manifest_.size()},{"localBytes",c.localManifest_.size()},{"download",c.downloading_},{"allowDownload",c.allowDownloads_},{"path",c.gamePath_},{"ready",c.gameReady_},{"appliedEpoch",QString::number(c.applyingEpoch_)}}).toJson(QJsonDocument::Compact);}
     static void create(NetplayController& c){c.startHost(0,QStringLiteral("127.0.0.1"),{});}
     static void join(NetplayController& c,const QString& invitation){c.startJoin(invitation,{});}
@@ -78,6 +124,17 @@ static QByteArray rom(bool outputs=false){
 int main(int argc,char** argv){
     QApplication app(argc,argv);app.setQuitOnLastWindowClosed(false);
     const auto args=app.arguments();
+    if(args.size()==2 && args[1]=="--waiting-only") {
+        QTemporaryDir scratch;if(!scratch.isValid())return 1;
+        QSettings settings(scratch.filePath("settings.ini"),QSettings::IniFormat);
+        EmulationSession session(QString{},scratch.path());int result=0;
+        {
+            NetplayController controller(session,scratch.path(),settings,nullptr);
+            try {NetplayScenario::verifyReadinessWaiting(controller);std::puts("player readiness transitions, role release, synchronization, exit, no duplicate signals and remote status passed");}
+            catch(const std::exception& error){std::fprintf(stderr,"readiness test failed: %s\n",error.what());result=1;}
+        }
+        session.shutdown();return result;
+    }
     const bool linkScenario=args.contains("--link");
     if(args.size()==2 || (args.size()==3 && linkScenario)){
         QTemporaryDir scratch; if(!scratch.isValid())return 1;

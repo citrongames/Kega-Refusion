@@ -572,6 +572,8 @@
     "Прогресс достижений слишком велик для сохранения.": "Achievement progress is too large to save.",
     "Прогресс условий достижений сброшен: состояние не совпадает": "Achievement condition progress was reset: the state does not match",
     "СВЯЗЬ ПОТЕРЯНА": "CONNECTION LOST",
+    "ОЖИДАНИЕ ИГРОКА": "WAITING FOR PLAYER",
+    "Загрузка игры или синхронизация": "Loading game or synchronizing",
     "Продолжить без отключившихся": "Continue without disconnected players",
     "Продолжить запись управления": "Resume input recording",
     "Продолжить запись…": "Resume recording…",

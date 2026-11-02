@@ -521,6 +521,12 @@ void GameView::setConnectionWaiting(bool waiting) {
     if(osdEnabled_)repaintView();
 }
 
+void GameView::setReadinessWaiting(bool waiting) {
+    if(readinessWaiting_==waiting)return;
+    readinessWaiting_=waiting;
+    if(osdEnabled_)repaintView();
+}
+
 void GameView::setRewindStatus(bool enabled) {
     if (rewinding_ == enabled) return;
     rewinding_ = enabled;
@@ -588,7 +594,7 @@ void GameView::paintOsd(QPainter& painter) {
     if (capturingGame_) return;
     const QRect achievementRect = osdEnabled_ ? achievementPopupRect() : QRect();
     const bool ordinaryOsd = osdEnabled_ && (!notices_.isEmpty() || stateSlots_.expiresAt ||
-        paused_ || connectionWaiting_ || fastForward_ || rewinding_ || muted_ || movieMode_ == 1 || movieMode_ == 2);
+        paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ || movieMode_ == 1 || movieMode_ == 2);
     const bool metricsOsd = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
     if (!ordinaryOsd && !metricsOsd) {
         if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
@@ -648,6 +654,9 @@ void GameView::paintOsd(QPainter& painter) {
                        margin, y, true) + 4;
     if (connectionWaiting_)
         y += drawPanel({Localization::text(QStringLiteral("СВЯЗЬ ПОТЕРЯНА"))}, margin, y, true) + 4;
+    else if (readinessWaiting_)
+        y += drawPanel({Localization::text(QStringLiteral("ОЖИДАНИЕ ИГРОКА")),
+                        Localization::text(QStringLiteral("Загрузка игры или синхронизация"))}, margin, y, true) + 4;
     if (paused_)
         y += drawPanel({Localization::text(QStringLiteral("ПАУЗА"))}, margin, y, true) + 4;
     if (fastForward_)

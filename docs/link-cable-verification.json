@@ -1,7 +1,7 @@
 {
-  "version": "0.15.0",
+  "version": "0.15.1",
   "date": "2026-11-03",
-  "environment": "WSL Ubuntu, Linux x86-64; Windows cross-build only, no Windows UI takeover",
+  "environment": "WSL Ubuntu/Linux x86-64 integration; native Windows x86-64 headless core/context checks; no Windows UI takeover",
   "hardware": {
     "core": "/home/vova/projects/Kega Refusion/build/linux/core/genesis_plus_gx_libretro.so",
     "core_sha256": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
@@ -183,15 +183,109 @@
     "No full campaign run",
     "No separate translation ROM exercised",
     "No CD/32X/Paprium cable combination",
-    "No Windows runtime or real Windows/Linux connection test in this batch"
+    "No Windows GUI or live Windows/Linux connection test in this batch"
   ],
+  "windows_fix": {
+    "reported_failure": "Crash when enabling Link Cable in an already connected session",
+    "wer_exception": "0xc0000005",
+    "wer_offset": "0x2440e7",
+    "instruction": "co_swap_function+0x27: movaps [rdx+0x50],xmm6",
+    "cause": "MinGW emulated TLS primary context declared with 8-byte alignment, while Win64 SIMD save requires 16",
+    "corrections": [
+      "Explicit 16-byte TLS context alignment",
+      "Reserve 32-byte Win64 argument home space within each initial stack",
+      "abort when context entrypoint unexpectedly returns, including Release"
+    ],
+    "before_context_test": "FAIL: primary context misaligned on all 9 thread lifetimes",
+    "after_context_test": {
+      "windows": "PASS",
+      "linux": "PASS",
+      "thread_lifetimes": 9,
+      "switches": 73728,
+      "peer_stacks_released": true
+    },
+    "native_windows_gameplay": {
+      "audio_hash": "ae87d3f6bd09294e08d859f36959391a2ba90915092ecdaab41893ea7fffbb48",
+      "audio_nonzero_bytes": 13714000,
+      "audio_replay_equal": true,
+      "emulated_fps": 334.79270331149644,
+      "failed_restore_atomic": true,
+      "frames": 5200,
+      "peer_mappings": -1,
+      "peer_mappings_after_disable": -1,
+      "peer_mappings_after_unload": -1,
+      "repeated_toggle_cleanup": [
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        },
+        {
+          "peer_mappings": -1,
+          "rss_kib": -1
+        }
+      ],
+      "rss_after_disable_kib": -1,
+      "rss_after_unload_kib": -1,
+      "rss_before_kib": -1,
+      "rss_linked_kib": -1,
+      "seconds": 15.5319992,
+      "state_bytes": 2270352,
+      "video_hash": "0e0660df2850bf39645a4f1cdbbc0e15604be483cda8498a2defdd4475193e43",
+      "video_rate": 59.92274340431231,
+      "video_replay_equal": true
+    },
+    "windows_memory_metrics": "/proc metrics are unavailable (-1); not a Windows memory measurement",
+    "cross_platform_hashes_identical": true
+  },
+  "readiness_osd": {
+    "tests": [
+      "QT_QPA_PLATFORM=offscreen build/linux/bin/osd_tests --readiness-only",
+      "QT_QPA_PLATFORM=offscreen build/linux/bin/netplay_session_tests --waiting-only"
+    ],
+    "result": "PASS",
+    "coverage": [
+      "missing ROM player2",
+      "clears on ready, spectator role, exit",
+      "snapshot start/end",
+      "disconnect priority and reconnect loading",
+      "host ROM close/reopen",
+      "guest wire status",
+      "unchanged packets do not repeat signals",
+      "OSD off hides and on restores",
+      "clean game capture unchanged"
+    ]
+  },
   "published_sha256": {
-    "KegaRefusion.exe": "63f22b19003aed95aa2989373008045a06e68779cd62344a5b2def0ff107b857",
+    "KegaRefusion.exe": "2fee30a0f61a1b8def6d3887569835bb0cdea12ee20342a63cfa7ef310a5c225",
     "cores/genesis_plus_gx_libretro.dll": "acbb697ef75e6bcf24ca9d310c82351de65e69c4fa603586996511c4a5444438",
     "cores/genesis_plus_gx_libretro_linkpeer.dll": "acbb697ef75e6bcf24ca9d310c82351de65e69c4fa603586996511c4a5444438",
-    "linux/KegaRefusion": "ab5223aa244fe890ee7be2600a73c85f9c83ce0d5c88d4756a5de489a92f50ed",
+    "linux/KegaRefusion": "1b931126636806850514851ef45bf392b0dd152b9d3269b261647a3e6e59481e",
     "linux/cores/genesis_plus_gx_libretro.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
     "linux/cores/genesis_plus_gx_libretro_linkpeer.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
-    "KegaRefusion-0.15.0-linux-x86_64.tar.gz": "df4a6cb7d9fd480e3117110da8f83e6f7d8431614797acf8646520945663e9b0"
+    "KegaRefusion-0.15.1-linux-x86_64.tar.gz": "2fe5e561fc5b9c868e6c0a3daff40a781c65ffb320128648afb334ada879ef31"
   }
 }

@@ -51,6 +51,7 @@ public:
     void setPerformanceMetrics(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
     void setPausedStatus(bool paused);
     void setConnectionWaiting(bool waiting);
+    void setReadinessWaiting(bool waiting);
     void setMutedStatus(bool muted);
     void setFastForwardStatus(bool enabled);
     void setFastForwardFactor(int factor);
@@ -160,6 +161,7 @@ private:
     QString loadingFileName_;
     bool paused_ = false;
     bool connectionWaiting_ = false;
+    bool readinessWaiting_ = false;
     bool muted_ = false;
     bool fastForward_ = false;
     int fastForwardFactor_ = 4;

@@ -247,6 +247,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         view_->showOsd(Localization::text(text), 3000, QStringLiteral("netplay"));
     });
     connect(netplay_, &NetplayController::connectionWaitingChanged, view_, &GameView::setConnectionWaiting);
+    connect(netplay_, &NetplayController::readinessWaitingChanged, view_, &GameView::setReadinessWaiting);
     connect(netplay_, &NetplayController::activeChanged, this, [this](bool active) {
         if (netplayLeaveAction_) netplayLeaveAction_->setEnabled(active);
         updateInputEnabled();
