@@ -34,6 +34,7 @@ private:
     int draftKey() const;
     PlayerMapping& draft();
     QVector<int> activeGameTargets();
+    void refreshPlayerChoices();
     QString captureDeviceKey();
     void refreshDevices();
     void refreshContents();
@@ -58,9 +59,9 @@ private:
     QComboBox* profileBox_ = nullptr;
     QComboBox* playerBox_ = nullptr;
     QComboBox* deviceBox_ = nullptr;
-    QCheckBox* connectedBox_ = nullptr;
     QLabel* deviceTypeLabel_ = nullptr;
     QComboBox* deviceTypeBox_ = nullptr;
+    QCheckBox* secondJustifierBox_ = nullptr;
     QLabel* aimSourceLabel_ = nullptr;
     QComboBox* aimSourceBox_ = nullptr;
     QLabel* aimHint_ = nullptr;

@@ -145,6 +145,58 @@ void testControllerPorts(const QString& corePath) {
     host.setControllerConnected(0,false);require(!host.controllerConnected(0),"player one disconnect");
 }
 
+// Original 68000 I/O handshake for both MD gun protocols; no game ROM needed.
+void testLightguns(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(),"gun probe directory");
+    auto rom=makeTestRom(); int pc=0x200;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    const auto write=[&](quint16 v,quint16 address){word(0x13fc);word(v);word(0xa1);word(address);};
+    const auto sample=[&](quint16 offset){word(0x1039);word(0xa1);word(5);word(0x0240);word(0x3f);word(0x33c0);word(0xff);word(offset);};
+    const int loop=pc;
+    write(0x40,0xb);write(0x40,5);sample(0); // Justifier detection phase
+    write(0x60,0xb);write(0,5);sample(2);    // first gun buttons
+    write(0x20,5);sample(4);                // second Justifier buttons
+    word(quint16(0x6000|((loop-(pc+2))&255)));
+    const QString path=temp.filePath("original-guns.md");writeFile(path,rom);
+    LibretroHost host(corePath,temp.path());
+    QLibrary inspect(corePath);
+    using Memory=void*(*)(unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory!=nullptr,"gun probe memory API");
+    const auto read=[&](int offset){quint16 value=0;std::memcpy(&value,static_cast<const char*>(memory(RETRO_MEMORY_SYSTEM_RAM))+offset,2);return value;};
+    const auto step=[&]{for(int i=0;i<2;++i)host.runFrame(false,false);};
+    QString error;
+    for (auto kind : {ControllerType::Menacer,ControllerType::Justifier}) {
+        require(!host.setControllerKind(0,kind),"MD gun accepted on port A");
+        for (bool withPad : {false,true}) {
+            constexpr unsigned owner = 1;
+            host.setControllerKind(owner,kind);
+            host.setControllerConnected(owner,true);
+            host.setControllerConnected(0,withPad);
+            host.setControllerConnected(2,false);
+            require(host.load(path,error),"gun probe load");
+            host.setButtons(0,(1u<<1)|(1u<<3));
+            host.setButtons(owner,0);step();
+            if(kind==ControllerType::Justifier) require(read(0)==0x30 && (read(2)&3)==3,"Justifier detection/idle");
+            else require((read(2)&15)==0,"Menacer idle");
+            host.setButtons(owner,1u<<1);step();
+            if(kind==ControllerType::Justifier) require((read(2)&3)==2,"Justifier trigger route");
+            else require((read(2)&15)==2,"Menacer trigger route");
+            host.setButtons(owner,1u<<3);step();
+            if(kind==ControllerType::Justifier) require((read(2)&3)==1,"Justifier Start route");
+            else require((read(2)&15)==8,"Menacer Start route");
+            if(kind==ControllerType::Justifier) {
+                host.setControllerKind(2,kind);host.setControllerConnected(2,true);
+                host.setButtons(1,1u<<1);host.setButtons(2,1u<<3);step();
+                require((read(2)&3)==2 && (read(4)&3)==1,"dual Justifier independent input");
+                host.setControllerConnected(2,false);step();
+                require((read(4)&3)==3,"disconnected second Justifier still pressed");
+            }
+            host.unload();
+        }
+    }
+}
+
 QByteArray makeSaveRamRom() {
     QByteArray rom = makeTestRom();
     rom.replace(0x1b0, 2, "RA");
@@ -772,11 +824,15 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     const auto mode = argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
-                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports]\n");
+                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") || mode == QLatin1String("--lightguns")))) {
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports|--lightguns]\n");
         return 2;
     }
     try {
+        if (mode == QLatin1String("--lightguns")) {
+            testLightguns(QString::fromLocal8Bit(argv[1]));
+            std::puts("Menacer and Justifier electrical detection and button routing passed");return 0;
+        }
         if (mode == QLatin1String("--controller-ports")) {
             testControllerPorts(QString::fromLocal8Bit(argv[1]));
             std::puts("controller port connection, live ID, state restore, hard reset and reload passed");return 0;

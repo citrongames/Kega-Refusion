@@ -12,7 +12,7 @@
 #include <memory>
 
 namespace {
-constexpr int playerCount = 2;
+constexpr int playerCount = 3; // Ports A/B and a second Justifier chained to port B.
 constexpr int targetCount = FrameAdvanceCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
@@ -129,6 +129,17 @@ bool activeGameplayTarget(ConsoleProfile profile, const PlayerMapping& mapping, 
     return std::find(range.begin(), range.end(), target) != range.end();
 }
 bool validPlayer(int player) { return player >= 0 && player < playerCount; }
+ControllerType slotControllerType(ConsoleProfile profile, int player, ControllerType type) {
+    if (profile == ConsoleProfile::MegaDrive && player == 0) return ControllerType::Pad;
+    if (player == 2) return profile == ConsoleProfile::MegaDrive
+        ? ControllerType::Justifier : ControllerType::Pad;
+    return validControllerType(profile, type);
+}
+bool validMouseButton(int button) {
+    return button == 0 || button == int(Qt::LeftButton) || button == int(Qt::RightButton) ||
+           button == int(Qt::MiddleButton) || button == int(Qt::XButton1) ||
+           button == int(Qt::XButton2);
+}
 int legacyKeyboardKey(int key) {
     // Old settings stored the active layout's Unicode key. Keep those bindings
     // usable at their original Russian/English key positions after upgrading.
@@ -201,6 +212,9 @@ struct InputManager::Impl {
     bool enabled = true;
     std::array<unsigned, playerCount> masks{};
     std::array<unsigned, playerCount> previews{};
+    bool legacyPortOneGun = false;
+    bool legacyGunMoved = false;
+    bool legacyGunMovedToChain = false;
     std::array<bool, targetCount - 16> commands{};
     std::array<bool, targetCount - 16> commandBlocked{};
     bool capture = false, captureArmed = false;
@@ -235,12 +249,63 @@ struct InputManager::Impl {
                 const QString keyKey = prefix + QStringLiteral("key/%1").arg(target);
                 if (gameplayTarget(target) && settings.contains(keyKey)) m.keyboard[target] = storedKeyboardKey(settings.value(keyKey).toInt());
             }
+            for (ControllerType type : {ControllerType::LightPhaser, ControllerType::Menacer,
+                                        ControllerType::Justifier}) {
+                if (validControllerType(ConsoleProfile(p), type) != type) continue;
+                for (int target : gameTargetRange(ConsoleProfile(p), true, type)) {
+                    const QString key = prefix + QStringLiteral("mouse/%1/%2").arg(int(type)).arg(target);
+                    if (settings.contains(key)) {
+                        const int button = settings.value(key).toInt();
+                        if (validMouseButton(button)) m.mouse[int(type)][target] = button;
+                    }
+                }
+            }
             if (!settings.contains(prefix + "device")) {
                 for (int target : InputManager::gameTargets(ConsoleProfile(p))) {
                     const QString legacy = QStringLiteral("keys/button_%1").arg(target);
                     if (settings.contains(legacy)) m.keyboard[target] = storedKeyboardKey(settings.value(legacy).toInt());
                 }
             }
+        }
+        auto& mdPortA = mappings[profileIndex(ConsoleProfile::MegaDrive)][0];
+        if (mdPortA.controllerType != ControllerType::Pad) {
+            legacyPortOneGun = true;
+            auto& mdPortB = mappings[profileIndex(ConsoleProfile::MegaDrive)][1];
+            const auto defaultB = InputManager::defaultMapping(ConsoleProfile::MegaDrive, 1);
+            const bool portBIsDefault = mdPortB.connected == defaultB.connected &&
+                mdPortB.sixButton == defaultB.sixButton &&
+                mdPortB.controllerType == defaultB.controllerType &&
+                (mdPortB.aimSource == defaultB.aimSource ||
+                 (mdPortB.controllerType == ControllerType::Pad &&
+                  mdPortB.aimSource == AimSource::LeftStick)) &&
+                mdPortB.deviceKey == defaultB.deviceKey &&
+                mdPortB.deadzonePercent == defaultB.deadzonePercent &&
+                mdPortB.pad == defaultB.pad && mdPortB.keyboard == defaultB.keyboard &&
+                mdPortB.mouse == defaultB.mouse;
+            if (portBIsDefault) { mdPortB = mdPortA; legacyGunMoved = true; }
+            else if (mdPortA.controllerType == ControllerType::Justifier &&
+                     mdPortB.controllerType == ControllerType::Justifier) {
+                auto& chained = mappings[profileIndex(ConsoleProfile::MegaDrive)][2];
+                const auto defaultChained = InputManager::defaultMapping(ConsoleProfile::MegaDrive, 2);
+                if (chained.connected == defaultChained.connected &&
+                    chained.sixButton == defaultChained.sixButton &&
+                    chained.controllerType == defaultChained.controllerType &&
+                    chained.aimSource == defaultChained.aimSource &&
+                    chained.deviceKey == defaultChained.deviceKey &&
+                    chained.deadzonePercent == defaultChained.deadzonePercent &&
+                    chained.pad == defaultChained.pad && chained.keyboard == defaultChained.keyboard &&
+                    chained.mouse == defaultChained.mouse) {
+                    chained = mdPortA;
+                    legacyGunMovedToChain = true;
+                }
+            }
+            mdPortA.controllerType = ControllerType::Pad;
+            mdPortA.connected = false; // A gun migration must not create an implicit port-A pad.
+        }
+        for (int p = 0; p < 4; ++p) {
+            auto& chained = mappings[p][2];
+            chained.controllerType = slotControllerType(ConsoleProfile(p), 2, chained.controllerType);
+            if (p != profileIndex(ConsoleProfile::MegaDrive)) chained.connected = false;
         }
         SDL_SetMainReady(); // Qt owns main(), including in SDL's Windows builds.
         if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) == 0) {
@@ -264,16 +329,30 @@ struct InputManager::Impl {
         for (const auto& device : devices) if (device->key == key) return device.get();
         return nullptr;
     }
+    bool connected(int player) const {
+        const auto& current = mappings[profileIndex(profile)];
+        if (player == 2)
+            return profile == ConsoleProfile::MegaDrive && current[1].connected &&
+                   current[1].controllerType == ControllerType::Justifier && current[2].connected;
+        return current[player].connected;
+    }
     std::array<Device*, playerCount> assignments() const {
         std::array<Device*, playerCount> out{};
         for (int player = 0; player < playerCount; ++player) {
             const QString key = mappings[profileIndex(profile)][player].deviceKey;
             if (key != "auto" && key != "none") out[player] = findByKey(key);
         }
-        for (int player = 0; player < playerCount; ++player) {
-            if (mappings[profileIndex(profile)][player].deviceKey != "auto") continue;
-            for (const auto& device : devices) {
-                if (device.get() != out[1 - player]) { out[player] = device.get(); break; }
+        for (int pass = 0; pass < 2; ++pass) {
+            for (int player = 0; player < playerCount; ++player) {
+                if (mappings[profileIndex(profile)][player].deviceKey != "auto" ||
+                    connected(player) != (pass == 0)) continue;
+                for (const auto& device : devices) {
+                    bool usedByActive = false;
+                    for (int other = 0; other < playerCount; ++other)
+                        usedByActive |= connected(other) && out[other] == device.get();
+                    if (!usedByActive) { out[player] = device.get(); break; }
+                }
+                if (!out[player] && !devices.empty()) out[player] = devices.front().get();
             }
         }
         return out;
@@ -386,7 +465,7 @@ struct InputManager::Impl {
         if (enabled && !capture) {
             for (unsigned player = 0; player < playerCount; ++player) {
                 const auto& mapping = mappings[profileIndex(profile)][player];
-                needed |= mapping.connected && mapping.controllerType != ControllerType::Pad &&
+                needed |= connected(player) && mapping.controllerType != ControllerType::Pad &&
                           mapping.aimSource == AimSource::LeftStick && assigned[player];
             }
         }
@@ -397,7 +476,7 @@ struct InputManager::Impl {
         for (unsigned player = 0; player < playerCount; ++player) {
             const auto& mapping = mappings[profileIndex(profile)][player];
             const auto* device = assigned[player];
-            if (!mapping.connected || mapping.controllerType == ControllerType::Pad ||
+            if (!connected(player) || mapping.controllerType == ControllerType::Pad ||
                 mapping.aimSource != AimSource::LeftStick || !device) continue;
             double x, y;
             if (device->controller) {
@@ -436,7 +515,7 @@ struct InputManager::Impl {
         std::array<bool, targetCount - 16> nextCommands{};
         for (int player = 0; player < playerCount; ++player) {
             const auto& m = mappings[profileIndex(profile)][player];
-            const unsigned pad = m.connected ? padMask(player, assigned[player]) : 0u;
+            const unsigned pad = connected(player) ? padMask(player, assigned[player]) : 0u;
             if (previews[player] != pad) {
                 previews[player] = pad;
                 emit owner->previewChanged(player, pad);
@@ -444,7 +523,7 @@ struct InputManager::Impl {
             unsigned mask = pad;
             for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
                 if (activeGameplayTarget(profile, m, it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
-            if (!enabled || capture || !m.connected) mask = 0;
+            if (!enabled || capture || !connected(player)) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
                 emit owner->maskChanged(player, mask);
@@ -534,7 +613,16 @@ struct InputManager::Impl {
 };
 
 InputManager::InputManager(const QString& settingsPath, QObject* parent)
-    : QObject(parent), d(std::make_unique<Impl>(this, settingsPath)) { poll(); }
+    : QObject(parent), d(std::make_unique<Impl>(this, settingsPath)) {
+    if (d->legacyPortOneGun) {
+        setMapping(ConsoleProfile::MegaDrive, 0, mapping(ConsoleProfile::MegaDrive, 0));
+        if (d->legacyGunMoved)
+            setMapping(ConsoleProfile::MegaDrive, 1, mapping(ConsoleProfile::MegaDrive, 1));
+        if (d->legacyGunMovedToChain)
+            setMapping(ConsoleProfile::MegaDrive, 2, mapping(ConsoleProfile::MegaDrive, 2));
+    }
+    poll();
+}
 InputManager::~InputManager() = default;
 QVector<InputDevice> InputManager::devices() const {
     QVector<InputDevice> result;
@@ -548,10 +636,14 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (!validPlayer(player)) return;
     auto m = value;
     m.deadzonePercent = std::clamp(m.deadzonePercent, 5, 60);
-    m.controllerType = validControllerType(profile, m.controllerType);
+    m.controllerType = slotControllerType(profile, player, m.controllerType);
+    if (player == 2 && profile != ConsoleProfile::MegaDrive) m.connected = false;
     if (m.aimSource != AimSource::LeftStick) m.aimSource = AimSource::Mouse;
     for (auto it = m.keyboard.begin(); it != m.keyboard.end(); ++it)
         it.value() = storedKeyboardKey(it.value());
+    for (auto type = m.mouse.begin(); type != m.mouse.end(); ++type)
+        for (auto button = type.value().begin(); button != type.value().end(); ++button)
+            if (!validMouseButton(button.value())) button.value() = 0;
     const auto defaults = defaultMapping(profile, player);
     const auto& previous = d->mappings[profileIndex(profile)][player];
     if (profile == d->profile && (previous.sixButton != m.sixButton || previous.controllerType != m.controllerType))
@@ -574,9 +666,20 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
         if (!gameplayTarget(target) || m.keyboard.value(target, 0) == defaults.keyboard.value(target, 0)) settings.remove(keyKey);
         else settings.setValue(keyKey, m.keyboard.value(target, 0));
     }
+    for (ControllerType type : {ControllerType::LightPhaser, ControllerType::Menacer,
+                                ControllerType::Justifier}) {
+        if (validControllerType(profile, type) != type) continue;
+        for (int target : gameTargetRange(profile, true, type)) {
+            const QString key = prefix + QStringLiteral("mouse/%1/%2").arg(int(type)).arg(target);
+            const int button = m.mouse.value(int(type)).value(target, 0);
+            if (button == defaults.mouse.value(int(type)).value(target, 0)) settings.remove(key);
+            else settings.setValue(key, button);
+        }
+    }
     settings.sync();
     if (profile == d->profile) {
-        emit connectionChanged(unsigned(player), m.connected);
+        emit connectionChanged(unsigned(player), d->connected(player));
+        if (player == 1) emit connectionChanged(2, d->connected(2));
         emit controllerTypeChanged(unsigned(player), m.sixButton);
         emit deviceTypeChanged(unsigned(player), int(m.controllerType));
         emit configurationChanged();
@@ -587,13 +690,27 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
 PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
     PlayerMapping m;
     m.connected = player == 0;
-    m.aimSource = player == 0 ? AimSource::Mouse : AimSource::LeftStick;
+    m.controllerType = slotControllerType(profile, player, ControllerType::Pad);
+    m.aimSource = player == 2 ? AimSource::LeftStick : AimSource::Mouse;
     for (int target : gameTargets(profile)) m.pad[target] = automatic(target);
     // Keep hidden Phaser trigger/reload defaults alongside the SMS pad bindings;
     // changing device type never destroys either set of assignments.
     if (profile == ConsoleProfile::MasterSystem) {
         m.pad[1] = automatic(1);
         m.pad[2] = automatic(2);
+        m.mouse[int(ControllerType::LightPhaser)][1] = int(Qt::LeftButton);
+        m.mouse[int(ControllerType::LightPhaser)][2] = int(Qt::RightButton);
+    }
+    if (profile == ConsoleProfile::MegaDrive) {
+        auto& menacer = m.mouse[int(ControllerType::Menacer)];
+        menacer[1] = int(Qt::LeftButton);
+        menacer[0] = int(Qt::RightButton);
+        menacer[8] = int(Qt::XButton1);
+        menacer[3] = int(Qt::MiddleButton);
+        auto& justifier = m.mouse[int(ControllerType::Justifier)];
+        justifier[1] = int(Qt::LeftButton);
+        justifier[2] = int(Qt::RightButton);
+        justifier[3] = int(Qt::MiddleButton);
     }
     if (player == 0) {
         m.keyboard[4] = Qt::Key_Up; m.keyboard[5] = Qt::Key_Down;
@@ -676,7 +793,7 @@ void InputManager::setProfile(ConsoleProfile profile) {
     d->profile = profile; d->axisHeld = {}; d->aimTimer.invalidate();
     for (unsigned player = 0; player < playerCount; ++player) {
         const auto& mapping = d->mappings[profileIndex(profile)][player];
-        emit connectionChanged(player, mapping.connected);
+        emit connectionChanged(player, d->connected(player));
         emit controllerTypeChanged(player, mapping.sixButton);
         emit deviceTypeChanged(player, int(mapping.controllerType));
     }
@@ -685,7 +802,7 @@ void InputManager::setProfile(ConsoleProfile profile) {
 }
 ConsoleProfile InputManager::profile() const { return d->profile; }
 bool InputManager::isConnected(unsigned player) const {
-    return player < playerCount && d->mappings[profileIndex(d->profile)][player].connected;
+    return player < playerCount && d->connected(int(player));
 }
 bool InputManager::sixButton(unsigned player) const {
     return player < playerCount && d->mappings[profileIndex(d->profile)][player].sixButton;
@@ -695,6 +812,20 @@ ControllerType InputManager::controllerType(unsigned player) const {
 }
 bool InputManager::aimWithMouse(unsigned player) const {
     return player < playerCount && d->mappings[profileIndex(d->profile)][player].aimSource == AimSource::Mouse;
+}
+unsigned InputManager::mouseButtonMask(unsigned player, unsigned qtButtons) const {
+    if (player >= playerCount || !d->enabled || d->capture) return 0;
+    const auto& mapping = d->mappings[profileIndex(d->profile)][player];
+    if (!d->connected(int(player)) || mapping.controllerType == ControllerType::Pad ||
+        mapping.aimSource != AimSource::Mouse) return 0;
+    const auto bindings = mapping.mouse.constFind(int(mapping.controllerType));
+    if (bindings == mapping.mouse.cend()) return 0;
+    unsigned mask = 0;
+    for (int target : gameTargetRange(d->profile, mapping.sixButton, mapping.controllerType)) {
+        const int button = bindings->value(target, 0);
+        if (button && (qtButtons & unsigned(button))) mask |= 1u << target;
+    }
+    return mask;
 }
 void InputManager::setEnabled(bool enabled) {
     if (d->enabled == enabled) return;

@@ -25,7 +25,7 @@ namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--gun=menacer|justifier] [--companion-pad]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -151,6 +151,9 @@ int main(int argc, char** argv) {
         return usage(QStringLiteral("FRAMES must be an integer from 1 to 36000."));
     enum class Input { None, StartPulses, Play };
     Input input = Input::None;
+    ControllerType gun = ControllerType::Pad;
+    constexpr unsigned gunPlayer = 1;
+    bool companionPad = false;
     bool inputSpecified = false, stateCheck = false, resetCheck = false, filterSpecified = false;
     int filter = 0, checkpoint = 0, extraStart = -1, extraPlay = -1;
     QString saveRawState, loadRawState;
@@ -216,7 +219,10 @@ int main(int argc, char** argv) {
                 return usage(QStringLiteral("--filter requires one value from 0 to 4."));
             filterSpecified = true;
             filter = value;
-        } else return usage(QStringLiteral("Unknown option: %1").arg(option));
+        } else if (option == QLatin1String("--gun=menacer")) gun = ControllerType::Menacer;
+        else if (option == QLatin1String("--gun=justifier")) gun = ControllerType::Justifier;
+        else if (option == QLatin1String("--companion-pad")) companionPad = true;
+        else return usage(QStringLiteral("Unknown option: %1").arg(option));
     }
     try {
         const QString core = QFileInfo(args[1]).absoluteFilePath();
@@ -238,6 +244,12 @@ int main(int argc, char** argv) {
         LibretroHost host(core, temp.path());
         host.message = [](const QString& text) { std::fprintf(stderr, "[core] %s\n", qPrintable(text)); };
         require(host.setBlarggFilter(filter, error), QStringLiteral("Could not set filter: %1").arg(error));
+        if (gun != ControllerType::Pad) {
+            host.setControllerKind(gunPlayer,gun);
+            host.setControllerConnected(gunPlayer,true);
+            host.setControllerConnected(gunPlayer^1u,companionPad);
+            host.setGunAim(gunPlayer,0,0,false);
+        }
         QElapsedTimer loadClock;
         loadClock.start();
         const bool loaded = host.load(game, error);
@@ -283,7 +295,8 @@ int main(int argc, char** argv) {
                 buttons |= (1u << RETRO_DEVICE_ID_JOYPAD_Y) | (1u << RETRO_DEVICE_ID_JOYPAD_B) |
                            (1u << RETRO_DEVICE_ID_JOYPAD_A);
             if (heldAt >= 0 && frame >= heldAt && frame < heldAt + heldCount) buttons |= heldMask;
-            host.setButtons(0, buttons);
+            host.setButtons(gun == ControllerType::Pad ? 0 : gunPlayer, buttons);
+            if (companionPad) host.setButtons(gunPlayer^1u,buttons);
             const auto previous = host.frame().cacheKey();
             host.runFrame(true, true);
             if (!host.frame().isNull()) {

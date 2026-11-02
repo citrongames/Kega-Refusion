@@ -16,6 +16,7 @@
 #include <memory>
 #include <QtMath>
 #include <algorithm>
+#include <iterator>
 
 namespace {
 QStringList wrapOsd(const QString& text, const QFontMetrics& metrics,
@@ -185,7 +186,8 @@ QImage GameView::captureImage() {
         image = shaderView_ && shaderView_->isVisible() && shaderView_->isValid()
             ? shaderView_->grabFramebuffer() : grab().toImage();
     }
-    if (guns_[0].enabled || guns_[1].enabled) repaintView();
+    if (std::any_of(std::begin(guns_), std::end(guns_),
+                    [](const GunState& gun) { return gun.enabled; })) repaintView();
     return image;
 }
 
@@ -218,6 +220,15 @@ void GameView::setFrame(const QImage& frame, double aspectRatio) {
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
     repaintView();
+}
+
+void GameView::clearGame() {
+    setLightgunInputEnabled(false);
+    for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
+    notices_.clear(); stateSlots_.expiresAt = 0; osdTimer_.stop();
+    setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
+    setFrame({}, 4.0 / 3.0);
+    frameCount_ = 0;
 }
 
 void GameView::setLoading(bool loading, const QString& fileName) {
@@ -473,16 +484,20 @@ QRect GameView::openArea() const {
     return QRect(plusCenter.x() - 152, plusCenter.y() - 124, 304, 248);
 }
 
-void GameView::setLightgunEnabled(unsigned player, bool enabled) {
-    if (player >= 2 || guns_[player].enabled == enabled) return;
+void GameView::setLightgunEnabled(unsigned player, bool enabled, unsigned gunNumber) {
+    if (player >= kGunSlots) return;
+    gunNumber = qBound(1U, gunNumber, 2U);
+    auto& gun = guns_[player];
+    if (gun.enabled == enabled && gun.number == gunNumber) return;
     if (!enabled && mouseGunPlayer_ == int(player)) clearMouseGun();
-    guns_[player].enabled = enabled;
-    if (!enabled) guns_[player].hasAim = false;
+    gun.enabled = enabled;
+    gun.number = gunNumber;
+    if (!enabled) gun.hasAim = false;
     repaintView();
 }
 
 void GameView::setLightgunAim(unsigned player, QPointF normalized, bool offscreen) {
-    if (player >= 2) return;
+    if (player >= kGunSlots) return;
     auto& gun = guns_[player];
     const bool valid = qIsFinite(normalized.x()) && qIsFinite(normalized.y());
     const QPointF aim = valid ? QPointF(qBound(0.0, normalized.x(), 1.0),
@@ -496,7 +511,7 @@ void GameView::setLightgunAim(unsigned player, QPointF normalized, bool offscree
 }
 
 void GameView::setMouseGunPlayer(int player) {
-    if (player < -1 || player > 1 || mouseGunPlayer_ == player) return;
+    if (player < -1 || player >= int(kGunSlots) || mouseGunPlayer_ == player) return;
     clearMouseGun();
     mouseGunPlayer_ = player;
 }
@@ -508,7 +523,7 @@ void GameView::setLightgunInputEnabled(bool enabled) {
 }
 
 bool GameView::mouseGunAvailable() const {
-    return lightgunInputEnabled_ && mouseGunPlayer_ >= 0 && mouseGunPlayer_ < 2 &&
+    return lightgunInputEnabled_ && mouseGunPlayer_ >= 0 && mouseGunPlayer_ < int(kGunSlots) &&
            guns_[mouseGunPlayer_].enabled && !frame_.isNull() && !loading_;
 }
 
@@ -529,7 +544,7 @@ void GameView::updateMouseAim(const QPointF& position) {
 }
 
 void GameView::clearMouseGun() {
-    if (mouseGunPlayer_ < 0 || mouseGunPlayer_ >= 2) return;
+    if (mouseGunPlayer_ < 0 || mouseGunPlayer_ >= int(kGunSlots)) return;
     const unsigned player = unsigned(mouseGunPlayer_);
     if (mouseGunButtons_) {
         mouseGunButtons_ = 0;
@@ -551,9 +566,8 @@ void GameView::mousePressEvent(QMouseEvent* event) {
         return;
     }
     if (mouseGunAvailable()) {
-        const unsigned bit = event->button() == Qt::LeftButton ? 1u << 1 :
-                             event->button() == Qt::RightButton ? 1u << 0 :
-                             event->button() == Qt::MiddleButton ? 1u << 3 : 0u;
+        const unsigned bit = unsigned(event->button()) & unsigned(Qt::LeftButton | Qt::RightButton |
+            Qt::MiddleButton | Qt::BackButton | Qt::ForwardButton);
         if (bit) {
             updateMouseAim(event->position());
             if (!(mouseGunButtons_ & bit)) {
@@ -568,10 +582,9 @@ void GameView::mousePressEvent(QMouseEvent* event) {
 }
 
 void GameView::mouseReleaseEvent(QMouseEvent* event) {
-    const unsigned bit = event->button() == Qt::LeftButton ? 1u << 1 :
-                         event->button() == Qt::RightButton ? 1u << 0 :
-                         event->button() == Qt::MiddleButton ? 1u << 3 : 0u;
-    if (mouseGunPlayer_ >= 0 && mouseGunPlayer_ < 2 && bit && (mouseGunButtons_ & bit)) {
+    const unsigned bit = unsigned(event->button()) & unsigned(Qt::LeftButton | Qt::RightButton |
+        Qt::MiddleButton | Qt::BackButton | Qt::ForwardButton);
+    if (mouseGunPlayer_ >= 0 && mouseGunPlayer_ < int(kGunSlots) && bit && (mouseGunButtons_ & bit)) {
         mouseGunButtons_ &= ~bit;
         if (mouseGunAvailable()) updateMouseAim(event->position());
         emit gunButtonsChanged(unsigned(mouseGunPlayer_), mouseGunButtons_);
@@ -598,20 +611,22 @@ void GameView::focusOutEvent(QFocusEvent* event) {
 
 void GameView::paintCrosshairs(QPainter& painter) {
     if (frame_.isNull() || loading_ || capturingGame_ || capturingReticles_) return;
-    const bool visible = (guns_[0].enabled && guns_[0].hasAim && !guns_[0].offscreen) ||
-                         (guns_[1].enabled && guns_[1].hasAim && !guns_[1].offscreen);
+    const bool visible = std::any_of(std::begin(guns_), std::end(guns_),
+        [](const GunState& gun) { return gun.enabled && gun.hasAim && !gun.offscreen; });
     if (!visible) return;
     const QRectF game = gameRect();
     if (game.isEmpty()) return;
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setClipRect(game, Qt::IntersectClip);
-    for (unsigned player = 0; player < 2; ++player) {
+    unsigned drawn = 0;
+    for (unsigned player = 0; player < kGunSlots && drawn < 2; ++player) {
         const auto& gun = guns_[player];
         if (!gun.enabled || !gun.hasAim || gun.offscreen) continue;
+        ++drawn;
         const QPointF point(game.left() + gun.aim.x() * game.width(),
                             game.top() + gun.aim.y() * game.height());
-        const QColor color = player == 0 ? QColor(66, 228, 238) : QColor(255, 135, 112);
+        const QColor color = gun.number == 1 ? QColor(66, 228, 238) : QColor(255, 135, 112);
         const auto drawMarks = [&painter, &point] {
             painter.drawEllipse(point, 8, 8);
             painter.drawLine(QPointF(point.x() - 17, point.y()), QPointF(point.x() - 11, point.y()));
@@ -624,8 +639,8 @@ void GameView::paintCrosshairs(QPainter& painter) {
         drawMarks();
         painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap));
         drawMarks();
-        const QPointF label = point + QPointF(12, player == 0 ? -13 : 22);
-        const QString number = player == 0 ? QStringLiteral("1") : QStringLiteral("2");
+        const QPointF label = point + QPointF(12, gun.number == 1 ? -13 : 22);
+        const QString number = gun.number == 1 ? QStringLiteral("1") : QStringLiteral("2");
         painter.setPen(QColor(0, 0, 0, 235));
         painter.drawText(label + QPointF(-1, 0), number);
         painter.drawText(label + QPointF(1, 0), number);

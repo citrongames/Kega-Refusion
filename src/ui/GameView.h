@@ -28,6 +28,7 @@ public:
     QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
     bool setShaderParameter(const QString& id, float value);
     void setFrame(const QImage& frame, double aspectRatio);
+    void clearGame();
     void setLoading(bool loading, const QString& fileName = {});
     QImage captureImage();
     QImage captureGameImage();
@@ -43,18 +44,18 @@ public:
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
     void setRewindProgress(qint64 remainingMs, qint64 totalMs);
-    void setLightgunEnabled(unsigned player, bool enabled);
+    void setLightgunEnabled(unsigned player, bool enabled, unsigned gunNumber = 1);
     // Aim coordinates are normalized to [0, 1] within the displayed gameRect.
     void setLightgunAim(unsigned player, QPointF normalized, bool offscreen = false);
-    void setMouseGunPlayer(int player); // -1 disables mouse aim; 0 and 1 select a player.
+    void setMouseGunPlayer(int player); // -1 disables mouse aim; 0/1 select console ports; 2 selects the chained second Justifier.
     void setLightgunInputEnabled(bool enabled);
 
 signals:
     void shaderFailed(const QString& error);
     void openGameRequested();
     void gunAimChanged(unsigned player, double x, double y, bool offscreen);
-    // Joypad bits: trigger = 1 << 1, auxiliary A = 1 << 0, start = 1 << 3.
-    void gunButtonsChanged(unsigned player, unsigned joypadMask);
+    // Raw Qt::MouseButton mask; the input layer maps buttons for each gun device.
+    void gunButtonsChanged(unsigned player, unsigned qtButtons);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -110,8 +111,10 @@ private:
         bool enabled = false;
         bool hasAim = false;
         bool offscreen = true;
+        unsigned number = 1; // Display number is independent of the input slot.
     };
-    GunState guns_[2];
+    static constexpr unsigned kGunSlots = 3;
+    GunState guns_[kGunSlots];
     int mouseGunPlayer_ = -1;
     unsigned mouseGunButtons_ = 0;
     bool lightgunInputEnabled_ = false;

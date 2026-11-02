@@ -19,6 +19,7 @@ public:
     ~EmulationSession() override;
     void loadGame(const QString& path, int archiveIndex = -1);
     void loadGame(const QString& path, const RomArchive::Entry& archiveEntry);
+    void closeGame();
     void setPaused(bool paused);
     void resetGame();
     void hardResetGame();
@@ -58,6 +59,7 @@ signals:
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
     void gameLoaded(const QString& path, double fps, const QString& contentName);
+    void gameClosed();
     void discStateChanged(const QStringList& paths, int index, bool ejected);
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);
@@ -72,7 +74,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject };
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject };
     struct Command {
         Type type;
         QString path;
@@ -94,6 +96,6 @@ private:
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
     std::atomic<bool> rewindEnabled_{true};
     std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
-    std::atomic<unsigned> buttons_[2]{};
-    std::atomic<quint64> gunPositions_[2]{{quint64(1)<<32},{quint64(1)<<32}};
+    std::atomic<unsigned> buttons_[3]{};
+    std::atomic<quint64> gunPositions_[3]{{quint64(1)<<32},{quint64(1)<<32},{quint64(1)<<32}};
 };

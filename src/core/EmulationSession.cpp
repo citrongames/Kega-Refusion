@@ -19,6 +19,7 @@ void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue
 void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry) {
     enqueue({Type::Load,path,archiveEntry.index,archiveEntry});
 }
+void EmulationSession::closeGame() { enqueue({Type::Close,{}}); }
 void EmulationSession::setPaused(bool paused) { enqueue({Type::Pause,{},paused ? 1 : 0}); }
 void EmulationSession::resetGame() { enqueue({Type::Reset,{}}); }
 void EmulationSession::hardResetGame() { enqueue({Type::HardReset,{}}); }
@@ -31,17 +32,17 @@ void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
 void EmulationSession::setControllerConnected(unsigned port, bool connected) {
-    if (port < 2) enqueue({Type::Port,{},int(port) | (connected ? 2 : 0)});
+    if (port < 3) enqueue({Type::Port,{},int(port) | (connected ? 4 : 0)});
 }
 void EmulationSession::setControllerSixButton(unsigned port, bool sixButton) {
-    if (port < 2) enqueue({Type::ControllerType,{},int(port) | (sixButton ? 2 : 0)});
+    if (port < 3) enqueue({Type::ControllerType,{},int(port) | (sixButton ? 4 : 0)});
 }
 void EmulationSession::setControllerKind(unsigned player, ControllerType type) {
-    if (player < 2 && int(type) >= 0 && int(type) <= int(ControllerType::Justifier))
-        enqueue({Type::ControllerKind,{},int(player) | (int(type) << 1)});
+    if (player < 3 && int(type) >= 0 && int(type) <= int(ControllerType::Justifier))
+        enqueue({Type::ControllerKind,{},int(player) | (int(type) << 2)});
 }
 void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) {
-    if (player >= 2) return;
+    if (player >= 3) return;
     const quint64 packed = quint16(std::clamp(x,-32767,32767)) |
         (quint64(quint16(std::clamp(y,-32767,32767))) << 16) | (quint64(offscreen) << 32);
     gunPositions_[player].store(packed);
@@ -76,10 +77,10 @@ bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio) {
 void EmulationSession::saveState(int slot) { enqueue({Type::Save,{},slot}); }
 void EmulationSession::loadState(int slot) { enqueue({Type::Restore,{},slot}); }
 void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
-    if (port >= 2 || id >= 16) return;
+    if (port >= 3 || id >= 16) return;
     if (pressed) buttons_[port].fetch_or(1u << id); else buttons_[port].fetch_and(~(1u << id));
 }
-void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < 2) buttons_[port].store(mask & 0xffffu); }
+void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < 3) buttons_[port].store(mask & 0xffffu); }
 void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store(0); }
 void EmulationSession::setFastForward(bool enabled) { fastForward_.store(enabled); }
 void EmulationSession::setFastForwardFactor(int factor) { fastForwardFactor_.store(factor == 0 ? 0 : std::clamp(factor, 2, 32)); }
@@ -94,7 +95,7 @@ void EmulationSession::run() {
     LibretroHost host(corePath_,dataPath_);
     host.message = [this](const QString& message) { emit notification(message); };
     auto syncInput = [&] {
-        for (unsigned player=0;player<2;++player) {
+        for (unsigned player=0;player<3;++player) {
             host.setButtons(player,buttons_[player].load());
             const quint64 aim = gunPositions_[player].load();
             host.setGunAim(player,int16_t(aim & 0xffff),int16_t((aim >> 16) & 0xffff),bool(aim >> 32));
@@ -161,6 +162,46 @@ void EmulationSession::run() {
                 }
                 loaded_.store(host.loaded()); discStatus(); cheatStatus();
                 break;
+            case Type::Close:
+                // Keep the running game intact if a changed battery save cannot be written.
+                if (host.loaded() && !host.flushSaveRam(error)) {
+                    emit errorOccurred(error);
+                    break;
+                }
+                host.unload();
+                loaded_.store(false);
+                releaseButtons();
+                for (auto& aim : gunPositions_) aim.store(quint64(1) << 32);
+                paused = false;
+                fastForward_.store(false);
+                rewind_.store(false);
+                rewindLatched = false;
+                fastLatched = false;
+                clearHistory();
+                rewindStatus(false);
+                rewindTotalMs = rewindLastProgressMs = nextRewindProgressNs = 0;
+                rewindStepMs = 0;
+                emit rewindProgress(0,0);
+                optionsPending = false;
+                frameRequested = false;
+                nextPresentationNs = 0;
+                {
+                    std::lock_guard<std::mutex> lock(videoMutex_);
+                    latestFrame_ = QImage();
+                    latestAspect_ = 4.0 / 3.0;
+                    videoPending_ = false;
+                }
+                clearAudio();
+                emit pausedChanged(false);
+                effectivePaused = false;
+                emit effectivePauseChanged(false);
+                emit stateSlotsChanged(-1,0);
+                discStatus();
+                cheatStatus();
+                lastBatteryCheck = Clock::now();
+                pacer.reset(nowNs());
+                emit gameClosed();
+                break;
             case Type::FrameAdvance:
                 if (host.loaded() && paused && !backgroundPaused_.load() && !rewind_.load()) frameRequested = true;
                 break;
@@ -172,7 +213,7 @@ void EmulationSession::run() {
                 break;
             }
             case Type::ControllerKind:
-                if (host.setControllerKind(unsigned(command.value & 1),ControllerType(command.value >> 1))) {
+                if (host.setControllerKind(unsigned(command.value & 3),ControllerType(command.value >> 2))) {
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false); pacer.reset(nowNs());
                 }
                 break;
@@ -217,13 +258,13 @@ void EmulationSession::run() {
                 break;
             }
             case Type::Port:
-                if (host.setControllerConnected(unsigned(command.value & 1), (command.value & 2) != 0)) {
+                if (host.setControllerConnected(unsigned(command.value & 3), (command.value & 4) != 0)) {
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
                     pacer.reset(nowNs());
                 }
                 break;
             case Type::ControllerType:
-                if (host.setControllerSixButton(unsigned(command.value & 1), (command.value & 2) != 0)) {
+                if (host.setControllerSixButton(unsigned(command.value & 3), (command.value & 4) != 0)) {
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
                     pacer.reset(nowNs());
                 }

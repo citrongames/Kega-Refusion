@@ -716,7 +716,9 @@ bool LibretroHost::setControllerSixButton(unsigned port, bool sixButton) {
     return true;
 }
 bool LibretroHost::setControllerKind(unsigned player, ControllerType type) {
-    if (player >= 2 || int(type) < 0 || int(type) > int(ControllerType::Justifier) ||
+    if (player >= controllerKinds_.size() || int(type) < 0 || int(type) > int(ControllerType::Justifier) ||
+        (player == 0 && (type == ControllerType::Menacer || type == ControllerType::Justifier)) ||
+        (player == 2 && type != ControllerType::Justifier && type != ControllerType::Pad) ||
         controllerKinds_[player] == type) return false;
     controllerKinds_[player] = type;
     buttons_[player] = 0; gunAim_[player] = {};
@@ -724,7 +726,7 @@ bool LibretroHost::setControllerKind(unsigned player, ControllerType type) {
     return true;
 }
 void LibretroHost::setGunAim(unsigned player, int x, int y, bool offscreen) {
-    if (player < 2) gunAim_[player] = {int16_t(std::clamp(x,-32767,32767)),
+    if (player < gunAim_.size()) gunAim_[player] = {int16_t(std::clamp(x,-32767,32767)),
         int16_t(std::clamp(y,-32767,32767)),offscreen};
 }
 void LibretroHost::applyControllerPorts(bool force) {
@@ -738,27 +740,21 @@ void LibretroHost::applyControllerPorts(bool force) {
         return md ? (controllerSixButton_[owner] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
             : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)) : RETRO_DEVICE_JOYPAD;
     };
-    int gun = -1;
-    if (md) for (unsigned i=0;i<2;++i)
-        if (controllerConnected_[i] && (controllerKinds_[i] == ControllerType::Menacer ||
-            controllerKinds_[i] == ControllerType::Justifier)) { gun = int(i); break; }
-    if (gun >= 0) {
-        // MD guns attach to hardware port B. A Justifier pair occupies one port.
-        for (unsigned i=0;i<2;++i) if (controllerConnected_[i] && controllerKinds_[i] == ControllerType::Pad) {
-            devices[0] = pad(i); callbackPlayers_[callback++] = int(i); break;
-        }
-        devices[1] = controllerKinds_[gun] == ControllerType::Menacer
-            ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 1)
-            : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 2);
-        callbackPlayers_[callback++] = gun;
-        const unsigned other = unsigned(gun) ^ 1u;
-        if (controllerKinds_[gun] == ControllerType::Justifier && controllerConnected_[other] &&
-            controllerKinds_[other] == ControllerType::Justifier) callbackPlayers_[callback] = int(other);
-    } else {
-        for (unsigned i=0;i<2;++i) if (controllerConnected_[i]) {
-            devices[i] = sms && controllerKinds_[i] == ControllerType::LightPhaser
-                ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 0) : pad(i);
-            callbackPlayers_[callback++] = int(i);
+    for (unsigned port=0;port<2;++port) if (controllerConnected_[port]) {
+        const auto kind = controllerKinds_[port];
+        if (md && port == 1 && (kind == ControllerType::Menacer || kind == ControllerType::Justifier)) {
+            devices[port] = kind == ControllerType::Menacer
+                ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 1)
+                : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 2);
+            callbackPlayers_[callback++] = int(port);
+            // The second Justifier is chained to the first on port B; port A
+            // remains an independently configured pad, never a hidden device.
+            if (kind == ControllerType::Justifier && controllerConnected_[2] &&
+                controllerKinds_[2] == ControllerType::Justifier) callbackPlayers_[callback] = 2;
+        } else {
+            devices[port] = sms && kind == ControllerType::LightPhaser
+                ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 0) : pad(port);
+            callbackPlayers_[callback++] = int(port);
         }
     }
     // With hardware port A empty, GPX numbers port B's pad as player zero.

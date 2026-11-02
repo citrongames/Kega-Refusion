@@ -116,15 +116,15 @@ private:
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
-    std::array<unsigned,2> buttons_{};
-    std::array<bool,2> controllerConnected_{{true,false}};
-    std::array<bool,2> controllerSixButton_{{true,true}};
+    std::array<unsigned,3> buttons_{};
+    std::array<bool,3> controllerConnected_{{true,false,false}};
+    std::array<bool,3> controllerSixButton_{{true,true,true}};
     std::array<unsigned,2> controllerDevices_{{~0u,~0u}};
-    std::array<ControllerType,2> controllerKinds_{{ControllerType::Pad,ControllerType::Pad}};
+    std::array<ControllerType,3> controllerKinds_{{ControllerType::Pad,ControllerType::Pad,ControllerType::Justifier}};
     // GPX compacts callback indices over connected devices; Justifiers add a third callback.
     std::array<int,3> callbackPlayers_{{0,-1,-1}};
     struct GunAim { int16_t x = 0, y = 0; bool offscreen = true; };
-    std::array<GunAim,2> gunAim_{};
+    std::array<GunAim,3> gunAim_{};
     std::array<size_t,2> saveMemorySizes_{};
     BatterySave batterySave_;
     Cheats::Store cheats_;

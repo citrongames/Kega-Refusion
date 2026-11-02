@@ -77,14 +77,15 @@ private:
     QActionGroup* discGroup_ = nullptr;
     QAction* changeDiscAction_ = nullptr;
     QAction* ejectDiscAction_ = nullptr;
+    QAction* closeGameAction_ = nullptr;
     QAction* pauseAction_ = nullptr;
     QAction* frameAdvanceAction_ = nullptr;
     QAction* cheatsAction_ = nullptr;
     CheatList cheats_;
     Cheats::Platform cheatPlatform_ = Cheats::Platform::MegaDrive;
     bool cheatsSupported_ = false;
-    std::array<unsigned,2> padMasks_{}, gunMasks_{};
-    std::array<QPointF,2> gunAims_{{QPointF(.5,.5),QPointF(.5,.5)}};
+    std::array<unsigned,3> padMasks_{}, gunMasks_{};
+    std::array<QPointF,3> gunAims_{{QPointF(.5,.5),QPointF(.5,.5),QPointF(.5,.5)}};
     QAction* fastForwardAction_ = nullptr;
     QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;

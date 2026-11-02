@@ -24,13 +24,14 @@ struct PadBinding {
 Q_DECLARE_METATYPE(PadBinding)
 struct InputDevice { int instanceId=-1; QString key; QString name; };
 struct PlayerMapping {
-    bool connected = true; // Virtual port; defaultMapping disconnects player 2.
+    bool connected = true; // Virtual port or chained Justifier; defaults disable ports after A.
     bool sixButton = true; // Mega Drive pad type; bindings survive device changes.
     ControllerType controllerType = ControllerType::Pad;
-    AimSource aimSource = AimSource::Mouse; // defaultMapping assigns player 2 a stick.
+    AimSource aimSource = AimSource::Mouse; // The chained second Justifier defaults to a stick.
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
     QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key
+    QMap<int,QMap<int,int>> mouse; // controller type -> target -> Qt::MouseButton (0 = unbound)
     int deadzonePercent = 25;
 };
 class InputManager final : public QObject {
@@ -54,6 +55,7 @@ public:
     bool sixButton(unsigned player) const;
     ControllerType controllerType(unsigned player) const;
     bool aimWithMouse(unsigned player) const;
+    unsigned mouseButtonMask(unsigned player, unsigned qtButtons) const;
     void setEnabled(bool enabled); // release all outputs when unfocused or in modal dialogs
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native);
