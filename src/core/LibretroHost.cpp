@@ -207,7 +207,7 @@ bool LibretroHost::checkDiscBios(const DiscImage& image, QString& error) const {
     // CHD's compressed header is decoded by the core. At least one installed
     // BIOS is needed; a failed core load reports the available region statuses.
     for (int candidate : {1,2,3}) if (SegaCdBios::validate(dataPath_,candidate,error)) { error.clear(); return true; }
-    error = QStringLiteral("Не найден BIOS Sega CD. Импортируйте BIOS через Файл → Sega CD → BIOS…");
+    error = QStringLiteral("Не найден BIOS Sega CD. Импортируйте BIOS через Настройки → Настройки эмулятора… → BIOS → Sega CD.");
     return false;
 }
 void LibretroHost::setDiscIdentity() {

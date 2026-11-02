@@ -44,8 +44,6 @@ private:
     void setLoadingUi(bool loading, const QString& fileName = {});
     void saveScreenshot();
     void updateRecentMenu();
-    void editSegaCdBios();
-    void editSega32xBios();
     void updateDiscMenu();
     void editSettings(int initialPage = 0);
     void editControls();

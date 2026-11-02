@@ -48,7 +48,7 @@ private:
     void refreshPadCell(int target);
     void updateActionButtons();
     void setFeedback(const QString& message, bool warning = false);
-    void onKeyboardChanged(int target, const QKeySequence& sequence);
+    bool onKeyboardChanged(int target, const QKeySequence& sequence);
     void beginCaptureFor(int target);
     void startSequence();
     void advanceSequence();
@@ -74,6 +74,7 @@ private:
     QSlider* deadzoneSlider_ = nullptr;
     QLabel* deadzoneValue_ = nullptr;
     QLabel* feedback_ = nullptr;
+    QLabel* portHint_ = nullptr;
     QTabWidget* tabs_ = nullptr;
     QTableWidget* gameTable_ = nullptr;
     QTableWidget* commandTable_ = nullptr;
@@ -84,6 +85,7 @@ private:
     QPushButton* clearButton_ = nullptr;
     QMap<int, PlayerMapping> drafts_;
     QSet<int> dirty_;
+    QSet<int> captureKeysDown_;
     QMap<QString, QString> knownDevices_;
     QVector<int> sequence_;
     int sequenceIndex_ = 0;

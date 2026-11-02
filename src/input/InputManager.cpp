@@ -731,6 +731,21 @@ PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
             m.keyboard[9] = Qt::Key_S; m.keyboard[11] = Qt::Key_D;
             m.keyboard[2] = Qt::Key_Backspace;
         }
+    } else if (player == 1) {
+        // A complete second-player layout, disjoint from player 1 and commands.
+        m.keyboard[4] = Qt::Key_I; m.keyboard[5] = Qt::Key_K;
+        m.keyboard[6] = Qt::Key_J; m.keyboard[7] = Qt::Key_L;
+        m.keyboard[0] = Qt::Key_G; m.keyboard[8] = Qt::Key_H;
+        if (profile != ConsoleProfile::SG1000) m.keyboard[3] = Qt::Key_Space;
+        if (profile == ConsoleProfile::MasterSystem) {
+            m.keyboard[1] = Qt::Key_F;
+            m.keyboard[2] = Qt::Key_U;
+        }
+        if (profile == ConsoleProfile::MegaDrive) {
+            m.keyboard[1] = Qt::Key_F; m.keyboard[10] = Qt::Key_V;
+            m.keyboard[9] = Qt::Key_B; m.keyboard[11] = Qt::Key_N;
+            m.keyboard[2] = Qt::Key_U;
+        }
     }
     return m;
 }

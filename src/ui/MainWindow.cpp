@@ -23,6 +23,7 @@
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QCryptographicHash>
 #include <QDragEnterEvent>
@@ -52,6 +53,9 @@
 #include <optional>
 
 namespace {
+constexpr int kBiosSettingsPage = 4;
+constexpr int kControlsSettingsPage = 5;
+
 QString shaderParameterPrefix(const QString& path) {
     const auto key = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex();
     return QStringLiteral("view/shaderParameters/%1/").arg(QString::fromLatin1(key));
@@ -287,9 +291,6 @@ void MainWindow::buildMenus() {
     recentMenu_ = fileMenu->addMenu(QStringLiteral("Недавние игры"));
     updateRecentMenu();
     QMenu* segaCdMenu = fileMenu->addMenu(QStringLiteral("Sega CD"));
-    QAction* biosAction = segaCdMenu->addAction(QStringLiteral("BIOS…"));
-    connect(biosAction, &QAction::triggered, this, &MainWindow::editSegaCdBios);
-    segaCdMenu->addSeparator();
     changeDiscAction_ = segaCdMenu->addAction(QStringLiteral("Сменить диск…"));
     connect(changeDiscAction_, &QAction::triggered, this, [this] {
         releaseInput();
@@ -313,10 +314,6 @@ void MainWindow::buildMenus() {
     discGroup_ = new QActionGroup(this);
     discGroup_->setExclusive(true);
     updateDiscMenu();
-    QMenu* sega32xMenu = fileMenu->addMenu(QStringLiteral("32X"));
-    QAction* bios32xAction = sega32xMenu->addAction(QStringLiteral("BIOS…"));
-    bios32xAction->setObjectName(QStringLiteral("sega32xBiosAction"));
-    connect(bios32xAction, &QAction::triggered, this, &MainWindow::editSega32xBios);
     fileMenu->addSeparator();
     screenshotAction_ = fileMenu->addAction(QStringLiteral("Сохранить скриншот"));
     screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
@@ -546,52 +543,6 @@ void MainWindow::buildMenus() {
         audio_->setVolume(value);
         settings_.setValue(QStringLiteral("audio/volume"), value);
     });
-    QMenu* outputMenu = soundMenu->addMenu(QStringLiteral("Устройство вывода"));
-    outputMenu->setObjectName(QStringLiteral("audioOutputMenu"));
-    auto* outputGroup = new QActionGroup(outputMenu);
-    outputGroup->setExclusive(true);
-    const auto refreshOutputs = [this, outputMenu, outputGroup] {
-        outputMenu->clear();
-        const QByteArray selectedId = audio_->outputDeviceId();
-        const QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
-        const QString defaultName = defaultDevice.isNull()
-            ? QStringLiteral("нет устройства") : defaultDevice.description();
-        QAction* defaultAction = outputMenu->addAction(
-            QStringLiteral("Системное по умолчанию (%1)").arg(defaultName).replace('&', QStringLiteral("&&")));
-        defaultAction->setObjectName(QStringLiteral("audioOutputDefaultAction"));
-        defaultAction->setCheckable(true);
-        defaultAction->setChecked(selectedId.isEmpty());
-        defaultAction->setData(QByteArray());
-        outputGroup->addAction(defaultAction);
-        const auto outputs = QMediaDevices::audioOutputs();
-        bool selectedPresent = selectedId.isEmpty();
-        for (const QAudioDevice& device : outputs)
-            selectedPresent = selectedPresent || device.id() == selectedId;
-        if (!selectedPresent) {
-            QAction* missing = outputMenu->addAction(QStringLiteral("Недоступно — используется системное"));
-            missing->setCheckable(true);
-            missing->setChecked(true);
-            missing->setEnabled(false);
-            outputGroup->addAction(missing);
-        }
-        if (!outputs.isEmpty()) outputMenu->addSeparator();
-        for (const QAudioDevice& device : outputs) {
-            QAction* action = outputMenu->addAction(device.description().replace('&', QStringLiteral("&&")));
-            action->setCheckable(true);
-            action->setChecked(device.id() == selectedId);
-            action->setData(device.id());
-            outputGroup->addAction(action);
-        }
-    };
-    connect(outputGroup, &QActionGroup::triggered, this, [this](QAction* action) {
-        const QByteArray id = action->data().toByteArray();
-        audio_->setOutputDeviceId(id);
-        settings_.setValue(QStringLiteral("audio/outputDeviceId"), id);
-    });
-    connect(outputMenu, &QMenu::aboutToShow, outputMenu, refreshOutputs);
-    connect(audio_, &AudioOutput::outputDevicesChanged, outputMenu, refreshOutputs);
-    refreshOutputs();
-
     QMenu* settingsMenu = menuBar()->addMenu(QStringLiteral("&Настройки"));
     QAction* emulatorSettingsAction = settingsMenu->addAction(QStringLiteral("Настройки эмулятора…"));
     emulatorSettingsAction->setObjectName(QStringLiteral("emulatorSettingsAction"));
@@ -663,120 +614,6 @@ void MainWindow::editShaderParameters() {
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
     dialog.exec(); view_->setFocus();
-}
-
-void MainWindow::editSegaCdBios() {
-    releaseInput();
-    QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("BIOS Sega CD"));
-    auto* layout = new QVBoxLayout(&dialog);
-    auto* form = new QFormLayout;
-    layout->addLayout(form);
-    QLabel* statusLabels[3]{};
-    const QStringList regions{QStringLiteral("Япония"), QStringLiteral("США"),
-                              QStringLiteral("Европа")};
-    for (int region = 1; region <= 3; ++region) {
-        statusLabels[region - 1] = new QLabel(&dialog);
-        form->addRow(regions[region - 1] + QStringLiteral(":"), statusLabels[region - 1]);
-    }
-    auto refresh = [this, &statusLabels] {
-        for (int region = 1; region <= 3; ++region) {
-            QString error;
-            const bool installed = SegaCdBios::validate(dataPath_, region, error);
-            statusLabels[region - 1]->setText(installed ? QStringLiteral("Установлен")
-                                                      : QStringLiteral("Не готов"));
-            statusLabels[region - 1]->setToolTip(error);
-        }
-    };
-    refresh();
-    auto* importButton = new QPushButton(QStringLiteral("Импортировать из папки…"), &dialog);
-    layout->addWidget(importButton);
-    connect(importButton, &QPushButton::clicked, &dialog, [this, &dialog, &refresh] {
-        const QString source = QFileDialog::getExistingDirectory(
-            &dialog, QStringLiteral("Папка с BIOS Sega CD"), QDir::homePath());
-        if (source.isEmpty()) return;
-        QString error;
-        const QStringList imported = SegaCdBios::importDirectory(source, dataPath_, error);
-        refresh();
-        QString message;
-        if (!imported.isEmpty())
-            message = QStringLiteral("Импортированы: %1").arg(imported.join(QStringLiteral(", ")));
-        if (!error.isEmpty()) {
-            if (!message.isEmpty()) message += QStringLiteral("\n\n");
-            QMessageBox::warning(&dialog, QStringLiteral("BIOS Sega CD"), message + error);
-        } else {
-            QMessageBox::information(&dialog, QStringLiteral("BIOS Sega CD"),
-                message.isEmpty() ? QStringLiteral("Новые BIOS не найдены.") : message);
-        }
-    });
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-    dialog.exec();
-    view_->setFocus();
-}
-
-void MainWindow::editSega32xBios() {
-    releaseInput();
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("sega32xBiosDialog"));
-    dialog.setWindowTitle(QStringLiteral("BIOS 32X"));
-    auto* layout = new QVBoxLayout(&dialog);
-    auto* hint = new QLabel(QStringLiteral("Для 32X нужны три файла BIOS. "
-        "Для CD32X также требуется BIOS Sega CD соответствующего региона."), &dialog);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-    auto* form = new QFormLayout;
-    layout->addLayout(form);
-    const Sega32xBios::Piece pieces[]{Sega32xBios::Piece::M68k,
-        Sega32xBios::Piece::MasterSh2, Sega32xBios::Piece::SlaveSh2};
-    const QStringList labels{QStringLiteral("68000"), QStringLiteral("Master SH2"),
-                             QStringLiteral("Slave SH2")};
-    QLabel* statusLabels[3]{};
-    for (int i = 0; i < 3; ++i) {
-        statusLabels[i] = new QLabel(&dialog);
-        statusLabels[i]->setObjectName(QStringLiteral("bios32xStatus%1").arg(i));
-        form->addRow(labels[i] + QLatin1Char(':'), statusLabels[i]);
-    }
-    auto refresh = [this, &pieces, &statusLabels] {
-        const QDir bios(QDir(dataPath_).filePath(QStringLiteral("bios")));
-        for (int i = 0; i < 3; ++i) {
-            const QString path = bios.filePath(Sega32xBios::fileName(pieces[i]));
-            QString error;
-            const bool installed = Sega32xBios::validateFile(path, pieces[i], error);
-            statusLabels[i]->setText(installed ? QStringLiteral("Установлен") : QStringLiteral("Не готов"));
-            statusLabels[i]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
-        }
-    };
-    refresh();
-    auto* importButton = new QPushButton(QStringLiteral("Импортировать из папки…"), &dialog);
-    importButton->setObjectName(QStringLiteral("import32xBios"));
-    layout->addWidget(importButton);
-    connect(importButton, &QPushButton::clicked, &dialog, [this, &dialog, &refresh] {
-        const QString source = QFileDialog::getExistingDirectory(
-            &dialog, QStringLiteral("Папка с BIOS 32X"), QDir::homePath());
-        if (source.isEmpty()) return;
-        QString error;
-        const auto imported = Sega32xBios::importDirectory(source, dataPath_, error);
-        refresh();
-        QString message;
-        if (!imported.isEmpty()) message = QStringLiteral("Импортированы: %1").arg(imported.join(QStringLiteral(", ")));
-        if (!error.isEmpty()) {
-            if (!message.isEmpty()) message += QStringLiteral("\n\n");
-            QMessageBox::warning(&dialog, QStringLiteral("BIOS 32X"), message + error);
-        } else {
-            QMessageBox::information(&dialog, QStringLiteral("BIOS 32X"),
-                message.isEmpty() ? QStringLiteral("Новые BIOS не найдены или уже установлены.") : message);
-        }
-    });
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-    dialog.exec();
-    view_->setFocus();
-    updateInputEnabled();
 }
 
 void MainWindow::updateDiscMenu() {
@@ -1001,7 +838,8 @@ void MainWindow::editSettings(int initialPage) {
     navigation->setFixedWidth(190);
     navigation->setSpacing(4);
     navigation->addItems({QStringLiteral("Общие"), QStringLiteral("Игры"),
-                          QStringLiteral("Перемотка"), QStringLiteral("Управление")});
+                          QStringLiteral("Перемотка"), QStringLiteral("Звук"),
+                          QStringLiteral("BIOS"), QStringLiteral("Управление")});
     auto* pages = new QStackedWidget(&dialog);
     pages->setObjectName(QStringLiteral("settingsPages"));
     content->addWidget(navigation);
@@ -1112,6 +950,174 @@ void MainWindow::editSettings(int initialPage) {
     rewindMemory->setToolTip(QStringLiteral(
         "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно."));
 
+    auto* sound = addPage(QStringLiteral("Звук"),
+        QStringLiteral("Устройство воспроизведения звука игры."));
+    auto* outputDevice = new QComboBox(&dialog);
+    outputDevice->setObjectName(QStringLiteral("audioOutputDevice"));
+    outputDevice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    outputDevice->setMinimumContentsLength(24);
+    const auto refreshOutputs = [this, outputDevice] {
+        const QByteArray selectedId = outputDevice->count()
+            ? outputDevice->currentData().toByteArray() : audio_->outputDeviceId();
+        outputDevice->clear();
+        const QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
+        const QString defaultName = defaultDevice.isNull()
+            ? QStringLiteral("нет устройства") : defaultDevice.description();
+        outputDevice->addItem(QStringLiteral("Системное по умолчанию (%1)").arg(defaultName), QByteArray());
+        const auto outputs = QMediaDevices::audioOutputs();
+        bool selectedPresent = selectedId.isEmpty();
+        for (const QAudioDevice& device : outputs)
+            selectedPresent = selectedPresent || device.id() == selectedId;
+        if (!selectedPresent)
+            outputDevice->addItem(QStringLiteral("Недоступно — используется системное"), selectedId);
+        for (const QAudioDevice& device : outputs)
+            outputDevice->addItem(device.description(), device.id());
+        outputDevice->setCurrentIndex(outputDevice->findData(selectedId));
+    };
+    connect(audio_, &AudioOutput::outputDevicesChanged, &dialog, refreshOutputs);
+    refreshOutputs();
+    sound->addRow(QStringLiteral("Устройство вывода:"), outputDevice);
+    auto* outputHelp = new QLabel(QStringLiteral(
+        "Если выбранное устройство отключено, звук временно выводится через системное. "
+        "После подключения выбор восстановится."), &dialog);
+    outputHelp->setWordWrap(true);
+    sound->addRow(outputHelp);
+
+    auto* biosPlaceholder = new QWidget(pages);
+    pages->addWidget(biosPlaceholder);
+    bool biosCreated = false;
+    const auto createBiosPage = [this, &dialog, pages, biosPlaceholder, addPage] {
+        auto* bios = addPage(QStringLiteral("BIOS"),
+            QStringLiteral("Файлы BIOS для запуска Sega CD и 32X."));
+        const auto reportBiosImport = [&dialog](const QString& title, const QStringList& imported,
+                                               const QString& error, const QString& emptyMessage) {
+            QString message;
+            if (!imported.isEmpty())
+                message = QStringLiteral("Импортированы: %1").arg(imported.join(QStringLiteral(", ")));
+            if (!error.isEmpty()) {
+                if (!message.isEmpty()) message += QStringLiteral("\n\n");
+                QMessageBox::warning(&dialog, title, message + error);
+            } else {
+                QMessageBox::information(&dialog, title, message.isEmpty() ? emptyMessage : message);
+            }
+        };
+
+        auto* cdGroup = new QGroupBox(QStringLiteral("Sega CD"), &dialog);
+        auto* cdLayout = new QVBoxLayout(cdGroup);
+        auto* cdForm = new QFormLayout;
+        cdLayout->addLayout(cdForm);
+        std::array<QLabel*, 3> cdStatusLabels{};
+        const QStringList cdRegions{QStringLiteral("Япония"), QStringLiteral("США"),
+                                    QStringLiteral("Европа")};
+        for (int region = 1; region <= 3; ++region) {
+            auto* status = new QLabel(cdGroup);
+            status->setObjectName(QStringLiteral("biosCdStatus%1").arg(region - 1));
+            cdStatusLabels[region - 1] = status;
+            cdForm->addRow(cdRegions[region - 1] + QLatin1Char(':'), status);
+        }
+        const auto refreshCdBios = [this, cdStatusLabels] {
+            for (int region = 1; region <= 3; ++region) {
+                QString error;
+                const bool installed = SegaCdBios::validate(dataPath_, region, error);
+                cdStatusLabels[region - 1]->setText(installed ? QStringLiteral("Установлен")
+                                                            : QStringLiteral("Не готов"));
+                cdStatusLabels[region - 1]->setToolTip(error);
+            }
+        };
+        auto* cdActions = new QHBoxLayout;
+        auto* checkCd = new QPushButton(QStringLiteral("Проверить"), cdGroup);
+        checkCd->setObjectName(QStringLiteral("checkCdBios"));
+        cdActions->addWidget(checkCd);
+        auto* importCd = new QPushButton(QStringLiteral("Импортировать из папки…"), cdGroup);
+        importCd->setObjectName(QStringLiteral("importCdBios"));
+        cdActions->addWidget(importCd);
+        cdActions->addStretch();
+        cdLayout->addLayout(cdActions);
+        bios->addRow(cdGroup);
+        connect(checkCd, &QPushButton::clicked, &dialog, refreshCdBios);
+        connect(importCd, &QPushButton::clicked, &dialog,
+                [this, &dialog, refreshCdBios, reportBiosImport] {
+            const QString source = QFileDialog::getExistingDirectory(
+                &dialog, QStringLiteral("Папка с BIOS Sega CD"), QDir::homePath());
+            if (source.isEmpty()) return;
+            QString error;
+            const QStringList imported = SegaCdBios::importDirectory(source, dataPath_, error);
+            refreshCdBios();
+            reportBiosImport(QStringLiteral("BIOS Sega CD"), imported, error,
+                             QStringLiteral("Новые BIOS не найдены."));
+        });
+        auto* x32Group = new QGroupBox(QStringLiteral("32X"), &dialog);
+        auto* x32Layout = new QVBoxLayout(x32Group);
+        auto* x32Hint = new QLabel(QStringLiteral("Для 32X нужны три файла BIOS. "
+            "Для CD32X также требуется BIOS Sega CD соответствующего региона."), x32Group);
+        x32Hint->setWordWrap(true);
+        x32Layout->addWidget(x32Hint);
+        auto* x32Form = new QFormLayout;
+        x32Layout->addLayout(x32Form);
+        constexpr std::array<Sega32xBios::Piece, 3> pieces{{Sega32xBios::Piece::M68k,
+            Sega32xBios::Piece::MasterSh2, Sega32xBios::Piece::SlaveSh2}};
+        const QStringList labels{QStringLiteral("68000"), QStringLiteral("Master SH2"),
+                                 QStringLiteral("Slave SH2")};
+        std::array<QLabel*, 3> x32StatusLabels{};
+        for (int i = 0; i < 3; ++i) {
+            auto* status = new QLabel(x32Group);
+            status->setObjectName(QStringLiteral("bios32xStatus%1").arg(i));
+            x32StatusLabels[i] = status;
+            x32Form->addRow(labels[i] + QLatin1Char(':'), status);
+        }
+        const auto refresh32xBios = [this, pieces, x32StatusLabels] {
+            const QDir biosDirectory(QDir(dataPath_).filePath(QStringLiteral("bios")));
+            for (int i = 0; i < 3; ++i) {
+                const QString path = biosDirectory.filePath(Sega32xBios::fileName(pieces[i]));
+                QString error;
+                const bool installed = Sega32xBios::validateFile(path, pieces[i], error);
+                x32StatusLabels[i]->setText(installed ? QStringLiteral("Установлен")
+                                                   : QStringLiteral("Не готов"));
+                x32StatusLabels[i]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
+            }
+        };
+        auto* x32Actions = new QHBoxLayout;
+        auto* check32x = new QPushButton(QStringLiteral("Проверить"), x32Group);
+        check32x->setObjectName(QStringLiteral("check32xBios"));
+        x32Actions->addWidget(check32x);
+        auto* import32x = new QPushButton(QStringLiteral("Импортировать из папки…"), x32Group);
+        import32x->setObjectName(QStringLiteral("import32xBios"));
+        x32Actions->addWidget(import32x);
+        x32Actions->addStretch();
+        x32Layout->addLayout(x32Actions);
+        bios->addRow(x32Group);
+        connect(check32x, &QPushButton::clicked, &dialog, refresh32xBios);
+        connect(import32x, &QPushButton::clicked, &dialog,
+                [this, &dialog, refresh32xBios, reportBiosImport] {
+            const QString source = QFileDialog::getExistingDirectory(
+                &dialog, QStringLiteral("Папка с BIOS 32X"), QDir::homePath());
+            if (source.isEmpty()) return;
+            QString error;
+            const QStringList imported = Sega32xBios::importDirectory(source, dataPath_, error);
+            refresh32xBios();
+            reportBiosImport(QStringLiteral("BIOS 32X"), imported, error,
+                             QStringLiteral("Новые BIOS не найдены или уже установлены."));
+        });
+        auto* biosHelp = new QLabel(QStringLiteral(
+            "Импорт начнётся сразу после выбора папки. Существующие BIOS не заменяются; "
+            "«Отмена» не удалит импортированные файлы. Новые BIOS используются при следующем запуске игры."),
+            &dialog);
+        biosHelp->setWordWrap(true);
+        bios->addRow(biosHelp);
+        auto* biosPage = pages->widget(pages->count() - 1);
+        pages->removeWidget(biosPage);
+        pages->removeWidget(biosPlaceholder);
+        delete biosPlaceholder;
+        auto* biosViewport = new QScrollArea(pages);
+        biosViewport->setWidgetResizable(true);
+        biosViewport->setFrameShape(QFrame::NoFrame);
+        biosViewport->setWidget(biosPage);
+        pages->insertWidget(kBiosSettingsPage, biosViewport);
+
+        refreshCdBios();
+        refresh32xBios();
+    };
+
     auto* controlsViewport = new QScrollArea(pages);
     controlsViewport->setObjectName(QStringLiteral("controlsPageViewport"));
     controlsViewport->setWidgetResizable(true);
@@ -1119,23 +1125,27 @@ void MainWindow::editSettings(int initialPage) {
     pages->addWidget(controlsViewport);
     ControlsPage* controls = nullptr;
     connect(navigation, &QListWidget::currentRowChanged, &dialog,
-            [this, pages, controlsViewport, &controls](int row) {
-        if (pages->currentIndex() == 3 && row != 3 && controls)
+            [this, pages, controlsViewport, &controls, &biosCreated, createBiosPage](int row) {
+        if (pages->currentIndex() == kControlsSettingsPage && row != kControlsSettingsPage && controls)
             controls->cancelCapture();
-        if (row == 3 && !controls) {
+        if (row == kBiosSettingsPage && !biosCreated) {
+            createBiosPage();
+            biosCreated = true;
+        }
+        if (row == kControlsSettingsPage && !controls) {
             controls = new ControlsPage(*input_, controlsViewport);
             controlsViewport->setWidget(controls);
         }
         pages->setCurrentIndex(row);
     });
-    navigation->setCurrentRow(qBound(0, initialPage, 3));
+    navigation->setCurrentRow(qBound(0, initialPage, kControlsSettingsPage));
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("ОК"));
     buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, navigation, &controls] {
         if (!controls || controls->apply()) dialog.accept();
-        else navigation->setCurrentRow(3);
+        else navigation->setCurrentRow(kControlsSettingsPage);
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, [&dialog, &controls] {
         if (controls) controls->cancelCapture();
@@ -1186,6 +1196,11 @@ void MainWindow::editSettings(int initialPage) {
             settings_.setValue(QStringLiteral("emulation/rewindMemoryMiB"), rewindMemory->value());
             session_.setRewindMemoryMiB(rewindMemory->value());
         }
+        const QByteArray selectedOutputId = outputDevice->currentData().toByteArray();
+        if (selectedOutputId != audio_->outputDeviceId()) {
+            audio_->setOutputDeviceId(selectedOutputId);
+            settings_.setValue(QStringLiteral("audio/outputDeviceId"), selectedOutputId);
+        }
     }
     view_->setFocus();
     updateInputEnabled();
@@ -1230,7 +1245,7 @@ void MainWindow::updateGunConfiguration() {
     }
 }
 
-void MainWindow::editControls() { editSettings(3); }
+void MainWindow::editControls() { editSettings(kControlsSettingsPage); }
 
 void MainWindow::releaseInput() {
     view_->setLightgunInputEnabled(false);

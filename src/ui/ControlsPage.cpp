@@ -3,6 +3,8 @@
 #include "ControllerDiagram.h"
 
 #include <QHideEvent>
+#include <QApplication>
+#include <QLineEdit>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QGridLayout>
@@ -110,6 +112,8 @@ QString padName(const PlayerMapping& mapping, int target) {
 
 ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     : QWidget(parent), input_(input) {
+    setFocusPolicy(Qt::StrongFocus);
+    qApp->installEventFilter(this);
 
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setSpacing(9);
@@ -142,7 +146,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     scope->addWidget(profileBox_, 1, 0);
     scope->addWidget(new QLabel(QStringLiteral("Порт консоли"), this), 0, 1);
     scope->addWidget(playerBox_, 1, 1);
-    scope->addWidget(new QLabel(QStringLiteral("Источник ввода"), this), 2, 0);
+    scope->addWidget(new QLabel(QStringLiteral("Геймпад"), this), 2, 0);
     scope->addWidget(deviceBox_, 3, 0);
     scope->addWidget(new QLabel(QStringLiteral("Мёртвая зона"), this), 2, 1);
     auto* deadzoneRow = new QHBoxLayout;
@@ -192,6 +196,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     aimHint_->setWordWrap(true);
     scope->addWidget(aimHint_, 8, 0, 1, 2);
     mainLayout->addLayout(scope);
+    portHint_ = new QLabel(QStringLiteral(
+        "Порт отключён. Назначения можно настроить заранее; для игры выберите контроллер вместо «Нет»."), this);
+    portHint_->setWordWrap(true);
+    mainLayout->addWidget(portHint_);
 
     tabs_ = new QTabWidget(this);
     tabs_->setObjectName(QStringLiteral("mappingTabs"));
@@ -248,7 +256,9 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     auto* actionRow = new QHBoxLayout;
     assignButton_ = new QPushButton(QStringLiteral("Назначить"), this);
+    assignButton_->setObjectName(QStringLiteral("assignBinding"));
     sequenceButton_ = new QPushButton(QStringLiteral("Назначить по порядку"), this);
+    sequenceButton_->setObjectName(QStringLiteral("assignSequence"));
     skipButton_ = new QPushButton(QStringLiteral("Пропустить"), this);
     clearButton_ = new QPushButton(QStringLiteral("Очистить геймпад"), this);
     auto* defaultsButton = new QPushButton(QStringLiteral("По умолчанию"), this);
@@ -375,8 +385,9 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
         const QString label = captureTarget_ < 16
             ? InputManager::targetName(selectedProfile(), captureTarget_, draft().controllerType)
             : commandName(captureTarget_);
-        setFeedback(QStringLiteral("Назначение «%1»: нажмите кнопку, крестовину "
-                                   "или отклоните ось. Esc — отмена.").arg(label));
+        setFeedback((captureTarget_ < 16
+            ? QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена.")
+            : QStringLiteral("Назначение «%1»: нажмите кнопку геймпада. Esc — отмена.")).arg(label));
     });
     connect(&input_, &InputManager::bindingCaptured,
             this, &ControlsPage::onCaptured);
@@ -396,11 +407,12 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     refreshContents();
     setFeedback(QStringLiteral(
-        "Выберите кнопку на рисунке или в таблице, затем нажмите «Назначить». "
-        "«Авто» использует стандартную раскладку подключённого геймпада."));
+        "Выберите кнопку и нажмите «Назначить», затем клавишу или кнопку геймпада. "
+        "Клавиатура и геймпад работают одновременно; одно назначение не стирает другое."));
 }
 
 ControlsPage::~ControlsPage() {
+    qApp->removeEventFilter(this);
     stopCapture();
 }
 
@@ -520,6 +532,7 @@ void ControlsPage::refreshContents() {
     refreshing_ = true;
     refreshPlayerChoices();
     const PlayerMapping mapping = draft();
+    portHint_->setVisible(!mapping.connected);
     const bool md = selectedProfile() == ConsoleProfile::MegaDrive;
     const bool sms = selectedProfile() == ConsoleProfile::MasterSystem;
     const bool gun = mapping.controllerType != ControllerType::Pad;
@@ -583,7 +596,8 @@ void ControlsPage::fillGameTable() {
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target, mapping.controllerType), target));
         auto* keyEdit = new PhysicalKeySequenceEdit(gameTable_);
-        keyEdit->installEventFilter(this);
+        if (auto* line = keyEdit->findChild<QLineEdit*>())
+            line->setPlaceholderText(QStringLiteral("Нажмите клавишу"));
         keyEdit->setToolTip(QStringLiteral("Клавиша по положению, независимо от раскладки. 0–9 — выбор слота; точка — следующий кадр."));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         keyEdit->setMaximumSequenceLength(1);
@@ -677,17 +691,12 @@ void ControlsPage::refreshPadCell(int target) {
 
 void ControlsPage::updateActionButtons() {
     if (!assignButton_) return;
-    const bool connected = draft().connected;
-    deviceBox_->setEnabled(connected);
-    deadzoneSlider_->setEnabled(connected);
-    gameTable_->setEnabled(connected);
-    diagram_->setEnabled(connected);
-    aimSourceBox_->setEnabled(connected);
     const bool gamePage = tabs_->currentIndex() == 0;
-    const bool targetSelected = selectedTarget_ >= 0 && (!gamePage || connected);
+    const bool targetSelected = selectedTarget_ >= 0;
     const bool deviceSelected = draft().deviceKey != QStringLiteral("none");
-    assignButton_->setEnabled(targetSelected && deviceSelected);
-    sequenceButton_->setEnabled(deviceSelected && (!gamePage || connected));
+    // Keyboard setup does not require a physical pad or an enabled console port.
+    assignButton_->setEnabled(targetSelected && (gamePage || deviceSelected));
+    sequenceButton_->setEnabled(gamePage || deviceSelected);
     skipButton_->setEnabled(captureTarget_ >= 0 && !sequence_.isEmpty());
     clearButton_->setEnabled(targetSelected);
 }
@@ -701,8 +710,8 @@ void ControlsPage::setFeedback(const QString& message, bool warning) {
     feedback_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
 }
 
-void ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
-    if (refreshing_) return;
+bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
+    if (refreshing_) return false;
     int key = 0;
     const Qt::KeyboardModifiers modifiers =
         sequence.isEmpty() ? Qt::NoModifier : sequence[0].keyboardModifiers();
@@ -731,42 +740,38 @@ void ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
             editor->setKeySequence(oldKey ? QKeySequence(oldKey) : QKeySequence());
         }
         setFeedback(error, true);
-        return;
+        return false;
     }
     draft().keyboard[target] = key;
     dirty_.insert(draftKey());
     setFeedback(key
         ? QStringLiteral("Клавиша назначена.")
         : QStringLiteral("Клавиша очищена."));
+    return true;
 }
 
 void ControlsPage::beginCaptureFor(int target) {
-    if (target < 16 && (!draft().connected || !activeGameTargets().contains(target))) return;
-    if (draft().deviceKey == QStringLiteral("none")) {
-        setFeedback(QStringLiteral("Сначала выберите устройство."), true);
-        return;
-    }
+    if (target < 16 && !activeGameTargets().contains(target)) return;
     const QString deviceKey = captureDeviceKey();
-    bool connected = false;
+    bool padPresent = false;
     for (const InputDevice& device : input_.devices())
-        connected |= device.key == deviceKey;
-    if (!connected) {
-        captureTarget_ = -1;
-        sequence_.clear();
-        setFeedback(QStringLiteral(
-            "Геймпад не подключён. Подключите устройство либо выберите другое в списке."), true);
-        updateActionButtons();
+        padPresent |= device.key == deviceKey;
+    if (target >= 16 && !padPresent) {
+        stopCapture();
+        setFeedback(QStringLiteral("Для назначения команды подключите геймпад. Сочетания клавиатуры указаны в таблице."), true);
         return;
     }
     captureTarget_ = target;
     selectTarget(target);
+    setFocus(Qt::OtherFocusReason);
     const QString label = target < 16
         ? InputManager::targetName(selectedProfile(), target, draft().controllerType)
         : commandName(target);
-    setFeedback(QStringLiteral(
-        "Назначение «%1»: отпустите кнопки и верните стики в центр. "
-        "Ожидание нейтрального положения… Esc — отмена.").arg(label));
-    input_.beginCapture(deviceKey, selectedPlayer());
+    setFeedback((target < 16
+        ? QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Перед назначением геймпада отпустите его кнопки и стики. Esc — отмена.")
+        : QStringLiteral("Назначение «%1»: отпустите кнопки и стики геймпада, затем нажмите нужную кнопку. Esc — отмена.")).arg(label));
+    if (padPresent)
+        input_.beginCapture(deviceKey, selectedPlayer());
     updateActionButtons();
 }
 
@@ -953,14 +958,68 @@ bool ControlsPage::apply() {
 }
 
 bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::KeyPress &&
-        (captureTarget_ >= 0 || !sequence_.isEmpty() || input_.capturing()) &&
-        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+    // Release remembered keys if focus leaves the application before key-up.
+    if (event->type() == QEvent::ApplicationDeactivate) {
+        captureKeysDown_.clear();
+        if (captureTarget_ >= 0 || !sequence_.isEmpty()) {
+            stopCapture();
+            setFeedback(QStringLiteral("Назначение отменено."));
+        }
+    }
+    if (captureTarget_ < 0 && captureKeysDown_.isEmpty())
+        return QWidget::eventFilter(watched, event);
+    // This is only the visible settings page's Qt input, never a system keyboard grab.
+    auto* widget = qobject_cast<QWidget*>(watched);
+    if (!isVisible() || !widget || widget->window() != window())
+        return QWidget::eventFilter(watched, event);
+    if (event->type() == QEvent::KeyRelease) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+        if (captureKeysDown_.contains(key)) {
+            if (!keyEvent->isAutoRepeat()) captureKeysDown_.remove(key);
+            return true;
+        }
+    }
+    if (captureTarget_ < 0) return QWidget::eventFilter(watched, event);
+    if (event->type() == QEvent::ShortcutOverride) {
+        event->accept();
+        return true;
+    }
+    if (event->type() != QEvent::KeyPress)
+        return QWidget::eventFilter(watched, event);
+    auto* keyEvent = static_cast<QKeyEvent*>(event);
+    if (keyEvent->isAutoRepeat()) return true;
+    const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+    if (captureKeysDown_.contains(key)) return true;
+    captureKeysDown_.insert(key);
+    if (key == Qt::Key_Escape) {
         stopCapture();
         setFeedback(QStringLiteral("Назначение отменено."));
         return true;
     }
-    return QWidget::eventFilter(watched, event);
+    if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt ||
+        key == Qt::Key_AltGr || key == Qt::Key_Meta || key == Qt::Key_unknown)
+        return true;
+    if (captureTarget_ >= 16) {
+        setFeedback(QStringLiteral("У команд фиксированные сочетания клавиатуры. Нажмите кнопку геймпада или Esc."), true);
+        return true;
+    }
+    const int target = captureTarget_;
+    if (!onKeyboardChanged(target, QKeySequence(QKeyCombination(
+            keyEvent->modifiers() & ~Qt::KeypadModifier, Qt::Key(key)))))
+        return true;
+    captureTarget_ = -1;
+    if (input_.capturing()) input_.cancelCapture();
+    for (int row = 0; row < gameTable_->rowCount(); ++row) {
+        if (gameTable_->item(row, 0)->data(Qt::UserRole).toInt() != target) continue;
+        auto* editor = gameTable_->cellWidget(row, 1)->findChild<QKeySequenceEdit*>();
+        const QSignalBlocker blocker(editor);
+        editor->setKeySequence(QKeySequence(key));
+        break;
+    }
+    if (!sequence_.isEmpty()) QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
+    updateActionButtons();
+    return true;
 }
 
 void ControlsPage::keyPressEvent(QKeyEvent* event) {
@@ -976,5 +1035,6 @@ void ControlsPage::keyPressEvent(QKeyEvent* event) {
 
 void ControlsPage::hideEvent(QHideEvent* event) {
     stopCapture();
+    captureKeysDown_.clear();
     QWidget::hideEvent(event);
 }
