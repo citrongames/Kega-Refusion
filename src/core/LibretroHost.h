@@ -12,6 +12,7 @@
 #include "DiscMedia.h"
 #include "RomArchive.h"
 #include "BatterySave.h"
+#include "PapriumMusic.h"
 #include "Cheats.h"
 #include "../input/ControllerType.h"
 #include <QStringList>
@@ -102,6 +103,8 @@ private:
     static size_t audioBatch(const int16_t* data, size_t frames);
     static void inputPoll();
     static int16_t inputState(unsigned port, unsigned device, unsigned index, unsigned id);
+    static std::uint64_t papriumMusicRead(void* user, unsigned track, std::uint64_t frame,
+                                          std::int16_t* interleaved, std::size_t frames);
     static thread_local LibretroHost* active_;
     QLibrary library_;
     std::unique_ptr<Api> api_;
@@ -127,6 +130,7 @@ private:
     std::array<GunAim,3> gunAim_{};
     std::array<size_t,2> saveMemorySizes_{};
     BatterySave batterySave_;
+    PapriumMusic papriumMusic_;
     Cheats::Store cheats_;
     QList<QByteArray> activeCheatCodes_;
     retro_system_av_info av_{};

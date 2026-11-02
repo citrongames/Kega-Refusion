@@ -32,8 +32,9 @@ battery_patch="$root/tools/patches/genesis-plus-gx-battery.patch"
 x32_patch="$root/tools/patches/genesis-plus-gx-32x.patch"
 normal_patches=(
   "$root/tools/patches/genesis-plus-gx-32x-render-hooks.patch"
-  "$root/tools/patches/genesis-plus-gx-32x-libretro.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-32x-libretro.patch"
+  "$root/tools/patches/genesis-plus-gx-paprium.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -41,7 +42,11 @@ fi
 for patch in "${required_patches[@]}"; do
   [[ -s "$patch" ]] || { echo "Required core patch is missing or empty: $patch" >&2; exit 1; }
 done
-for source in src/core32x third_party/picodrive32x third_party/blargg; do
+required_sources=(src/core32x third_party/picodrive32x third_party/blargg)
+if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
+  required_sources+=(src/paprium)
+fi
+for source in "${required_sources[@]}"; do
   [[ -d "$root/$source" ]] || { echo "Required source directory is missing: $source" >&2; exit 1; }
 done
 for tool in git make python3 rsync nproc; do command -v "$tool" >/dev/null; done
@@ -156,6 +161,9 @@ copy_tree() {
 copy_tree "$root/src/core32x" "$checkout/core/kega32x"
 copy_tree "$root/third_party/picodrive32x" "$checkout/third_party/picodrive32x"
 copy_tree "$root/third_party/blargg" "$checkout/third_party/blargg"
+if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
+  copy_tree "$root/src/paprium" "$checkout/core/kegapaprium"
+fi
 
 python3 - "$checkout" "$use_drc" <<'PY'
 from pathlib import Path
@@ -172,6 +180,7 @@ GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/sh2
 GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/audio
 GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/video
 GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/gpx
+GENPLUS_SRC_DIR += $(CORE_DIR)/core/kegapaprium
 INCFLAGS += -I$(CORE_DIR)/third_party -I$(CORE_DIR)/third_party/picodrive32x
 INCFLAGS += -I$(CORE_DIR)/core/kega32x/sh2
 INCFLAGS += -I$(LIBRETRO_COMM_DIR)/include/streams

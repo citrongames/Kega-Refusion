@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.8.2 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.9.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -23,6 +23,7 @@ endif()
 add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/Cheats.cpp src/core/Cheats.h
     src/core/Mp3Stream.cpp src/core/Mp3Stream.h
+    src/core/PapriumMusic.cpp src/core/PapriumMusic.h
     src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
     src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
     src/core/Sega32xBios.cpp src/core/Sega32xBios.h

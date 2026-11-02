@@ -1,0 +1,188 @@
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -66,6 +66,7 @@
+ #define HW_LOCK_ON  0x08
+ #define HW_MEGASD   0x10
+ #define HW_YX5200   0x20
++#define HW_PUNCHIUM 0x40
+ 
+ /* Cartridge extra hardware */
+ typedef struct
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -47,6 +47,7 @@
+ #include "flash_cfi.h"
+ #include "yx5200.h"
+ #include "megasd.h"
++#include "../kegapaprium/paprium.h"
+ 
+ /* Cart database entry */
+ typedef struct
+@@ -573,6 +574,20 @@
+     /* cartridge ROM mapping is reinitialized on /VRES */
+     cart.hw.bankshift = 1;
+   }
++  else if ((cart.romsize == 0x800000) &&
++           (memcmp(rominfo.product, " T-574120-00", 12) == 0))
++  {
++    /* Paprium must precede the generic T-5740 mapper. */
++    cart.special |= HW_PUNCHIUM;
++    punchium_init();
++    eeprom_spi_init();
++    snd.blips[3] = blip_new(snd.sample_rate / 10);
++    if (snd.blips[3])
++    {
++      blip_clear(snd.blips[3]);
++      blip_set_rates(snd.blips[3], 48000, snd.sample_rate);
++    }
++  }
+   else if (strstr(rominfo.product,"T-5740"))
+   {
+     /* T-5740XX-XX mapper */
+@@ -1036,6 +1051,11 @@
+     yx5200_reset();
+   }
+ 
++  if (cart.special & HW_PUNCHIUM)
++  {
++    punchium_reset();
++  }
++
+   /* SVP chip */
+   if (svp)
+   {
+@@ -1133,6 +1153,11 @@
+   if (cart.special & HW_YX5200)
+   {
+     bufferptr += yx5200_context_save(&state[bufferptr]);
++  }
++
++  if (cart.special & HW_PUNCHIUM)
++  {
++    bufferptr += punchium_context_save(&state[bufferptr]);
+   }
+ 
+   return bufferptr;
+@@ -1207,6 +1232,11 @@
+   if (cart.special & HW_YX5200)
+   {
+     bufferptr += yx5200_context_load(&state[bufferptr]);
++  }
++
++  if (cart.special & HW_PUNCHIUM)
++  {
++    bufferptr += punchium_context_load(&state[bufferptr]);
+   }
+ 
+   return bufferptr;
+--- a/core/system.c
++++ b/core/system.c
+@@ -61,6 +61,8 @@
+ static EQSTATE eq[2];
+ static int16 llp,rrp;
+ 
++#include "kegapaprium/bridge.h"
++
+ /******************************************************************************************/
+ /* Audio subsystem                                                                        */
+ /******************************************************************************************/
+@@ -152,8 +154,10 @@
+   /* Cartridge sound hardware enabled ? */
+   if (snd.blips[3])
+   {
+-    /* initialize YX5200 audio */
+-    yx5200_init(samplerate);
++    if (cart.special & HW_PUNCHIUM)
++      blip_set_rates(snd.blips[3], 48000, samplerate);
++    else
++      yx5200_init(samplerate);
+   }
+ 
+   /* Reinitialize internal rates */
+@@ -229,8 +233,10 @@
+   /* Cartridge sound hardware enabled ? */
+   if (snd.blips[3])
+   {
+-    /* read YX5200 audio samples */
+-    yx5200_update(size);
++    if (cart.special & HW_PUNCHIUM)
++      punchium_audio(size);
++    else
++      yx5200_update(size);
+ 
+     /* add cartridge audio stream for audio mixing */
+     mixed_blips++;
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -728,8 +728,13 @@
+   error("[%d(%d)][%d(%d)] DMA type %d (%d access/line)(%d cycles left)-> %d access (%d remaining) (%x)\n", v_counter, (v_counter + (cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, cycles, cycles%MCYCLES_PER_LINE,dma_type, rate, dma_cycles, dma_bytes, dma_length, m68k_get_reg(M68K_REG_PC));
+ #endif
+ 
+-  /* Check if DMA can be finished within current timeframe */
+-  if (dma_length < dma_bytes)
++  /* Paprium depends on a full transfer in this timeframe. */
++  if (cart.special & HW_PUNCHIUM)
++  {
++    dma_bytes = dma_length;
++    dma_cycles = MCYCLES_PER_LINE / rate;
++  }
++  else if (dma_length < dma_bytes)
+   {
+     /* Adjust remaining DMA bytes */
+     dma_bytes = dma_length;
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -89,6 +89,7 @@
+ #define M68K_MAX_CYCLES 1107
+ #define Z80_MAX_CYCLES 345
+ #define OVERCLOCK_FRAME_DELAY 100
++#include "../core/kegapaprium/bridge.h"
+ 
+ #ifdef M68K_OVERCLOCK_SHIFT
+ #ifndef HAVE_OVERCLOCK
+@@ -3948,6 +3949,7 @@
+       free(sms_ntsc);
+    sms_ntsc  = NULL;
+ 
++   paprium_shutdown();
+    system_hw = 0;
+ }
+ 
+@@ -4056,6 +4058,7 @@
+ 
+ void retro_deinit(void)
+ {
++   paprium_shutdown();
+    libretro_supports_option_categories = false;
+    libretro_supports_bitmasks          = false;
+ 
+@@ -4229,3 +4232,14 @@
+ }
+ 
+ #undef  CHUNKSIZE
++
++/* Kega Refusion Paprium music bridge. */
++RETRO_API void retro_kegarefusion_set_paprium_music(paprium_music_callback callback, void *user)
++{
++   paprium_set_music_callback(callback, user);
++}
++
++RETRO_API int retro_kegarefusion_paprium_active(void)
++{
++   return paprium_active();
++}
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -747,7 +747,11 @@
+   }
+ 
+   /* 16-bit ROM cartridge (max. 8MB) with optional CD hardware add-on support enabled */
+-  else if ((system_hw == SYSTEM_MD) && (cart.romsize <= 0x800000) && (config.add_on != HW_ADDON_NONE))
++  /* Paprium is a full 8MB cartridge, despite its CD peripheral header bit. */
++  else if ((system_hw == SYSTEM_MD) && (cart.romsize <= 0x800000) &&
++           !((cart.romsize == 0x800000) &&
++             (memcmp(rominfo.product, " T-574120-00", 12) == 0)) &&
++           (config.add_on != HW_ADDON_NONE))
+   {
+     int len;
+     char fname[256];

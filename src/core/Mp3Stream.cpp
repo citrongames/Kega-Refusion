@@ -23,7 +23,7 @@ struct Mp3Stream::State {
 };
 Mp3Stream::Mp3Stream() : state_(std::make_unique<State>()) {}
 Mp3Stream::~Mp3Stream() = default;
-bool Mp3Stream::open(const QString& path, QString& error) {
+bool Mp3Stream::open(const QString& path, QString& error, int expectedRate) {
     error.clear(); state_ = std::make_unique<State>();
     auto& s = *state_;
     s.file.setFileName(path);
@@ -40,10 +40,14 @@ bool Mp3Stream::open(const QString& path, QString& error) {
             static_cast<QFile*>(user)->seek(qint64(offset)) ? 0 : -1;
     };
     s.io.read_data = s.io.seek_data = &s.file;
-    if (mp3dec_ex_open_cb(&s.decoder,&s.io,MP3D_SEEK_TO_SAMPLE) ||
-        s.decoder.info.hz != 44100 || s.decoder.info.channels != 2 ||
-        !s.decoder.samples || s.decoder.samples > 100ULL*60*44100*2) {
-        error = QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 кГц, стерео, не длиннее 100 минут: %1").arg(path);
+    const bool decoded = mp3dec_ex_open_cb(&s.decoder,&s.io,MP3D_SEEK_TO_SAMPLE) == 0;
+    const int rate = s.decoder.info.hz;
+    if (!decoded || s.decoder.info.channels != 2 ||
+        (expectedRate ? rate != expectedRate : (rate != 44100 && rate != 48000)) ||
+        !s.decoder.samples || s.decoder.samples > 100ULL*60*uint64_t(rate)*2) {
+        error = expectedRate == 0
+            ? QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 или 48 кГц, стерео, не длиннее 100 минут: %1").arg(path)
+            : QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 кГц, стерео, не длиннее 100 минут: %1").arg(path);
         return false;
     }
     s.totalBytes = qint64(s.decoder.samples)*2 + 44;
@@ -51,13 +55,14 @@ bool Mp3Stream::open(const QString& path, QString& error) {
     std::memcpy(h,"RIFF",4); qToLittleEndian<quint32>(quint32(s.totalBytes-8),h+4);
     std::memcpy(h+8,"WAVEfmt ",8); qToLittleEndian<quint32>(16,h+16);
     qToLittleEndian<quint16>(1,h+20); qToLittleEndian<quint16>(2,h+22);
-    qToLittleEndian<quint32>(44100,h+24); qToLittleEndian<quint32>(176400,h+28);
+    qToLittleEndian<quint32>(quint32(rate),h+24); qToLittleEndian<quint32>(quint32(rate*4),h+28);
     qToLittleEndian<quint16>(4,h+32); qToLittleEndian<quint16>(16,h+34);
     std::memcpy(h+36,"data",4); qToLittleEndian<quint32>(quint32(s.totalBytes-44),h+40);
     s.opened = true;
     return true;
 }
 qint64 Mp3Stream::size() const { return state_->totalBytes; }
+int Mp3Stream::sampleRate() const { return state_->opened ? state_->decoder.info.hz : 0; }
 qint64 Mp3Stream::pos() const { return state_->position; }
 bool Mp3Stream::seek(qint64 position) {
     if (!state_->opened || position < 0 || position > state_->totalBytes) return false;

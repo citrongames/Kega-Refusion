@@ -138,6 +138,10 @@ def main() -> None:
     notices.mkdir()
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
+    paprium_notices = notices / "paprium"
+    paprium_notices.mkdir()
+    for name in ("LICENSE", "PROVENANCE.md"):
+        shutil.copy2(root / "src/paprium" / name, paprium_notices / name)
     if (root / "README.md").is_file():
         shutil.copy2(root / "README.md", stage / "README.md")
     shutil.copy2(

@@ -25,7 +25,7 @@ namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--gun=menacer|justifier] [--companion-pad]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--gun=menacer|justifier] [--companion-pad]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -73,16 +73,18 @@ FutureHashes futureHashes(LibretroHost& host) {
             QStringLiteral("Disc read failed during state check: %1").arg(CoreFileSystem::lastError()));
     return {video.result().toHex(), audio.result().toHex()};
 }
-QJsonObject checkState(LibretroHost& host) {
+QJsonObject checkState(LibretroHost& host, bool has32x) {
     const QByteArray state = host.serialize();
     require(!state.isEmpty(), QStringLiteral("State check: core serialization is unavailable or failed."));
     const qsizetype magic = state.indexOf(QByteArrayLiteral("KR32X001"), 1);
-    require(magic > 0, QStringLiteral("State check: KR32X001 extension header is missing."));
-    QByteArray corrupt = state;
-    corrupt[magic] = char(quint8(corrupt[magic]) ^ 0x20u);
-    require(!host.unserialize(corrupt), QStringLiteral("State check: corrupted 32X extension was accepted."));
-    require(host.serialize() == state,
-            QStringLiteral("State check: rejected extension changed the serialized machine state."));
+    if (has32x) {
+        require(magic > 0, QStringLiteral("State check: KR32X001 extension header is missing."));
+        QByteArray corrupt = state;
+        corrupt[magic] = char(quint8(corrupt[magic]) ^ 0x20u);
+        require(!host.unserialize(corrupt), QStringLiteral("State check: corrupted 32X extension was accepted."));
+        require(host.serialize() == state,
+                QStringLiteral("State check: rejected extension changed the serialized machine state."));
+    }
     const QByteArray rewind = host.captureRewindState();
     require(!rewind.isEmpty(), QStringLiteral("State check: rewind capture failed."));
     require(host.restoreRewindState(rewind), QStringLiteral("State check: rewind restore failed."));
@@ -97,8 +99,8 @@ QJsonObject checkState(LibretroHost& host) {
             QStringLiteral("State check: future PCM differs after two restores (%1 vs %2).")
                 .arg(QString::fromLatin1(first.audio), QString::fromLatin1(second.audio)));
     return {{"enabled", true}, {"serialize_bytes", qint64(state.size())},
-            {"extension_magic_offset", qint64(magic)}, {"corrupt_extension_rejected", true},
-            {"state_unchanged_after_reject", true}, {"rewind_roundtrip", true},
+            {"extension_magic_offset", qint64(magic)}, {"corrupt_extension_rejected", has32x},
+            {"state_unchanged_after_reject", has32x}, {"rewind_roundtrip", true},
             {"rewind_bytes", qint64(rewind.size())}, {"future_frames_per_restore", 30},
             {"extra_frames", 60}, {"future_video_match", true}, {"future_audio_match", true},
             {"future_video_sha256_rgba", QString::fromLatin1(first.video)},
@@ -155,7 +157,7 @@ int main(int argc, char** argv) {
     constexpr unsigned gunPlayer = 1;
     bool companionPad = false;
     bool inputSpecified = false, stateCheck = false, resetCheck = false, filterSpecified = false;
-    int filter = 0, checkpoint = 0, extraStart = -1, extraPlay = -1;
+    int filter = 0, checkpoint = 0, extraStart = -1, extraPlay = -1, resetAt = -1;
     QString saveRawState, loadRawState;
     int heldAt = -1, heldCount = 0;
     unsigned heldMask = 0;
@@ -180,6 +182,11 @@ int main(int argc, char** argv) {
         } else if (option.startsWith(QLatin1String("--load-state="))) {
             loadRawState = option.mid(13);
             if (loadRawState.isEmpty()) return usage(QStringLiteral("Empty state path."));
+        } else if (option.startsWith(QLatin1String("--reset-at="))) {
+            bool valid = false;
+            resetAt = option.mid(11).toInt(&valid);
+            if (!valid || resetAt < 1 || resetAt >= frames)
+                return usage(QStringLiteral("--reset-at requires a frame inside the run."));
         } else if (option.startsWith(QLatin1String("--play-at="))) {
             bool valid = false;
             const int value = option.mid(10).toInt(&valid);
@@ -285,6 +292,7 @@ int main(int argc, char** argv) {
         QElapsedTimer clock;
         clock.start();
         for (int frame = 0; frame < frames; ++frame) {
+            if (frame == resetAt) host.reset();
             const bool start = input != Input::None && ((frame >= 120 && frame < 124) ||
                                   (frame >= 240 && frame < 244) || (frame >= 480 && frame < 484));
             const bool extra = extraStart >= 0 && frame >= extraStart && frame < extraStart + 4;
@@ -354,7 +362,7 @@ int main(int argc, char** argv) {
         savePng(image, output);
         QElapsedTimer stateClock;
         stateClock.start();
-        QJsonObject stateChecks = stateCheck ? checkState(host) : QJsonObject{{"enabled", false}, {"extra_frames", 0}};
+        QJsonObject stateChecks = stateCheck ? checkState(host, (benchmarkFeatures & 2u) != 0) : QJsonObject{{"enabled", false}, {"extra_frames", 0}};
         if (stateCheck) stateChecks.insert("elapsed_ms", stateClock.nsecsElapsed() / 1.0e6);
         QElapsedTimer resetClock;
         resetClock.start();
@@ -367,7 +375,7 @@ int main(int argc, char** argv) {
             {"bios_32x_imported", labels(x32Imported)}, {"bios_cd_imported", labels(cdImported)},
             {"input", input == Input::Play ? "start_pulses_120_123_240_243_480_483_abc_600_603_720_723" :
                       input == Input::StartPulses ? "start_pulses_120_123_240_243_480_483" : "none"},
-            {"filter", filter}, {"checkpoint_interval", checkpoint}, {"extra_start_frame", extraStart}, {"extra_play_frame", extraPlay},
+            {"filter", filter}, {"reset_at", resetAt}, {"checkpoint_interval", checkpoint}, {"extra_start_frame", extraStart}, {"extra_play_frame", extraPlay},
             {"held_buttons_frame", heldAt}, {"held_buttons_count", heldCount}, {"held_buttons_mask", qint64(heldMask)},
             {"rewind_recording", recordRewind}, {"rewind_bytes", qint64(history.bytesUsed())}, {"state_checks", stateChecks}, {"reset_checks", resetChecks},
             {"frames_requested", frames}, {"frames_run", frames},

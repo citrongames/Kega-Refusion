@@ -32,6 +32,10 @@ struct LibretroHost::Api {
     const char* (*state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
     void (*invalidate_code)() = nullptr;
+    using PapriumMusicCallback = std::uint64_t (*)(void*, unsigned, std::uint64_t,
+                                                    std::int16_t*, std::size_t);
+    void (*set_paprium_music)(PapriumMusicCallback, void*) = nullptr;
+    int (*paprium_active)() = nullptr;
 };
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
@@ -100,6 +104,18 @@ LibretroHost::~LibretroHost() {
     coreOwner.compare_exchange_strong(expected, nullptr);
     library_.unload();
 }
+std::uint64_t LibretroHost::papriumMusicRead(void* user, unsigned track,
+                                             std::uint64_t frame, std::int16_t* interleaved,
+                                             std::size_t frames) {
+    if (!user) return 0;
+    auto& music = *static_cast<PapriumMusic*>(user);
+    if (!frames) {
+        if (frame == 0) return music.frames(track);
+        if (frame == 1) return std::uint64_t(music.sampleRate(track));
+        return 0;
+    }
+    return music.read(track, frame, interleaved, frames);
+}
 bool LibretroHost::initialize(QString& error) {
     if (initialized_) return true;
     if (active_ && active_ != this) {
@@ -133,6 +149,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->manage_bram = reinterpret_cast<decltype(api_->manage_bram)>(library_.resolve("kegarefusion_manage_bram"));
     api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
+    api_->set_paprium_music = reinterpret_cast<decltype(api_->set_paprium_music)>(library_.resolve("retro_kegarefusion_set_paprium_music"));
+    api_->paprium_active = reinterpret_cast<decltype(api_->paprium_active)>(library_.resolve("retro_kegarefusion_paprium_active"));
     if (api_->manage_bram && api_->get_bram && api_->state_abi &&
         QByteArray(api_->state_abi()) == "kegarefusion-gpx-f27655b-battery-v1") {
         // This extension only exposes battery memory; the pinned core's state
@@ -162,6 +180,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->set_input_poll(inputPoll);
     api_->set_input_state(inputState);
     api_->init();
+    if (api_->set_paprium_music)
+        api_->set_paprium_music(papriumMusicRead, &papriumMusic_);
     initialized_ = true;
     return true;
 }
@@ -453,6 +473,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     if (!accepted) { error = QStringLiteral("Genesis Plus GX не смог загрузить ROM."); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
     gamePath_ = info.absoluteFilePath();
+    if (api_->set_paprium_music && api_->paprium_active && api_->paprium_active())
+        papriumMusic_.configure(gamePath_);
     contentName_ = name;
     romHash_ = digest(content_);
     legacyGameKey_ = QString::fromLatin1(romHash_.toHex());
@@ -477,6 +499,7 @@ void LibretroHost::unload() {
         clearCoreCheats();
         api_->unload_game();
     }
+    papriumMusic_.clear();
     loaded_ = false;
     CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0;
@@ -850,6 +873,8 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
 QByteArray LibretroHost::stateCoreIdentity() const {
     // Ordinary MD/CD retain their stable GPX state identity. The attachment
     // has its own versioned state contract, independent of executable hashes.
+    if (api_->paprium_active && api_->paprium_active())
+        return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-v1"));
     if (api_->features && (api_->features() & 2u))
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-32x-state-v1"));
     return coreHash_;

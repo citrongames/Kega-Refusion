@@ -4,3 +4,6 @@ tools/patches/*.patch -text -whitespace
 # Keep byte-exact upstream SH2 sources and their original whitespace.
 third_party/picodrive32x/** -text -whitespace
 third_party/blargg/** -text -whitespace
+
+# Preserve the unmodified upstream Paprium donor license.
+src/paprium/LICENSE -text -whitespace

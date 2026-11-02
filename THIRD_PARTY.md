@@ -1,10 +1,11 @@
 # Third-party components
 
 - **Genesis Plus GX libretro core**: https://github.com/libretro/Genesis-Plus-GX, pinned commit `f27655b592ef43f317272d79883bcaa10d3ac8ad`. The ordinary core build applies the frontend battery-memory extension in `tools/patches/genesis-plus-gx-battery.patch`, retaining upstream emulation and serialized state layout. The separate experimental source integration in `tools/build-core32x.sh` adds the `genesis-plus-gx-32x*.patch` hooks and `src/core32x` attachment, including its own versioned state extension; MD/CD execution remains in GPX. Its non-commercial license and embedded component notices are preserved in `third_party/Genesis-Plus-GX-LICENSE.txt`. This bundled core must not be treated as a permissively licensed commercial component.
+- **Paprium cartridge HLE**: adapted from [pav1388/Genesis-Plus-GX-PUNCHiUM](https://github.com/pav1388/Genesis-Plus-GX-PUNCHiUM) at commit `3849f3d3432df1d6320574e73695dd379ecef2b3`. Its Paprium source credits Project Little Man and pav13. The donor's Genesis Plus GX non-commercial license and embedded notices are retained in `src/paprium/LICENSE`; source provenance, behavioral references, and experimental limitations are in `src/paprium/PROVENANCE.md`.
 - **libretro API header**: copied from that exact source revision, `libretro/libretro-common/include/libretro.h`; license/copyright notice is preserved in the header.
 - **Qt 6**: dynamically linked Core, Gui, Widgets, Multimedia, OpenGL and OpenGLWidgets. Qt license notices and dependency licenses must accompany distributable Windows packages. See https://www.qt.io/licensing/open-source-lgpl-obligations and licenses supplied with the installed Qt distribution.
 
-No game ROMs or console BIOS files are distributed. Integration test ROMs are original fixtures generated from the test source at runtime.
+No game ROMs, Paprium soundtrack files, or console BIOS files are distributed. Integration test ROMs are original fixtures generated from the test source at runtime.
 
 - **SDL 2.32.10**: joystick and controller discovery/input, dynamically linked; https://github.com/libsdl-org/SDL/tree/release-2.32.10. License preserved in `third_party/SDL2-LICENSE.txt`. Windows official MinGW archive is pinned by SHA-256 in `tools/prepare-sdl-windows.py`.
 - **Press Start 2P**: pixel OSD typeface with Cyrillic by the Press Start 2P Project Authors; https://github.com/google/fonts/tree/main/ofl/pressstart2p. Font and SIL Open Font License are in `assets/fonts/`.
