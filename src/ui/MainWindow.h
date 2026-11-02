@@ -43,6 +43,7 @@ protected:
 
 private:
     void buildMenus();
+    void setSmsFmEnabled(bool enabled);
     void openGameDialog();
     void setLoadingUi(bool loading, const QString& fileName = {});
     void saveScreenshot();
@@ -124,6 +125,7 @@ private:
     QAction* gameFpsAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
+    QAction* smsFmAction_ = nullptr;
     QStringList recentPaths_;
     QStringList discPaths_;
     int discIndex_ = -1;
@@ -135,6 +137,7 @@ private:
     int stateSlot_ = 0;
     int fastForwardFactor_ = 4;
     bool rewindEnabled_ = true;
+    bool smsFmEnabled_ = true;
     int region_ = 0, blarggFilter_ = 0;
     unsigned occupiedSlots_ = 0;
     bool pauseOnFocusLoss_ = true;

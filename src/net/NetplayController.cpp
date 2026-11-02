@@ -295,7 +295,8 @@ void NetplayController::startHost(quint16 port,const QString& address,const QStr
         transport_.stop();emit notice(error);QMessageBox::warning(lobby_,t("Онлайн"),error);return;
     }
     rosterBytes_.clear();lastLobbyBytes_.clear();udpReadyPeers_.clear();
-    active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=false;
+    active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=true;
+    QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(true);});
     storageId_=QString::fromLatin1(NetTransport::generateSecret().left(16).toHex());
     invitationKey_=options.inviteSecret;invitationPassword_=password;connectionId_=connectionId;
     lanInvite_.clear();

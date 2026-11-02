@@ -39,7 +39,9 @@ public:
     bool supportsInputPollMetrics() const;
     void setExpansionDevices(bool cd, bool x32);
     void reset();
-    bool hardReset(QString& error);
+    bool hardReset(QString& error, bool applyPending = true);
+    void setSmsFmEnabled(bool enabled) { smsFmEnabled_ = enabled; }
+    bool isMasterSystem() const;
     // Region: 0 Auto, 1 Japan, 2 USA, 3 Europe. Filter: 0 Off, 1 Mono,
     // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
     bool setRegion(int region, QString& error);
@@ -72,11 +74,11 @@ public:
     QByteArray networkCompatibility() const;
     // trusted is only for snapshots retained inside RewindBuffer, never files.
     bool restoreMovieState(const QByteArray& state, QString& error, bool trusted = false);
-    QJsonObject movieConfiguration() const;
+    QJsonObject movieConfiguration(bool forPowerReset = false) const;
     bool prepareNetwork(const QJsonObject& configuration, QString& error);
     bool restoreNetworkState(const QByteArray& state, QString& error);
     bool prepareMovie(const QJsonObject& configuration, QString& error);
-    bool restoreMovieConfiguration(QString& error);
+    bool restoreMovieConfiguration(QString& error, bool keepRunningFm = false);
     QByteArray movieGameIdentity() const;
     QByteArray movieCoreIdentity() const;
     unsigned achievementConsoleId() const;
@@ -116,7 +118,7 @@ private:
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
-    bool applyExpansionDevices(QString& error);
+    bool applyPowerOnOptions(QString& error, bool applyPending = true);
     bool hasCdHardware() const;
     void loadCheats();
     void applyCheats();
@@ -171,6 +173,7 @@ private:
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
+    bool smsFmEnabled_ = true;
     bool attachCd_ = false, attach32x_ = false, contentNeeds32x_ = false;
     std::array<unsigned,3> buttons_{};
     std::array<bool,3> controllerConnected_{{true,false,false}};

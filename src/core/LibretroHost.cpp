@@ -321,7 +321,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     setDiscIdentity();
     retro_game_info game{}; game.path = encodedGamePath_.constData();
     contentInfoActive_ = true;
-    if (!applyExpansionDevices(error)) { contentInfoActive_ = false; return false; }
+    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) {
@@ -510,7 +510,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
-    if (!applyExpansionDevices(error)) { contentInfoActive_ = false; return false; }
+    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
@@ -572,9 +572,10 @@ void LibretroHost::setExpansionDevices(bool cd, bool x32) {
     // Settings are pending until the next load or power cycle.
     attachCd_ = cd; attach32x_ = x32;
 }
-bool LibretroHost::applyExpansionDevices(QString& error) {
+bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     // A recording carries its own exact hardware configuration.
-    if (movieConfigurationActive_) return true;
+    if (movieConfigurationActive_ || !applyPending) return true;
+    if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
     if (!setCoreOption("genesis_plus_gx_add_on", attachCd_ ? "sega/mega cd" : "auto", error)) return false;
     if (variableValues_.count("genesis_plus_gx_32x_add_on"))
         return setCoreOption("genesis_plus_gx_32x_add_on", attach32x_ ? "connected" : "auto", error);
@@ -593,7 +594,15 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
 void LibretroHost::reset() {
     if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
 }
-bool LibretroHost::hardReset(QString& error) {
+bool LibretroHost::isMasterSystem() const {
+    if(!loaded_)return false;
+    if(api_->system_hw) {
+        const auto system=api_->system_hw();
+        return system==0x10 || system==0x20 || system==0x21;
+    }
+    return contentExtension_=="sms";
+}
+bool LibretroHost::hardReset(QString& error, bool applyPending) {
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
     achievementHashCache_.clear();
@@ -603,8 +612,8 @@ bool LibretroHost::hardReset(QString& error) {
     // Recheck user BIOS before unloading a working game for its power cycle.
     const bool mdHardware = api_->system_hw ? ((api_->system_hw() & 0x80u) != 0)
         : (contentExtension_ != "sms" && contentExtension_ != "gg" && contentExtension_ != "sg");
-    const auto wantedOption = [this](const char* key, bool preference) {
-        if (!movieConfigurationActive_) return preference;
+    const auto wantedOption = [this,applyPending](const char* key, bool preference) {
+        if (!movieConfigurationActive_ && applyPending) return preference;
         const auto value = variables_.find(key);
         return value != variables_.end() && (value->second == "connected" || value->second == "sega/mega cd");
     };
@@ -639,7 +648,7 @@ bool LibretroHost::hardReset(QString& error) {
     game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
-    if (!applyExpansionDevices(error)) { contentInfoActive_ = false; return false; }
+    if (!applyPowerOnOptions(error,applyPending)) { contentInfoActive_ = false; return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) {
@@ -939,12 +948,12 @@ bool LibretroHost::setNetplayStorage(const QString& scope,QString& error) {
     netplaySaveRoot_=next;savePath_=QDir::toNativeSeparators(destination+QStringLiteral("/saves")).toUtf8();
     if(loaded_) {
         const bool playback=moviePlayback_;moviePlayback_=true;
-        bool ok=hardReset(error);
+        bool ok=hardReset(error,false);
         if(ok)ok=restoreMovieState(state,error);
         if(!ok) {
             const auto originalError=error;netplaySaveRoot_=previousRoot;savePath_=previousPath;
             QString rollbackError;
-            if(!hardReset(rollbackError)||!restoreMovieState(state,rollbackError))unload();
+            if(!hardReset(rollbackError,false)||!restoreMovieState(state,rollbackError))unload();
             error=originalError;
         }
         moviePlayback_=playback;return ok;
@@ -1362,13 +1371,15 @@ QJsonObject LibretroHost::movieBiosFingerprints() const {
     }
     return result;
 }
-QJsonObject LibretroHost::movieConfiguration() const {
+QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
     if (!loaded_) return {};
     const auto game = movieGameIdentity();
     if (game.size() != 32 || exactCoreHash_.size() != 32) return {};
     QJsonObject options;
     for (const auto& [key,value] : variables_)
         options.insert(QString::fromUtf8(key), QString::fromUtf8(value));
+    if(forPowerReset && !movieConfigurationActive_)
+        options.insert(QStringLiteral("genesis_plus_gx_ym2413"), smsFmEnabled_ ? QStringLiteral("enabled") : QStringLiteral("disabled"));
     QJsonArray controllers;
     for (size_t i = 0; i < controllerKinds_.size(); ++i)
         controllers.append(QJsonObject{{QStringLiteral("connected"), controllerConnected_[i]},
@@ -1589,9 +1600,18 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     if (loaded_ && previousDisc != discIndex_) { discIndex_ = previousDisc; setDiscIdentity(); }
     return false;
 }
-bool LibretroHost::restoreMovieConfiguration(QString& error) {
+bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm) {
     error.clear();
     if (!movieConfigurationActive_) return true;
+    // Ending/taking over a recording must not hot-switch the FM hardware.
+    // Recovery and unload still restore the original complete configuration.
+    if(keepRunningFm && loaded_) {
+        const auto fm=variables_.find("genesis_plus_gx_ym2413");
+        if(fm!=variables_.end()) {
+            preMovieVariables_[fm->first]=fm->second;
+            preMovieOptionOverrides_[fm->first]=fm->second;
+        }
+    }
     const bool optionChanged = variables_ != preMovieVariables_;
     variables_ = std::move(preMovieVariables_);
     optionOverrides_ = std::move(preMovieOptionOverrides_);

@@ -764,6 +764,142 @@ void testNativeVideoGeometry(const QString& corePath) {
     }
 }
 
+// Original SMS program: mute all PSG channels and hold one YM2413 note.
+// Muting PSG makes PCM output an independent check of the FM option.
+QByteArray makeSmsFmTestRom() {
+    QByteArray rom(32 * 1024, char(0));
+    const auto program = QByteArray::fromHex(
+        "f331f0df"              // DI; LD SP,$DFF0
+        "3e9fd37f3ebfd37f3edfd37f3effd37f" // mute four PSG channels
+        "3e01d3f2"          // 315-5297 audio control: output FM only
+        "3e30d3f03e10d3f1"  // instrument 1, maximum volume, channel 0
+        "3e10d3f03e80d3f1"  // frequency low byte
+        "3e20d3f03e15d3f1"  // frequency high bits, key on
+        "18fe");            // hold note
+    rom.replace(0, program.size(), program);
+    rom.replace(0x7ff0, 8, "TMR SEGA");
+    rom[0x7fff] = char(0x4c);
+    return rom;
+}
+
+QString smsFmOption(const LibretroHost& host, bool forPowerReset = false) {
+    return host.movieConfiguration(forPowerReset)
+        .value(QStringLiteral("options")).toObject()
+        .value(QStringLiteral("genesis_plus_gx_ym2413")).toString();
+}
+
+void expectSmsFmAudio(LibretroHost& host, bool audible) {
+    bool signal = false;
+    for (int frame = 0; frame < 12; ++frame) {
+        host.runFrame();
+        const auto& pcm = host.audio();
+        require(!pcm.isEmpty() && pcm.size() % 4 == 0, "SMS FM PCM stream missing");
+        if (frame < 2) continue; // let the power-on PSG mute and mixer settle
+        for (char sample : pcm) signal |= sample != 0;
+    }
+    require(signal == audible, audible ? "enabled SMS FM produced silence"
+                                      : "disabled SMS FM still produced sound");
+}
+
+void testSmsFm(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "SMS FM test directory");
+    const QString smsPath = temp.filePath("original-fm.sms");
+    const auto sms = makeSmsFmTestRom();
+    writeFile(smsPath, sms);
+    LibretroHost host(corePath, temp.path() + "/data");
+    require(!host.isMasterSystem(), "unloaded host identified as Master System");
+    QString error;
+    require(host.load(smsPath, error), "SMS FM fixture load failed");
+    QLibrary inspect(corePath);
+    using Hardware = unsigned (*)();
+    const auto hardware = reinterpret_cast<Hardware>(inspect.resolve("retro_kegarefusion_system_hw"));
+    require(hardware != nullptr, "SMS hardware inspection export missing");
+    require(hardware() == 0x10 || hardware() == 0x20 || hardware() == 0x21,
+            "SMS FM fixture did not select Master System hardware");
+    require(host.isMasterSystem(), "Master System hardware was not recognized");
+    require(smsFmOption(host) == QLatin1String("enabled"), "SMS FM default was not enabled");
+    expectSmsFmAudio(host, true);
+
+    const auto recordedEnabled = host.movieConfiguration();
+    host.setSmsFmEnabled(false);
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "pending SMS FM preference changed active recording metadata");
+    require(smsFmOption(host, true) == QLatin1String("disabled"),
+            "new recording did not predict the pending power-reset setting");
+    require(host.setNetplayStorage(QStringLiteral("0123456789abcdef0123456789abcdef"), error),
+            "network storage switch failed with pending SMS FM");
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "network storage switch applied pending SMS FM");
+    expectSmsFmAudio(host, true);
+    host.reset();
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "soft reset changed the active SMS FM option");
+    expectSmsFmAudio(host, true);
+    require(host.prepareMovie(recordedEnabled, error), "recorded FM option was not restored");
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "recorded FM option lost to local pending preference");
+    expectSmsFmAudio(host, true);
+    require(host.restoreMovieConfiguration(error, true), "SMS FM movie configuration restore failed");
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "ending recording hot-switched running SMS FM");
+    expectSmsFmAudio(host, true);
+    require(host.hardReset(error), "SMS FM disable power reset failed");
+    require(smsFmOption(host) == QLatin1String("disabled"),
+            "power reset did not apply disabled SMS FM");
+    expectSmsFmAudio(host, false);
+
+    auto networkDisabled = host.movieConfiguration();
+    networkDisabled.insert(QStringLiteral("networkCompatibility"),
+                           QString::fromLatin1(host.networkCompatibility().toHex()));
+    host.setSmsFmEnabled(true);
+    require(smsFmOption(host) == QLatin1String("disabled") &&
+            smsFmOption(host, true) == QLatin1String("enabled"),
+            "pending enable leaked into active network metadata");
+    host.reset();
+    require(smsFmOption(host) == QLatin1String("disabled"),
+            "soft reset applied pending SMS FM enable");
+    expectSmsFmAudio(host, false);
+    require(host.prepareNetwork(networkDisabled, error), "network FM option was not restored");
+    require(smsFmOption(host) == QLatin1String("disabled"),
+            "network FM option lost to local pending preference");
+    expectSmsFmAudio(host, false);
+    require(host.restoreMovieConfiguration(error, true), "SMS FM network configuration restore failed");
+    require(smsFmOption(host) == QLatin1String("disabled"),
+            "ending network session hot-switched running SMS FM");
+    expectSmsFmAudio(host, false);
+    require(host.hardReset(error), "SMS FM enable power reset failed");
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "power reset did not apply enabled SMS FM");
+    expectSmsFmAudio(host, true);
+
+    host.setSmsFmEnabled(false);
+    require(host.load(smsPath, error), "SMS FM disabled reload failed");
+    require(smsFmOption(host) == QLatin1String("disabled"),
+            "new load did not apply disabled SMS FM");
+    expectSmsFmAudio(host, false);
+    host.setSmsFmEnabled(true);
+    require(host.load(smsPath, error), "SMS FM enabled reload failed");
+    require(smsFmOption(host) == QLatin1String("enabled"),
+            "new load did not apply enabled SMS FM");
+    expectSmsFmAudio(host, true);
+
+    auto gg = sms; gg[0x7fff] = char(0x6c);
+    const QString ggPath = temp.filePath("original-fm.gg");
+    writeFile(ggPath, gg);
+    require(host.load(ggPath, error), "Game Gear fixture load failed");
+    require(hardware() == 0x40 || hardware() == 0x41,
+            "Game Gear fixture did not select handheld hardware");
+    require(!host.isMasterSystem(), "Game Gear identified as Master System");
+
+    auto sg = sms; sg.replace(0x7ff0, 8, QByteArray(8, char(0)));
+    const QString sgPath = temp.filePath("original-fm.sg");
+    writeFile(sgPath, sg);
+    require(host.load(sgPath, error), "SG-1000 fixture load failed");
+    require(hardware() == 0x01 || hardware() == 0x02 || hardware() == 0x03,
+            "SG-1000 fixture did not select SG hardware");
+    require(!host.isMasterSystem(), "SG-1000 identified as Master System");
+}
+
 // Two invocations of this mode verify that a Nuked OPLL snapshot can be
 // restored after the core is loaded at a different process address.
 void testNetworkOpll(const QString& corePath, const QString& directory, bool reader) {
@@ -871,9 +1007,10 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
-                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") || mode == QLatin1String("--lightguns"))) &&
+                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports|--lightguns|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -881,6 +1018,11 @@ int main(int argc, char** argv) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));
             std::puts("network OPLL snapshot process passed"); return 0;
+        }
+        if (mode == QLatin1String("--sms-fm")) {
+            testSmsFm(QString::fromLocal8Bit(argv[1]));
+            std::puts("SMS FM pending settings, audio, recording/network metadata and hardware classification passed");
+            return 0;
         }
         if (mode == QLatin1String("--lightguns")) {
             testLightguns(QString::fromLocal8Bit(argv[1]));

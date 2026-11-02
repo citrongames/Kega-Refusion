@@ -89,12 +89,12 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     setObjectName(QStringLiteral("netplayLobby"));
     setWindowTitle(t("Сетевое лобби — Kega Refusion"));
     setAttribute(Qt::WA_DeleteOnClose, false);
-    setMinimumSize(620, 520);
-    resize(720, 650);
+    setMinimumSize(600, 500);
+    resize(660, 560);
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(16, 14, 16, 14);
-    layout->setSpacing(10);
+    layout->setContentsMargins(12, 10, 12, 10);
+    layout->setSpacing(8);
 
     auto* top = new QHBoxLayout;
     status_ = new QLabel(t("Нет сетевого сеанса"), this);
@@ -177,6 +177,7 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     participants_->setSelectionBehavior(QAbstractItemView::SelectRows);
     participants_->setSelectionMode(QAbstractItemView::SingleSelection);
     participants_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    participants_->setMinimumHeight(110);
     layout->addWidget(participants_, 1);
     connect(participants_, &QTableWidget::itemSelectionChanged,
             this, &NetplayLobby::updateModerationButtons);

@@ -222,12 +222,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
     achievementNotifications_ = settings_.value(QStringLiteral("achievements/notifications"), true).toBool();
     achievementSound_ = settings_.value(QStringLiteral("achievements/sound"), true).toBool();
+    smsFmEnabled_ = settings_.value(QStringLiteral("audio/smsFmEnabled"), true).toBool();
     achievementPosition_ = qBound(0, settings_.value(QStringLiteral("achievements/position"), 0).toInt(), 5);
     view_->setAchievementPosition(achievementPosition_);
     region_ = qBound(0, settings_.value(QStringLiteral("emulation/region"), 0).toInt(), 3);
     blarggFilter_ = qBound(0, settings_.value(QStringLiteral("view/blarggFilter"), 0).toInt(), 4);
     session_.setRegion(region_);
     session_.setBlarggFilter(blarggFilter_);
+    session_.setSmsFmEnabled(smsFmEnabled_);
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
     session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
@@ -250,6 +252,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateInputEnabled();
     });
     buildMenus();
+    connect(&session_, &EmulationSession::masterSystemChanged,
+            smsFmAction_, &QAction::setVisible);
     for (QAction* action : menuBar()->actions()) {
         QMenu* menu = action->menu();
         if (!menu) continue;
@@ -842,6 +846,14 @@ void MainWindow::buildMenus() {
         view_->setMutedStatus(muted);
         settings_.setValue(QStringLiteral("audio/muted"), muted);
     });
+    smsFmAction_ = soundMenu->addAction(Localization::text(QStringLiteral("FM-синтезатор (Master System)")));
+    smsFmAction_->setObjectName(QStringLiteral("smsFmAction"));
+    smsFmAction_->setCheckable(true);
+    smsFmAction_->setChecked(smsFmEnabled_);
+    smsFmAction_->setVisible(false);
+    smsFmAction_->setToolTip(Localization::text(QStringLiteral(
+        "Применяется при следующей загрузке игры или перезапуске питания.")));
+    connect(smsFmAction_, &QAction::toggled, this, &MainWindow::setSmsFmEnabled);
     QWidget* volumePanel = new QWidget(soundMenu);
     QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
     volumeLayout->setContentsMargins(12, 6, 12, 8);
@@ -1561,6 +1573,14 @@ void MainWindow::editSettings(int initialPage) {
         "После подключения выбор восстановится.")), &dialog);
     outputHelp->setWordWrap(true);
     sound->addRow(outputHelp);
+    auto* smsFmBox = new QCheckBox(Localization::text(QStringLiteral("FM-синтезатор (Master System)")), &dialog);
+    smsFmBox->setObjectName(QStringLiteral("smsFmEnabled"));
+    smsFmBox->setChecked(smsFmEnabled_);
+    sound->addRow(smsFmBox);
+    auto* smsFmHelp = new QLabel(Localization::text(QStringLiteral(
+        "Применяется при следующей загрузке игры или перезапуске питания.")), &dialog);
+    smsFmHelp->setWordWrap(true);
+    sound->addRow(smsFmHelp);
 
     auto* biosPlaceholder = new QWidget(pages);
     pages->addWidget(biosPlaceholder);
@@ -1822,6 +1842,7 @@ void MainWindow::editSettings(int initialPage) {
             settings_.setValue(QStringLiteral("emulation/rewindMemoryMiB"), rewindMemory->value());
             session_.setRewindMemoryMiB(rewindMemory->value());
         }
+        setSmsFmEnabled(smsFmBox->isChecked());
         const QByteArray selectedOutputId = outputDevice->currentData().toByteArray();
         if (selectedOutputId != audio_->outputDeviceId()) {
             audio_->setOutputDeviceId(selectedOutputId);
@@ -1831,6 +1852,15 @@ void MainWindow::editSettings(int initialPage) {
     view_->setFocus();
     updateMovieActions();
     updateInputEnabled();
+}
+
+void MainWindow::setSmsFmEnabled(bool enabled) {
+    if (smsFmEnabled_ == enabled) return;
+    smsFmEnabled_ = enabled;
+    settings_.setValue(QStringLiteral("audio/smsFmEnabled"), enabled);
+    const QSignalBlocker blocker(smsFmAction_);
+    smsFmAction_->setChecked(enabled);
+    session_.setSmsFmEnabled(enabled);
 }
 
 void MainWindow::showAchievements() {

@@ -127,6 +127,7 @@ void EmulationSession::setRewind(bool enabled) {
 }
 void EmulationSession::setRewindEnabled(bool enabled) { rewindEnabled_.store(enabled); }
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
+void EmulationSession::setSmsFmEnabled(bool enabled) { enqueue({Type::SmsFm,{},enabled?1:0}); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
 void EmulationSession::setPerformanceMetricsEnabled(bool enabled) { enqueue({Type::PerformanceMetrics,{},enabled ? 1 : 0}); }
 void EmulationSession::setGameFpsEnabled(bool enabled) { enqueue({Type::GameFps,{},enabled ? 1 : 0}); }
@@ -336,6 +337,7 @@ void EmulationSession::run() {
     };
     clearHistory();
     bool paused = false, effectivePaused = false, rewindLatched = false, rewinding = false;
+    bool masterSystem = false;
     auto rewindStatus = [&](bool enabled) {
         if (rewinding != enabled) { rewinding = enabled; emit rewindingChanged(enabled); }
     };
@@ -694,6 +696,7 @@ void EmulationSession::run() {
                 break;
             }
             case Type::NetSlots: networkSlots=unsigned(command.value)&0x3ff;slotStatus();break;
+            case Type::SmsFm: host.setSmsFmEnabled(command.value!=0); break;
             case Type::NetFactor: fastForwardFactor_.store(command.value==0?0:std::clamp(command.value,2,32)); break;
             case Type::NetStepHold: frameAdvanceHeld_.store(command.value!=0); break;
             case Type::NetFast: fastForward_.store(command.value!=0); break;
@@ -983,6 +986,16 @@ void EmulationSession::run() {
                 break;
             }
             case Type::Slots: slotStatus(command.value); break;
+            }
+            switch(command.type) {
+            case Type::Load: case Type::Close: case Type::HardReset: case Type::NetMode:
+            case Type::NetReceiveState: case Type::MovieRecord: case Type::MoviePlay:
+            case Type::MovieResume: case Type::MovieFork: case Type::MovieStop: case Type::MovieTakeOver: {
+                const bool sms=host.isMasterSystem();
+                if(sms!=masterSystem){masterSystem=sms;emit masterSystemChanged(sms);}
+                break;
+            }
+            default:break;
             }
         }
         if(networkDirty && networkMode==1 && host.loaded()) networkSnapshot();

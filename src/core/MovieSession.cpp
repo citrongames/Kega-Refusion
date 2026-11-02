@@ -39,7 +39,7 @@ void restorePreviousSession(LibretroHost& host, const QByteArray& state,
     if (restored && host.loaded() && host.isCd() && host.discIndex() != disc)
         restored = host.selectDisc(disc, recovery);
     // Reapply the original region/options/ROM patches before restoring its state.
-    if (restored && wasPrepared && host.loaded()) restored = host.hardReset(recovery);
+    if (restored && wasPrepared && host.loaded()) restored = host.hardReset(recovery,false);
     if (restored) restored = host.restoreMovieState(state, recovery);
     host.setMoviePlayback(false);
     if (!restored) error += Localization::text(QStringLiteral("\nНе удалось восстановить прежнюю сессию: %1")).arg(recovery);
@@ -63,7 +63,7 @@ bool MovieSession::startRecording(const QString& path, QString& error) {
     const auto previous = host_.captureMovieState();
     if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед началом записи.")); return false; }
     host_.setMoviePlayback(true); // Movie editing must not write imported/rewound battery data to normal saves.
-    auto config = host_.movieConfiguration();
+    auto config = host_.movieConfiguration(true);
     if (!host_.prepareMovie(config, error)) {
         restorePreviousSession(host_, previous, previousDisc, false, error);
         return false;
@@ -133,7 +133,7 @@ bool MovieSession::saveRecording(QString& error) {
 bool MovieSession::finish(bool unload, QString& error) {
     if (!saveRecording(error)) return false;
     if (unload) host_.unload(); // Keep the read-only battery guard until after unloading.
-    if (active() && !host_.restoreMovieConfiguration(error)) return false;
+    if (active() && !host_.restoreMovieConfiguration(error,!unload)) return false;
     host_.setMoviePlayback(false);
     mode_ = Off; cursor_ = 0; path_.clear(); tape_.clear();
     return true;

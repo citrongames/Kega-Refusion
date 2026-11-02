@@ -32,6 +32,7 @@ public:
     void setFastCdLoading(bool enabled);
     void setRemoveSpriteLimit(bool enabled);
     void setAutoFixChecksum(bool enabled);
+    void setSmsFmEnabled(bool enabled);
     void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
     bool takeVideoFrame(QImage& frame, double& aspectRatio);
     void saveState(int slot);
@@ -117,6 +118,7 @@ signals:
     void audioSamples(const QByteArray& pcm, int sampleRate);
     void gameLoaded(const QString& path, double fps, const QString& contentName);
     void gameClosed();
+    void masterSystemChanged(bool masterSystem);
     void discStateChanged(const QStringList& paths, int index, bool ejected);
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);
@@ -131,7 +133,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm};
     struct Command {
         Type type;
         QString path;
