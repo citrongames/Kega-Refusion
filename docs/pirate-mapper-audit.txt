@@ -223,3 +223,9 @@ Unresolved: 13 Tiles Mahjong - 98 Pretty Girl.
 Other donor sources:
 - MAME revision 079ac58c453b09a3ffd8267d1c611b4d2c63795b, BSD-3-Clause per file header: https://github.com/mamedev/mame/blob/079ac58c453b09a3ffd8267d1c611b4d2c63795b/src/devices/bus/megadrive/rom.cpp . Implements SMW64, Creaton, Tekken, SF-001/002/004 family (Beggar Prince, Legend of Wukong, Star Odyssey). GPX already contains these families; compare behavior as needed.
 - FBNeo revision b9d32a0597b43c7f90d20ccdc64b764e3b148fec: https://github.com/finalburnneo/FBNeo/blob/b9d32a0597b43c7f90d20ccdc64b764e3b148fec/src/burn/drv/megadrive/megadrive.cpp . Contains Realtec and Squirrel King handlers; no independent missing family found. File header says Pico-derived code free for non-commercial use, separate commercial licensing.
+
+ДОПОЛНЕНИЕ: LINK DRAGON (2026-11-02)
+Подробности в link-dragon-audit.txt. На уровне 46 предметы 15–18 по
+данным ROM совпадают со стенами; в исходном режиме обязательны 15–16.
+Sound Fix — только удвоенный исходник, без исправлений игровых данных.
+Оснований добавлять маппер не найдено; предполагаемую защиту не подтвердили.

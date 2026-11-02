@@ -1710,6 +1710,13 @@
         "core_preserves_checksum": false,
         "header_after": "6CDD",
         "loses_exact_database_match": false
+      },
+      "followup_audit": {
+        "report": "docs/link-dragon-audit.txt",
+        "date": "2026-11-02",
+        "finding": "level 46 food positions 15-18 exactly coincide with wall coordinates; default mode requires food 16",
+        "evidence": "static ROM data and consumption code, independently decoded; not natural full-level gameplay reproduction",
+        "sound_fix_is_repeated_original": true
       }
     },
     {
@@ -5589,6 +5596,13 @@
         "core_preserves_checksum": false,
         "header_after": "AC02",
         "loses_exact_database_match": false
+      },
+      "followup_audit": {
+        "report": "docs/link-dragon-audit.txt",
+        "date": "2026-11-02",
+        "finding": "level 46 food positions 15-18 exactly coincide with wall coordinates; default mode requires food 16",
+        "evidence": "static ROM data and consumption code, independently decoded; not natural full-level gameplay reproduction",
+        "sound_fix_is_repeated_original": true
       }
     },
     {
