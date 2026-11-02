@@ -232,3 +232,18 @@ The overlay now contains only one-decimal numbers: emulation `59.9`, game estima
 - Windows is cross-built and packaged with Qt OpenSSL backend and pinned DLLs;
   the Windows application is not launched by automation. Internet paths and
   cross-platform game compatibility remain user-side validation.
+
+
+## 0.13.1 — automatic invitation address
+
+- `net_address_tests` validates public IPv4 and rejects malformed, private,
+  loopback, shared/CGNAT, link-local, multicast and reserved addresses without
+  network access.
+- The explicit `--live` diagnostic completed from WSL and obtained a public IPv4
+  through the HTTPS fallback. The address itself is not written to the log.
+  Physical router UPnP and Windows runtime discovery remain user-side checks.
+- Linux application and Windows 0.13.1 cross-build passed. Testbuild package
+  was compared byte-for-byte; no automated Windows UI or gameplay was launched.
+- Discovery is only started on lobby creation or explicit Retry. Cancel/leave
+  invalidates old requests; fixed request/body/datagram limits prevent a slow
+  or noisy discovery path from blocking the GUI or growing queues indefinitely.

@@ -1,5 +1,6 @@
 #include "NetplayController.h"
 #include "NetTransferWorker.h"
+#include "NetAddressDiscovery.h"
 #include "NetplayTimeline.h"
 #include "core/EmulationSession.h"
 #include "ui/NetplayLobby.h"
@@ -30,6 +31,16 @@ QString manifestId(const QByteArray& bytes) { const auto m=NetFileTransfer::Mani
 }
 NetplayController::NetplayController(EmulationSession& session,const QString& dataPath,QSettings& settings,QWidget* parentWindow)
     : QObject(parentWindow),session_(session),dataPath_(dataPath),settings_(settings),lobby_(new NetplayLobby(parentWindow)),transport_(this) {
+    addressDiscovery_=new NetAddressDiscovery(this);
+    connect(addressDiscovery_,&NetAddressDiscovery::finished,this,[this](const QString& address,const QString& detail){
+        if(!active_||!hosting_||!automaticAddress_||!addressPending_)return;
+        addressPending_=false;addressRetry_=address.isEmpty();
+        if(address.isEmpty())addressStatus_=t("Не удалось определить внешний адрес. Можно повторить или указать его в дополнительных параметрах при создании лобби.");
+        else {setHostAddress(address);addressStatus_=t("Внешний адрес определён автоматически. Для подключения нужен доступ к TCP-порту %1.").arg(transport_.localPort());}
+        Q_UNUSED(detail);
+        refreshLobby();
+    });
+    connect(lobby_,&NetplayLobby::retryAddressRequested,this,&NetplayController::resolveHostAddress);
     files_=new NetTransferWorker;
     files_->moveToThread(&fileThread_);
     connect(&fileThread_,&QThread::finished,files_,&QObject::deleteLater);
@@ -231,6 +242,18 @@ void NetplayController::unban(const QString& id){
 void NetplayController::createSession(){if(active_){showLobby();return;}lobby_->showCreateDialog();}
 void NetplayController::joinSession(){if(active_){showLobby();return;}lobby_->showJoinDialog();}
 void NetplayController::showLobby(){refreshLobby();lobby_->show();lobby_->raise();lobby_->activateWindow();}
+void NetplayController::setHostAddress(const QString& address){
+    invite_=NetTransport::makeInvitation(address,transport_.localPort(),invitationKey_);
+    inviteWithPassword_=invite_;
+    if(!invite_.isEmpty()&&!invitationPassword_.isEmpty()) {
+        QUrl u(invite_);QUrlQuery q(u);q.addQueryItem("password",invitationPassword_);u.setQuery(q);inviteWithPassword_=u.toString(QUrl::FullyEncoded);
+    }
+}
+void NetplayController::resolveHostAddress(){
+    if(!active_||!hosting_||!automaticAddress_||addressPending_)return;
+    addressPending_=true;addressRetry_=false;addressStatus_=t("Определение внешнего адреса…");
+    invite_.clear();inviteWithPassword_.clear();refreshLobby();addressDiscovery_->cancel();addressDiscovery_->start();
+}
 void NetplayController::startHost(quint16 port,const QString& address,const QString& password){
     if(active_)return;
     HostOptions options;options.port=port;options.inviteSecret=NetTransport::generateSecret();options.password=password;
@@ -238,12 +261,16 @@ void NetplayController::startHost(quint16 port,const QString& address,const QStr
     QString error;if(!transport_.host(options,&error)){emit notice(error);QMessageBox::warning(lobby_,t("Онлайн"),error);return;}
     active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=false;
     storageId_=QString::fromLatin1(NetTransport::generateSecret().left(16).toHex());
-    invite_=NetTransport::makeInvitation(address,transport_.localPort(),options.inviteSecret);inviteWithPassword_=invite_;
-    if(!password.isEmpty()){QUrl u(invite_);QUrlQuery q(u);q.addQueryItem("password",password);u.setQuery(q);inviteWithPassword_=u.toString(QUrl::FullyEncoded);}
+    invitationKey_=options.inviteSecret;invitationPassword_=password;
+    setHostAddress(QStringLiteral("127.0.0.1"));localInvite_=inviteWithPassword_;
+    automaticAddress_=address.trimmed().isEmpty();addressPending_=false;addressRetry_=false;
+    addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
+    if(!automaticAddress_)setHostAddress(address);
     participants_.clear();participants_.insert(0,QJsonObject{{"id","0"},{"nickname",nickname()},{"role","player1"},{"host",true},{"local",true},{"readiness","waiting"},{"pingMs",0}});
     session_.setNetworkRole(1);session_.setNetworkMode(1,storageId_);session_.setNetworkWaiting(false);
-    inputTimer_.start();status_=t("Лобби создано. Передайте приглашение другим игрокам.");
+    inputTimer_.start();status_=t("Лобби создано.");
     emit activeChanged(true);showLobby();sendInput();
+    if(automaticAddress_)resolveHostAddress();
 }
 void NetplayController::startJoin(const QString& invitation,const QString& password){
     if(active_)return;
@@ -263,6 +290,8 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
 void NetplayController::leaveSession(){
     if(!active_)return;
     stopping_=true;active_=false;
+    addressPending_=false;automaticAddress_=false;addressRetry_=false;addressDiscovery_->cancel();
+    invitationKey_.clear();invitationPassword_.clear();localInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
     inputTimer_.stop();reconnectTimer_.stop();snapshotTimer_.stop();
     transport_.stop();session_.setNetworkMode(0);session_.setNetworkWaiting(false);
     files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);
@@ -420,6 +449,6 @@ void NetplayController::refreshLobby(){
         int owners=0;for(const auto& participant:participants_)if(roleValue(participant.value("role").toString())==localRole_)++owners;
         session_.setNetworkRole(owners>1?0:localRole_);
     }
-    lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},
+    lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"localInvite",localInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},
         {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_}});
 }

@@ -11,6 +11,7 @@ class QSettings;
 class QWidget;
 class NetplayLobby;
 class NetTransferWorker;
+class NetAddressDiscovery;
 class NetplayController final : public QObject {
     friend class NetplayScenario;
     Q_OBJECT
@@ -32,6 +33,8 @@ signals:
     void notice(const QString&);
 private:
     void startHost(quint16, const QString&, const QString&);
+    void resolveHostAddress();
+    void setHostAddress(const QString& address);
     void startJoin(const QString&, const QString&);
     void refreshLobby();
     void receive(quint64,kega::net::MessageKind,const QByteArray&);
@@ -50,6 +53,10 @@ private:
     QSettings& settings_;
     NetplayLobby* lobby_ = nullptr;
     kega::net::NetTransport transport_;
+    NetAddressDiscovery* addressDiscovery_=nullptr;
+    QByteArray invitationKey_;
+    QString invitationPassword_,localInvite_,addressStatus_;
+    bool automaticAddress_=false,addressPending_=false,addressRetry_=false;
     QThread fileThread_;
     NetTransferWorker* files_ = nullptr;
     QTimer inputTimer_, reconnectTimer_, snapshotTimer_;

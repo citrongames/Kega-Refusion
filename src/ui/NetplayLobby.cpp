@@ -14,6 +14,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
@@ -23,10 +24,23 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTableWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
 QString t(const char* source) { return Localization::text(QString::fromUtf8(source)); }
+
+bool validManualAddress(const QString& address) {
+    if (address.isEmpty()) return true;
+    QHostAddress ip;
+    if (ip.setAddress(address)) return true;
+    if (address.size() > 253) return false;
+    static const QRegularExpression label(
+        QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?$"));
+    for (const QString& part : address.split(QLatin1Char('.')))
+        if (!label.match(part).hasMatch()) return false;
+    return true;
+}
 
 QString roleName(const QString& role) {
     if (role == QLatin1String("player1")) return t("Игрок 1");
@@ -95,19 +109,34 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     connect(leave_, &QPushButton::clicked, this, &NetplayLobby::leaveRequested);
 
     auto* inviteBox = new QGroupBox(t("Приглашение"), this);
-    auto* inviteLayout = new QHBoxLayout(inviteBox);
+    auto* inviteLayout = new QVBoxLayout(inviteBox);
+    auto* inviteRow = new QHBoxLayout;
     invite_ = new QLineEdit(inviteBox);
     invite_->setObjectName(QStringLiteral("netplayInvite"));
     invite_->setReadOnly(true);
     invite_->setPlaceholderText(t("Доступно после создания сеанса"));
-    inviteLayout->addWidget(invite_, 1);
+    inviteRow->addWidget(invite_, 1);
     copyInvite_ = new QPushButton(t("Копировать"), inviteBox);
     copyInvite_->setObjectName(QStringLiteral("netplayCopyInvite"));
-    inviteLayout->addWidget(copyInvite_);
+    inviteRow->addWidget(copyInvite_);
     copyWithPassword_ = new QPushButton(t("С паролем"), inviteBox);
     copyWithPassword_->setObjectName(QStringLiteral("netplayCopyWithPassword"));
     copyWithPassword_->setToolTip(t("Копировать приглашение вместе с паролем доступа"));
-    inviteLayout->addWidget(copyWithPassword_);
+    inviteRow->addWidget(copyWithPassword_);
+    inviteLayout->addLayout(inviteRow);
+    auto* addressRow = new QHBoxLayout;
+    addressStatus_ = new QLabel(inviteBox);
+    addressStatus_->setObjectName(QStringLiteral("netplayAddressStatus"));
+    addressStatus_->setTextFormat(Qt::PlainText);
+    addressStatus_->setWordWrap(true);
+    addressRow->addWidget(addressStatus_, 1);
+    retryAddress_ = new QPushButton(t("Повторить"), inviteBox);
+    retryAddress_->setObjectName(QStringLiteral("netplayRetryAddress"));
+    addressRow->addWidget(retryAddress_);
+    copyLocalInvite_ = new QPushButton(t("Копировать для этого компьютера"), inviteBox);
+    copyLocalInvite_->setObjectName(QStringLiteral("netplayCopyLocalInvite"));
+    addressRow->addWidget(copyLocalInvite_);
+    inviteLayout->addLayout(addressRow);
     layout->addWidget(inviteBox);
     connect(copyInvite_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("invite")).toString());
@@ -115,6 +144,10 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     connect(copyWithPassword_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("inviteWithPassword")).toString());
     });
+    connect(copyLocalInvite_, &QPushButton::clicked, this, [this] {
+        QApplication::clipboard()->setText(state_.value(QStringLiteral("localInvite")).toString());
+    });
+    connect(retryAddress_, &QPushButton::clicked, this, &NetplayLobby::retryAddressRequested);
 
     auto* roleRow = new QHBoxLayout;
     roleRow->addWidget(new QLabel(t("Роль выбранного участника:"), this));
@@ -244,24 +277,40 @@ void NetplayLobby::showCreateDialog() {
     dialog->setWindowTitle(t("Создать сетевой сеанс"));
     auto* layout = new QVBoxLayout(dialog);
     auto* form = new QFormLayout;
-    auto* port = new QSpinBox(dialog);
-    port->setObjectName(QStringLiteral("netplayCreatePort"));
-    port->setRange(1, 65535);
-    port->setValue(33445);
-    form->addRow(t("Порт:"), port);
-    auto* address = new QLineEdit(dialog);
-    address->setObjectName(QStringLiteral("netplayAdvertisedAddress"));
-    address->setText(state_.value(QStringLiteral("suggestedAddress")).toString());
-    address->setPlaceholderText(t("Публичный адрес или имя хоста"));
-    form->addRow(t("Адрес для приглашения:"), address);
     auto* password = new QLineEdit(dialog);
     password->setObjectName(QStringLiteral("netplayCreatePassword"));
     password->setEchoMode(QLineEdit::Password);
     form->addRow(t("Пароль (необязательно):"), password);
     layout->addLayout(form);
-    auto* hint = new QLabel(t("Прямое подключение: адрес и порт должны быть доступны другим участникам. Сервис ретрансляции не используется."), dialog);
+    auto* hint = new QLabel(t("Адрес для приглашения определится автоматически. Подключение между игроками прямое; настройка порта на маршрутизаторе может потребоваться."), dialog);
     hint->setWordWrap(true);
     layout->addWidget(hint);
+
+    auto* advancedToggle = new QToolButton(dialog);
+    advancedToggle->setObjectName(QStringLiteral("netplayAdvancedOptions"));
+    advancedToggle->setText(t("Дополнительные параметры"));
+    advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    advancedToggle->setArrowType(Qt::RightArrow);
+    advancedToggle->setCheckable(true);
+    layout->addWidget(advancedToggle, 0, Qt::AlignLeft);
+    auto* advanced = new QWidget(dialog);
+    auto* advancedForm = new QFormLayout(advanced);
+    advancedForm->setContentsMargins(0, 0, 0, 0);
+    auto* address = new QLineEdit(advanced);
+    address->setObjectName(QStringLiteral("netplayAdvertisedAddress"));
+    address->setPlaceholderText(t("Автоматически"));
+    advancedForm->addRow(t("Адрес для приглашения:"), address);
+    auto* port = new QSpinBox(dialog);
+    port->setObjectName(QStringLiteral("netplayCreatePort"));
+    port->setRange(1, 65535);
+    port->setValue(33445);
+    advancedForm->addRow(t("Порт:"), port);
+    advanced->setVisible(false);
+    layout->addWidget(advanced);
+    connect(advancedToggle, &QToolButton::toggled, dialog, [advancedToggle, advanced](bool shown) {
+        advanced->setVisible(shown);
+        advancedToggle->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
+    });
     auto* error = new QLabel(dialog);
     error->setWordWrap(true);
     layout->addWidget(error);
@@ -269,11 +318,13 @@ void NetplayLobby::showCreateDialog() {
     buttons->button(QDialogButtonBox::Ok)->setText(t("Создать"));
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, dialog, [this, dialog, port, address, password, error] {
+    connect(buttons, &QDialogButtonBox::accepted, dialog,
+            [this, dialog, port, address, password, error, advancedToggle] {
         const QString advertised = address->text().trimmed();
-        if (advertised.isEmpty() || advertised.contains(QRegularExpression(QStringLiteral("\\s")))) {
-            error->setText(t("Введите доступный другим участникам адрес без пробелов."));
+        if (!validManualAddress(advertised)) {
+            error->setText(t("Укажите только IP-адрес или имя хоста, без схемы и порта."));
             address->setFocus();
+            advancedToggle->setChecked(true);
             return;
         }
         emit createRequested(quint16(port->value()), advertised, password->text());
@@ -283,6 +334,7 @@ void NetplayLobby::showCreateDialog() {
         activateWindow();
     });
     dialog->show();
+    password->setFocus();
 }
 
 void NetplayLobby::showJoinDialog() {
@@ -333,11 +385,23 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
     leave_->setEnabled(active);
     const QString invite = host ? state.value(QStringLiteral("invite")).toString() : QString();
     invite_->setText(invite);
+    invite_->setPlaceholderText(host && invite.isEmpty() ? t("Определение адреса…")
+                                                      : t("Доступно после создания сеанса"));
     copyInvite_->setEnabled(!invite.isEmpty());
     const QString inviteWithPassword = state.value(QStringLiteral("inviteWithPassword")).toString();
-    const bool hasPasswordInvite = host && !inviteWithPassword.isEmpty() && inviteWithPassword != invite;
+    const bool hasPasswordInvite = host && !invite.isEmpty() &&
+        !inviteWithPassword.isEmpty() && inviteWithPassword != invite;
     copyWithPassword_->setEnabled(hasPasswordInvite);
     copyWithPassword_->setVisible(hasPasswordInvite);
+    const QString localInvite = state.value(QStringLiteral("localInvite")).toString();
+    copyLocalInvite_->setVisible(host);
+    copyLocalInvite_->setEnabled(host && !localInvite.isEmpty());
+    const QString addressStatus = host ? state.value(QStringLiteral("addressStatus")).toString() : QString();
+    addressStatus_->setText(Localization::text(addressStatus));
+    addressStatus_->setVisible(!addressStatus.isEmpty());
+    const bool retryAddress = host && state.value(QStringLiteral("addressRetry")).toBool();
+    retryAddress_->setVisible(retryAddress);
+    retryAddress_->setEnabled(retryAddress);
 
     updateParticipants(state);
 
