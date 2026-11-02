@@ -184,6 +184,8 @@ GameView::GameView(QWidget* parent) : QWidget(parent) {
     }
     if (osdFamily_.isEmpty())
         osdFamily_ = QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+    achievementFallbackBadge_ = QImage(QStringLiteral(":/icons/app.png"))
+        .scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     osdClock_.start();
     osdTimer_.setInterval(90);
     connect(&osdTimer_, &QTimer::timeout, this, &GameView::expireOsd);
@@ -237,7 +239,7 @@ void GameView::setFrame(const QImage& frame, double aspectRatio) {
 void GameView::clearGame() {
     setLightgunInputEnabled(false);
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
-    notices_.clear(); stateSlots_.expiresAt = 0; osdTimer_.stop();
+    notices_.clear(); stateSlots_.expiresAt = 0; clearAchievementNotices(); osdTimer_.stop();
     movieMode_ = 0; movieFrame_ = movieLength_ = 0;
     setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
     setFrame({}, 4.0 / 3.0);
@@ -248,7 +250,7 @@ void GameView::setLoading(bool loading, const QString& fileName) {
     const QString name = loading ? fileName.left(220) : QString();
     if (loading_ == loading && loadingFileName_ == name) return;
     loading_ = loading;
-    if (loading_) clearMouseGun();
+    if (loading_) { clearMouseGun(); clearAchievementNotices(); }
     loadingFileName_ = name;
     repaintView();
     if (loading && isVisible()) {
@@ -294,10 +296,156 @@ void GameView::showStateSlots(int selected, unsigned occupiedMask, int durationM
     repaintView();
 }
 
+void GameView::showAchievementNotice(const QString& heading, const QString& title,
+                                     const QString& description, const QString& badgeUrl,
+                                     bool sound) {
+    if (!osdEnabled_ || loading_ || title.trimmed().isEmpty() || achievementQueue_.size() >= 8)
+        return;
+    const bool first = achievementQueue_.isEmpty();
+    achievementQueue_.append({heading.trimmed().left(80), title.trimmed().left(120),
+                              description.trimmed().left(240), badgeUrl.left(2048), {}, sound});
+    if (first) startAchievementPopup();
+    if (!badgeUrl.isEmpty()) emit achievementBadgeRequested(badgeUrl);
+}
+
+void GameView::setAchievementBadge(const QString& url, const QImage& image) {
+    if (url.isEmpty() || image.isNull() || achievementQueue_.isEmpty()) return;
+    const QImage badge = image.width() > 256 || image.height() > 256
+        ? image.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation) : image;
+    bool activeChanged = false;
+    for (int i = 0; i < achievementQueue_.size(); ++i) {
+        if (achievementQueue_[i].badgeUrl != url) continue;
+        achievementQueue_[i].badge = badge;
+        if (i == 0) activeChanged = true;
+    }
+    if (activeChanged) {
+        rebuildAchievementPixmap();
+        repaintView();
+    }
+}
+
+void GameView::clearAchievementNotices() {
+    if (achievementQueue_.isEmpty()) return;
+    achievementQueue_.clear();
+    achievementExpiresAt_ = 0;
+    achievementPixmap_ = {};
+    achievementCardSize_ = {};
+    if (notices_.isEmpty() && !stateSlots_.expiresAt) osdTimer_.stop();
+    repaintView();
+}
+
+void GameView::setAchievementPosition(int position) {
+    const int next = position >= 0 && position <= 5 ? position : 0;
+    if (achievementPosition_ == next) return;
+    achievementPosition_ = next;
+    if (!achievementQueue_.isEmpty()) repaintView();
+}
+
+QRect GameView::achievementPopupRect() const {
+    if (achievementQueue_.isEmpty() || achievementCardSize_.isEmpty()) return {};
+    const int margin = qBound(6, width() / 65, 16);
+    const int column = achievementPosition_ % 3;
+    const int x = column == 0 ? margin
+        : column == 1 ? (width() - achievementCardSize_.width()) / 2
+                      : width() - margin - achievementCardSize_.width();
+    const int y = achievementPosition_ < 3 ? margin
+        : height() - margin - achievementCardSize_.height();
+    return QRect(QPoint(x, y), achievementCardSize_);
+}
+
+void GameView::startAchievementPopup() {
+    if (achievementQueue_.isEmpty()) return;
+    achievementExpiresAt_ = osdClock_.elapsed() + 4000;
+    rebuildAchievementPixmap();
+    if (!osdTimer_.isActive()) osdTimer_.start();
+    repaintView();
+    emit achievementPopupStarted(achievementQueue_.first().sound);
+}
+
+void GameView::rebuildAchievementPixmap() {
+    achievementPixmap_ = {};
+    achievementCardSize_ = {};
+    if (achievementQueue_.isEmpty() || width() <= 0 || height() <= 0) return;
+
+    const int margin = qBound(6, width() / 65, 16);
+    const int cardWidth = qMin(width() - 2 * margin, qBound(300, int(width() * 0.48), 520));
+    const int pad = qBound(9, height() / 62, 16);
+    const int badgeSize = qBound(52, height() / 8, 86);
+    const int gap = qBound(9, height() / 68, 14);
+    const int textWidth = qMax(40, cardWidth - 2 * pad - badgeSize - gap);
+    QFont headingFont = font();
+    headingFont.setPixelSize(qBound(10, height() / 45, 16));
+    headingFont.setWeight(QFont::DemiBold);
+    QFont titleFont = font();
+    titleFont.setPixelSize(qBound(15, height() / 35, 23));
+    titleFont.setWeight(QFont::Bold);
+    QFont detailFont = font();
+    detailFont.setPixelSize(qBound(11, height() / 55, 16));
+    const QFontMetrics headingMetrics(headingFont);
+    const QFontMetrics titleMetrics(titleFont);
+    const QFontMetrics detailMetrics(detailFont);
+    const AchievementPopup& popup = achievementQueue_.first();
+    const QString heading = headingMetrics.elidedText(popup.heading, Qt::ElideRight, textWidth);
+    const QStringList titleLines = wrapOsd(popup.title, titleMetrics, textWidth, 2);
+    const QStringList details = popup.description.isEmpty()
+        ? QStringList{} : wrapOsd(popup.description, detailMetrics, textWidth, 2);
+    const int textHeight = headingMetrics.height() + 3
+        + titleLines.size() * (titleMetrics.height() + 1)
+        + (details.isEmpty() ? 0 : 3 + details.size() * (detailMetrics.height() + 1));
+    const int cardHeight = qMax(badgeSize, textHeight) + 2 * pad;
+    achievementCardSize_ = QSize(cardWidth, cardHeight);
+
+    const qreal dpr = devicePixelRatioF();
+    achievementPixmap_ = QPixmap(qMax(1, qCeil(cardWidth * dpr)),
+                                  qMax(1, qCeil(cardHeight * dpr)));
+    achievementPixmap_.setDevicePixelRatio(dpr);
+    achievementPixmap_.fill(Qt::transparent);
+    QPainter painter(&achievementPixmap_);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    const QRect card(0, 0, cardWidth, cardHeight);
+    painter.fillRect(card, QColor(17, 23, 30, 245));
+    painter.setPen(QPen(QColor(126, 224, 233), 2));
+    painter.drawRect(card.adjusted(1, 1, -2, -2));
+    const QRect badgeBox(pad, (cardHeight - badgeSize) / 2, badgeSize, badgeSize);
+    painter.fillRect(badgeBox, QColor(44, 53, 65));
+    painter.setPen(QColor(96, 111, 127));
+    painter.drawRect(badgeBox.adjusted(0, 0, -1, -1));
+    const QImage& badge = popup.badge.isNull()
+        ? achievementFallbackBadge_ : popup.badge;
+    if (!badge.isNull()) {
+        const QSize scaled = badge.size().scaled(badgeBox.size() - QSize(8, 8),
+                                                  Qt::KeepAspectRatio);
+        const QRect target(QPoint(badgeBox.center().x() - scaled.width() / 2,
+                                  badgeBox.center().y() - scaled.height() / 2), scaled);
+        painter.drawImage(target, badge);
+    }
+    const int textX = pad + badgeSize + gap;
+    int textY = pad;
+    painter.setFont(headingFont);
+    painter.setPen(QColor(126, 224, 233));
+    painter.drawText(textX, textY + headingMetrics.ascent(), heading);
+    textY += headingMetrics.height() + 3;
+    painter.setFont(titleFont);
+    painter.setPen(QColor(250, 251, 252));
+    for (const QString& line : titleLines) {
+        painter.drawText(textX, textY + titleMetrics.ascent(), line);
+        textY += titleMetrics.height() + 1;
+    }
+    textY += 2;
+    painter.setFont(detailFont);
+    painter.setPen(QColor(195, 207, 219));
+    for (const QString& line : details) {
+        painter.drawText(textX, textY + detailMetrics.ascent(), line);
+        textY += detailMetrics.height() + 1;
+    }
+}
+
 void GameView::setOsdEnabled(bool enabled) {
     osdEnabled_ = enabled;
     notices_.clear();
     stateSlots_.expiresAt = 0;
+    clearAchievementNotices();
     osdTimer_.stop();
     repaintView();
 }
@@ -378,20 +526,35 @@ void GameView::expireOsd() {
         stateSlots_.expiresAt = 0;
         repaintView();
     }
-    if (notices_.isEmpty() && !stateSlots_.expiresAt) osdTimer_.stop();
+    if (!achievementQueue_.isEmpty() && achievementExpiresAt_ <= now) {
+        achievementQueue_.removeFirst();
+        achievementExpiresAt_ = 0;
+        achievementPixmap_ = {};
+        achievementCardSize_ = {};
+        if (achievementQueue_.isEmpty()) repaintView();
+        else startAchievementPopup();
+    }
+    if (notices_.isEmpty() && !stateSlots_.expiresAt && achievementQueue_.isEmpty())
+        osdTimer_.stop();
 }
 
 void GameView::paintOsd(QPainter& painter) {
-    if (capturingGame_ || !osdEnabled_ || (notices_.isEmpty() && !stateSlots_.expiresAt &&
-                         !paused_ && !fastForward_ && !rewinding_ && !muted_ &&
-                         movieMode_ != 1 && movieMode_ != 2)) return;
+    if (capturingGame_ || !osdEnabled_) return;
+    const QRect achievementRect = achievementPopupRect();
+    const bool ordinaryOsd = !notices_.isEmpty() || stateSlots_.expiresAt ||
+        paused_ || fastForward_ || rewinding_ || muted_ || movieMode_ == 1 || movieMode_ == 2;
+    if (!ordinaryOsd) {
+        if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
+            painter.drawPixmap(achievementRect.topLeft(), achievementPixmap_);
+        return;
+    }
+    const int margin = qBound(6, width() / 65, 16);
     QFont osd(osdFamily_);
     osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);
     osd.setStyleStrategy(QFont::NoAntialias);
     painter.setFont(osd);
     painter.setRenderHint(QPainter::TextAntialiasing, false);
     const QFontMetrics fm(osd);
-    const int margin = qBound(6, width() / 65, 16);
     const int pad = qBound(5, height() / 95, 9);
     const int lineHeight = fm.height() + 2;
     const int maxTextWidth = qMax(60, width() - 2 * margin - 2 * pad);
@@ -501,6 +664,9 @@ void GameView::paintOsd(QPainter& painter) {
         if (y + panelHeight > height() - margin) break;
         y += drawPanel(lines, margin, y, false) + 4;
     }
+    // Achievement cards intentionally cover ordinary OSD until their timeout.
+    if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
+        painter.drawPixmap(achievementRect.topLeft(), achievementPixmap_);
 }
 
 void GameView::paintLoading(QPainter& painter) {
@@ -821,13 +987,21 @@ void GameView::ensureGpu() {
     });
 }
 
+bool GameView::event(QEvent* event) {
+    if (event->type() == QEvent::DevicePixelRatioChange && !achievementQueue_.isEmpty())
+        rebuildAchievementPixmap();
+    return QWidget::event(event);
+}
+
 void GameView::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
+    if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();
     ensureGpu();
 }
 
 void GameView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();
     if (shaderView_) shaderView_->setGeometry(rect());
 }
 

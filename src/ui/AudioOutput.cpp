@@ -7,6 +7,9 @@
 #include <QMetaObject>
 #include <QtGlobal>
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <utility>
 
 namespace {
@@ -15,6 +18,7 @@ using SinkError = decltype(std::declval<QAudioSink>().error());
 }
 
 AudioOutput::AudioOutput(QObject* parent) : QObject(parent) {
+    initializeAchievementChime();
     clock_.start();
     pumpTimer_.setInterval(5);
     pumpTimer_.setTimerType(Qt::PreciseTimer);
@@ -84,6 +88,8 @@ void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
     if (closing_) return;
     if (sampleRate != queue_.sampleRate()) {
         queue_.setSampleRate(sampleRate);
+        chimeActive_ = false;
+        sinkReady_ = false;
         resetPending_ = true;
         retryResetPending_ = true;
         ++generation_;
@@ -92,14 +98,90 @@ void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
     // Overflow already drops stale whole frames while preserving a partial
     // device write. Keep the live sink: reopening it can take longer than this
     // bounded queue, causing another overflow and an endless reopen loop.
-    queue_.append(pcm);
+    appendWithAchievementChime(pcm, sampleRate);
     requestPumpLocked();
+}
+
+void AudioOutput::initializeAchievementChime() {
+    constexpr double tau = 6.2831853071795864769;
+    for (size_t i = 0; i < chime_.size(); ++i) {
+        const double time = double(i) / ChimeRate;
+        const auto envelope = [time](double start, double duration) {
+            if (time < start || time >= start + duration) return 0.0;
+            const double elapsed = time - start;
+            const double attack = std::min(1.0, elapsed / 0.006);
+            const double fade = 1.0 - elapsed / duration;
+            return attack * fade * fade;
+        };
+        const double first = envelope(0.0, 0.19) * std::sin(tau * 659.25 * time);
+        const double second = envelope(0.075, 0.175) *
+                              std::sin(tau * 987.77 * (time - 0.075));
+        chime_[i] = std::int16_t(std::lround(2600.0 * (first + second)));
+    }
+}
+
+void AudioOutput::appendWithAchievementChime(const QByteArray& pcm, int sampleRate) {
+    if (!chimeActive_ || !sinkReady_ || muted_ || resetPending_) {
+        queue_.append(pcm);
+        return;
+    }
+    const qsizetype aligned = pcm.size() - pcm.size() % AudioQueue::FrameBytes;
+    const qsizetype capacity = qsizetype(queue_.capacity());
+    const qsizetype keep = qMin(aligned, capacity - capacity % AudioQueue::FrameBytes);
+    if (keep <= 0) {
+        queue_.append(pcm);
+        return;
+    }
+    const std::uint64_t step = (std::uint64_t(ChimeRate) << 32) / std::uint64_t(sampleRate);
+    const std::uint64_t end = std::uint64_t(ChimeSamples) << 32;
+    if (!step || chimePositionFixed_ >= end) {
+        chimeActive_ = false;
+        queue_.append(pcm);
+        return;
+    }
+    const std::uint64_t skipped = std::uint64_t((aligned - keep) / AudioQueue::FrameBytes);
+    if (skipped >= (end - chimePositionFixed_ + step - 1) / step) {
+        chimeActive_ = false;
+        queue_.append(pcm);
+        return;
+    }
+    chimePositionFixed_ += skipped * step;
+    // Only the newest bounded PCM can survive AudioQueue overflow. Copy that
+    // portion while the chime is active; ordinary playback uses the input as-is.
+    QByteArray mixed(pcm.constData() + aligned - keep, keep);
+    for (qsizetype offset = 0; offset < keep; offset += AudioQueue::FrameBytes) {
+        const size_t index = size_t(chimePositionFixed_ >> 32);
+        if (index >= chime_.size()) {
+            chimeActive_ = false;
+            break;
+        }
+        const int tone = chime_[index];
+        for (qsizetype channel = 0; channel < AudioQueue::FrameBytes; channel += 2) {
+            std::int16_t original;
+            std::memcpy(&original, mixed.constData() + offset + channel, sizeof(original));
+            const auto result = std::int16_t(std::clamp(int(original) + tone, -32768, 32767));
+            std::memcpy(mixed.data() + offset + channel, &result, sizeof(result));
+        }
+        chimePositionFixed_ += step;
+    }
+    queue_.append(mixed);
+}
+
+void AudioOutput::playAchievementSound() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (closing_ || muted_ || resetPending_ || !sinkReady_ || !sink_ || !stream_ ||
+        queue_.sampleRate() <= 0 || queue_.sampleRate() != sampleRate_ ||
+        sink_->state() != SinkState::ActiveState) return;
+    chimePositionFixed_ = 0;
+    chimeActive_ = true;
 }
 
 void AudioOutput::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_) return;
     queue_.clear();
+    chimeActive_ = false;
+    sinkReady_ = false;
     resetPending_ = true;
     retryResetPending_ = true;
     ++generation_;
@@ -110,6 +192,11 @@ void AudioOutput::clear() {
 }
 
 void AudioOutput::releaseSink() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sinkReady_ = false;
+        chimeActive_ = false;
+    }
     ++sinkGeneration_;
     stream_ = nullptr;
     sampleRate_ = 0;
@@ -232,7 +319,12 @@ void AudioOutput::pump() {
     if (prefilling_ && pendingUsecs < AudioQueue::PrefillUsecs) {
         feedback(generation, false);
         // Once input has ended, there is no reason to poll an empty device.
-        if (pendingUsecs == 0 && deviceBytes == 0) pumpTimer_.stop();
+        if (pendingUsecs == 0 && deviceBytes == 0) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            sinkReady_ = false;
+            chimeActive_ = false;
+            pumpTimer_.stop();
+        }
         return;
     }
     prefilling_ = false;
@@ -251,12 +343,20 @@ void AudioOutput::pump() {
         return;
     }
     wroteSamples_ = wroteSamples_ || result.accepted > 0;
+    if (result.accepted > 0) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (generation == generation_ && !resetPending_) sinkReady_ = true;
+    }
     deviceBytes = qMax<qint64>(0, sink_->bufferSize() - sink_->bytesFree());
     feedback(generation, wroteSamples_, deviceBytes);
 }
 
 void AudioOutput::setMuted(bool muted) {
-    muted_ = muted;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        muted_ = muted;
+        if (muted) chimeActive_ = false;
+    }
     if (sink_) sink_->setVolume(muted_ ? 0.0 : volume_ / 100.0);
 }
 

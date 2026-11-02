@@ -157,6 +157,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     }
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
     achievementNotifications_ = settings_.value(QStringLiteral("achievements/notifications"), true).toBool();
+    achievementSound_ = settings_.value(QStringLiteral("achievements/sound"), true).toBool();
+    achievementPosition_ = qBound(0, settings_.value(QStringLiteral("achievements/position"), 0).toInt(), 5);
+    view_->setAchievementPosition(achievementPosition_);
     region_ = qBound(0, settings_.value(QStringLiteral("emulation/region"), 0).toInt(), 3);
     blarggFilter_ = qBound(0, settings_.value(QStringLiteral("view/blarggFilter"), 0).toInt(), 4);
     session_.setRegion(region_);
@@ -199,24 +202,47 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(achievementNetwork_, &AchievementNetwork::response,
             &session_, &EmulationSession::achievementResponse);
     connect(&session_, &EmulationSession::achievementsChanged, this,
-            [this](const AchievementsState& state) { achievementsState_ = state; });
+            [this](const AchievementsState& state) {
+        const bool changedGame = state.gameId != achievementsState_.gameId;
+        if (!state.enabled || changedGame) view_->clearAchievementNotices();
+        if (!state.enabled || !state.gameId) {
+            achievementNetwork_->prefetchBadges({});
+        } else if (changedGame || (achievementsState_.disconnected && !state.disconnected)) {
+            QStringList badges;
+            badges.reserve(state.entries.size() * 2);
+            for (const auto& entry : state.entries) {
+                if (!entry.badgeUrl.isEmpty()) badges.append(entry.badgeUrl);
+                if (!entry.lockedBadgeUrl.isEmpty()) badges.append(entry.lockedBadgeUrl);
+            }
+            achievementNetwork_->prefetchBadges(badges);
+        }
+        achievementsState_ = state;
+    });
+    connect(view_, &GameView::achievementBadgeRequested,
+            achievementNetwork_, &AchievementNetwork::requestBadge);
+    connect(achievementNetwork_, &AchievementNetwork::badgeReady,
+            view_, &GameView::setAchievementBadge);
+    connect(view_, &GameView::achievementPopupStarted, this, [this](bool sound) {
+        if (sound && achievementSound_ && achievementNotifications_ && osdAction_->isChecked() &&
+            !muteAction_->isChecked() && !pauseAction_->isChecked() && !fastForwardActive_)
+            audio_->playAchievementSound();
+    });
     connect(&session_, &EmulationSession::achievementNotice, this,
             [this](const AchievementNotice& notice) {
-        if (!achievementNotifications_ ||
+        if (!achievementNotifications_ || !osdAction_->isChecked() ||
             (notice.kind == AchievementNotice::Completed && !notice.hardcore)) return;
-        QString message;
-        int duration = 5000;
+        QString heading, title = notice.title;
         if (notice.kind == AchievementNotice::GameReady) {
-            message = QStringLiteral("ДОСТИЖЕНИЯ: %1 — %2").arg(notice.title, notice.description);
+            heading = QStringLiteral("ИГРА РАСПОЗНАНА");
         } else if (notice.kind == AchievementNotice::Unlocked) {
-            message = QStringLiteral("ДОСТИЖЕНИЕ ОТКРЫТО: %1").arg(notice.title);
-            duration = 7000;
+            heading = QStringLiteral("ДОСТИЖЕНИЕ ОТКРЫТО");
+            if (notice.rarity > 0.0) heading += QStringLiteral(" · %1%").arg(notice.rarity, 0, 'f', 2);
+            title += QStringLiteral(" · %1 очк.").arg(notice.points);
         } else if (notice.kind == AchievementNotice::Completed) {
-            message = QStringLiteral("МАСТЕРСТВО: %1").arg(notice.title);
-            duration = 8000;
+            heading = QStringLiteral("МАСТЕРСТВО");
         }
-        if (!message.isEmpty())
-            view_->showOsd(message, duration, QStringLiteral("achievement"));
+        view_->showAchievementNotice(heading, title, notice.description, notice.badgeUrl,
+                                     notice.kind != AchievementNotice::GameReady);
     });
     connect(&session_, &EmulationSession::achievementsHardcoreChanged, this,
             [this](bool enabled) {
@@ -1174,6 +1200,19 @@ void MainWindow::editSettings(int initialPage) {
     achievementToasts->setChecked(achievementNotifications_);
     achievementToasts->setToolTip(QStringLiteral("При выключенных уведомлениях достижения продолжают засчитываться."));
     achievements->addRow(achievementToasts);
+    auto* achievementSound = new QCheckBox(QStringLiteral("Звук открытия достижения"), &dialog);
+    achievementSound->setObjectName(QStringLiteral("achievementSound"));
+    achievementSound->setChecked(achievementSound_);
+    achievementSound->setEnabled(achievementToasts->isChecked());
+    connect(achievementToasts, &QCheckBox::toggled, achievementSound, &QWidget::setEnabled);
+    achievements->addRow(achievementSound);
+    auto* achievementPosition = new QComboBox(&dialog);
+    achievementPosition->setObjectName(QStringLiteral("achievementPosition"));
+    achievementPosition->addItems({QStringLiteral("Сверху слева"), QStringLiteral("Сверху по центру"),
+        QStringLiteral("Сверху справа"), QStringLiteral("Снизу слева"),
+        QStringLiteral("Снизу по центру"), QStringLiteral("Снизу справа")});
+    achievementPosition->setCurrentIndex(achievementPosition_);
+    achievements->addRow(QStringLiteral("Положение уведомлений:"), achievementPosition);
     auto* accountStatus = new QLabel(achievementsState_.status.isEmpty()
         ? QStringLiteral("Войдите в RetroAchievements.") : achievementsState_.status, &dialog);
     accountStatus->setObjectName(QStringLiteral("achievementAccountStatus"));
@@ -1483,6 +1522,16 @@ void MainWindow::editSettings(int initialPage) {
         if (achievementToasts->isChecked() != achievementNotifications_) {
             achievementNotifications_ = achievementToasts->isChecked();
             settings_.setValue(QStringLiteral("achievements/notifications"), achievementNotifications_);
+            if (!achievementNotifications_) view_->clearAchievementNotices();
+        }
+        if (achievementSound->isChecked() != achievementSound_) {
+            achievementSound_ = achievementSound->isChecked();
+            settings_.setValue(QStringLiteral("achievements/sound"), achievementSound_);
+        }
+        if (achievementPosition->currentIndex() != achievementPosition_) {
+            achievementPosition_ = achievementPosition->currentIndex();
+            settings_.setValue(QStringLiteral("achievements/position"), achievementPosition_);
+            view_->setAchievementPosition(achievementPosition_);
         }
         const QString selectedCounterUnit = recordingCounterUnit->currentData().toString();
         if (selectedCounterUnit != counterUnit) {

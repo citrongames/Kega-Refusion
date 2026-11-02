@@ -99,6 +99,8 @@ private:
     AchievementsState achievementsState_;
     bool achievementsHardcore_ = false;
     bool achievementNotifications_ = true;
+    bool achievementSound_ = true;
+    int achievementPosition_ = 0;
     Cheats::Platform cheatPlatform_ = Cheats::Platform::MegaDrive;
     bool cheatsSupported_ = false;
     std::array<unsigned,3> padMasks_{}, gunMasks_{};

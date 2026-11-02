@@ -9,9 +9,32 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSortFilterProxyModel>
 #include <QTableView>
 #include <QTimer>
 #include <QVBoxLayout>
+
+namespace {
+bool sameEntry(const AchievementEntry& a, const AchievementEntry& b) {
+    return a.id == b.id && a.points == b.points &&
+           a.title == b.title && a.description == b.description &&
+           a.badgeUrl == b.badgeUrl && a.lockedBadgeUrl == b.lockedBadgeUrl &&
+           a.rarity == b.rarity &&
+           a.hardcoreRarity == b.hardcoreRarity &&
+           a.softcoreUnlocked == b.softcoreUnlocked &&
+           a.hardcoreUnlocked == b.hardcoreUnlocked &&
+           a.unsupported == b.unsupported && a.type == b.type;
+}
+QString achievementType(const AchievementEntry& entry) {
+    if (entry.unsupported) return QStringLiteral("Недоступно");
+    switch (entry.type) {
+    case 1: return QStringLiteral("Пропускаемое");
+    case 2: return QStringLiteral("Прогресс");
+    case 3: return QStringLiteral("Победа");
+    default: return QStringLiteral("—");
+    }
+}
+}
 
 class AchievementModel final : public QAbstractTableModel {
 public:
@@ -21,7 +44,7 @@ public:
         return parent.isValid() ? 0 : state_.entries.size();
     }
     int columnCount(const QModelIndex& parent = {}) const override {
-        return parent.isValid() ? 0 : 9;
+        return parent.isValid() ? 0 : 8;
     }
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override {
         if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return {};
@@ -29,12 +52,25 @@ public:
             QString(), QStringLiteral("Достижение"), QStringLiteral("Очки"),
             QStringLiteral("Softcore"), QStringLiteral("Hardcore"),
             QStringLiteral("Открыли %"), QStringLiteral("Hard %"),
-            QStringLiteral("Тип"), QStringLiteral("Прогресс")};
+            QStringLiteral("Тип")};
         return section >= 0 && section < headers.size() ? headers[section] : QVariant();
     }
     QVariant data(const QModelIndex& index, int role) const override {
         if (!index.isValid() || index.row() >= state_.entries.size()) return {};
         const AchievementEntry& entry = state_.entries[index.row()];
+        if (role == Qt::UserRole) {
+            switch (index.column()) {
+            case 0: return entry.id;
+            case 1: return entry.title;
+            case 2: return entry.points;
+            case 3: return int(entry.softcoreUnlocked);
+            case 4: return int(entry.hardcoreUnlocked);
+            case 5: return entry.rarity;
+            case 6: return entry.hardcoreRarity;
+            case 7: return achievementType(entry);
+            default: return {};
+            }
+        }
         if (role == Qt::DecorationRole && index.column() == 0) {
             const QPixmap* image = icons_.object(badgeUrl(index.row()));
             return image ? QVariant(*image) : QVariant();
@@ -52,24 +88,36 @@ public:
         case 4: return entry.hardcoreUnlocked ? QStringLiteral("✓") : QStringLiteral("—");
         case 5: return QStringLiteral("%1%").arg(entry.rarity, 0, 'f', 2);
         case 6: return QStringLiteral("%1%").arg(entry.hardcoreRarity, 0, 'f', 2);
-        case 7:
-            if (entry.unsupported) return QStringLiteral("Недоступно");
-            switch (entry.type) {
-            case 1: return QStringLiteral("Пропускаемое");
-            case 2: return QStringLiteral("Прогресс");
-            case 3: return QStringLiteral("Победа");
-            default: return QStringLiteral("—");
-            }
-        case 8: return entry.progress.isEmpty() ? QStringLiteral("—") : entry.progress;
+        case 7: return achievementType(entry);
         default: return {};
         }
     }
     void setState(const AchievementsState& state) {
         const bool newGame = state.gameId != state_.gameId;
-        beginResetModel();
+        bool sameRows = !newGame && state.entries.size() == state_.entries.size();
+        if (sameRows) {
+            for (int row = 0; row < state.entries.size(); ++row) {
+                if (state.entries[row].id != state_.entries[row].id) {
+                    sameRows = false;
+                    break;
+                }
+            }
+        }
+        if (!sameRows) {
+            beginResetModel();
+            state_ = state;
+            if (newGame) icons_.clear();
+            endResetModel();
+            return;
+        }
+        QList<int> changedRows;
+        for (int row = 0; row < state.entries.size(); ++row)
+            if (!sameEntry(state_.entries[row], state.entries[row]))
+                changedRows.append(row);
         state_ = state;
-        if (newGame) icons_.clear();
-        endResetModel();
+        for (int row : changedRows)
+            emit dataChanged(index(row, 0), index(row, 7),
+                             {Qt::DisplayRole, Qt::DecorationRole, Qt::ToolTipRole, Qt::UserRole});
     }
     QString badgeUrl(int row) const {
         if (row < 0 || row >= state_.entries.size()) return {};
@@ -94,6 +142,25 @@ private:
     QCache<QString, QPixmap> icons_{8 * 1024 * 1024};
 };
 
+class AchievementSortProxy final : public QSortFilterProxyModel {
+public:
+    explicit AchievementSortProxy(QObject* parent = nullptr) : QSortFilterProxyModel(parent) {}
+protected:
+    bool lessThan(const QModelIndex& left, const QModelIndex& right) const override {
+        const QVariant a = sourceModel()->data(left, Qt::UserRole);
+        const QVariant b = sourceModel()->data(right, Qt::UserRole);
+        if (left.column() == 0 || (left.column() >= 2 && left.column() <= 6)) {
+            const double first = a.toDouble();
+            const double second = b.toDouble();
+            if (first != second) return first < second;
+        } else {
+            const int result = QString::localeAwareCompare(a.toString(), b.toString());
+            if (result != 0) return result < 0;
+        }
+        return left.row() < right.row();
+    }
+};
+
 AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
     setObjectName(QStringLiteral("achievementsDialog"));
     setWindowTitle(QStringLiteral("Достижения — Kega Refusion"));
@@ -114,9 +181,14 @@ AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
     layout->addWidget(game_);
     layout->addWidget(status_);
     model_ = new AchievementModel(this);
+    proxy_ = new AchievementSortProxy(this);
+    proxy_->setSourceModel(model_);
+    proxy_->setSortRole(Qt::UserRole);
+    proxy_->setDynamicSortFilter(false);
     table_ = new QTableView(this);
     table_->setObjectName(QStringLiteral("achievementsTable"));
-    table_->setModel(model_);
+    table_->setModel(proxy_);
+    table_->setSortingEnabled(true);
     table_->setAlternatingRowColors(true);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -132,7 +204,6 @@ AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
     table_->setColumnWidth(5, 84);
     table_->setColumnWidth(6, 74);
     table_->setColumnWidth(7, 110);
-    table_->setColumnWidth(8, 110);
     table_->viewport()->installEventFilter(this);
     layout->addWidget(table_, 1);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
@@ -140,10 +211,17 @@ AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     layout->addWidget(buttons);
     connect(table_->verticalScrollBar(), &QScrollBar::valueChanged,
-            this, &AchievementsDialog::requestVisibleBadges);
+            this, &AchievementsDialog::scheduleVisibleBadges);
+    connect(table_->horizontalHeader(), &QHeaderView::sortIndicatorChanged,
+            this, &AchievementsDialog::scheduleVisibleBadges);
+    table_->sortByColumn(-1, Qt::AscendingOrder);
 }
 
 void AchievementsDialog::setState(const AchievementsState& state) {
+    if (state.gameId != displayedGameId_) {
+        requestedBadges_.clear();
+        displayedGameId_ = state.gameId;
+    }
     model_->setState(state);
     account_->setText(state.loggedIn
         ? QStringLiteral("RetroAchievements: %1%2").arg(state.username,
@@ -154,26 +232,42 @@ void AchievementsDialog::setState(const AchievementsState& state) {
               .arg(state.gameTitle).arg(state.unlocked).arg(state.total).arg(state.points)
         : QStringLiteral("Игра с достижениями не загружена."));
     status_->setText(state.status);
-    QTimer::singleShot(0, this, &AchievementsDialog::requestVisibleBadges);
+    scheduleVisibleBadges();
 }
 
 void AchievementsDialog::setBadge(const QString& url, const QImage& image) {
+    if (image.isNull() || !requestedBadges_.remove(url)) return;
     model_->setBadge(url, image);
 }
 
 bool AchievementsDialog::eventFilter(QObject* watched, QEvent* event) {
     if (table_ && watched == table_->viewport() && event->type() == QEvent::Resize)
-        QTimer::singleShot(0, this, &AchievementsDialog::requestVisibleBadges);
+        scheduleVisibleBadges();
     return QDialog::eventFilter(watched, event);
 }
 
+void AchievementsDialog::scheduleVisibleBadges() {
+    if (visibleScanPending_) return;
+    visibleScanPending_ = true;
+    QTimer::singleShot(0, this, [this] {
+        visibleScanPending_ = false;
+        requestVisibleBadges();
+    });
+}
+
 void AchievementsDialog::requestVisibleBadges() {
-    if (!isVisible() || model_->rowCount() == 0) return;
+    if (!isVisible() || proxy_->rowCount() == 0) return;
     const int first = qMax(0, table_->rowAt(0));
     int last = table_->rowAt(table_->viewport()->height() - 1);
-    if (last < 0) last = model_->rowCount() - 1;
-    for (int row = first; row <= qMin(last, model_->rowCount() - 1); ++row) {
-        const QString url = model_->badgeUrl(row);
-        if (!url.isEmpty() && !model_->hasBadge(url)) emit badgeRequested(url);
+    if (last < 0) last = proxy_->rowCount() - 1;
+    for (int row = first; row <= qMin(last, proxy_->rowCount() - 1); ++row) {
+        const int sourceRow = proxy_->mapToSource(proxy_->index(row, 0)).row();
+        const QString url = model_->badgeUrl(sourceRow);
+        if (!url.isEmpty() && !model_->hasBadge(url) &&
+            !requestedBadges_.contains(url)) {
+            if (requestedBadges_.size() >= 256) requestedBadges_.clear();
+            requestedBadges_.insert(url);
+            emit badgeRequested(url);
+        }
     }
 }

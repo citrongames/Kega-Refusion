@@ -1,6 +1,6 @@
 # Architecture and current boundary
 
-Kega Refusion 0.11.0 is a standalone C++17 / Qt6 Widgets application for Linux and Windows. It supports cartridge and Sega CD image loading and input recordings through a pinned Genesis Plus GX libretro core; it is not yet the complete feature list from info.txt.
+Kega Refusion 0.11.1 is a standalone C++17 / Qt6 Widgets application for Linux and Windows. It supports cartridge and Sega CD image loading and input recordings through a pinned Genesis Plus GX libretro core; it is not yet the complete feature list from info.txt.
 
 ## Ownership
 
@@ -163,7 +163,7 @@ Plugin discovery occurs before `QApplication` loads its platform plugin. The exe
 
 ## RetroAchievements (0.11.0)
 
-`AchievementsClient` owns the pinned rcheevos `rc_client` on the emulation worker. `AchievementNetwork` owns GUI-thread Qt Network requests and an image-only disk cache. Requests/responses cross queued signals; neither HTTP nor image decoding runs inside a core frame. The constructor does not emit requests before the GUI connects its handlers. Anonymous/disabled operation makes no service requests. Every emulated forward frame, including skipped presentation frames at fast-forward, evaluates the achievement runtime. While paused/loading it idles at 100 ms intervals. Loading has a 15-second watchdog. Tables are rebuilt on relevant state changes or explicit requests, not every frame.
+`AchievementsClient` owns the pinned rcheevos `rc_client` on the emulation worker. `AchievementNetwork` owns GUI-thread Qt Network requests and a persistent image-only disk cache. Requests/responses cross queued signals; neither HTTP nor image decoding runs inside a core frame. The constructor does not emit requests before the GUI connects its handlers. Anonymous/disabled operation makes no service requests. Every emulated forward frame, including skipped presentation frames at fast-forward, evaluates the achievement runtime. While paused/loading it idles at 100 ms intervals. Loading has a 15-second watchdog. Tables are rebuilt on relevant state changes or explicit requests, not every frame.
 
 Host memory descriptors are copied when registered by libretro (the native core may use stack-local descriptor arrays), then mapped through `rc_libretro`. The raw byte order follows the official libretro mapping. Cartridge identification uses the SDK hash over original content, without checksum autofix; CD identification uses the first 512 decoded bytes exposed by the native core, avoiding full-image hashing and drive-position changes. IDs and hashes are cached outside the per-frame memory-read path.
 
@@ -174,3 +174,17 @@ All public Hardcore entry points are gated by `AchievementsHardcoreApproved=fals
 Account persistence is separate from settings: username and reusable API token in `retroachievements-account.ini`, atomically replaced, no password or response logging. API responses are not disk-cached. Badge transfers have bounded bodies, image dimensions, concurrency and queues. Only official HTTPS API/badge endpoints are accepted; redirects are not followed. Qt's Windows Schannel TLS plugin is deployed with Qt Network.
 
 Achievement enablement and notification enablement are independent. OSD only receives game-ready, unlocked, and Hardcore-completion messages; global OSD disable suppresses them as well. There is no anonymous offline achievement-definition engine in this version.
+
+
+### Achievement presentation (0.11.1)
+
+Achievement rows are emitted in stable ID order, independent of SDK lock-state buckets. `AchievementsDialog` uses a proxy with explicit numeric/localized sorting and dynamic re-sorting disabled: unlock/status updates change data on the existing row. Same-game updates do not reset the model, selection or scroll. Visible icon requests map proxy rows to the source, coalesce per event-loop iteration, and share the existing bounded image/network caches.
+
+`GameView` keeps at most eight achievement popups, each visible for 4000 ms. Cards are rendered into a cached device-pixel-ratio-aware pixmap only at display, badge arrival or resize, then composited over the video. Expiry removes the card and schedules an update; it performs no core reset, network or file operation. Hiding notifications/global OSD and closing/loading games clears the queue. Late image arrivals do not restart the timer. Cards use one of six saved screen anchors (top/bottom × left/center/right), default top-left, and are composited last above action OSD without shifting its layout. Clean screenshots still omit overlays.
+
+A 250 ms original two-note sound is precomputed once (24 KiB PCM). It mixes into existing frontend stereo PCM only while an audio sink is active and ordinary gameplay audio is running. It does not allocate a separate device, reopen a sink, read sound files or change sample counts/pacing. Inactive playback follows the original queue path; active mixing copies only a bounded chunk and saturates Int16 samples. Mute, clear and device changes cancel the tone. Sound has an independent saved preference, subordinate to notification/global OSD enablement.
+
+Presentation behavior was compared with upstream RetroArch's `gfx/widgets/gfx_widget_achievement_popup.c` (4000 ms, queue of eight) and `cheevos/cheevos.c` (badge, unlock heading/rarity, title/points and optional sound). No RetroArch source or sound asset was copied.
+
+
+On game recognition, MainWindow schedules both unlocked and locked badge variants for the complete set once. Background prefetch is limited to two concurrent downloads; visible/popup requests have priority. Valid images are stored atomically under `data/achievements/badges`, keyed by URL digest, without automatic deletion as explicitly requested. Decoded memory cache remains bounded at 16 MiB. A private lazy worker pool (one thread, five-second idle expiry) performs file stat/read/decode/atomic writes; at most two total badge IO/network jobs are active. Background cache hits only inspect bounded file metadata, while displayed images are decoded and validated on the worker. The GUI only schedules work and receives ready images. No progress/unlock event restarts the full prefetch; game change replaces the remaining background list.

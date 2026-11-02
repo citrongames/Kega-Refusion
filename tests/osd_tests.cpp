@@ -2,6 +2,8 @@
 #include "core/VideoFrameGeometry.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QImageReader>
@@ -450,11 +452,160 @@ void testRecordingOsd() {
     const QRect notice = changedBounds(clean, render(view));
     require(notice.height() > 60, "compatibility warning lost its explicit lines");
 }
+struct ExpiryTiming {
+    qint64 maxRenderBeforeNs = 0;
+    qint64 maxRenderNearNs = 0;
+    qint64 maxTimerGapNs = 0;
+    int frames = 0;
+};
+
+ExpiryTiming sampleExpiry(GameView& view, int durationMs, int nearStartMs) {
+    ExpiryTiming result;
+    QElapsedTimer clock;
+    clock.start();
+    qint64 previousTick = 0;
+    QTimer timer;
+    timer.setInterval(16);
+    QObject::connect(&timer, &QTimer::timeout, &view, [&] {
+        const qint64 tick = clock.nsecsElapsed();
+        if (previousTick) result.maxTimerGapNs = qMax(result.maxTimerGapNs, tick - previousTick);
+        previousTick = tick;
+        QElapsedTimer renderClock;
+        renderClock.start();
+        const QImage image = render(view);
+        require(!image.isNull(), "sampled OSD render is empty");
+        const qint64 elapsed = renderClock.nsecsElapsed();
+        if (tick / 1000000 >= nearStartMs)
+            result.maxRenderNearNs = qMax(result.maxRenderNearNs, elapsed);
+        else
+            result.maxRenderBeforeNs = qMax(result.maxRenderBeforeNs, elapsed);
+        ++result.frames;
+    });
+    timer.start();
+    waitMs(durationMs);
+    timer.stop();
+    return result;
+}
+
+void testAchievementPopup(bool positionsOnly = false) {
+    GameView view;
+    prepare(view);
+    const QImage clean = render(view);
+    int starts = 0, sounds = 0, requests = 0;
+    QObject::connect(&view, &GameView::achievementPopupStarted, &view, [&](bool sound) {
+        ++starts;
+        if (sound) ++sounds;
+    });
+    QObject::connect(&view, &GameView::achievementBadgeRequested, &view,
+                     [&](const QString& url) {
+        if (url == QStringLiteral("badge://first")) ++requests;
+    });
+    view.showAchievementNotice(QStringLiteral("ДОСТИЖЕНИЕ ПОЛУЧЕНО"),
+                               QStringLiteral("Первый уровень"),
+                               QStringLiteral("Пройти первый этап игры"), QStringLiteral("badge://first"));
+    require(starts == 1 && sounds == 0 && requests == 1,
+            "first achievement was not started or badge was not requested");
+    const QImage first = render(view);
+    const QRect card = changedBounds(clean, first);
+    require(card.left() == qBound(6, view.width() / 65, 16) &&
+                card.top() == qBound(6, view.width() / 65, 16) &&
+                card.width() >= 300 && card.height() >= 85 &&
+                card.right() < view.width() * 2 / 3,
+            "achievement card is not a readable upper-left rectangle");
+    const int margin = qBound(6, view.width() / 65, 16);
+    for (int position = 0; position < 6; ++position) {
+        view.setAchievementPosition(position);
+        const QRect placed = changedBounds(clean, render(view));
+        const int expectedX = position % 3 == 0 ? margin
+            : position % 3 == 1 ? (view.width() - card.width()) / 2
+                                : view.width() - margin - card.width();
+        const int expectedY = position < 3 ? margin
+            : view.height() - margin - card.height();
+        require(placed == QRect(expectedX, expectedY, card.width(), card.height()),
+                "achievement card missed its selected edge or corner");
+    }
+    view.setAchievementPosition(-1);
+    require(render(view) == first, "invalid achievement position did not return to top-left");
+    view.setPausedStatus(true);
+    const QImage paused = render(view);
+    const QRect pauseDifference = changedBounds(first, paused);
+    require(!pauseDifference.isEmpty() && card.contains(pauseDifference),
+            "ordinary OSD was displaced outside the achievement card");
+    const QColor foreground = paused.pixelColor(margin + 5, margin + 5);
+    const QColor expectedForeground = first.pixelColor(margin + 5, margin + 5);
+    require(qAbs(foreground.red() - expectedForeground.red()) < 8 &&
+                qAbs(foreground.green() - expectedForeground.green()) < 8 &&
+                qAbs(foreground.blue() - expectedForeground.blue()) < 8,
+            "ordinary OSD was painted over the achievement card");
+    view.setPausedStatus(false);
+    if (positionsOnly) return;
+    const QImage screenshot = view.captureGameImage();
+    require(!screenshot.isNull() &&
+                colorBounds(screenshot, QColor(37, 58, 81)) == screenshot.rect(),
+            "clean screenshot contains the achievement card");
+
+    // A delayed badge must not move the original four-second deadline.
+    waitMs(650);
+    QImage badge(32, 32, QImage::Format_RGB32);
+    badge.fill(QColor(245, 60, 43));
+    view.setAchievementBadge(QStringLiteral("badge://first"), badge);
+    require(render(view) != first, "async achievement badge did not update the card");
+    view.showAchievementNotice(QStringLiteral("ДОСТИЖЕНИЕ ПОЛУЧЕНО"),
+                               QStringLiteral("Второй уровень"),
+                               QStringLiteral("Очередь показывает карточки по порядку"), {}, true);
+    require(starts == 1 && sounds == 0, "queued popup started before the visible one expired");
+    const ExpiryTiming popup = sampleExpiry(view, 3700, 3200);
+    require(starts == 2 && sounds == 1 && render(view) != first,
+            "queued achievement did not begin after the four-second lifetime");
+    view.clearAchievementNotices();
+    require(render(view) == clean, "clearing achievement cards left overlay pixels");
+    view.setOsdEnabled(false);
+    view.showAchievementNotice(QStringLiteral("Скрыто"), QStringLiteral("Скрыто"), {}, {}, true);
+    require(starts == 2 && render(view) == clean, "disabled OSD started an achievement or sound");
+    view.setOsdEnabled(true);
+    view.showAchievementNotice(QStringLiteral("Сброс"), QStringLiteral("Сброс"), {}, {});
+    view.setLoading(true, QStringLiteral("fixture"));
+    view.setLoading(false);
+    require(render(view) == clean, "loading a new game retained an achievement card");
+
+    GameView old;
+    prepare(old);
+    const QImage oldClean = render(old);
+    old.showOsd(QStringLiteral("Existing timed notice"), 500);
+    const ExpiryTiming notice = sampleExpiry(old, 800, 450);
+    require(render(old) == oldClean, "existing notice remained after expiry");
+    std::printf("expiry raster 60Hz: achievement %d frames, max render before/near %.3f/%.3f ms, max tick gap %.3f ms; old notice %d frames, max render before/near %.3f/%.3f ms, max tick gap %.3f ms\n",
+                popup.frames, popup.maxRenderBeforeNs / 1e6, popup.maxRenderNearNs / 1e6,
+                popup.maxTimerGapNs / 1e6, notice.frames,
+                notice.maxRenderBeforeNs / 1e6, notice.maxRenderNearNs / 1e6,
+                notice.maxTimerGapNs / 1e6);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--achievement-positions-only"))) {
+            testAchievementPopup(true);
+            std::puts("achievement positions passed"); return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--achievement-preview"))) {
+            GameView view;
+            prepare(view, QSize(960, 720));
+            view.showAchievementNotice(QStringLiteral("ДОСТИЖЕНИЕ ПОЛУЧЕНО"),
+                                       QStringLiteral("Мастер первого уровня"),
+                                       QStringLiteral("Пройдите первый этап без потери жизни"), {});
+            require(QDir().mkpath(QStringLiteral("build/verification")),
+                    "cannot create achievement preview directory");
+            require(render(view).save(QStringLiteral("build/verification/achievement-popup-0.11.1.png")),
+                    "cannot save achievement preview image");
+            std::puts("achievement preview saved"); return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--achievement-only"))) {
+            testAchievementPopup();
+            std::puts("achievement popup passed"); return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--screenshot-only"))) {
             testCleanScreenshot();
             std::puts("clean screenshots passed"); return 0;
@@ -482,6 +633,7 @@ int main(int argc, char** argv) {
         testStateSlots();
         testGlobalToggle();
         testNoticeExpiry();
+        testAchievementPopup();
         testStateSlotExpiry();
         std::puts("OSD tests passed");
         return 0;

@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPointF>
+#include <QPixmap>
 #include <QRect>
 #include <QString>
 #include <QTimer>
@@ -37,6 +38,12 @@ public:
     void showOsd(const QString& message, int durationMs = 2600,
                  const QString& category = {});
     void showStateSlots(int selected, unsigned occupiedMask, int durationMs = 2000);
+    void showAchievementNotice(const QString& heading, const QString& title,
+                               const QString& description, const QString& badgeUrl,
+                               bool sound = false);
+    void setAchievementBadge(const QString& url, const QImage& image);
+    void clearAchievementNotices();
+    void setAchievementPosition(int position); // 0..5: top L/C/R, bottom L/C/R.
     void setOsdEnabled(bool enabled);
     void setPausedStatus(bool paused);
     void setMutedStatus(bool muted);
@@ -56,11 +63,14 @@ public:
 signals:
     void shaderFailed(const QString& error);
     void openGameRequested();
+    void achievementPopupStarted(bool sound);
+    void achievementBadgeRequested(const QString& url);
     void gunAimChanged(unsigned player, double x, double y, bool offscreen);
     // Raw Qt::MouseButton mask; the input layer maps buttons for each gun device.
     void gunButtonsChanged(unsigned player, unsigned qtButtons);
 
 protected:
+    bool event(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -93,12 +103,23 @@ private:
         QString category;
         qint64 expiresAt = 0;
     };
+    struct AchievementPopup {
+        QString heading;
+        QString title;
+        QString description;
+        QString badgeUrl;
+        QImage badge;
+        bool sound = false;
+    };
     struct StateSlots {
         int selected = 0;
         unsigned occupiedMask = 0;
         qint64 expiresAt = 0;
     };
     void expireOsd();
+    void startAchievementPopup();
+    void rebuildAchievementPixmap();
+    QRect achievementPopupRect() const;
     void paintOsd(QPainter& painter);
     void paintLoading(QPainter& painter);
 
@@ -136,6 +157,12 @@ private:
     QString rewindTime_;
     StateSlots stateSlots_;
     QVector<Notice> notices_;
+    QVector<AchievementPopup> achievementQueue_;
+    QPixmap achievementPixmap_;
+    QImage achievementFallbackBadge_;
+    QSize achievementCardSize_;
+    qint64 achievementExpiresAt_ = 0;
+    int achievementPosition_ = 0;
     QElapsedTimer osdClock_;
     QTimer osdTimer_;
     QString osdFamily_;

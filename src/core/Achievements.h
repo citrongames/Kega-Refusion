@@ -26,6 +26,8 @@ struct AchievementsState {
 struct AchievementNotice {
     enum Kind { GameReady, Unlocked, Completed } kind = Unlocked;
     QString title, description, badgeUrl;
+    quint32 points = 0;
+    double rarity = 0.0;
     bool hardcore = false;
 };
 struct AchievementHttpRequest {

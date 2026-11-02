@@ -14,6 +14,7 @@
 #include <QtEndian>
 
 #include <cstring>
+#include <algorithm>
 #include <limits>
 #include <unordered_map>
 #include <utility>
@@ -217,6 +218,7 @@ struct AchievementsClient::Impl {
         AchievementNotice notice;
         notice.kind = AchievementNotice::GameReady;
         notice.title = impl->state.gameTitle;
+        notice.badgeUrl = fromUtf8(game->badge_url);
         notice.description = QStringLiteral("Открыто %1 из %2").arg(impl->state.unlocked).arg(impl->state.total);
         impl->sendNotice(notice);
     }
@@ -262,6 +264,8 @@ struct AchievementsClient::Impl {
             notice.description = fromUtf8(event->achievement->description);
             notice.badgeUrl = fromUtf8(event->achievement->badge_url);
             notice.hardcore = impl->hardcore();
+            notice.points = event->achievement->points;
+            notice.rarity = notice.hardcore ? event->achievement->rarity_hardcore : event->achievement->rarity;
             impl->sendNotice(notice);
             impl->rebuild();
             break;
@@ -269,6 +273,8 @@ struct AchievementsClient::Impl {
         case RC_CLIENT_EVENT_GAME_COMPLETED: {
             AchievementNotice notice;
             notice.kind = AchievementNotice::Completed;
+            if (const auto* game = rc_client_get_game_info(client))
+                notice.badgeUrl = fromUtf8(game->badge_url);
             notice.title = impl->state.gameTitle;
             notice.description = impl->hardcore() ? QStringLiteral("Мастерство достигнуто")
                                                   : QStringLiteral("Все достижения открыты");
@@ -440,6 +446,9 @@ struct AchievementsClient::Impl {
                 }
             }
             rc_client_destroy_achievement_list(list);
+            // Lock-state buckets must not move rows when an achievement unlocks.
+            std::sort(state.entries.begin(), state.entries.end(),
+                [](const AchievementEntry& a, const AchievementEntry& b) { return a.id < b.id; });
         }
         publish();
     }

@@ -8,6 +8,7 @@
 #include <QString>
 #include <QTimer>
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 
@@ -27,6 +28,8 @@ public:
     void clear();
     void setMuted(bool muted);
     void setVolume(int percent);
+    // GUI thread: start a short tone in the existing PCM stream if it is live.
+    void playAchievementSound();
 
     // Selection and device discovery stay on the GUI thread. An empty ID
     // follows the system default; a missing explicit ID is kept for reconnect.
@@ -49,6 +52,11 @@ private:
     void releaseSink();
     void fail(const QString& message);
     void feedback(std::uint64_t generation, bool available, qint64 deviceBytes = 0);
+    void initializeAchievementChime();
+    void appendWithAchievementChime(const QByteArray& pcm, int sampleRate);
+
+    static constexpr int ChimeRate = 48000;
+    static constexpr size_t ChimeSamples = ChimeRate / 4;
 
     std::mutex mutex_;
     AudioQueue queue_;
@@ -57,6 +65,10 @@ private:
     bool retryResetPending_ = false;
     bool wakePending_ = false;
     bool closing_ = false;
+    std::array<std::int16_t, ChimeSamples> chime_{};
+    std::uint64_t chimePositionFixed_ = 0;
+    bool chimeActive_ = false;
+    bool sinkReady_ = false;
 
     QTimer pumpTimer_;
     QElapsedTimer clock_;
