@@ -1,0 +1,225 @@
+Аудит пиратских картриджей Kega Refusion
+Дата: 2026-11-02. Базовая версия приложения: fa85f11.
+Ядро: Genesis Plus GX f27655b592ef43f317272d79883bcaa10d3ac8ad
+с текущими патчами Kega Refusion; изучен реально собираемый вариант 32X.
+
+РЕЗУЛЬТАТ ПОСЛЕ ИСПРАВЛЕНИЯ (0.14.3)
+Разделы ниже сохраняют исходный аудит fa85f11, чтобы не потерять причину.
+Теперь приложение перед автофиксом запрашивает ядро, нужно ли оставить
+исходную чексумму. База мапперов во фронтенд не копируется. Защищены
+совпадения базы, отдельные специальные картриджи (включая T-5740 / Pier
+Solar), а также изученные checksum-зависимые правила SRAM/EEPROM/региона.
+Обычный ROM по-прежнему можно исправить. Если внешнее старое ядро не
+предоставляет эту проверку, заголовок консервативно остаётся исходным.
+Проверка выполняется только при подготовке загрузки/питания, без работы
+на каждом кадре и без повторного вычисления полной суммы внутри ядра.
+
+Проверено:
+- Вызов собранной проверки ядра на всех 325 уникальных исходных файлах:
+  все 60 совпадений базы сохранены, включая ранее терявшиеся 56;
+  все три версии Pier Solar сохраняют исходный header=63D2.
+- Целевой запуск core_integration_tests --checksum-only прошёл:
+  обычный MD, SMD, swapped BIN и ZIP исправляются; искусственный ROM
+  с ключом защиты и специальным T-5740 заголовком не меняются;
+  проверены загрузка, питание и сохранность исходных файлов.
+- Реальный Pier Solar Rev B, 600 кадров с одинаковым вводом:
+  OFF и ON дошли до выбора языка с одинаковыми итоговым изображением
+  и накопленным звуком. Повтор старого поведения через отдельную временную
+  копию с изменённым checksum дал красный экран. Это проверка запуска,
+  не заявление о полном прохождении всех трёх версий.
+- Игровые мапперы и их базы в этом изменении не расширялись.
+  Super Poker overdump и остальные кандидаты остаются задачами на потом.
+
+ОБЪЁМ И ГРАНИЦЫ
+D:/emulation/Sega Mega Drive/ToCheck/my-pirate — 217 файлов.
+D:/emulation/Sega Mega Drive/ToCheck/omonim-pirate — 245 файлов.
+Всего 462 файла, 325 уникальных SHA-256, 137 дополнительных точных копий.
+Все расширения .md здесь означают двоичные Mega Drive ROM, а не документы.
+106 файлов (82 уникальных содержимых) имеют метку [f], [f1…], [Sound Fix]
+или [unprot]. Слово Fix в названии Fix-It Felix не является такой меткой.
+
+Это аудит содержимого и исходников, не перечень полностью пройденных игр.
+Исходные ROM, настройки, сохранения и BIOS пользователя не изменялись. Windows GUI
+не запускался. Массовых прогонов игр и повторного тестирования не было.
+Полная ведомость с именами всех 462 файлов, SHA-256, CRC32, ключами
+распознавания, обработчиками и обоими режимами автофикса лежит рядом:
+pirate-mapper-audit.json. Каждый уникальный ROM перечислен один раз;
+поле files содержит все его пути, включая дубликаты.
+
+КАК ПРОВЕРЯЛОСЬ РАСПОЗНАВАНИЕ
+В md_cart.c таблица содержит 71 запись. Ключ — пара: чексумма из заголовка
+0x18E и фактическая 16-битная сумма big-endian слов с 0x200 до конца ROM.
+Сумма не является уникальным идентификатором. Поэтому для сверки дампов
+сохранены также SHA-256 и CRC32 всего файла. Порядок распознавания изучен
+по фактическому исходнику, а не по названию игры.
+В этой выборке не потребовалась нормализация SMD или байтового порядка.
+
+60 уникальных ROM совпадают с таблицей (55 разных записей таблицы).
+Ещё 10 распознаются вне неё: Beggar Prince SF-001 — 2; Legend of Wukong
+SF-002 — 3; Star Odyssey SF-004 — 1; Pier Solar T-5740 — 3;
+Super Mario World 64 по сигнатуре и вычисленной сумме — 1.
+Оставшиеся 255 идут по общему пути. Это НЕ 255 неподдерживаемых игр:
+линейный ROM, общий !TIME-банкинг, SRAM и EEPROM могут работать без
+специальной записи. Отсутствие записи не доказывает необходимость маппера.
+
+ПРИОРИТЕТ A: АВТОИСПРАВЛЕНИЕ ЧЕКСУММЫ МЕШАЕТ РАСПОЗНАВАНИЮ
+Подтверждено по исходникам базовой версии и ключам всех дампов.
+При выключенном автофиксе сохраняются приведённые выше 60 совпадений.
+При включённом prepareCoreContent() меняет 0x18E/0x18F до передачи ROM
+ядру. Для 56 из этих 60 содержимых заголовок SEGA разрешает замену,
+и исходная пара меняется на (real,real), которой в таблице нет.
+Это подтверждённая потеря специального распознавания, но НЕ утверждение,
+что все 56 игр непременно перестают работать. Остальные пути остаются.
+По умолчанию автофикс выключен.
+Источники в приложении: src/core/LibretroHost.cpp:496–514,729–771;
+src/core/LibretroHost.h:175. В ядре: libretro/libretro.c:3721–3727;
+core/loadrom.c:702–703; core/cart_hw/md_cart.c:490–523.
+
+Предложение: не исправлять заголовок у распознанных специальных картриджей.
+Решение должно учитывать фактическое распознавание ядра, без копирования
+его базы во фронтенд. Нужны как записи таблицы, так и отдельные ветки:
+Pier Solar, SF-001/002/004, SMW64 и т.д. Сохранять оригинальные файлы.
+Пользователь отдельно сообщил, что Pier Solar не запускается с автофиксом.
+В наших трёх дампах исходный header=63D2; real=4DCC,305D,0122.
+T-5740 выбирается по product, так что потеря таблицы сама по себе этот
+случай не объясняет. Требуется отдельная короткая проверка обоих режимов.
+Это дополнение к аудиту, а не доказательство новой проблемы маппера.
+
+ПРИОРИТЕТ B: SUPER POKER — МАППЕР ЕСТЬ, OVERDUMP НЕ РАСПОЗНАЁТСЯ
+Файл: my-pirate/Cha Oji Pu Ke - Super Poker (Ch).md.
+Он же: omonim-pirate/Chaoji Poker (T) (Unl) [!].md.
+CRC32 C37E6858, размер 4 МиБ, ключ FFFF:6F41.
+Проверено побайтно: весь файл состоит из четырёх одинаковых копий 1 МиБ.
+Для первого 1 МиБ CRC32=40198B9C, ключ FFFF:D7B0 — точная существующая
+запись Chao Ji Poker в core/cart_hw/md_cart.c:208–209. В комментарии
+ядра прямо отмечен первоначальный overdump.
+
+Оригинал проверяет 55/0F/AA/F0 по адресам 400000/400002/400004/400006.
+Вариант [f1], CRC32 08275694, отличается ровно двумя байтами в 0x68E:
+ветвление 6624 заменено на 603E, обходя проверку. Добавлять его в базу
+вместо распознавания исходного дампа не нужно.
+Независимая сверка: PicoDrive распознаёт исходный файл по CRC первых
+64 КиБ DD02797C и использует соответствующие регистры защиты.
+
+Следующий шаг: распознать именно подтверждённый повторённый dump и
+назначить существующую защиту; не писать новый маппер и не менять ROM
+на диске. Нельзя автоматически обрезать любой повторяющийся ROM:
+нужно учитывать реальные банковые схемы и однозначность идентификации.
+Это подтверждённый пробел распознавания, а не результат прохождения игры.
+
+КРАСНЫЕ ФЛАГИ: В БАЗЕ ОПИСАНА УЖЕ ИСПРАВЛЕННАЯ ВЕРСИЯ
+В самом md_cart.c девять записей явно помечены patched ROM:
+1. Shui Hu: Feng Yun Zhuan — 3332:872B, регистры не используются.
+2. Chao Ji Da Fu Weng — A697:A697, неизвестное банковое оборудование?
+3. Aq Renkan Awa — 8104:0517, неизвестное банковое оборудование?
+4. Tun Shi Tian Di III — 0000:9C5E, регистр не используется.
+5. Zhan Qi — 0000:4704, результаты сравнений не используются.
+6. Jiu Ji Ma Jiang II — 0C44:BA81; ожидаемый F0 ломает patched ROM.
+7. Hei Tao 2 — 0000:5843, регистры не используются.
+8. Dragon Ball Final Bout — C65A:C65A, изменена обработка защиты.
+9. Yi Men Ying Lie / Yang Warrior Family — 0000:96B0, регистр не используется.
+
+В подборке есть точные совпадения восьми этих записей, кроме Dragon Ball.
+Для них наличие записи НЕ подтверждает полноценную эмуляцию непатченного
+картриджа. Приоритет исследования оригинального железа: Chao Ji Da Fu
+Weng и Aq Renkan Awa, где авторы прямо отмечают неизвестный банкинг.
+Пока нет установленного исходного дампа и трассы обращений, добавлять
+новые fix-версии или придумывать значения регистров не следует.
+Метки [!] и отсутствие [f] в имени не гарантируют, что ROM не патчен.
+
+УЖЕ ЕСТЬ ОСНОВА — FIX-ВЕРСИИ НЕ ТРЕБУЮТ НОВОЙ БАЗЫ
+Realtec: Funny World & Balloon Boy, Earth Defense, Whac-a-Critter,
+Tom Clown. Их исходные варианты распознаны; отдельные Balloon Boy /
+Funny World [f1] не заменяют исходный комбинированный картридж.
+Creaton: Insane Paradise original 2F15BB22, 16 Tiles Mahjong II B4F4249F,
+Wu Kong Wai Zhuan original 0BD70E54 и другие регистровые схемы уже есть.
+SuperMajonClubvers0000 CRC 2B4B40E3 определяется как Chao Ji Mahjong Club;
+Super Majon Club (Creaton, 1995, Original) CRC 1D81A67C совпадает с записью
+Du Shen Zhi Meng Huan Poker. Это показательный случай ненадёжного имени.
+
+Семейство custom_regs: Top Fighter, Soul Edge VS Samurai Spirits, Mulan,
+Pocket Monsters II, Lion King 3, Super King Kong 99, Super Donkey Kong 99,
+Gunfight 3-in-1; отдельно Pokemon Stadium. В выборке есть распознанные
+базовые версии. Поддержка оригинального Tekken Special тоже есть.
+SMW64, Pier Solar, Beggar Prince, Legend of Wukong и Star Odyssey имеют
+отдельные ветки распознавания — искать их только в rom_database ошибочно.
+
+Некоторые файлы без [f] уже содержат обходы проверок:
+- Top Fighter из my-pirate CRC 506FCFAC отличается от распознанного
+  F75519DC на 104 байта; есть замены инструкций на NOP/безусловные переходы.
+- Chinese Fighter 6F98247D против E833BC6E: 1096 изменённых байтов,
+  в том числе NOP/переходы в проверках.
+- Lion King 3 8E0555E4 против C004219D: 416 изменённых байтов, включая
+  изменения кода. Не считать его отдельным новым маппером по одному имени.
+- King of Fighters 99 AB82AFBE против распознанного 54638C11:
+  семь изменённых байтов, включая checksum и ветвление 6600 -> 6008.
+Эти сравнения доказывают различия и наличие обходов, но не гарантируют,
+что абсолютно все проверки и банковые обращения в варианте устранены.
+
+ПРИОРИТЕТ C: ТОЧЕЧНО УТОЧНИТЬ, А НЕ ДОБАВЛЯТЬ МАППЕР ВСЛЕПУЮ
+1. Ben 10 C8BE0B26, Mario 3 [a1] 6F630EBD, Mario 4 96B0ECD9.
+   PicoDrive сопоставляет первые 64 КиБ и включает no_z80_bus_lock для
+   конфликта 68000/Z80 в звуковом драйвере. В GPX аналогичного исключения
+   не найдено. Это кандидат на короткую проверку старта/звука, а не уже
+   подтверждённая поломка и не отдельная банковая схема картриджа.
+2. 13 Tiles Mahjong - 98 Pretty Girl CRC 68B372F6, 655360 байт,
+   FFFF:3D41. Это не известный Shisan Zhang / Chinese Beauty 9B691779.
+   Нельзя назначать ему чужие регистры по сходному названию. Надёжное
+   соответствие аппаратной схеме не установлено; нужно отдельное изучение.
+3. Sonic Jam 6, Super Mario World CF540BA6, переводы/переиздания,
+   sound-fix Link Dragon и Super Tank War: отсутствие точного ключа само
+   по себе не причина добавления в базу. Сначала воспроизвести конкретный
+   сбой и установить, есть ли обращения к отсутствующему оборудованию.
+   Sound-fix может обходить звуковой баг, а не защиту картриджа.
+
+ИСТОЧНИКИ И ПЛАН ПРОДОЛЖЕНИЯ
+На дату проверки remote HEAD libretro/Genesis-Plus-GX совпал с нашим pin;
+готового более нового libretro-исправления мапперов для переноса не найдено.
+Проверенные первичные исходники перечислены ниже. PicoDrive использует
+CRC первых 64 КиБ, а не всего файла: совпадение секции не равнозначно
+полному совпадению ROM. В ведомости сохранены 81 сопоставление файлов.
+
+Очередность дальнейшей работы:
+A. Выполнено в 0.14.3: защитить распознавание от автофикса;
+   результат короткой проверки Pier Solar приведён в начале отчёта.
+B. Распознать исходный Super Poker overdump существующим маппером.
+C. Проверить несколько конкретных звуковых кандидатов V.M.V.
+D. Исследовать patched-only красные флаги по настоящим исходным дампам.
+
+Не добавлять fix/f1 «на всякий случай», не объявлять весь список неизвестных
+сломанным, не подменять работу защиты патчами игрового кода.
+
+ПРИЛОЖЕНИЕ: ПЕРВИЧНЫЕ ИСТОЧНИКИ И РЕВИЗИИ
+Pirate mapper primary-source notes (2026-11-02)
+================================================
+Collection: my-pirate 217, omonim-pirate 245. The .md files are binary Mega Drive images. No ROM changed.
+
+Current GPX:
+- Local pin f27655b592ef43f317272d79883bcaa10d3ac8ad (2026-10-30) equals current libretro/Genesis-Plus-GX remote HEAD (git ls-remote). No newer libretro mapper revision.
+- Local source build/deps/genesis-plus-gx-32x-linux/core/cart_hw/md_cart.c includes SF-001/002/004, Realtec, LK3 family, SMW64, Creaton protection and Tekken Special. Do not flag them by absent title names alone.
+- Source: https://github.com/libretro/Genesis-Plus-GX/blob/f27655b592ef43f317272d79883bcaa10d3ac8ad/core/cart_hw/md_cart.c
+- License: bundled non-commercial terms in THIRD_PARTY.md and third_party/Genesis-Plus-GX-LICENSE.txt.
+
+PicoDrive:
+- Revision 26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee.
+- Config: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/carthw.cfg
+- Pico check_crc32 hashes the first 64 KiB of loaded ROM, not the whole ROM: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/cart.c#L916-L924 and #L1112-L1121. picodrive-64k-matches.json records 81 matching files. Prefix CRC is a section identity check, not proof of whole-file identity.
+- Hardware reference: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/carthw/carthw.c
+- License: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/COPYING prohibits commercial use and requires complete source for modified redistributions. carthw.c states MAME license, so inspect file-specific provenance before any code transfer. Behavioral reference is safe.
+
+Priority 1 confirmed: Chaoji Poker original overdump.
+- User my-pirate/Cha Oji Pu Ke - Super Poker (Ch).md: full CRC C37E6858, 4 MiB, first-64KiB CRC DD02797C, header FFFF, full real checksum 6F41. Four repeated 1 MiB blocks; each 1 MiB block checksum D7B0 matches GPX Super Poker database (FFFF,D7B0). Full dump misses that detection.
+- Pico independently matches DD02797C and emulates protection reads at 0x400000/2/4/6 with 5500/0F00/AA00/F000: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/carthw.cfg#L588-L595
+- Reuse GPX existing hardware after recognizing the repeated original dump; do not change ROM. The f1 full CRC 08275694 bypasses protection, so it is not equivalent evidence.
+
+Priority 2 verification candidate: V.M.V. Z80 bus quirk.
+- Exact Pico first-64KiB CRC matches: Ben 10 (Unl)[Rus] 6732AAB4; Mario 3 (Unl)[Rus] [a1] E302585A; Mario 4 (Unl)[Rus] 20ED0DE8.
+- Pico applies no_z80_bus_lock, citing 68k/Z80 audio driver conflict: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/carthw.cfg#L603-L619 . It bypasses normal 68k Z80-bus access checks: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/memory.c#L825-L858
+- GPX core/genesis.c#L471-L510 disables 68k A0 access after BUSREQ release; no per-title override found. Audio/boot test target, not yet proven GPX failure.
+
+Unresolved: 13 Tiles Mahjong - 98 Pretty Girl.
+- Full CRC 68B372F6, first-64KiB CRC FF871340, header FFFF, real 3D41. Pico [13 Tiles Mahjong] uses first-64KiB CRC 83397760 for another image: https://github.com/notaz/picodrive/blob/26ecb2b6358fefba24e3d68b9eb2efba7f10d5ee/pico/carthw.cfg#L579-L586 . No primary-source mapper identification for the 98 variant. Do not assign another image's protection by title.
+
+Other donor sources:
+- MAME revision 079ac58c453b09a3ffd8267d1c611b4d2c63795b, BSD-3-Clause per file header: https://github.com/mamedev/mame/blob/079ac58c453b09a3ffd8267d1c611b4d2c63795b/src/devices/bus/megadrive/rom.cpp . Implements SMW64, Creaton, Tekken, SF-001/002/004 family (Beggar Prince, Legend of Wukong, Star Odyssey). GPX already contains these families; compare behavior as needed.
+- FBNeo revision b9d32a0597b43c7f90d20ccdc64b764e3b148fec: https://github.com/finalburnneo/FBNeo/blob/b9d32a0597b43c7f90d20ccdc64b764e3b148fec/src/burn/drv/megadrive/megadrive.cpp . Contains Realtec and Squirrel King handlers; no independent missing family found. File header says Pico-derived code free for non-commercial use, separate commercial licensing.

@@ -1,0 +1,148 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -271,6 +271,84 @@
+ };
+ 
+ 
++/* Check whether changing the header checksum could change cartridge hardware
++ * selection or a game's own checksum check. No process-wide state is touched. */
++static void md_cart_header_title(char *out, const uint8 *in, unsigned int length)
++{
++  unsigned int i, j = 0;
++  for (i=0; i<length && in[i]; i++)
++  {
++    if ((in[i] != ' ') || !j || (out[j-1] != ' '))
++      out[j++] = in[i];
++  }
++  out[j] = 0;
++}
++
++int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum)
++{
++  unsigned int i;
++  uint16 header, real;
++  char console[17], domestic[49], international[49], type[3], product[13];
++
++  /* Unknown layouts should retain their original bytes. */
++  if (!rom || (size < 0x200) || (size > MAXROMSIZE) || (size & 1)) return 1;
++  header = (rom[0x18e] << 8) | rom[0x18f];
++  real = calculated_checksum & 0xffff;
++  if (header == real) return 1;
++
++  /* This is the same table md_cart_init() searches, with the original key. */
++  for (i=0; i<(sizeof(rom_database)/sizeof(md_entry_t)); i++)
++  {
++    if ((header == rom_database[i].chk_1) && (real == rom_database[i].chk_2))
++      return 1;
++  }
++
++  memcpy(console, rom + 0x100, 16); console[16] = 0;
++  md_cart_header_title(domestic, rom + 0x120, 48);
++  md_cart_header_title(international, rom + 0x150, 48);
++  memcpy(type, rom + 0x180, 2); type[2] = 0;
++  memcpy(product, rom + 0x182, 12); product[12] = 0;
++
++  /* Non-database hardware selected by header strings or ROM signatures.
++   * T-5740 includes Pier Solar; Paprium has a separate product code. */
++  if (strstr(international, "DEMONS OF ASTEBORG") ||
++      strstr(international, "ASTEBROS") ||
++      strstr(domestic, "DAEMON CLAW") ||
++      strstr(console, "SEGA SSF") ||
++      strstr(console, "SEGA MEGASD") ||
++      strstr(domestic, "SUPER STREET FIGHTER2") ||
++      ((size == 0x800000) && !memcmp(product, " T-574120-00", 12)) ||
++      strstr(product, "T-5740") ||
++      (strstr(type, "SF") && (strstr(product, "001") ||
++                              strstr(product, "002") || strstr(product, "004"))) ||
++      (strstr(type, "GM") && strstr(product, "00000000-42")) ||
++      strstr(international, "COLOCODX") ||
++      ((size == 0x400000) && !memcmp(rom + 0x200150, "CANON", 5)) ||
++      ((rom[0x08] == 0x60) && (rom[0x09] == 0x00) &&
++       (rom[0x0a] == 0x01) && (rom[0x0b] == 0xf6) && (real == 0xf894)) ||
++      ((rom[0x04] == 0x00) && (rom[0x05] == 0x00) &&
++       (rom[0x06] == 0x01) && (rom[0x07] == 0x04) && (header == 0x31fc)) ||
++      ((rom[0x1b0] == 'F') && (rom[0x1b1] == 'L')) ||
++      ((rom[0x1c8] == 'S') && (rom[0x1c9] == 'V')))
++    return 1;
++
++  /* Other checksum-dependent setup outside rom_database: SRAM, EEPROM and
++   * region exceptions. Preserve the original keys before those checks run. */
++  if (((header == 0xcdf5) && (real == 0x603a)) ||
++      ((header == 0x6bd5) && (real == 0x1fea)) ||
++      ((header == 0x45c1) && (real == 0xc613)) ||
++      ((header == 0x2284) && (real == 0x8dcf)) ||
++      ((header == 0x8104) && ((real == 0xaeaa) || (real == 0x8dba))) ||
++      ((header == 0x0000) && (real == 0x1f7f)) ||
++      ((header == 0xa4b3) && (size == 0x80000) &&
++       strstr(product, "00004054-01")) ||
++      ((header == 0x0f81) && strstr(product, "T-45033")) ||
++      eeprom_i2c_header_checksum_key(product, header))
++    return 1;
++
++  return 0;
++}
++
+ /************************************************************
+           Cart Hardware initialization 
+ *************************************************************/
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -96,6 +96,7 @@
+ 
+ 
+ /* Function prototypes */
++extern int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum);
+ extern void md_cart_init(void);
+ extern void md_cart_reset(int hard_reset);
+ extern int md_cart_context_save(uint8 *state);
+--- a/core/cart_hw/eeprom_i2c.c
++++ b/core/cart_hw/eeprom_i2c.c
+@@ -179,6 +179,22 @@
+ /* I2C EEPROM mapper initialization                                 */
+ /********************************************************************/
+ 
++/* Read-only preflight: identify EEPROM entries whose header checksum is a key.
++ * The start-vector test is intentionally omitted, so uncertain cases keep the
++ * original header rather than losing the EEPROM mapping. */
++int eeprom_i2c_header_checksum_key(const char *product, unsigned checksum)
++{
++  unsigned int i;
++  if (!product) return 1;
++  for (i=0; i<(sizeof(i2c_database)/sizeof(T_I2C_GAME)); i++)
++  {
++    if (i2c_database[i].chk && (i2c_database[i].chk == checksum) &&
++        strstr(product, i2c_database[i].id))
++      return 1;
++  }
++  return 0;
++}
++
+ void eeprom_i2c_init(void)
+ {
+   int i = sizeof(i2c_database) / sizeof(T_I2C_GAME) - 1;
+--- a/core/cart_hw/eeprom_i2c.h
++++ b/core/cart_hw/eeprom_i2c.h
+@@ -40,6 +40,7 @@
+ #define _EEPROM_I2C_H_
+ 
+ /* Function prototypes */
++extern int eeprom_i2c_header_checksum_key(const char *product, unsigned checksum);
+ extern void eeprom_i2c_init(void);
+ 
+ #endif
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3613,6 +3613,13 @@
+    kegarefusion_32x_invalidate_code();
+ }
+ 
++/* Read-only cartridge preflight before the frontend changes header bytes. */
++RETRO_API int retro_kegarefusion_preserve_header_checksum(
++      const uint8_t *normalized, size_t size, unsigned calculated_checksum)
++{
++   return md_cart_preserve_header_checksum(normalized, size, calculated_checksum);
++}
++
+ RETRO_API unsigned retro_kegarefusion_core_features(void)
+ {
+    return kegarefusion_32x_features();

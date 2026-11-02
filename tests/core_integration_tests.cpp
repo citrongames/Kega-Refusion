@@ -709,6 +709,38 @@ void testChecksumFix(const QString& corePath) {
         require(host.frame() == bad, "checksum fix disable did not restore unmodified in-memory content");
         require(readFile(path) == original, "checksum fix disable rewrote source file");
     }
+    // Match a real protection-table key using our generated diagnostic program.
+    // The original header must survive both load and power reset with Auto-Fix ON.
+    auto protectedRom = rom;
+    protectedRom[0x18e] = protectedRom[0x18f] = 0;
+    quint16 sum = 0;
+    for (int i = 0x200; i < protectedRom.size(); i += 2)
+        sum = quint16(sum + (quint16(quint8(protectedRom[i])) << 8) + quint8(protectedRom[i+1]));
+    const int tail = protectedRom.size()-2;
+    const quint16 lastWord = (quint16(quint8(protectedRom.at(tail))) << 8) |
+        quint8(protectedRom.at(tail+1));
+    const quint16 adjustment = quint16(0x2288 - sum + lastWord);
+    protectedRom[tail] = char(adjustment >> 8); protectedRom[tail+1] = char(adjustment);
+    auto specialRom = rom;
+    specialRom.replace(0x180, 14, "GM T-574013-00"); // Pier Solar's product family.
+    require(specialRom.size() == rom.size(), "special-cartridge header changed ROM size");
+    for (const auto& [name, bytes] : std::vector<std::pair<QString,QByteArray>>{
+            {"protected.md", protectedRom}, {"protected.smd", smdRom(protectedRom)},
+            {"special.md", specialRom}}) {
+        const QString path = temp.path()+'/'+name; writeFile(path,bytes);
+        require(host.setAutoFixChecksum(false,error) && host.load(path,error), "protected fixture load failed");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        const auto originalFrame = host.frame();
+        const QRgb pixel = originalFrame.pixel(originalFrame.width()/2,originalFrame.height()/2);
+        require(qRed(pixel) > qGreen(pixel)+64, "protected diagnostic baseline did not retain original checksum");
+        require(host.setAutoFixChecksum(true,error) && host.hardReset(error), "protected power reset failed");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        require(host.frame() == originalFrame, "Auto-Fix changed recognized cartridge header on power reset");
+        require(host.load(path,error), "protected auto-fix load failed");
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        require(host.frame() == originalFrame, "Auto-Fix changed recognized cartridge header on load");
+        require(readFile(path) == bytes, "protected source ROM was modified");
+    }
     // A BIN without a valid MD header must not be patched merely due to its extension.
     QByteArray ambiguous = rom; ambiguous.replace(0x100,4,"TEST");
     const QString path = temp.path()+"/ambiguous.bin"; writeFile(path,ambiguous);
@@ -1008,9 +1040,9 @@ int main(int argc, char** argv) {
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
-                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm"))) &&
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -1018,6 +1050,10 @@ int main(int argc, char** argv) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));
             std::puts("network OPLL snapshot process passed"); return 0;
+        }
+        if (mode == QLatin1String("--checksum-only")) {
+            testChecksumFix(QString::fromLocal8Bit(argv[1]));
+            std::puts("checksum correction and recognized-cartridge preservation passed"); return 0;
         }
         if (mode == QLatin1String("--sms-fm")) {
             testSmsFm(QString::fromLocal8Bit(argv[1]));

@@ -45,6 +45,7 @@ struct LibretroHost::Api {
     bool (*input_polled)() = nullptr;
     bool (*get_cd_header)(void*, size_t) = nullptr;
     void (*invalidate_code)() = nullptr;
+    int (*preserve_header_checksum)(const std::uint8_t*, size_t, unsigned) = nullptr;
     using PapriumMusicCallback = std::uint64_t (*)(void*, unsigned, std::uint64_t,
                                                     std::int16_t*, std::size_t);
     void (*set_paprium_music)(PapriumMusicCallback, void*) = nullptr;
@@ -166,6 +167,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
     api_->cheat_set = reinterpret_cast<decltype(api_->cheat_set)>(library_.resolve("retro_cheat_set"));
     api_->invalidate_code = reinterpret_cast<decltype(api_->invalidate_code)>(library_.resolve("retro_kegarefusion_invalidate_code"));
+    api_->preserve_header_checksum = reinterpret_cast<decltype(api_->preserve_header_checksum)>(
+        library_.resolve("retro_kegarefusion_preserve_header_checksum"));
     api_->manage_bram = reinterpret_cast<decltype(api_->manage_bram)>(library_.resolve("kegarefusion_manage_bram"));
     api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
@@ -761,6 +764,12 @@ void LibretroHost::prepareCoreContent() {
     quint16 checksum = 0;
     for (qsizetype i = 0x200; i < normalized.size(); i += 2)
         checksum = quint16(checksum + (quint16(quint8(normalized[i])) << 8) + quint8(normalized[i+1]));
+    // Identification belongs to the core: a valid but nonstandard header checksum
+    // can select cartridge protection, banking or backup hardware. Older cores
+    // without this query keep the original header rather than lose that identity.
+    if (!api_->preserve_header_checksum || api_->preserve_header_checksum(
+            reinterpret_cast<const std::uint8_t*>(normalized.constData()),
+            size_t(normalized.size()), checksum)) return;
     const auto sourceOffset = [layout](qsizetype offset) {
         if (layout == Layout::Swapped) return offset ^ 1;
         if (layout == Layout::Smd) return 512 + (offset/0x4000)*0x4000 +

@@ -26,7 +26,7 @@ namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--p2-buttons=FRAME:COUNT:MASK]... [--gun=menacer|justifier] [--companion-pad]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--auto-fix-checksum] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--p2-buttons=FRAME:COUNT:MASK]... [--gun=menacer|justifier] [--companion-pad]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     Input input = Input::None;
     ControllerType gun = ControllerType::Pad;
     constexpr unsigned gunPlayer = 1;
-    bool companionPad = false;
+    bool companionPad = false, autoFixChecksum = false;
     bool inputSpecified = false, stateCheck = false, resetCheck = false, filterSpecified = false;
     int filter = 0, checkpoint = 0, extraStart = -1, extraPlay = -1, resetAt = -1;
     QString saveRawState, loadRawState;
@@ -173,6 +173,8 @@ int main(int argc, char** argv) {
             inputSpecified = true;
             if (option == QLatin1String("--start-pulses")) input = Input::StartPulses;
             else if (option == QLatin1String("--play")) input = Input::Play;
+        } else if (option == QLatin1String("--auto-fix-checksum")) {
+            autoFixChecksum = true;
         } else if (option == QLatin1String("--state-check")) {
             if (stateCheck) return usage(QStringLiteral("Duplicate --state-check option."));
             stateCheck = true;
@@ -266,6 +268,7 @@ int main(int argc, char** argv) {
         const auto cdImported = SegaCdBios::importDirectory(source, temp.path(), cdImportError);
         LibretroHost host(core, temp.path());
         host.message = [](const QString& text) { std::fprintf(stderr, "[core] %s\n", qPrintable(text)); };
+        require(host.setAutoFixChecksum(autoFixChecksum, error), QStringLiteral("Could not configure checksum correction."));
         require(host.setBlarggFilter(filter, error), QStringLiteral("Could not set filter: %1").arg(error));
         if (gun != ControllerType::Pad) {
             host.setControllerKind(gunPlayer,gun);

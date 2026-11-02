@@ -35,8 +35,9 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-32x-libretro.patch"
   "$root/tools/patches/genesis-plus-gx-paprium.patch"
   "$root/tools/patches/genesis-plus-gx-expansions-metrics.patch"
-  "$root/tools/patches/genesis-plus-gx-network-state.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-network-state.patch"
+  "$root/tools/patches/genesis-plus-gx-checksum-guard.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
