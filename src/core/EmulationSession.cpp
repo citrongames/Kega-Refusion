@@ -13,11 +13,82 @@
 #include "RewindBuffer.h"
 #include "FramePacer.h"
 #include "PerformanceMetrics.h"
+#include "VideoFrameGeometry.h"
+#include <QPainter>
+#include <cstring>
 #include <QFileInfo>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <thread>
+
+namespace {
+constexpr int LinkPreviewBytes = 48;
+struct LinkPreviewGeometry {
+    QSize size[2], native[2];
+    double aspect[2]{};
+};
+bool linkPreviewGeometry(const QByteArray& bytes, LinkPreviewGeometry& geometry) {
+    if(bytes.size()!=LinkPreviewBytes)return false;
+    for(int i=0;i<2;++i) {
+        const char* data=bytes.constData()+24*i;
+        geometry.size[i]=QSize(qFromBigEndian<quint32>(data),qFromBigEndian<quint32>(data+4));
+        geometry.native[i]=QSize(qFromBigEndian<quint32>(data+8),qFromBigEndian<quint32>(data+12));
+        const quint64 bits=qFromBigEndian<quint64>(data+16);
+        std::memcpy(&geometry.aspect[i],&bits,sizeof(bits));
+        if(!VideoFrameGeometry::validSize(geometry.size[i]) || !VideoFrameGeometry::validSize(geometry.native[i]) ||
+            !std::isfinite(geometry.aspect[i]) || geometry.aspect[i]<=0 || geometry.aspect[i]>8)return false;
+    }
+    return geometry.size[0].height()+geometry.size[1].height()<=4096;
+}
+QImage combineLinkPreview(const QImage& first,double firstAspect,const QImage& second,double secondAspect,QByteArray& geometry) {
+    geometry.clear();
+    if(first.isNull() || second.isNull())return {};
+    QImage combined(std::max(first.width(),second.width()),first.height()+second.height(),QImage::Format_RGB32);
+    if(combined.isNull() || combined.sizeInBytes()>64*1024*1024)return {};
+    combined.fill(Qt::black);
+    { QPainter painter(&combined);painter.drawImage(0,0,first);painter.drawImage(0,first.height(),second); }
+    geometry.resize(LinkPreviewBytes);
+    const QImage* frames[]={&first,&second};
+    const double aspects[]={firstAspect,secondAspect};
+    for(int i=0;i<2;++i) {
+        char* data=geometry.data()+24*i;
+        const auto native=VideoFrameGeometry::nativeSize(*frames[i]);
+        qToBigEndian(quint32(frames[i]->width()),data);qToBigEndian(quint32(frames[i]->height()),data+4);
+        qToBigEndian(quint32(native.width()),data+8);qToBigEndian(quint32(native.height()),data+12);
+        quint64 bits;std::memcpy(&bits,&aspects[i],sizeof(bits));qToBigEndian(bits,data+16);
+    }
+    return combined;
+}
+QImage selectLinkPreview(const QImage& image,const QByteArray& bytes,int role,double& aspect) {
+    if(bytes.isEmpty())return image;
+    LinkPreviewGeometry geometry;
+    if(!linkPreviewGeometry(bytes,geometry) || image.width()!=std::max(geometry.size[0].width(),geometry.size[1].width()) ||
+        image.height()!=geometry.size[0].height()+geometry.size[1].height())return {};
+    const int index=role==2?1:0;
+    QImage selected=image.copy(QRect(QPoint(0,index?geometry.size[0].height():0),geometry.size[index]));
+    VideoFrameGeometry::setNativeSize(selected,geometry.native[index]);aspect=geometry.aspect[index];return selected;
+}
+QByteArray encodeRewindPreview(const QImage& image,QByteArray& geometry) {
+    QByteArray bytes;
+    if(image.isNull())return bytes;
+    { QBuffer buffer(&bytes);buffer.open(QIODevice::WriteOnly);image.save(&buffer,"PNG"); }
+    if(bytes.size()<=60*1024)return bytes;
+    QImage smaller;
+    if(!geometry.isEmpty()) {
+        double firstAspect=1,secondAspect=1;
+        const auto first=selectLinkPreview(image,geometry,1,firstAspect),second=selectLinkPreview(image,geometry,2,secondAspect);
+        auto firstSmall=first.scaled(160,120,Qt::KeepAspectRatio,Qt::FastTransformation);
+        auto secondSmall=second.scaled(160,120,Qt::KeepAspectRatio,Qt::FastTransformation);
+        VideoFrameGeometry::setNativeSize(firstSmall,VideoFrameGeometry::nativeSize(first));
+        VideoFrameGeometry::setNativeSize(secondSmall,VideoFrameGeometry::nativeSize(second));
+        smaller=combineLinkPreview(firstSmall,firstAspect,secondSmall,secondAspect,geometry);
+    } else smaller=image.scaled(320,240,Qt::KeepAspectRatio,Qt::FastTransformation);
+    bytes.clear();QBuffer buffer(&bytes);buffer.open(QIODevice::WriteOnly);smaller.save(&buffer,"JPEG",65);
+    if(bytes.size()>60*1024)bytes.clear();
+    return bytes;
+}
+}
 
 EmulationSession::EmulationSession(QString corePath, QString dataPath, QObject* parent)
     : QThread(parent), corePath_(std::move(corePath)), dataPath_(std::move(dataPath)) {
@@ -201,6 +272,7 @@ bool EmulationSession::isNetworkMomentaryRelease(const QByteArray& bytes) {
     return isNetworkMomentaryCommand(bytes) && QJsonDocument::fromJson(bytes).object().value("value").toInt()==0;
 }
 void EmulationSession::setNetworkMode(int mode,const QString& scope) {
+    if(mode==0 && networkLinkCableDesired_.exchange(false))networkLinkCableRevision_.fetch_add(1);
     if (networkMode_.exchange(mode) != mode) {
         networkFastRequested_.store(false);
         networkRewindRequested_.store(false);
@@ -208,6 +280,20 @@ void EmulationSession::setNetworkMode(int mode,const QString& scope) {
     }
     networkWaiting_.store(mode==2);
     enqueue({Type::NetMode,scope,mode});
+}
+void EmulationSession::setNetworkRole(int role) {
+    role=std::clamp(role,0,2);
+    if(networkRole_.exchange(role)==role)return;
+    enqueue({Type::NetRole,{},role});
+}
+void EmulationSession::setNetworkLinkCableEnabled(bool enabled) {
+    if(networkLinkCableDesired_.exchange(enabled)!=enabled)networkLinkCableRevision_.fetch_add(1);
+    std::lock_guard<std::mutex> lock(mutex_);
+    for(auto command=commands_.rbegin();command!=commands_.rend();++command) {
+        if(command->type==Type::NetMode || command->type==Type::Load || command->type==Type::Close)break;
+        if(command->type==Type::NetLinkCable){command->value=enabled?1:0;return;}
+    }
+    if(commands_.size()<2048)commands_.push_back({Type::NetLinkCable,{},enabled?1:0});
 }
 void EmulationSession::receiveNetworkSlots(unsigned mask) {
     if(networkMode_.load()==2)enqueue({Type::NetSlots,{},int(mask&0x3ff)});
@@ -219,7 +305,7 @@ void EmulationSession::closeNetworkGame() {
 void EmulationSession::requestNetworkSnapshot() { enqueue({Type::NetSnapshot,{}}); }
 void EmulationSession::receiveNetworkSnapshot(const QByteArray& bytes) {
     if(bytes.size()>128*1024*1024) return;
-    Command c{Type::NetReceiveState,{}};c.bytes=bytes;enqueue(std::move(c));
+    Command c{Type::NetReceiveState,{}};c.bytes=bytes;c.requestId=networkLinkCableRevision_.load();enqueue(std::move(c));
 }
 void EmulationSession::receiveNetworkRewindPreview(const QByteArray& bytes) {
     if(networkMode_.load()!=2 || bytes.size()<4 || bytes.size()>64*1024)return;
@@ -365,28 +451,23 @@ void EmulationSession::run() {
     QJsonArray networkRoster;
     bool networkStepAnnounced=false, frameRequested=false;
     int networkMode=0, loadedArchiveIndex=-1;
+    bool networkLinkCableRequested=false;
     unsigned networkSlots=0;
     quint64 networkEpoch=0, networkPosition=0;
     bool networkDirty=false, networkReady=false, networkRemoteRewinding=false;
     QJsonObject lastNetworkConfiguration;
     qint64 nextNetworkRewind=0,lastNetworkRewindRemaining=-1;
     QImage networkRewindImage;
+    QByteArray networkRewindLinkPreview;
     double networkRewindAspect=4.0/3.0;
     auto networkRewindPreview=[&](qint64 remaining,qint64 total) {
         if(networkMode!=1 || networkRoster.size()<2 || networkPreviewPending_.exchange(true))return false;
+        QByteArray geometry=networkRewindLinkPreview;
+        const auto preview=encodeRewindPreview(networkRewindImage,geometry);
         QJsonObject metadata{{"epoch",QString::number(networkEpoch)},
             {"remaining",remaining},{"total",total},{"aspect",networkRewindAspect}};
+        if(!geometry.isEmpty())metadata.insert("linkPreview",QString::fromLatin1(geometry.toBase64()));
         const auto json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
-        QByteArray preview;
-        if(!networkRewindImage.isNull()) {
-            QBuffer buffer(&preview);buffer.open(QIODevice::WriteOnly);
-            networkRewindImage.save(&buffer,"PNG");
-            if(preview.size()+json.size()+4>64*1024) {
-                preview.clear();buffer.seek(0);
-                networkRewindImage.scaled(320,240,Qt::KeepAspectRatio,Qt::FastTransformation).save(&buffer,"JPEG",80);
-            }
-        }
-        if(preview.size()+json.size()+4>64*1024)preview.clear();
         QByteArray packet;packet.reserve(4+json.size()+preview.size());
         const auto size=qToBigEndian(quint32(json.size()));packet.append(reinterpret_cast<const char*>(&size),4);
         packet+=json;packet+=preview;emit networkRewindPreviewReady(packet);return true;
@@ -412,10 +493,17 @@ void EmulationSession::run() {
         QJsonObject metadata{{"epoch",QString::number(networkEpoch)},{"configuration",configuration},{"roster",networkRoster},
             {"paused",paused},{"fast",fastForward_.load()},{"factor",fastForwardFactor_.load()},
             {"rewinding",rewind_.load()},{"rewindRemaining",rewindLastProgressMs},{"rewindTotal",rewindTotalMs},{"slots",int(host.occupiedStateSlots())}};
-        if(!host.frame().isNull()) {
-            QByteArray preview; QBuffer buffer(&preview); buffer.open(QIODevice::WriteOnly);
-            if((!networkRewindImage.isNull()?networkRewindImage:host.frame()).save(&buffer,"PNG") && preview.size()<=2*1024*1024) {
-                metadata.insert("image",QString::fromLatin1(preview.toBase64())); metadata.insert("aspect",!networkRewindImage.isNull()?networkRewindAspect:host.aspectRatio());
+        QImage snapshotImage=!networkRewindImage.isNull()?networkRewindImage:host.frame();
+        QByteArray snapshotGeometry=networkRewindLinkPreview;
+        if(host.linkCableEnabled() && networkRewindImage.isNull())
+            snapshotImage=combineLinkPreview(host.frameForLinkRole(1),host.aspectRatioForLinkRole(1),
+                host.frameForLinkRole(2),host.aspectRatioForLinkRole(2),snapshotGeometry);
+        if(!snapshotImage.isNull()) {
+            QByteArray preview;QBuffer buffer(&preview);buffer.open(QIODevice::WriteOnly);
+            if(snapshotImage.save(&buffer,"PNG") && preview.size()<=2*1024*1024) {
+                metadata.insert("image",QString::fromLatin1(preview.toBase64()));
+                metadata.insert("aspect",!networkRewindImage.isNull()?networkRewindAspect:host.aspectRatio());
+                if(!snapshotGeometry.isEmpty())metadata.insert("linkPreview",QString::fromLatin1(snapshotGeometry.toBase64()));
             }
         }
         const auto json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
@@ -510,7 +598,16 @@ void EmulationSession::run() {
         return wrapped;
     };
     auto restoreHistory = [&](const QByteArray& packed, QString& error) {
-        if(networkMode && packed.startsWith("KRGGORW1"))return host.restoreMovieState(packed.mid(8),error,true);
+        if(networkMode && packed.startsWith("KRGGORW1")) {
+            networkRewindLinkPreview.clear();return host.restoreMovieState(packed.mid(8),error,true);
+        }
+        if(networkMode && packed.startsWith("KRGGORW2")) {
+            LinkPreviewGeometry geometry;
+            const auto bytes=packed.mid(8,LinkPreviewBytes);
+            if(packed.size()<=8+LinkPreviewBytes || !linkPreviewGeometry(bytes,geometry))return false;
+            if(!host.restoreMovieState(packed.mid(8+LinkPreviewBytes),error,true))return false;
+            networkRewindLinkPreview=bytes;return true;
+        }
         QByteArray state = packed, progress;
         if (packed.startsWith("KRACHRW1")) {
             if (packed.size() < 16) return false;
@@ -527,8 +624,16 @@ void EmulationSession::run() {
         if(networkMode==1) {
             NetRollbackSession::RewindFrame frame;
             while(networkTimeline.takeConfirmedHistory(frame)) {
-                QByteArray packed("KRGGORW1",8);packed.reserve(8+frame.state.size());packed+=frame.state;
-                if(!history.capture(packed,frame.image,frame.aspect))return false;
+                QImage image=frame.image;QByteArray geometry;
+                if(host.linkCableEnabled()) {
+                    // Only confirmed history checkpoints retain both console previews.
+                    if(frame.secondImage.isNull())continue;
+                    image=combineLinkPreview(frame.image,frame.aspect,frame.secondImage,frame.secondAspect,geometry);
+                    if(image.isNull())return false;
+                }
+                QByteArray packed(geometry.isEmpty()?"KRGGORW1":"KRGGORW2",8);
+                packed.reserve(8+geometry.size()+frame.state.size());packed+=geometry;packed+=frame.state;
+                if(!history.capture(packed,image,frame.aspect))return false;
             }
             return true;
         }
@@ -588,10 +693,17 @@ void EmulationSession::run() {
             }
             switch (command.type) {
             case Type::NetMode: {
+                networkTimeline.stop();
                 if(movie.active() && !movie.finish(false,error)) {networkMode_.store(networkMode);emit networkModeFailed(error);break;}
                 if(command.value==0) {
                     // Do not allow a later offline unload to write the online battery into solo saves.
                     if(networkMode && host.loaded()) { host.unload(); loaded_.store(false); emit gameClosed(); }
+                    if(!host.setLinkCableEnabled(false,error))emit actionNotice(error);
+                    networkLinkCableRequested=false;
+                    {
+                        std::lock_guard<std::mutex> lock(videoMutex_);
+                        latestFrame_={};videoPending_=false;latestAspect_=4.0/3.0;
+                    }
                     host.restoreMovieConfiguration(error);
                     if(!host.setNetplayStorage({},error))emit errorOccurred(error);
                 } else if(!host.setNetplayStorage(command.path,error)) {
@@ -599,16 +711,51 @@ void EmulationSession::run() {
                     if(!host.loaded())emit gameClosed();
                     emit networkModeFailed(error);break;
                 }
+                if(command.value==1 && !host.setLinkCableEnabled(networkLinkCableRequested,error)) {
+                    networkLinkCableRequested=host.linkCableEnabled();emit actionNotice(error);
+                }
+                host.setLinkPresentationRole(networkRole_.load());
+                if(networkLinkCableDesired_.load()==networkLinkCableRequested)emit networkLinkCableChanged(host.linkCableEnabled());
                 emit movieHardwareChanged({});
                 networkMode=command.value; networkReady=networkMode==1; networkDirty=networkMode==1;
                 networkRoster=networkMode==1?QJsonArray{QJsonObject{{"id","0"},{"role",networkRole_.load()}}}:QJsonArray{};
-                networkEpoch=networkPosition=0; networkRemoteRewinding=false;rewindStatus(false);networkRewindImage={}; networkTimeline.stop(); networkStepAnnounced=false; frameRequested=false; lastNetworkConfiguration={};
+                networkEpoch=networkPosition=0; networkRemoteRewinding=false;rewindStatus(false);networkRewindImage={};networkRewindLinkPreview.clear(); networkTimeline.stop(); networkStepAnnounced=false; frameRequested=false; lastNetworkConfiguration={};
                 achievementSuppressed=networkMode!=0;
                 achievements.unloadGame(); configureAchievements();
                 if(!networkMode && host.loaded()) loadAchievements();
                 clearHistory(); clearAudio(); fastForward_.store(false); rewind_.store(false);
                 pacer.reset(nowNs());
                 if(networkMode && host.loaded()) emit networkGameSource(host.gamePath(),loadedArchiveIndex);
+                break;
+            }
+            case Type::NetRole:
+                host.setLinkPresentationRole(command.value);
+                clearAudio();
+                if(host.loaded() && !host.frame().isNull() && networkRewindImage.isNull())publishVideo(host.frame(),host.aspectRatio());
+                break;
+            case Type::NetLinkCable: {
+                const bool requested=command.value!=0;
+                networkLinkCableRequested=requested;
+                if(networkMode!=1)break; // Clients apply hardware atomically with the authenticated snapshot.
+                if(host.linkCableEnabled()!=networkLinkCableRequested) {
+                    networkTimeline.stop();networkReady=false;
+                    if(!host.setLinkCableEnabled(networkLinkCableRequested,error)) {
+                        networkLinkCableRequested=host.linkCableEnabled();emit actionNotice(error);
+                    }
+                    host.setLinkPresentationRole(networkRole_.load());
+                    networkRewindImage={};networkRewindLinkPreview.clear();networkRemoteRewinding=false;
+                    rewind_.store(false);rewindStatus(false);frameRequested=false;networkStepAnnounced=false;
+                    clearHistory();clearAudio();resetMetrics();pacer.reset(nowNs());
+                    networkDirty=true;lastNetworkConfiguration={};
+                    loaded_.store(host.loaded());
+                    if(!host.loaded())emit gameClosed();
+                    if(host.loaded()) {
+                        emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                        if(!host.frame().isNull())publishVideo(host.frame(),host.aspectRatio());
+                    }
+                }
+                networkDirty=true; // Readiness was cleared by the lobby even when requests coalesced.
+                if(networkLinkCableDesired_.load()==requested)emit networkLinkCableChanged(host.linkCableEnabled());
                 break;
             }
             case Type::NetSnapshot: if(networkMode==1) networkDirty=true; break;
@@ -635,11 +782,23 @@ void EmulationSession::run() {
                         const auto state=LibretroHost::unpackNetworkState(b.mid(4+n));
                         if(epochValid && epoch && !state.isEmpty()) {
                             const auto current=host.movieConfiguration();
-                            if(host.networkCompatibility().isEmpty() || config.value("networkCompatibility").toString()!=QString::fromLatin1(host.networkCompatibility().toHex()) || config.value("coreVersion")!=current.value("coreVersion"))
+                            if(command.requestId!=networkLinkCableRevision_.load() || config.value("linkCable").toBool()!=networkLinkCableDesired_.load()) {
+                                emit networkSnapshotDiscarded();break;
+                            }
+                            if(config.value("coreVersion")!=current.value("coreVersion"))
                                 error=QStringLiteral("Для онлайн-игры нужны одинаковые версии Kega Refusion и совместимые ядра.");
                             else {
-                                ok=config==lastNetworkConfiguration || host.prepareNetwork(config,error);
+                                networkTimeline.stop();networkReady=false;
+                                const bool prepared=config==lastNetworkConfiguration;
+                                lastNetworkConfiguration={};
+                                ok=prepared || host.prepareNetwork(config,error);
+                                if(ok && (host.networkCompatibility().isEmpty() || config.value("networkCompatibility").toString()!=QString::fromLatin1(host.networkCompatibility().toHex()))) {
+                                    error=QStringLiteral("Для онлайн-игры нужны одинаковые версии Kega Refusion и совместимые ядра.");ok=false;
+                                }
                                 if(ok) ok=host.restoreNetworkState(state,error);
+                                if(ok && (command.requestId!=networkLinkCableRevision_.load() || config.value("linkCable").toBool()!=networkLinkCableDesired_.load())) {
+                                    emit networkSnapshotDiscarded();break;
+                                }
                                 if(ok) {
                                     networkRoster=meta.value("roster").toArray();
                                     ok=networkTimeline.start(host,epoch,networkRoster,networkPeerId_.load(),
@@ -648,6 +807,8 @@ void EmulationSession::run() {
                             }
                             if(ok) {
                                 lastNetworkConfiguration=config; networkEpoch=epoch; networkPosition=0;
+                                host.setLinkPresentationRole(networkRole_.load());
+                                if(config.value("linkCable").toBool()==networkLinkCableDesired_.load())emit networkLinkCableChanged(host.linkCableEnabled());
                                 networkReady=true; networkWaiting_.store(false); frameRequested=false; networkStepAnnounced=false;
                                 paused=meta.value("paused").toBool();
                                 networkRemoteRewinding=meta.value("rewinding").toBool();
@@ -664,7 +825,9 @@ void EmulationSession::run() {
                                 QBuffer imageBuffer(&preview);imageBuffer.open(QIODevice::ReadOnly);
                                 QImageReader reader(&imageBuffer,"PNG");const auto size=reader.size();
                                 if(size.isValid()&&size.width()<=2048&&size.height()<=2048) {
-                                    const auto image=reader.read();if(!image.isNull())publishVideo(image,meta.value("aspect").toDouble(4.0/3.0));
+                                    const auto image=reader.read();double aspect=meta.value("aspect").toDouble(4.0/3.0);
+                                    const auto selected=selectLinkPreview(image,QByteArray::fromBase64(meta.value("linkPreview").toString().toLatin1()),networkRole_.load(),aspect);
+                                    if(!selected.isNull())publishVideo(selected,aspect);
                                 }
                                 }
                             }
@@ -689,8 +852,9 @@ void EmulationSession::run() {
                     QBuffer buffer(&preview);buffer.open(QIODevice::ReadOnly);QImageReader reader(&buffer);
                     const auto dimensions=reader.size();
                     if(dimensions.isValid() && dimensions.width()<=2048 && dimensions.height()<=2048) {
-                        const auto image=reader.read();const double aspect=meta.value("aspect").toDouble(4.0/3.0);
-                        if(!image.isNull() && std::isfinite(aspect) && aspect>0 && aspect<=8)publishVideo(image,aspect);
+                        const auto image=reader.read();double aspect=meta.value("aspect").toDouble(4.0/3.0);
+                        const auto selected=selectLinkPreview(image,QByteArray::fromBase64(meta.value("linkPreview").toString().toLatin1()),networkRole_.load(),aspect);
+                        if(!selected.isNull() && std::isfinite(aspect) && aspect>0 && aspect<=8)publishVideo(selected,aspect);
                     }
                 }
                 break;
@@ -777,6 +941,7 @@ void EmulationSession::run() {
                 }
                 if (host.load(command.path,error,command.value,
                               command.archiveEntry ? &*command.archiveEntry : nullptr)) {
+                    host.setLinkPresentationRole(networkRole_.load());
                     loaded_.store(true); releaseButtons(); paused = false;
                     achievementSuppressed = networkMode!=0; configureAchievements();
                     if(!networkMode) loadAchievements();
@@ -818,7 +983,7 @@ void EmulationSession::run() {
                 paused = false;
                 fastForward_.store(false);
                 rewind_.store(false);
-                rewindLatched = false;networkRemoteRewinding=false;networkRewindImage={};
+                rewindLatched = false;networkRemoteRewinding=false;networkRewindImage={};networkRewindLinkPreview.clear();
                 fastLatched = false;
                 clearHistory();
                 rewindStatus(false);
@@ -1071,10 +1236,13 @@ void EmulationSession::run() {
                 rewindTotalMs = rewindAvailableMs();
                 rewindLastProgressMs = rewindTotalMs;
                 nextRewindProgressNs = nowNs() + 100000000;
-                networkRewindImage=host.frame();networkRewindAspect=host.aspectRatio();nextNetworkRewind=0;lastNetworkRewindRemaining=-1;
+                networkRewindImage=host.frame();networkRewindAspect=host.aspectRatio();networkRewindLinkPreview.clear();
+                if(host.linkCableEnabled())networkRewindImage=combineLinkPreview(host.frameForLinkRole(1),host.aspectRatioForLinkRole(1),
+                    host.frameForLinkRole(2),host.aspectRatioForLinkRole(2),networkRewindLinkPreview);
+                nextNetworkRewind=0;lastNetworkRewindRemaining=-1;
                 rewindStatus(true);
                 emit rewindProgress(rewindTotalMs,rewindTotalMs);
-            } else {rewindStatus(networkRemoteRewinding);networkRewindImage={};}
+            } else {rewindStatus(networkRemoteRewinding);networkRewindImage={};networkRewindLinkPreview.clear();}
         }
         if (reverse) {
             rewindStatus(true);
@@ -1084,8 +1252,10 @@ void EmulationSession::run() {
             if (history.stepBack(state,frame,aspect)) {
                 QString restoreError;
                 if (restoreHistory(state,restoreError)) {
-                    captureFrame = 0; publishVideo(frame,aspect); movieStatus();
-                    networkRewindImage=frame;networkRewindAspect=aspect;
+                    captureFrame = 0;
+                    const auto selected=selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
+                    if(!selected.isNull())publishVideo(selected,aspect);
+                    movieStatus();networkRewindImage=frame;networkRewindAspect=aspect;
                 } else {
                     clearHistory(); historyHealthy = false;
                     emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));

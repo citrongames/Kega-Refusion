@@ -1,0 +1,282 @@
+--- a/core/io_ctrl.c
++++ b/core/io_ctrl.c
+@@ -53,6 +53,71 @@
+ 
+ uint8 io_reg[0x10];
+ 
++/* Port-B cable model derived from Linn1024/zero-tolerance-link (2026).
++ * Same Genesis Plus GX noncommercial/source-distribution license as this file.
++ * No ROM-specific behavior: the two emulated games implement the protocol. */
++void (*io_link_yield)(void *user, unsigned int cycles) = 0;
++unsigned int io_link_deadline = 0;
++unsigned int io_link_irq_pending = 0;
++unsigned int io_link_vdp_irq = 0;
++static uint8 *io_link_peer = 0;
++static void *io_link_user = 0;
++static unsigned int io_link_previous_th = 1;
++
++static unsigned int io_link_peer_th(void)
++{
++  /* An input pin is pulled high; peer TR is crossed to local TH. */
++  return ((io_link_peer[2] | ~io_link_peer[5]) >> 5) & 1;
++}
++
++void io_link_sync(unsigned int cycles)
++{
++  unsigned int th, falling;
++  if (!io_link_yield) return;
++  io_link_yield(io_link_user, cycles);
++  th = io_link_peer_th();
++  falling = io_link_previous_th && !th;
++  io_link_previous_th = th;
++  if (falling && (io_reg[5] & 0x80) && !(io_reg[5] & 0x40) && (reg[11] & 8))
++  {
++    m68k_update_irq(2);
++    /* An edge observed in an I/O handler must be taken at the next instruction
++     * boundary, even when the scheduler had selected a longer time slice. */
++    io_link_deadline = cycles;
++  }
++}
++
++void io_link_connect(uint8 *peer, void (*yield)(void *, unsigned int), void *user)
++{
++  if (io_link_yield)
++  {
++    io_link_irq_pending = 0;
++    m68k_set_irq(io_link_vdp_irq);
++  }
++  io_link_peer = (peer && yield && system_hw == SYSTEM_MD) ? peer : 0;
++  io_link_user = io_link_peer ? user : 0;
++  io_link_yield = io_link_peer ? yield : 0;
++  io_link_deadline = 0;
++  io_link_irq_pending = 0;
++  io_link_vdp_irq = io_link_peer && ((m68k.int_level >> 8) >= 4) ? (m68k.int_level >> 8) : 0;
++  /* Connecting or restoring never invents a falling edge. */
++  io_link_previous_th = io_link_peer ? io_link_peer_th() : 1;
++}
++
++unsigned int io_link_latch(void)
++{
++  return io_link_previous_th | (io_link_irq_pending << 1) | (io_link_vdp_irq << 8);
++}
++
++void io_link_restore_latch(unsigned int latch)
++{
++  unsigned int level = (latch >> 8) & 7;
++  io_link_previous_th = latch & 1;
++  io_link_irq_pending = (latch >> 1) & 1;
++  io_link_vdp_irq = (level == 4 || level == 6) ? level : 0;
++  if (io_link_yield) m68k_set_irq(io_link_vdp_irq);
++}
++
+ uint8 region_code = REGION_USA;
+ 
+ static struct port_t
+@@ -290,6 +355,13 @@
+ 
+ void io_reset(void)
+ {
++  if (io_link_yield)
++  {
++    io_link_irq_pending = 0;
++    io_link_vdp_irq = 0;
++    io_link_previous_th = io_link_peer_th();
++    io_link_deadline = 0;
++  }
+   /* Reset I/O registers */
+   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+   {
+@@ -373,6 +445,8 @@
+ 
+ void io_68k_write(unsigned int offset, unsigned int data)
+ {
++  /* Synchronize before either cable output data or direction changes. */
++  if (io_link_yield && (offset == 2 || offset == 5)) io_link_sync(m68k.cycles);
+   switch (offset)
+   {
+     case 0x01:  /* Port A Data */
+@@ -454,6 +528,14 @@
+ 
+ unsigned int io_68k_read(unsigned int offset)
+ {
++  if (io_link_yield && (offset == 2 || offset == 5)) io_link_sync(m68k.cycles);
++  if (io_link_yield && offset == 2)
++  {
++    unsigned int peer = io_link_peer[2] | ~io_link_peer[5];
++    unsigned int pins = (peer & 15) | 16 | ((peer & 32) << 1) | ((peer & 64) >> 1);
++    unsigned int mask = 0x80 | io_reg[5];
++    return (io_reg[2] & mask) | (pins & ~mask & 0x7f);
++  }
+ #ifdef KEGAREFUSION_32X
+   if (offset == 1 || offset == 2) kegarefusion_input_polled = 1;
+ #endif
+--- a/core/io_ctrl.h
++++ b/core/io_ctrl.h
+@@ -54,6 +54,16 @@
+ extern uint8 io_reg[0x10];
+ extern uint8 region_code;
+ 
++/* Process-local cable scheduler; null callback preserves the ordinary core. */
++extern void (*io_link_yield)(void *user, unsigned int cycles);
++extern unsigned int io_link_deadline;
++extern unsigned int io_link_irq_pending;
++extern unsigned int io_link_vdp_irq;
++extern void io_link_sync(unsigned int cycles);
++extern void io_link_connect(uint8 *peer, void (*yield)(void *, unsigned int), void *user);
++extern unsigned int io_link_latch(void);
++extern void io_link_restore_latch(unsigned int latch);
++
+ /* Function prototypes */
+ extern void io_init(void);
+ extern void io_reset(void);
+--- a/core/m68k/m68kcpu.c
++++ b/core/m68k/m68kcpu.c
+@@ -3,6 +3,11 @@
+ /* ======================================================================== */
+ 
+ extern int vdp_68k_irq_ack(int int_level);
++extern void (*io_link_yield)(void *user, unsigned int cycles);
++extern unsigned int io_link_deadline;
++extern unsigned int io_link_irq_pending;
++extern unsigned int io_link_vdp_irq;
++extern void io_link_sync(unsigned int cycles);
+ 
+ #define m68ki_cpu m68k
+ #define MUL (7)
+@@ -201,7 +206,14 @@
+ void m68k_update_irq(unsigned int mask)
+ {
+   /* Update IRQ level */
+-  CPU_INT_LEVEL |= (mask << 8);
++  if (io_link_yield)
++  {
++    if (mask == 2) io_link_irq_pending = 1;
++    else io_link_vdp_irq |= mask;
++    /* IRQ priority is numeric: ORing external 2 and horizontal 4 invents 6. */
++    CPU_INT_LEVEL = (io_link_vdp_irq ? io_link_vdp_irq : (io_link_irq_pending ? 2 : 0)) << 8;
++  }
++  else CPU_INT_LEVEL |= (mask << 8);
+   
+ #ifdef LOGERROR
+   error("[%d(%d)][%d(%d)] m68k IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
+@@ -211,7 +223,12 @@
+ void m68k_set_irq(unsigned int int_level)
+ {
+   /* Set IRQ level */
+-  CPU_INT_LEVEL = int_level << 8;
++  if (io_link_yield)
++  {
++    io_link_vdp_irq = int_level;
++    CPU_INT_LEVEL = (int_level ? int_level : (io_link_irq_pending ? 2 : 0)) << 8;
++  }
++  else CPU_INT_LEVEL = int_level << 8;
+   
+ #ifdef LOGERROR
+   error("[%d(%d)][%d(%d)] m68k IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
+@@ -243,7 +260,12 @@
+     }
+ 
+     /* Set IRQ level */
+-    CPU_INT_LEVEL = int_level << 8;
++    if (io_link_yield)
++    {
++      io_link_vdp_irq = int_level;
++      CPU_INT_LEVEL = (int_level ? int_level : (io_link_irq_pending ? 2 : 0)) << 8;
++    }
++    else CPU_INT_LEVEL = int_level << 8;
+   }
+   
+ #ifdef LOGERROR
+@@ -262,9 +284,25 @@
+     return;
+   }
+ 
++  /* Synchronize before testing STOP so an external edge can wake the CPU. */
++  if (io_link_yield && m68k.cycles >= io_link_deadline) io_link_sync(m68k.cycles);
++
+   /* Check interrupt mask to process IRQ if needed */
+   m68ki_check_interrupts();
+ 
++  if (io_link_yield && CPU_STOPPED)
++  {
++    /* Idle time must also yield: skipping a whole line can hide a short pulse.
++     * A zero deadline selects instruction-granularity diagnostics (4*7 clocks). */
++    while (CPU_STOPPED && m68k.cycles < cycles)
++    {
++      unsigned int next = io_link_deadline > m68k.cycles ? io_link_deadline : m68k.cycles + 28;
++      m68k.cycles = next < cycles ? next : cycles;
++      io_link_sync(m68k.cycles);
++      m68ki_check_interrupts();
++    }
++  }
++
+   /* Make sure we're not stopped */
+   if (CPU_STOPPED)
+   {
+@@ -284,6 +322,12 @@
+ 
+   while (m68k.cycles < cycles)
+   {
++    if (io_link_yield && m68k.cycles >= io_link_deadline)
++    {
++      io_link_sync(m68k.cycles);
++      m68ki_check_interrupts();
++      if (m68k.cycles >= cycles) break;
++    }
+     /* Set tracing according to T1. */
+     m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
+ 
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -1529,6 +1529,13 @@
+ 
+ int vdp_68k_irq_ack(int int_level)
+ {
++  if (io_link_yield && int_level == 2)
++  {
++    /* A cable acknowledge must not clear a pending HINT or VINT. */
++    io_link_irq_pending = 0;
++    m68k_set_irq(io_link_vdp_irq);
++    return M68K_INT_ACK_AUTOVECTOR;
++  }
+ #ifdef LOGVDP
+   error("[%d(%d)][%d(%d)] INT Level %d ack (%x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE,int_level, m68k_get_reg(M68K_REG_PC));
+ #endif
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3621,6 +3621,35 @@
+    return md_cart_preserve_header_checksum(normalized, size, calculated_checksum);
+ }
+ 
++/* Linked instances remain isolated core modules, owned by one emulation thread.
++ * These pointers/callbacks are process-local and never enter native state data. */
++RETRO_API uint8_t *retro_kegarefusion_link_io(void)
++{
++   return io_reg;
++}
++
++RETRO_API void retro_kegarefusion_link_connect(uint8_t *peer,
++      void (*yield)(void *, unsigned), void *user)
++{
++   if (kegarefusion_32x_attached || system_hw != SYSTEM_MD) peer = NULL;
++   io_link_connect(peer, yield, user);
++}
++
++RETRO_API void retro_kegarefusion_link_deadline(unsigned cycles)
++{
++   io_link_deadline = cycles;
++}
++
++RETRO_API unsigned retro_kegarefusion_link_latch(void)
++{
++   return io_link_latch();
++}
++
++RETRO_API void retro_kegarefusion_link_restore_latch(unsigned latch)
++{
++   io_link_restore_latch(latch);
++}
++
+ RETRO_API unsigned retro_kegarefusion_core_features(void)
+ {
+    return kegarefusion_32x_features();

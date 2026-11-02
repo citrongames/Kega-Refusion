@@ -99,6 +99,7 @@ def main() -> None:
         Path("SDL2.dll"): sdl_root / "bin/SDL2.dll",
         Path("KegaRefusion.exe"): executable,
         Path("cores/genesis_plus_gx_libretro.dll"): core,
+        Path("cores/genesis_plus_gx_libretro_linkpeer.dll"): build / "core/genesis_plus_gx_libretro_linkpeer.dll",
         Path("plugins/platforms/qwindows.dll"): qt_root / "plugins/platforms/qwindows.dll",
         Path("plugins/imageformats/qjpeg.dll"): qt_root / "plugins/imageformats/qjpeg.dll",
         Path("plugins/tls/qschannelbackend.dll"): qt_root / "plugins/tls/qschannelbackend.dll",
@@ -156,6 +157,9 @@ def main() -> None:
     notices.mkdir()
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
+    shutil.copy2(root / "third_party/libco/LICENSE.txt", notices / "libco-LICENSE.txt")
+    shutil.copy2(root / "third_party/libco/README.txt", notices / "libco-PROVENANCE.txt")
+    shutil.copy2(root / "tools/patches/genesis-plus-gx-link-cable.README.md", notices / "LinkCable-PROVENANCE.md")
     shutil.copy2(openssl_root / "LICENSE.txt", notices / "OpenSSL-LICENSE.txt")
     paprium_notices = notices / "paprium"
     paprium_notices.mkdir()

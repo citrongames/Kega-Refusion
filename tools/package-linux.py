@@ -112,6 +112,7 @@ def main() -> None:
 
     copy(app, stage / "KegaRefusion")
     copy(core, stage / "cores/genesis_plus_gx_libretro.so")
+    copy(build / "core/genesis_plus_gx_libretro_linkpeer.so", stage / "cores/genesis_plus_gx_libretro_linkpeer.so")
     shutil.copytree(root / "languages", stage / "languages")
     qt_ru = Path("/usr/share/qt6/translations/qtbase_ru.qm")
     if qt_ru.is_file():
@@ -165,6 +166,9 @@ Windows и Linux x86_64 используют общий контракт сет�
     notice = stage / "licenses"
     for source, name in (
         (root / "THIRD_PARTY.md", "THIRD_PARTY.md"),
+        (root / "third_party/libco/LICENSE.txt", "libco-LICENSE.txt"),
+        (root / "third_party/libco/README.txt", "libco-PROVENANCE.txt"),
+        (root / "tools/patches/genesis-plus-gx-link-cable.README.md", "LinkCable-PROVENANCE.md"),
         (root / "third_party/GGPO-LICENSE.txt", "GGPO-LICENSE.txt"),
         (root / "third_party/GGPO-PROVENANCE.md", "GGPO-PROVENANCE.md"),
         (root / "third_party/Genesis-Plus-GX-LICENSE.txt", "Genesis-Plus-GX-LICENSE.txt"),

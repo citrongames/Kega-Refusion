@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "LibretroHost.h"
+#include "LibretroHostApi.h"
 #include <zlib.h>
 #include <QSysInfo>
 #include <rc_hash.h>
@@ -26,32 +27,7 @@
 #include <chrono>
 
 thread_local LibretroHost* LibretroHost::active_ = nullptr;
-struct LibretroHost::Api {
-#define API(name) decltype(&retro_##name) name = nullptr
-    API(init); API(deinit); API(api_version); API(get_system_info); API(get_system_av_info);
-    API(set_environment); API(set_video_refresh); API(set_audio_sample); API(set_audio_sample_batch);
-    API(set_input_poll); API(set_input_state); API(set_controller_port_device);
-    API(load_game); API(unload_game); API(run); API(reset); API(serialize_size); API(serialize);
-    API(unserialize); API(get_memory_data); API(get_memory_size);
-    API(cheat_reset); API(cheat_set);
-#undef API
-    void (*manage_bram)(bool) = nullptr;
-    bool (*get_bram)(unsigned, const void**, size_t*, const char**) = nullptr;
-    const char* (*state_abi)() = nullptr;
-    const char* (*recording_abi)() = nullptr;
-    const char* (*network_state_abi)() = nullptr;
-    unsigned (*features)() = nullptr;
-    unsigned (*system_hw)() = nullptr;
-    bool (*input_polled)() = nullptr;
-    bool (*get_cd_header)(void*, size_t) = nullptr;
-    void (*invalidate_code)() = nullptr;
-    int (*preserve_header_checksum)(const std::uint8_t*, size_t, unsigned) = nullptr;
-    using PapriumMusicCallback = std::uint64_t (*)(void*, unsigned, std::uint64_t,
-                                                    std::int16_t*, std::size_t);
-    void (*set_paprium_music)(PapriumMusicCallback, void*) = nullptr;
-    int (*paprium_active)() = nullptr;
-    int (*paprium_cd_active)() = nullptr;
-};
+
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
@@ -115,6 +91,8 @@ LibretroHost::LibretroHost(QString corePath, QString dataPath)
 }
 LibretroHost::~LibretroHost() {
     unload();
+    Activation scope(this);
+    if (scope.previous==this) scope.previous=nullptr;
     if (initialized_) api_->deinit();
     if (active_ == this) active_ = nullptr;
     LibretroHost* expected = this;
@@ -135,7 +113,7 @@ std::uint64_t LibretroHost::papriumMusicRead(void* user, unsigned track,
 }
 bool LibretroHost::initialize(QString& error) {
     if (initialized_) return true;
-    if (active_ && active_ != this) {
+    if (active_ && active_ != this && active_ != linkParent_) {
         error = Localization::text(QStringLiteral("В одном потоке может работать только одно ядро.")); return false;
     }
     for (const auto& name : {"bios", "saves", "states"}) {
@@ -151,6 +129,7 @@ bool LibretroHost::initialize(QString& error) {
     if (!coreHash.addData(&binary)) { error = Localization::text(QStringLiteral("Не удалось прочитать ядро.")); return false; }
     coreHash_ = coreHash.result();
     exactCoreHash_ = coreHash_;
+    if (linkParent_) library_.setLoadHints(QLibrary::ResolveAllSymbolsHint | QLibrary::DeepBindHint);
     if (!library_.load()) { error = library_.errorString(); return false; }
 #define RESOLVE(name) api_->name = reinterpret_cast<decltype(api_->name)>(library_.resolve("retro_" #name)); \
     if (!api_->name) { error = QStringLiteral("Ядро не поддерживает retro_" #name); return false; }
@@ -160,6 +139,14 @@ bool LibretroHost::initialize(QString& error) {
     RESOLVE(load_game); RESOLVE(unload_game); RESOLVE(run); RESOLVE(reset); RESOLVE(serialize_size); RESOLVE(serialize);
     RESOLVE(unserialize); RESOLVE(get_memory_data); RESOLVE(get_memory_size);
 #undef RESOLVE
+    api_->link_io = reinterpret_cast<decltype(api_->link_io)>(library_.resolve("retro_kegarefusion_link_io"));
+    api_->link_connect = reinterpret_cast<decltype(api_->link_connect)>(library_.resolve("retro_kegarefusion_link_connect"));
+    api_->link_deadline = reinterpret_cast<decltype(api_->link_deadline)>(library_.resolve("retro_kegarefusion_link_deadline"));
+    api_->link_latch = reinterpret_cast<decltype(api_->link_latch)>(library_.resolve("retro_kegarefusion_link_latch"));
+    api_->link_restore_latch = reinterpret_cast<decltype(api_->link_restore_latch)>(library_.resolve("retro_kegarefusion_link_restore_latch"));
+    api_->link_audio_size = reinterpret_cast<decltype(api_->link_audio_size)>(library_.resolve("retro_kegarefusion_link_audio_size"));
+    api_->link_audio_save = reinterpret_cast<decltype(api_->link_audio_save)>(library_.resolve("retro_kegarefusion_link_audio_save"));
+    api_->link_audio_load = reinterpret_cast<decltype(api_->link_audio_load)>(library_.resolve("retro_kegarefusion_link_audio_load"));
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
     api_->input_polled = reinterpret_cast<decltype(api_->input_polled)>(library_.resolve("retro_kegarefusion_input_polled"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
@@ -194,7 +181,7 @@ bool LibretroHost::initialize(QString& error) {
     }
     if (api_->api_version() != RETRO_API_VERSION) { error = Localization::text(QStringLiteral("Несовместимая версия API ядра.")); return false; }
     LibretroHost* expected = nullptr;
-    if (!coreOwner.compare_exchange_strong(expected, this)) {
+    if (linkParent_ ? coreOwner.load() != linkParent_ : !coreOwner.compare_exchange_strong(expected, this)) {
         error = Localization::text(QStringLiteral("В приложении уже работает экземпляр ядра.")); return false;
     }
     active_ = this;
@@ -262,7 +249,7 @@ void LibretroHost::setDiscIdentity() {
     romHash_ = digest(identity);
 }
 bool LibretroHost::refreshDiscFiles(QString& error) {
-    CoreFileSystem::clearVirtualFiles();
+    if (!linkParent_) CoreFileSystem::clearVirtualFiles();
     for (auto& disc : discs_) if (!DiscMedia::prepare(disc,dataPath_,error)) return false;
     return true;
 }
@@ -339,6 +326,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     // GPX still owns initialization/formatting; the host owns atomic writes.
     saveMemorySizes_.fill(0);
     loadCheats();
+    if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
     return true;
 }
 bool LibretroHost::setDiscEjected(bool ejected, QString& error) {
@@ -530,9 +518,11 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + Localization::text(QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл.")));
     loadCheats();
+    if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
     return true;
 }
 void LibretroHost::unload() {
+    stopLinkedPair();
     resetAchievementMemory();
     achievementDescriptorCount_ = 0;
     achievementConsoleCache_ = 0;
@@ -547,7 +537,7 @@ void LibretroHost::unload() {
     papriumMusic_.clear();
     loaded_ = false;
     contentNeeds32x_ = false;
-    CoreFileSystem::clearVirtualFiles();
+    if (!linkParent_) CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0;
     contentInfo_ = {}; contentInfoActive_ = false;
     content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); legacyGameKey_.clear(); contentName_.clear(); romHash_.clear();
@@ -558,6 +548,7 @@ void LibretroHost::unload() {
     batterySave_.clear(); cheats_.clear(); movieCheats_.clear(); movieCheatsActive_ = false; activeCheatCodes_.clear();
 }
 bool LibretroHost::frameInputPolled() const {
+    if (linkPeer_ && linkPresentationRole_==2) return linkPeer_->frameInputPolled();
     return loaded_ && api_->input_polled && api_->input_polled();
 }
 bool LibretroHost::supportsInputPollMetrics() const { return api_->input_polled != nullptr; }
@@ -582,6 +573,7 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
 }
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
+    if (linkPair_) { runLinkedFrame(renderVideo,captureAudio); return; }
     videoEnabled_ = renderVideo; audioEnabled_ = captureAudio;
     audio_.clear(); api_->run();
     // Serialization and normal calls retain accurate audio state: never set
@@ -589,6 +581,7 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     videoEnabled_ = audioEnabled_ = true;
 }
 void LibretroHost::reset() {
+    if (linkPeer_) { resetLinkedPair(); return; }
     if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
 }
 bool LibretroHost::isMasterSystem() const {
@@ -602,6 +595,13 @@ bool LibretroHost::isMasterSystem() const {
 bool LibretroHost::hardReset(QString& error, bool applyPending) {
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
+    std::array<QByteArray,2> peerBattery;
+    if (linkPeer_) for (unsigned i=0;i<2;++i) {
+        const auto size=linkPeer_->saveMemorySizes_[i];
+        const auto* bytes=linkPeer_->api_->get_memory_data(i?RETRO_MEMORY_RTC:RETRO_MEMORY_SAVE_RAM);
+        if (size && bytes && size<=size_t(maxStateSize)) peerBattery[i]=QByteArray(static_cast<const char*>(bytes),qsizetype(size));
+    }
+    stopLinkedPair();
     achievementHashCache_.clear();
     achievementConsoleCache_ = 0;
     if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
@@ -669,6 +669,13 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + Localization::text(QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл.")));
     applyCheats();
+    if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
+    if (linkPeer_) for (unsigned i=0;i<2;++i) {
+        if (!peerBattery[i].isEmpty() && size_t(peerBattery[i].size())==linkPeer_->saveMemorySizes_[i]) {
+            void* bytes=linkPeer_->api_->get_memory_data(i?RETRO_MEMORY_RTC:RETRO_MEMORY_SAVE_RAM);
+            if (bytes) std::memcpy(bytes,peerBattery[i].constData(),size_t(peerBattery[i].size()));
+        }
+    }
     return true;
 }
 Cheats::Platform LibretroHost::cheatPlatform() const {
@@ -712,6 +719,7 @@ void LibretroHost::applyCheats() {
     // after both enabling and disabling ROM patches on an active 32X.
     if (api_->invalidate_code) api_->invalidate_code();
     activeCheatCodes_ = std::move(codes);
+    if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->movieCheats_=cheats(); linkPeer_->movieCheatsActive_=true; linkPeer_->applyCheats(); }
 }
 bool LibretroHost::setCheats(const CheatList& entries, QString& error, bool* activeChanged) {
     error.clear();
@@ -786,6 +794,7 @@ bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value,
             return false;
         }
     }
+    if (linkPeer_) { Activation scope(linkPeer_.get()); if (!linkPeer_->setCoreOption(key,value,error)) return false; }
     optionOverrides_[key] = value;
     if (variables_[key] != value) {
         variables_[key] = value;
@@ -820,6 +829,7 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     return setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error);
 }
 void LibretroHost::setButtons(unsigned port, unsigned mask) {
+    if (linkPeer_ && port == 1) { Activation scope(linkPeer_.get()); linkPeer_->setButtons(0,mask); return; }
     if (port >= buttons_.size()) return;
     if (controllerKinds_[port] == ControllerType::Pad && !controllerSixButton_[port])
         mask &= ~((1u << 2) | (1u << 9) | (1u << 10) | (1u << 11)); // Mode/X/Y/Z.
@@ -839,6 +849,7 @@ bool LibretroHost::controllerSixButton(unsigned port) const {
     return port < controllerSixButton_.size() && controllerSixButton_[port];
 }
 bool LibretroHost::setControllerSixButton(unsigned port, bool sixButton) {
+    if (linkPeer_ && port==1) { Activation scope(linkPeer_.get()); linkPeer_->setControllerSixButton(0,sixButton); }
     if (port >= controllerSixButton_.size() || controllerSixButton_[port] == sixButton) return false;
     controllerSixButton_[port] = sixButton;
     buttons_[port] = 0;
@@ -863,6 +874,13 @@ void LibretroHost::applyControllerPorts(bool force) {
     if (!loaded_) return;
     const bool sms = contentExtension_ == "sms";
     const bool md = !sms && contentExtension_ != "gg" && contentExtension_ != "sg";
+    if (linkRequested_ || linkParent_) {
+        callbackPlayers_ = {{0,-1,-1}};
+        const unsigned pad = controllerSixButton_[0] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1) : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,0);
+        const std::array<unsigned,2> wanted{{pad,RETRO_DEVICE_NONE}};
+        for (unsigned i=0;i<2;++i) if (force || controllerDevices_[i]!=wanted[i]) { api_->set_controller_port_device(i,wanted[i]); controllerDevices_[i]=wanted[i]; }
+        return;
+    }
     std::array<unsigned,2> devices{{RETRO_DEVICE_NONE,RETRO_DEVICE_NONE}};
     callbackPlayers_.fill(-1);
     unsigned callback = 0;
@@ -904,10 +922,11 @@ void LibretroHost::applyControllerPorts(bool force) {
     }
 }
 double LibretroHost::aspectRatio() const {
+    if (linkPeer_ && linkPresentationRole_==2) return linkPeer_->aspectRatio();
     if (av_.geometry.aspect_ratio > 0) return av_.geometry.aspect_ratio;
     return av_.geometry.base_height ? double(av_.geometry.base_width) / av_.geometry.base_height : 4.0 / 3.0;
 }
-QSize LibretroHost::nativeVideoSize() const { return VideoFrameGeometry::nativeSize(frame_); }
+QSize LibretroHost::nativeVideoSize() const { return VideoFrameGeometry::nativeSize(frame()); }
 QByteArray LibretroHost::netplayDigest() const {
     if (!loaded_) return {};
     QCryptographicHash hash(QCryptographicHash::Sha256);
@@ -923,6 +942,7 @@ QByteArray LibretroHost::netplayDigest() const {
         if (api_->get_bram(i,&data,&size,&path) && data && size<=1024*1024)
             hash.addData(QByteArrayView(static_cast<const char*>(data),qsizetype(size)));
     }
+    if (linkPeer_) hash.addData(linkPeer_->netplayDigest());
     return hash.result();
 }
 QByteArray LibretroHost::unpackNetworkState(const QByteArray& packed) {
@@ -966,6 +986,7 @@ bool LibretroHost::setNetplayStorage(const QString& scope,QString& error) {
 }
 QByteArray LibretroHost::serialize() const {
     if (!loaded_) return {};
+    if (linkPeer_) return captureLinkedState();
     const size_t size = api_->serialize_size();
     if (!size || size > size_t(maxStateSize)) return {};
     QByteArray result(qsizetype(size), '\0');
@@ -973,20 +994,22 @@ QByteArray LibretroHost::serialize() const {
     return result;
 }
 bool LibretroHost::unserialize(const QByteArray& state) {
+    if (linkPeer_) return restoreLinkedState(state);
     if (!loaded_ || size_t(state.size()) != api_->serialize_size() ||
         !api_->unserialize(state.constData(), size_t(state.size()))) return false;
     applyControllerPorts();
     return true;
 }
-QString LibretroHost::statePath(int slot) const { return storageRoot() + "/states/" + gameKey_ + QStringLiteral(".slot%1.krs").arg(slot); }
+QString LibretroHost::statePath(int slot) const { return storageRoot() + "/states/" + gameKey_ + (linkRequested_ ? QStringLiteral(".link") : QString()) + QStringLiteral(".slot%1.krs").arg(slot); }
 QString LibretroHost::saveReadPath(const QString& directory, const QString& suffix) const {
     const QString prefix = storageRoot() + QLatin1Char('/') + directory + QLatin1Char('/');
-    const QString preferred = prefix + gameKey_ + suffix;
+    const QString linkSuffix=directory==QLatin1String("states")&&linkRequested_?QStringLiteral(".link"):QString();
+    const QString preferred = prefix + gameKey_ + linkSuffix + suffix;
     const QFileInfo existing(preferred);
     // A present but invalid new file must be reported, never masked by a legacy
     // fallback. No legacy source file is renamed, overwritten or removed.
     return !existing.exists() && !existing.isSymLink() && !legacyGameKey_.isEmpty()
-        ? prefix + legacyGameKey_ + suffix : preferred;
+        ? prefix + legacyGameKey_ + linkSuffix + suffix : preferred;
 }
 
 unsigned LibretroHost::occupiedStateSlots() const {
@@ -1023,7 +1046,7 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
     const auto coreSize = qFromBigEndian<quint32>(state.constData() + 8);
     const auto ramSize = qFromBigEndian<quint32>(state.constData() + 12);
     const auto rtcSize = qFromBigEndian<quint32>(state.constData() + 16);
-    if (coreSize != api_->serialize_size() || ramSize != saveMemorySizes_[0] || rtcSize != saveMemorySizes_[1] ||
+    if (coreSize != serializedSize() || ramSize != saveMemorySizes_[0] || rtcSize != saveMemorySizes_[1] ||
         quint64(coreSize) + ramSize + rtcSize + 20 != quint64(state.size())) return false;
     void* ram = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
     void* rtc = api_->get_memory_data(RETRO_MEMORY_RTC);
@@ -1081,7 +1104,7 @@ QByteArray LibretroHost::networkCompatibility() const {
     if (!loaded_ || !api_->network_state_abi) return {};
     const char* contract = api_->network_state_abi();
     if (!contract || !*contract) return {};
-    return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract));
+    return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) + (linkPeer_ ? QByteArrayLiteral(":md-link-v1") : QByteArray()));
 }
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
     const auto identity = networkCompatibility();
@@ -1114,7 +1137,7 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
             return state.mid(96,32) == hash.result();
         }();
     if (total != quint64(state.size()) || bramMask > 3 ||
-        sizes[0] != api_->serialize_size() || sizes[1] != saveMemorySizes_[0] ||
+        sizes[0] != serializedSize() || sizes[1] != saveMemorySizes_[0] ||
         sizes[2] != saveMemorySizes_[1] ||
         (bool(bramMask & 1u) != bool(sizes[3])) ||
         (bool(bramMask & 2u) != bool(sizes[4])) || !hashValid) {
@@ -1141,7 +1164,7 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     }
     const auto previous = serialize();
     if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи.")); return false; }
-    if (!api_->unserialize(state.constData()+128,size_t(sizes[0]))) {
+    if (!(linkPeer_ ? restoreLinkedState(state.mid(128,sizes[0]),false) : api_->unserialize(state.constData()+128,size_t(sizes[0])))) {
         if (!unserialize(previous)) error = Localization::text(QStringLiteral("Ядро отклонило состояние записи; восстановить прежнее состояние не удалось."));
         else error = Localization::text(QStringLiteral("Ядро отклонило состояние записи."));
         return false;
@@ -1180,6 +1203,7 @@ void LibretroHost::refreshRecordingIdentity() {
     }
     // Native serialization is platform/architecture dependent. The core's explicit
     // contract covers both the state layout and deterministic execution behavior.
+    if (linkRequested_ && !recordingAbi_.isEmpty()) recordingAbi_ += "-md-link-v1";
     recordingCoreHash_ = recordingAbi_.isEmpty() ? exactCoreHash_
         : digest(QByteArrayLiteral("KegaRefusion-recording-contract:") + recordingAbi_ + ':'
                  + QSysInfo::kernelType().toUtf8() + ':' + QSysInfo::buildAbi().toUtf8());
@@ -1279,6 +1303,7 @@ QString LibretroHost::achievementHash(QString& error) const {
     return achievementHashCache_;
 }
 uint32_t LibretroHost::readAchievementMemory(uint32_t address, uint8_t* buffer, uint32_t count) {
+    if (linkPeer_ && linkPresentationRole_==2) { Activation scope(linkPeer_.get()); return linkPeer_->readAchievementMemory(address,buffer,count); }
     if (!loaded_ || !buffer || !count) return 0;
     const unsigned console = achievementConsoleId();
     if (!console) return 0;
@@ -1406,6 +1431,7 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         cheatsJson.append(QJsonObject{{QStringLiteral("code"),entry.code},
             {QStringLiteral("description"),entry.description},{QStringLiteral("enabled"),entry.enabled}});
     return QJsonObject{{QStringLiteral("version"),2},
+        {QStringLiteral("linkCable"),linkRequested_},
         {QStringLiteral("gameIdentity"),QString::fromLatin1(game.toHex())},
         {QStringLiteral("coreIdentity"),QString::fromLatin1(recordingCoreHash_.toHex())},
         {QStringLiteral("coreBuild"),QString::fromLatin1(exactCoreHash_.toHex())},
@@ -1420,6 +1446,7 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         {QStringLiteral("bios"),movieBiosFingerprints()}};
 }
 bool LibretroHost::prepareNetwork(const QJsonObject& configuration,QString& error) {
+    if (!setLinkCableEnabled(configuration.value(QStringLiteral("linkCable")).toBool(false),error)) return false;
     const auto identity = networkCompatibility();
     if (identity.size() != 32 ||
         configuration.value(QStringLiteral("networkCompatibility")).toString() !=
@@ -1600,6 +1627,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         preMovieControllerKinds_ = controllerKinds_;
         movieConfigurationActive_ = true;
     }
+    linkRequested_ = configuration.value(QStringLiteral("linkCable")).toBool(false);
     optionOverrides_ = newOptions;
     for (const auto& [key,value] : newOptions) if (variables_[key] != value) {
         variables_[key] = value; variablesUpdated_ = true;
@@ -1669,6 +1697,7 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     return true;
 }
 QByteArray LibretroHost::stateCoreIdentity() const {
+    if (linkPeer_) return digest(coreHash_ + QByteArrayLiteral("md-link-state-v1"));
     // Ordinary MD/CD retain their stable GPX state identity. The attachment
     // has its own versioned state contract, independent of executable hashes.
     if (api_->paprium_cd_active && api_->paprium_cd_active())
@@ -1761,6 +1790,7 @@ bool LibretroHost::pollSaveRam(qint64 nowMs, QString& error) {
     return updateSaveRam(nowMs, false, error);
 }
 bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
+    if (linkParent_) return true;
     error.clear();
     if (!loaded_ || !saveRamWritable_ || moviePlayback_) return true;
     if (hasCdHardware()) {
@@ -1795,6 +1825,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
     return true;
 }
 bool LibretroHost::restoreSaveRam(QString& error) {
+    if (linkParent_) return true;
     if (isCd()) return true;
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];

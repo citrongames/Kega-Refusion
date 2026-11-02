@@ -44,8 +44,8 @@ struct NetRollbackSession::Impl {
     qsizetype queuedBytes = 0, stateBytes = 0;
     std::array<QByteArray, GGPO_MAX_PREDICTION_FRAMES + 2> states;
     std::array<int, GGPO_MAX_PREDICTION_FRAMES + 2> stateFrames{};
-    std::array<QImage, GGPO_MAX_PREDICTION_FRAMES + 2> images;
-    std::array<double, GGPO_MAX_PREDICTION_FRAMES + 2> aspects{};
+    std::array<QImage, GGPO_MAX_PREDICTION_FRAMES + 2> images, secondImages;
+    std::array<double, GGPO_MAX_PREDICTION_FRAMES + 2> aspects{}, secondAspects{};
     bool historyEnabled=false;
     int rollbackPosition=0,lastHistoryFrame=0;
     Send send;
@@ -64,8 +64,12 @@ struct NetRollbackSession::Impl {
             auto& slot=self.states[i];slot=std::move(state);self.stateBytes+=slot.size();
             self.stateFrames[i]=frame;
             if(self.historyEnabled && self.localId==0 && frame%2==0) {
-                self.images[i]=self.host->frame();self.aspects[i]=self.host->aspectRatio();
-                self.stateBytes+=self.images[i].sizeInBytes();
+                self.images[i]=self.host->frameForLinkRole(1);self.aspects[i]=self.host->aspectRatioForLinkRole(1);
+                if(self.host->linkCableEnabled()) {
+                    self.secondImages[i]=self.host->frameForLinkRole(2);
+                    self.secondAspects[i]=self.host->aspectRatioForLinkRole(2);
+                }
+                self.stateBytes+=self.images[i].sizeInBytes()+self.secondImages[i].sizeInBytes();
                 if(self.stateBytes>StateLimit)throw std::runtime_error("GGPO rewind previews exceed memory budget");
             }
             *buffer=reinterpret_cast<unsigned char*>(slot.data());*length=int(slot.size());*checksum=0;
@@ -83,8 +87,8 @@ struct NetRollbackSession::Impl {
     static bool log(char*,unsigned char*,int) { return true; }
     static void free(void* buffer) {
         for(size_t i=0;i<current->states.size();++i)if(current->states[i].constData()==buffer) {
-            current->stateBytes-=current->states[i].size()+current->images[i].sizeInBytes();
-            current->states[i].clear();current->images[i]={};return;
+            current->stateBytes-=current->states[i].size()+current->images[i].sizeInBytes()+current->secondImages[i].sizeInBytes();
+            current->states[i].clear();current->images[i]={};current->secondImages[i]={};return;
         }
     }
     MovieInput synchronize() {
@@ -147,7 +151,10 @@ void NetRollbackSession::stop() {
 void NetRollbackSession::setHistoryEnabled(bool enabled) {
     if(d->historyEnabled==enabled)return;
     d->historyEnabled=enabled;
-    if(!enabled)for(auto& image:d->images){d->stateBytes-=image.sizeInBytes();image={};}
+    if(!enabled)for(size_t i=0;i<d->images.size();++i) {
+        d->stateBytes-=d->images[i].sizeInBytes()+d->secondImages[i].sizeInBytes();
+        d->images[i]={};d->secondImages[i]={};
+    }
 }
 bool NetRollbackSession::takeConfirmedHistory(RewindFrame& output) {
     if(!d->session || !d->historyEnabled || d->localId!=0)return false;
@@ -159,7 +166,7 @@ bool NetRollbackSession::takeConfirmedHistory(RewindFrame& output) {
             index=int(i);earliest=d->stateFrames[i];
         }
     if(index<0)return false;
-    output={d->states[index],d->images[index],d->aspects[index]};d->lastHistoryFrame=earliest;return true;
+    output={d->states[index],d->images[index],d->aspects[index],d->secondImages[index],d->secondAspects[index]};d->lastHistoryFrame=earliest;return true;
 }
 bool NetRollbackSession::active() const {return d->session!=nullptr;}
 quint64 NetRollbackSession::position() const {return d->frame;}

@@ -51,6 +51,7 @@ private:
     void stopWaiting();
     void updateRoster();
     void announceContent();
+    void applyLinkCableConfiguration(bool enabled);
     void compareContent();
     void prepareSource(const QString&,int archiveIndex=-1);
     EmulationSession& session_;
@@ -72,6 +73,7 @@ private:
     bool active_ = false, hosting_ = false, stopping_ = false;
     bool connectionLost_=false, remoteConnectionWaiting_=false, connectionWaiting_=false;
     bool allowCommands_ = true, allowDownloads_ = false;
+    bool linkCable_ = false;
     bool gameReady_ = false, remoteGameOpen_ = false;
     QString invite_, inviteWithPassword_, gamePath_, gameName_, status_;
     QString joinInvite_, joinPassword_;
@@ -94,6 +96,7 @@ private:
     QByteArray incomingSnapshot_;
     qsizetype incomingSize_ = 0, pendingIncomingSize_=0;
     quint64 incomingEpoch_=0, applyingEpoch_=0, pendingIncomingEpoch_=0;
+    quint64 linkCableRevision_=0, applyingLinkCableRevision_=0;
     bool fileChunkExpected_=false;
     qint64 transferDone_ = 0, transferTotal_ = 0;
     bool downloading_ = false;

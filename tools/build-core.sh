@@ -30,3 +30,8 @@ if ! cmp -s "$source" "$target"; then
   staged=''
 fi
 echo "Core ready: $target"
+
+# A distinct module identity isolates the second console's native globals.
+# This is a build artifact, never a runtime copy of user content.
+peer="$out/genesis_plus_gx_libretro_linkpeer.$extension"
+if ! cmp -s "$target" "$peer"; then cp -p -- "$target" "$peer"; fi

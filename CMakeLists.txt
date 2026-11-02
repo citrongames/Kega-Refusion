@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.14.8 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.15.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -27,7 +27,10 @@ if(MSVC)
 else()
     target_compile_options(rom_archive PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
+add_library(kega_libco STATIC third_party/libco/amd64.c)
+target_include_directories(kega_libco PUBLIC third_party/libco)
+target_compile_definitions(kega_libco PRIVATE LIBCO_MP)
+add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/Cheats.cpp src/core/Cheats.h
     src/core/AchievementsClient.cpp src/core/AchievementsClient.h src/core/Achievements.h
     src/core/Mp3Stream.cpp src/core/Mp3Stream.h
@@ -44,7 +47,7 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/net/NetRollbackSession.cpp src/net/NetRollbackSession.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive kega_ggpo Qt6::Network)
+target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive kega_ggpo kega_libco Qt6::Network)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)
 target_include_directories(video_renderer PUBLIC src)
@@ -157,6 +160,8 @@ if(BUILD_TESTING)
     add_executable(achievements_client_tests tests/achievements_client_tests.cpp)
     target_link_libraries(achievements_client_tests PRIVATE core_host)
     add_test(NAME achievements_client_tests COMMAND achievements_client_tests)
+    add_executable(link_cable_probe tests/link_cable_probe.cpp)
+    target_link_libraries(link_cable_probe PRIVATE core_host)
     add_executable(movie_integration_tests tests/movie_integration_tests.cpp)
     target_link_libraries(movie_integration_tests PRIVATE core_host)
     add_executable(achievements_host_tests tests/achievements_host_tests.cpp)

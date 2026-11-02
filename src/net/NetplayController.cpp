@@ -27,6 +27,12 @@ int roleValue(const QString& n) { return n=="player1"?1:n=="player2"?2:0; }
 void append32(QByteArray& b,quint32 n) { n=qToBigEndian(n);b.append(reinterpret_cast<const char*>(&n),4); }
 void append64(QByteArray& b,quint64 n){n=qToBigEndian(n);b.append(reinterpret_cast<const char*>(&n),8);}
 QByteArray snapshotHeader(quint32 size,quint64 epoch) { QByteArray b(1,'\0');append32(b,size);append64(b,epoch);return b; }
+QJsonObject snapshotMetadata(const QByteArray& bytes) {
+    if(bytes.size()<8)return {};
+    const auto length=qFromBigEndian<quint32>(bytes.constData());
+    if(length>4*1024*1024 || quint64(length)+8>quint64(bytes.size()))return {};
+    return QJsonDocument::fromJson(bytes.mid(4,length)).object();
+}
 QString manifestId(const QByteArray& bytes) { const auto m=NetFileTransfer::Manifest::fromBytes(bytes); return m?QString::fromLatin1(m->id.toHex()):QString(); }
 }
 NetplayController::NetplayController(EmulationSession& session,const QString& dataPath,QSettings& settings,QWidget* parentWindow)
@@ -103,6 +109,15 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         if(!hosting_)return;
         allowDownloads_=yes;
         QMetaObject::invokeMethod(files_,[this,yes]{files_->setSharingEnabled(yes);});announceContent();refreshLobby();
+    });
+    connect(lobby_,&NetplayLobby::linkCableRequested,this,[this](bool enabled){
+        if(active_&&hosting_)applyLinkCableConfiguration(enabled);
+    });
+    connect(&session_,&EmulationSession::networkLinkCableChanged,this,[this](bool enabled){
+        if(!active_||!hosting_||linkCable_==enabled)return;
+        // A failed hardware change reports the mode that remains available.
+        // Reflect it once; this is not another request to the emulation thread.
+        linkCable_=enabled;++linkCableRevision_;announceContent();refreshLobby();
     });
     connect(lobby_,&NetplayLobby::downloadRomRequested,this,[this]{
         if(!active_ || hosting_ || !allowDownloads_ || manifest_.isEmpty() || downloading_)return;
@@ -200,9 +215,9 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         session_.acknowledgeNetworkSnapshot();
         if(!active_||!hosting_)return;
         snapshotRequested_=false;
-        if(state.size()<8)return;
-        const auto metadataLength=qFromBigEndian<quint32>(state.constData());
-        hostEpoch_=QJsonDocument::fromJson(state.mid(4,metadataLength)).object().value("epoch").toString().toULongLong();
+        const auto metadata=snapshotMetadata(state);
+        if(metadata.isEmpty()||metadata.value("configuration").toObject().value("linkCable").toBool()!=linkCable_)return;
+        hostEpoch_=metadata.value("epoch").toString().toULongLong();
         readyPeers_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();
         for(auto it=participants_.begin();it!=participants_.end();++it)if(it.key()&&it->value("matched").toBool()&&udpReadyPeers_.contains(it.key())&&!disconnectedAt_.contains(it.key())) {
             it->insert("readiness","syncing");queueSnapshot(it.key(),state);
@@ -210,12 +225,22 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         updateWaiting();refreshLobby();
     });
     connect(&session_,&EmulationSession::networkSnapshotApplied,this,[this](bool ok,const QString& error){
-        if(!active_||hosting_)return;
-        gameReady_=ok;
-        if(ok){status_=t("Игра синхронизирована");transport_.send(0,MessageKind::Control,json({{"op","snapshot-ready"},{"epoch",QString::number(applyingEpoch_)}}));}
+        if(!active_||hosting_||!applyingEpoch_)return;
+        const bool obsolete=applyingLinkCableRevision_!=linkCableRevision_;
+        gameReady_=ok&&!obsolete;
+        if(obsolete)session_.setNetworkWaiting(true);
+        else if(ok){status_=t("Игра синхронизирована");transport_.send(0,MessageKind::Control,json({{"op","snapshot-ready"},{"epoch",QString::number(applyingEpoch_)}}));}
         else {status_=error;emit notice(error);transport_.send(0,MessageKind::Control,json({{"op","sync-failed"}}));}
         applyingEpoch_=0;
         if(pendingIncomingEpoch_) {const auto size=pendingIncomingSize_;const auto epoch=pendingIncomingEpoch_;pendingIncomingEpoch_=0;pendingIncomingSize_=0;beginIncomingSnapshot(size,epoch);}
+        else if(obsolete)transport_.send(0,MessageKind::Control,json({{"op","resync"}}));
+        refreshLobby();
+    });
+    connect(&session_,&EmulationSession::networkSnapshotDiscarded,this,[this]{
+        if(!active_||hosting_||!applyingEpoch_)return;
+        applyingEpoch_=0;gameReady_=false;session_.setNetworkWaiting(true);
+        if(pendingIncomingEpoch_) {const auto size=pendingIncomingSize_;const auto epoch=pendingIncomingEpoch_;pendingIncomingEpoch_=0;pendingIncomingSize_=0;beginIncomingSnapshot(size,epoch);}
+        else transport_.send(0,MessageKind::Control,json({{"op","resync"}}));
         refreshLobby();
     });
     connect(&session_,&EmulationSession::networkResyncRequested,this,[this]{
@@ -295,7 +320,7 @@ void NetplayController::startHost(quint16 port,const QString& address,const QStr
         transport_.stop();emit notice(error);QMessageBox::warning(lobby_,t("Онлайн"),error);return;
     }
     rosterBytes_.clear();lastLobbyBytes_.clear();udpReadyPeers_.clear();
-    active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=true;
+    active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=true;linkCable_=false;
     QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(true);});
     storageId_=QString::fromLatin1(NetTransport::generateSecret().left(16).toHex());
     invitationKey_=options.inviteSecret;invitationPassword_=password;connectionId_=connectionId;
@@ -321,7 +346,7 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
     if(options.password.isEmpty())options.password=QUrlQuery(QUrl(invitation)).queryItemValue("password",QUrl::FullyDecoded);
     joinInvite_=invitation;joinPassword_=options.password;
     if(!transport_.join(options,&error)){QMessageBox::warning(lobby_,t("Онлайн"),error);return;}
-    active_=true;hosting_=false;remoteGameOpen_=false;localRole_=0;localId_=0;allowDownloads_=false;gameReady_=false;
+    active_=true;hosting_=false;remoteGameOpen_=false;localRole_=0;localId_=0;allowDownloads_=false;gameReady_=false;linkCable_=false;
     storageId_=QString::fromLatin1(options.inviteSecret.left(16).toHex());
     session_.setNetworkMode(2,storageId_);session_.setNetworkRole(0);
     inputTimer_.start();status_=t("Подключение…");emit activeChanged(true);showLobby();
@@ -338,7 +363,7 @@ void NetplayController::leaveSession(){
     QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(false);});
     participants_.clear();inputs_.clear();readyPeers_.clear();filePending_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();disconnectedAt_.clear();
     incomingSnapshot_.clear();manifest_.clear();localManifest_.clear();
-    hosting_=false;gameReady_=false;downloading_=false;snapshotRequested_=false;applyingEpoch_=incomingEpoch_=pendingIncomingEpoch_=0;incomingSize_=pendingIncomingSize_=0;fileChunkExpected_=false;stopping_=false;
+    hosting_=false;linkCable_=false;gameReady_=false;downloading_=false;snapshotRequested_=false;applyingEpoch_=incomingEpoch_=pendingIncomingEpoch_=0;linkCableRevision_=applyingLinkCableRevision_=0;incomingSize_=pendingIncomingSize_=0;fileChunkExpected_=false;stopping_=false;
     status_=t("Онлайн-сессия завершена");emit activeChanged(false);refreshLobby();lobby_->hide();
 }
 void NetplayController::onGameLoaded(const QString&){if(active_){gameReady_=hosting_;refreshLobby();}}
@@ -354,9 +379,25 @@ void NetplayController::prepareSource(const QString& path,int archiveIndex){
     const auto source=path;QMetaObject::invokeMethod(files_,[this,source,archiveIndex]{files_->prepare(source,archiveIndex);});
     status_=t("Проверка файлов игры…");refreshLobby();
 }
+void NetplayController::applyLinkCableConfiguration(bool enabled){
+    if(!active_||linkCable_==enabled)return;
+    linkCable_=enabled;++linkCableRevision_;
+    // A hardware transition starts a new GGPO timeline. Drop transfers for the
+    // previous configuration rather than retaining another pair's full state.
+    readyPeers_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();
+    incomingSnapshot_.clear();incomingSize_=0;pendingIncomingSize_=0;pendingIncomingEpoch_=0;
+    snapshotRequested_=false;
+    if(hosting_){
+        for(auto it=participants_.begin();it!=participants_.end();++it)
+            if(it.key()&&it->value("matched").toBool())it->insert("readiness","syncing");
+        // Send the expected configuration before the worker publishes its state.
+        announceContent();refreshLobby();
+    } else {gameReady_=false;session_.setNetworkWaiting(true);}
+    session_.setNetworkLinkCableEnabled(enabled);
+}
 void NetplayController::announceContent(){
     if(!hosting_)return;
-    const QJsonObject o{{"name",gameName_},{"open",!gamePath_.isEmpty()},{"manifest",QString::fromLatin1(manifest_.toBase64())},{"downloads",allowDownloads_}};
+    const QJsonObject o{{"name",gameName_},{"open",!gamePath_.isEmpty()},{"manifest",QString::fromLatin1(manifest_.toBase64())},{"downloads",allowDownloads_},{"linkCable",linkCable_}};
     transport_.broadcast(MessageKind::Content,json(o));
 }
 void NetplayController::compareContent(){
@@ -457,6 +498,7 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     if(kind==MessageKind::Frame){if(!hosting_)session_.receiveNetworkRewindPreview(b);return;}
     if(kind==MessageKind::Content&&!hosting_){
         const auto o=QJsonDocument::fromJson(b).object();gameName_=o.value("name").toString().left(512);allowDownloads_=o.value("downloads").toBool();
+        applyLinkCableConfiguration(o.value("linkCable").toBool());
         const auto next=QByteArray::fromBase64(o.value("manifest").toString().toLatin1());
         if(next!=manifest_){manifest_=next;gameReady_=false;incomingSnapshot_.clear();session_.setNetworkWaiting(true);compareContent();}
         const bool open=o.value("open").toBool();
@@ -474,8 +516,13 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
             const auto epoch=qFromBigEndian<quint64>(b.constData()+5);
             if(applyingEpoch_||epoch!=incomingEpoch_||offset!=quint32(incomingSnapshot_.size())||incomingSize_<=0||incomingSnapshot_.size()+b.size()-13>incomingSize_)return;
             incomingSnapshot_.append(b.constData()+13,b.size()-13);
-            if(incomingSnapshot_.size()==incomingSize_){applyingEpoch_=incomingEpoch_;session_.receiveNetworkSnapshot(incomingSnapshot_);incomingSnapshot_.clear();incomingSize_=0;}
-            else transport_.send(0,MessageKind::Control,json({{"op","snapshot-offset"},{"offset",incomingSnapshot_.size()},{"epoch",QString::number(epoch)}}));
+            if(incomingSnapshot_.size()==incomingSize_){
+                const auto metadata=snapshotMetadata(incomingSnapshot_);
+                if(!metadata.isEmpty()&&metadata.value("configuration").toObject().value("linkCable").toBool()==linkCable_){
+                    applyingEpoch_=incomingEpoch_;applyingLinkCableRevision_=linkCableRevision_;session_.receiveNetworkSnapshot(incomingSnapshot_);
+                } else transport_.send(0,MessageKind::Control,json({{"op","resync"}}));
+                incomingSnapshot_.clear();incomingSize_=0;
+            } else transport_.send(0,MessageKind::Control,json({{"op","snapshot-offset"},{"offset",incomingSnapshot_.size()},{"epoch",QString::number(epoch)}}));
         }
         return;
     }
@@ -518,6 +565,7 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     } else if(op=="lobby"){
         remoteConnectionWaiting_=o.value("connectionWaiting").toBool();
         allowCommands_=o.value("allowCommands").toBool();
+        applyLinkCableConfiguration(o.value("linkCable").toBool());
         const auto array=o.value("participants").toArray();if(array.size()>32)return;
         participants_.clear();for(const auto& value:array){auto participant=value.toObject();const auto id=participant.value("id").toString().toULongLong();participant.insert("local",id==localId_);participants_.insert(id,participant);}
         localRole_=roleValue(participants_.value(localId_).value("role").toString());session_.setNetworkRole(localRole_);refreshLobby();
@@ -528,7 +576,7 @@ void NetplayController::refreshLobby(){
     if(waiting!=connectionWaiting_){connectionWaiting_=waiting;emit connectionWaitingChanged(waiting);}
     QJsonArray list;auto ids=participants_.keys();std::sort(ids.begin(),ids.end());for(auto id:ids)list.append(participants_.value(id));
     if(hosting_) {
-        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"connectionWaiting",waiting}});
+        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"linkCable",linkCable_},{"connectionWaiting",waiting}});
         if(bytes!=lastLobbyBytes_){lastLobbyBytes_=bytes;transport_.broadcast(MessageKind::Control,bytes);}
     }
     QString romStatus=gameReady_?QStringLiteral("matched"):localManifest_.isEmpty()?QStringLiteral("missing"):QStringLiteral("verifying");
@@ -537,5 +585,5 @@ void NetplayController::refreshLobby(){
     QJsonObject rom{{"filename",gameName_},{"status",romStatus},{"progress",transferTotal_?double(transferDone_)*100.0/double(transferTotal_):0},
         {"canSelect",active_},{"canDownload",active_&&!hosting_&&allowDownloads_&&!manifest_.isEmpty()&&!downloading_},{"canCancel",downloading_}};
     lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"connectionWaiting",waiting},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"lanInvite",lanInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},{"connections",connections_},{"selectedConnectionId",connectionId_},
-        {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_}});
+        {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_},{"linkCable",linkCable_}});
 }

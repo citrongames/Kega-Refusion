@@ -41,3 +41,9 @@ No game ROMs, Paprium soundtrack files, or console BIOS files are distributed. I
 - Achievement definitions, badge artwork and account data are fetched from RetroAchievements for the signed-in user; they are not bundled with this project. This integration is not an endorsement or Hardcore approval by RetroAchievements.
 
 - **GGPO (Flycast fork)**: MIT rollback and input networking SDK, pinned at Flycast `7adbf3caef251b153e348df3f469a0f35878339d`. Only the GGPO subtree is extracted; no Flycast emulator wrapper is copied. License and narrow transport/bounds changes are recorded in `third_party/GGPO-LICENSE.txt` and `third_party/GGPO-PROVENANCE.md`, included in both packages.
+
+## MD Link Cable and cooperative execution
+
+The controller-port wiring and external interrupt approach were studied from [Linn1024/zero-tolerance-link](https://github.com/Linn1024/zero-tolerance-link), a Genesis Plus GX based prototype. Hardware changes are adapted for this core with separate IRQ arbitration, portable paired execution and canonical audio state. See `tools/patches/genesis-plus-gx-link-cable.README.md` and the existing Genesis Plus GX license.
+
+The x86-64 context switch implementation is libco by byuu (public domain), from libretro-common; its interface headers retain the RetroArch team's MIT notices. Exact provenance and notices are in `third_party/libco/README.txt` and `LICENSE.txt`.

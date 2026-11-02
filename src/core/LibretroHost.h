@@ -19,7 +19,7 @@
 #include "../input/ControllerType.h"
 #include <QStringList>
 
-// Own on exactly one emulation thread. One libretro instance per process.
+// One logical session on the emulation worker; optional isolated Link Cable peer.
 class LibretroHost final {
 public:
     explicit LibretroHost(QString corePath, QString dataPath);
@@ -34,6 +34,11 @@ public:
     bool changeDisc(const QString& path, QString& error);
     bool selectDisc(int index, QString& error);
     bool setDiscEjected(bool ejected, QString& error);
+    bool setLinkCableEnabled(bool enabled, QString& error);
+    bool linkCableEnabled() const { return linkRequested_; }
+    void setLinkPresentationRole(int role) { linkPresentationRole_ = role == 2 ? 2 : 1; }
+    const QImage& frameForLinkRole(int role) const;
+    double aspectRatioForLinkRole(int role) const;
     void runFrame(bool renderVideo = true, bool captureAudio = true);
     bool frameInputPolled() const;
     bool supportsInputPollMetrics() const;
@@ -106,12 +111,27 @@ public:
     int sampleRate() const { return int(av_.timing.sample_rate); }
     double aspectRatio() const;
     QSize nativeVideoSize() const;
-    const QImage& frame() const { return frame_; }
-    const QByteArray& audio() const { return audio_; }
+    const QImage& frame() const;
+    const QByteArray& audio() const;
     QString gamePath() const { return gamePath_; }
     QString contentName() const { return contentName_; }
     std::function<void(const QString&)> message;
 private:
+    struct Activation { LibretroHost* previous; explicit Activation(LibretroHost* h) : previous(active_) { active_=h; } ~Activation() { active_=previous; } };
+    struct LinkPair;
+    std::unique_ptr<LibretroHost> linkPeer_;
+    struct LinkPairDeleter { void operator()(LinkPair*) const; };
+    std::unique_ptr<LinkPair,LinkPairDeleter> linkPair_;
+    LibretroHost* linkParent_ = nullptr;
+    bool linkRequested_ = false;
+    int linkPresentationRole_ = 1;
+    bool startLinkedPair(QString& error);
+    void stopLinkedPair();
+    void runLinkedFrame(bool video, bool audio);
+    void resetLinkedPair();
+    qsizetype serializedSize() const;
+    QByteArray captureLinkedState() const;
+    bool restoreLinkedState(const QByteArray&, bool transactional = true);
     QByteArray stateCoreIdentity() const;
     bool acceptsLegacyMovieCore(const QByteArray& identity) const;
     QJsonObject movieBiosFingerprints() const;

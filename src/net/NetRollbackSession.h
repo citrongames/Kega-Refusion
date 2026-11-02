@@ -22,7 +22,10 @@ public:
     bool idle(QString& error);
     Result beforeFrame(const MovieInput& local, MovieInput& merged, QString& error);
     bool afterFrame(QString& error);
-    struct RewindFrame { QByteArray state; QImage image; double aspect=1; };
+    struct RewindFrame {
+        QByteArray state; QImage image; double aspect=1;
+        QImage secondImage; double secondAspect=1;
+    };
     void setHistoryEnabled(bool enabled);
     bool takeConfirmedHistory(RewindFrame& frame);
     bool active() const;

@@ -1,0 +1,197 @@
+{
+  "version": "0.15.0",
+  "date": "2026-11-03",
+  "environment": "WSL Ubuntu, Linux x86-64; Windows cross-build only, no Windows UI takeover",
+  "hardware": {
+    "core": "/home/vova/projects/Kega Refusion/build/linux/core/genesis_plus_gx_libretro.so",
+    "core_sha256": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
+    "fixture_sha256": "98254cd573920e52c2ccf4324a7436d293242f050e6bc6c021dedfff737f1436",
+    "scope": "Original generated ROM, local ELF inspection, no external game ROMs",
+    "hardware": {
+      "priority_and_ack": true,
+      "port_direction_pullups": true,
+      "irq_gates": [
+        {
+          "control": 128,
+          "external_enable": 8,
+          "pending": 1
+        },
+        {
+          "control": 0,
+          "external_enable": 8,
+          "pending": 0
+        },
+        {
+          "control": 192,
+          "external_enable": 8,
+          "pending": 0
+        },
+        {
+          "control": 128,
+          "external_enable": 0,
+          "pending": 0
+        }
+      ],
+      "latch_restore": true,
+      "disconnected_behavior_unchanged": true
+    },
+    "stop": {
+      "stopped_edge_observed": true,
+      "irq_handler_count": 1
+    },
+    "audio": [
+      {
+        "filter": "disabled",
+        "extension_bytes": 496,
+        "independent_states": 2,
+        "bit_exact_audio_and_video_frames": 144,
+        "bad_payloads_rejected_without_mutation": 4,
+        "audio_trace_sha256": "37593256e52e3b1f2784dd1a2ada8574d8e34a0e010c301636c7d008d7e46ca2"
+      },
+      {
+        "filter": "low-pass",
+        "extension_bytes": 496,
+        "independent_states": 2,
+        "bit_exact_audio_and_video_frames": 144,
+        "bad_payloads_rejected_without_mutation": 4,
+        "audio_trace_sha256": "9844ebed4acb0c8e6d1eb6848d6d82e98fbde2d8de9d1b8337d69e3bf24c4a9e"
+      },
+      {
+        "filter": "EQ",
+        "extension_bytes": 496,
+        "independent_states": 2,
+        "bit_exact_audio_and_video_frames": 144,
+        "bad_payloads_rejected_without_mutation": 4,
+        "audio_trace_sha256": "c819793e8f98366a58d359ac8c097b00cf2a0bfb887d8fcce99fe359a24cbe82"
+      }
+    ],
+    "pass": true
+  },
+  "game": {
+    "name": "Zero Tolerance (USA, Europe)",
+    "rom_sha256": "02e98d4dbf68c2279bf1471bfc7df4d6b8dc864435582beea92d2915febd0eeb",
+    "coverage": "Link handshake and opening cooperative gameplay, not full campaign",
+    "result": {
+      "audio_hash": "ae87d3f6bd09294e08d859f36959391a2ba90915092ecdaab41893ea7fffbb48",
+      "audio_nonzero_bytes": 13714000,
+      "audio_replay_equal": true,
+      "emulated_fps": 516.8853214170857,
+      "failed_restore_atomic": true,
+      "frames": 5200,
+      "peer_mappings": 5,
+      "peer_mappings_after_disable": 0,
+      "peer_mappings_after_unload": 0,
+      "repeated_toggle_cleanup": [
+        {
+          "peer_mappings": 0,
+          "rss_kib": 44760
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        },
+        {
+          "peer_mappings": 0,
+          "rss_kib": 46616
+        }
+      ],
+      "rss_after_disable_kib": 44400,
+      "rss_after_unload_kib": 44564,
+      "rss_before_kib": 16508,
+      "rss_linked_kib": 55724,
+      "seconds": 10.0602586,
+      "state_bytes": 2270352,
+      "video_hash": "0e0660df2850bf39645a4f1cdbbc0e15604be483cda8498a2defdd4475193e43",
+      "video_rate": 59.92274340431231,
+      "video_replay_equal": true
+    }
+  },
+  "ordinary_performance": {
+    "frames_each": 3000,
+    "same_rom_and_input": true,
+    "runs": [
+      {
+        "case": "previous-1",
+        "fps": 2069.7483046146604,
+        "seconds": 1.449451604
+      },
+      {
+        "case": "current-1",
+        "fps": 2086.836769972066,
+        "seconds": 1.43758249
+      },
+      {
+        "case": "current-2",
+        "fps": 2062.8122379611764,
+        "seconds": 1.454325287
+      },
+      {
+        "case": "previous-2",
+        "fps": 2092.407649046134,
+        "seconds": 1.433755034
+      }
+    ]
+  },
+  "network": {
+    "ordinary": "PASS",
+    "linked": "PASS",
+    "ordinary_seconds": 5.5,
+    "linked_seconds": 7.8,
+    "command": "QT_QPA_PLATFORM=offscreen build/linux/bin/netplay_session_tests build/linux/core/genesis_plus_gx_libretro.so [--link]",
+    "coverage": [
+      "role-specific image and audio",
+      "spectator console A",
+      "both rewind previews",
+      "pause/step/reset/save/load",
+      "game change",
+      "live and rapid cable toggles",
+      "guest policy",
+      "leave/kick/rejoin",
+      "abrupt loss"
+    ],
+    "platform": "Linux local integration; cross-platform runtime not checked in this batch"
+  },
+  "ui": {
+    "host_checkbox": true,
+    "guest_read_only": true,
+    "unchanged_refresh_emissions": 0,
+    "refresh_count": 20,
+    "click_requests": 1,
+    "english_fallback": true
+  },
+  "limitations": [
+    "No full campaign run",
+    "No separate translation ROM exercised",
+    "No CD/32X/Paprium cable combination",
+    "No Windows runtime or real Windows/Linux connection test in this batch"
+  ],
+  "published_sha256": {
+    "KegaRefusion.exe": "63f22b19003aed95aa2989373008045a06e68779cd62344a5b2def0ff107b857",
+    "cores/genesis_plus_gx_libretro.dll": "acbb697ef75e6bcf24ca9d310c82351de65e69c4fa603586996511c4a5444438",
+    "cores/genesis_plus_gx_libretro_linkpeer.dll": "acbb697ef75e6bcf24ca9d310c82351de65e69c4fa603586996511c4a5444438",
+    "linux/KegaRefusion": "ab5223aa244fe890ee7be2600a73c85f9c83ce0d5c88d4756a5de489a92f50ed",
+    "linux/cores/genesis_plus_gx_libretro.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
+    "linux/cores/genesis_plus_gx_libretro_linkpeer.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
+    "KegaRefusion-0.15.0-linux-x86_64.tar.gz": "df4a6cb7d9fd480e3117110da8f83e6f7d8431614797acf8646520945663e9b0"
+  }
+}

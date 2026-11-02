@@ -18,7 +18,7 @@ class QTableWidget;
 //   active, host, status, connectionWaiting, addressStatus, addressRetry, invite,
 //   inviteWithPassword, lanInvite (LAN links include password when configured),
 //   connections: [{id, name, ipv4, physical}] for the create dialog;
-//   allowCommands, allowDownloads;
+//   allowCommands, allowDownloads, linkCable;
 //   participants: [{id, nickname, role, readiness, pingMs, local, host}];
 //   rom: {filename, status, message, progress (0..100), canSelect,
 //         canDownload, canCancel}.
@@ -47,6 +47,7 @@ signals:
     void banRequested(const QString& peerId, bool permanent);
     void allowCommandsRequested(bool allowed);
     void allowDownloadsRequested(bool allowed);
+    void linkCableRequested(bool enabled);
     void retryAddressRequested();
 
 protected:
@@ -80,4 +81,5 @@ private:
     QPushButton* permanentBan_ = nullptr;
     QCheckBox* allowCommands_ = nullptr;
     QCheckBox* allowDownloads_ = nullptr;
+    QCheckBox* linkCable_ = nullptr;
 };

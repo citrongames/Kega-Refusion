@@ -1,0 +1,342 @@
+--- a/core/sound/blip_buf.c
++++ b/core/sound/blip_buf.c
+@@ -8,6 +8,7 @@
+ /*  - added inverted stereo output (define #BLIP_INVERT to enable)*/
+ 
+ #include "blip_buf.h"
++#include "../link_state.h"
+ 
+ #ifdef BLIP_ASSERT
+ #include <assert.h>
+@@ -709,6 +710,68 @@
+ }
+ #endif
+ 
++/* Canonical frame-boundary state, independent of LP64 versus Windows LLP64.
++ * All 18 impulse-tail samples are retained; the legacy fast-state slot has 16.
++ * This extension is deliberately separate from ordinary GPX save states. */
++unsigned blip_link_state_size(void)
++{
++#if defined(BLIP_MONO)
++  return 0;
++#else
++  return sizeof(fixed_t) == 8 && time_bits == 52 && sizeof(buf_t) == 4 ? 168 : 0;
++#endif
++}
++
++int blip_link_state_save(const blip_t *buf, unsigned char *out, unsigned size)
++{
++#ifndef BLIP_MONO
++  unsigned c, i;
++  if (!buf || !out || size != blip_link_state_size() || size != 168 ||
++      buf->size < buf_extra || blip_samples_avail(buf) != 0) return 0;
++  link_wire_put64(out, (uint64_t)buf->factor);
++  link_wire_put64(out + 8, (uint64_t)buf->offset);
++  for (c = 0; c < 2; c++)
++  {
++    link_wire_put32(out + 16 + c * 4, (uint32_t)buf->integrator[c]);
++    for (i = 0; i < buf_extra; i++)
++      link_wire_put32(out + 24 + (c * buf_extra + i) * 4, (uint32_t)buf->buffer[c][i]);
++  }
++  return 1;
++#else
++  return 0;
++#endif
++}
++
++int blip_link_state_valid(const blip_t *buf, const unsigned char *in, unsigned size)
++{
++#ifndef BLIP_MONO
++  return buf && in && size == 168 && size == blip_link_state_size() &&
++    buf->size >= buf_extra && link_wire_get64(in) == (uint64_t)buf->factor &&
++    link_wire_get64(in + 8) < (uint64_t)time_unit;
++#else
++  return 0;
++#endif
++}
++
++int blip_link_state_load(blip_t *buf, const unsigned char *in, unsigned size)
++{
++#ifndef BLIP_MONO
++  unsigned c, i;
++  if (!blip_link_state_valid(buf, in, size)) return 0;
++  buf->offset = (fixed_t)link_wire_get64(in + 8);
++  for (c = 0; c < 2; c++)
++  {
++    buf->integrator[c] = link_wire_get_i32(in + 16 + c * 4);
++    memset(buf->buffer[c], 0, (buf->size + buf_extra) * sizeof(buf_t));
++    for (i = 0; i < buf_extra; i++)
++      buf->buffer[c][i] = link_wire_get_i32(in + 24 + (c * buf_extra + i) * 4);
++  }
++  return 1;
++#else
++  return 0;
++#endif
++}
++
+ void blip_save_buffer_state(const blip_t *buf, blip_buffer_state_t *state)
+ {
+ #ifdef BLIP_MONO
+--- a/core/sound/blip_buf.h
++++ b/core/sound/blip_buf.h
+@@ -80,6 +80,12 @@
+ /** Frees buffer. No effect if NULL is passed. */
+ void blip_delete( blip_t* );
+ 
++/* Optional linked-pair frame-boundary audio extension; canonical LE bytes. */
++unsigned blip_link_state_size(void);
++int blip_link_state_save(const blip_t *, unsigned char *, unsigned);
++int blip_link_state_valid(const blip_t *, const unsigned char *, unsigned);
++int blip_link_state_load(blip_t *, const unsigned char *, unsigned);
++
+ /** Saves buffer state (samples, accumulators, and offset) to a blip_buffer_state structure */
+ void blip_save_buffer_state(const blip_t *buf, blip_buffer_state_t *state);
+ 
+--- a/core/sound/sound.c
++++ b/core/sound/sound.c
+@@ -39,6 +39,7 @@
+ 
+ #include "shared.h"
+ #include "blip_buf.h"
++#include "../link_state.h"
+ 
+ int8 audio_hard_disable = 0;
+ 
+@@ -643,6 +644,34 @@
+ #include "scd.h"
+ #include "cdd.h"
+ 
++/* FM synthesis chips are in the normal state; output delta history and the
++ * MAME busy deadline are missing there. Only completed audio frames are valid. */
++int sound_link_state_save(uint8 *out, unsigned int size)
++{
++  if (!out || size != 16 || fm_ptr != fm_buffer || fm_cycles_count != fm_cycles_start) return 0;
++  link_wire_put32(out, (uint32_t)fm_last[0]);
++  link_wire_put32(out + 4, (uint32_t)fm_last[1]);
++  link_wire_put32(out + 8, (uint32_t)fm_cycles_busy);
++  link_wire_put32(out + 12, (uint32_t)fm_cycles_ratio);
++  return 1;
++}
++
++int sound_link_state_valid(const uint8 *in, unsigned int size)
++{
++  return in && size == 16 && link_wire_get32(in + 12) == (uint32_t)fm_cycles_ratio &&
++    link_wire_get_i32(in + 8) >= 0;
++}
++
++int sound_link_state_load(const uint8 *in, unsigned int size)
++{
++  if (!sound_link_state_valid(in, size)) return 0;
++  fm_last[0] = link_wire_get_i32(in);
++  fm_last[1] = link_wire_get_i32(in + 4);
++  fm_cycles_busy = link_wire_get_i32(in + 8);
++  fm_ptr = fm_buffer;
++  return 1;
++}
++
+ void save_sound_buffer()
+ {
+   int i;
+--- a/core/sound/sound.h
++++ b/core/sound/sound.h
+@@ -49,6 +49,9 @@
+ extern void (*fm_reset)(unsigned int cycles);
+ extern void (*fm_write)(unsigned int cycles, unsigned int address, unsigned int data);
+ extern unsigned int (*fm_read)(unsigned int cycles, unsigned int address);
++extern int sound_link_state_save(uint8 *out, unsigned int size);
++extern int sound_link_state_valid(const uint8 *in, unsigned int size);
++extern int sound_link_state_load(const uint8 *in, unsigned int size);
+ extern void save_sound_buffer();
+ extern void restore_sound_buffer();
+ 
+--- a/core/system.c
++++ b/core/system.c
+@@ -42,6 +42,7 @@
+ #include "shared.h"
+ #include "yx5200.h"
+ #include "eq.h"
++#include "link_state.h"
+ #ifdef KEGAREFUSION_32X
+ #include "kega32x/gpx/bridge.h"
+ #endif
+@@ -195,6 +196,93 @@
+   eq[0].hg = eq[1].hg = (double)(config.hg) / 100.0;
+ }
+ 
++/* KRLKA001 is a 496-byte optional extension to each ordinary native state.
++ * It is captured/applied after retro_run, with no pending whole audio samples.
++ * Settings and buffer rates must match; validation completes before mutation. */
++unsigned int audio_link_state_size(void)
++{
++  return system_hw == SYSTEM_MD && snd.blips[0] && !snd.blips[1] &&
++    !snd.blips[2] && !snd.blips[3] && sizeof(double) == 8 &&
++    DBL_MANT_DIG == 53 && DBL_MAX_EXP == 1024 && sizeof(int) == 4 &&
++    blip_link_state_size() == 168 ? 496 : 0;
++}
++
++static void audio_link_eq_fields(double **fields)
++{
++  unsigned int c, n = 0;
++  for (c = 0; c < 2; c++)
++  {
++    fields[n++] = &eq[c].lf;
++    fields[n++] = &eq[c].f1p0;
++    fields[n++] = &eq[c].f1p1;
++    fields[n++] = &eq[c].f1p2;
++    fields[n++] = &eq[c].f1p3;
++    fields[n++] = &eq[c].hf;
++    fields[n++] = &eq[c].f2p0;
++    fields[n++] = &eq[c].f2p1;
++    fields[n++] = &eq[c].f2p2;
++    fields[n++] = &eq[c].f2p3;
++    fields[n++] = &eq[c].sdm1;
++    fields[n++] = &eq[c].sdm2;
++    fields[n++] = &eq[c].sdm3;
++    fields[n++] = &eq[c].lg;
++    fields[n++] = &eq[c].mg;
++    fields[n++] = &eq[c].hg;
++  }
++}
++
++static void audio_link_header(uint8 *out)
++{
++  memcpy(out, "KRLKA001", 8);
++  link_wire_put32(out + 8, (uint32_t)snd.sample_rate);
++  link_wire_put32(out + 12, config.filter);
++  link_wire_put32(out + 16, config.lp_range);
++  link_wire_put32(out + 20, config.hq_fm);
++  link_wire_put32(out + 24, config.hq_psg);
++#ifdef HAVE_YM3438_CORE
++  link_wire_put32(out + 28, config.ym3438);
++#else
++  link_wire_put32(out + 28, 0);
++#endif
++  link_wire_put32(out + 32, (uint32_t)(int32_t)config.fm_preamp);
++  link_wire_put32(out + 36, (uint32_t)(int32_t)config.psg_preamp);
++  link_wire_put_double(out + 40, snd.frame_rate);
++}
++
++int audio_link_state_save(uint8 *out, unsigned int size)
++{
++  double *fields[32]; unsigned int i;
++  if (!out || size != 496 || audio_link_state_size() != size) return 0;
++  if (!sound_link_state_save(out + 48, 16) ||
++      !blip_link_state_save(snd.blips[0], out + 64, 168)) return 0;
++  audio_link_header(out);
++  audio_link_eq_fields(fields);
++  for (i = 0; i < 32; i++) link_wire_put_double(out + 232 + i * 8, *fields[i]);
++  link_wire_put32(out + 488, (uint32_t)(int32_t)llp);
++  link_wire_put32(out + 492, (uint32_t)(int32_t)rrp);
++  return 1;
++}
++
++int audio_link_state_load(const uint8 *in, unsigned int size)
++{
++  uint8 header[48]; double *fields[32]; unsigned int i;
++  int32_t left, right;
++  if (!in || size != 496 || audio_link_state_size() != size) return 0;
++  audio_link_header(header);
++  if (memcmp(in, header, sizeof(header)) || !sound_link_state_valid(in + 48, 16) ||
++      !blip_link_state_valid(snd.blips[0], in + 64, 168)) return 0;
++  for (i = 0; i < 32; i++) if (!isfinite(link_wire_get_double(in + 232 + i * 8))) return 0;
++  left = link_wire_get_i32(in + 488); right = link_wire_get_i32(in + 492);
++  if (left < -32768 || left > 32767 || right < -32768 || right > 32767) return 0;
++  /* All sections validated: none of the following operations can reject. */
++  blip_link_state_load(snd.blips[0], in + 64, 168);
++  sound_link_state_load(in + 48, 16);
++  audio_link_eq_fields(fields);
++  for (i = 0; i < 32; i++) *fields[i] = link_wire_get_double(in + 232 + i * 8);
++  llp = (int16)left; rrp = (int16)right;
++  return 1;
++}
++
+ void audio_shutdown(void)
+ {
+   int i;
+--- a/core/system.h
++++ b/core/system.h
+@@ -112,6 +112,9 @@
+ extern void audio_set_rate(int samplerate, double framerate);
+ extern void audio_reset(void);
+ extern void audio_shutdown(void);
++extern unsigned int audio_link_state_size(void);
++extern int audio_link_state_save(uint8 *out, unsigned int size);
++extern int audio_link_state_load(const uint8 *in, unsigned int size);
+ extern int audio_update(int16 *buffer);
+ extern void audio_set_equalizer(void);
+ extern void system_init(void);
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3650,6 +3650,21 @@
+    io_link_restore_latch(latch);
+ }
+ 
++RETRO_API size_t retro_kegarefusion_link_audio_size(void)
++{
++   return kegarefusion_32x_attached ? 0 : audio_link_state_size();
++}
++
++RETRO_API bool retro_kegarefusion_link_audio_save(void *out, size_t size)
++{
++   return !kegarefusion_32x_attached && size == 496 && audio_link_state_save(out, (unsigned)size);
++}
++
++RETRO_API bool retro_kegarefusion_link_audio_load(const void *in, size_t size)
++{
++   return !kegarefusion_32x_attached && size == 496 && audio_link_state_load(in, (unsigned)size);
++}
++
+ RETRO_API unsigned retro_kegarefusion_core_features(void)
+ {
+    return kegarefusion_32x_features();
+--- /dev/null
++++ b/core/link_state.h
+@@ -0,0 +1,48 @@
++/* Kega Refusion link audio extension: canonical little-endian scalar encoding.
++ * Original integration code, under the Genesis Plus GX default license.
++ * No native structs, pointer values, or machine-sized long values enter the wire. */
++#ifndef KEGAREFUSION_LINK_STATE_H
++#define KEGAREFUSION_LINK_STATE_H
++#include <stdint.h>
++#include <stddef.h>
++#include <string.h>
++#include <float.h>
++
++static inline void link_wire_put32(unsigned char *out, uint32_t value)
++{
++  unsigned i;
++  for (i = 0; i < 4; i++) out[i] = (unsigned char)(value >> (i * 8));
++}
++static inline uint32_t link_wire_get32(const unsigned char *in)
++{
++  uint32_t value = 0; unsigned i;
++  for (i = 0; i < 4; i++) value |= (uint32_t)in[i] << (i * 8);
++  return value;
++}
++static inline void link_wire_put64(unsigned char *out, uint64_t value)
++{
++  unsigned i;
++  for (i = 0; i < 8; i++) out[i] = (unsigned char)(value >> (i * 8));
++}
++static inline uint64_t link_wire_get64(const unsigned char *in)
++{
++  uint64_t value = 0; unsigned i;
++  for (i = 0; i < 8; i++) value |= (uint64_t)in[i] << (i * 8);
++  return value;
++}
++static inline int32_t link_wire_get_i32(const unsigned char *in)
++{
++  uint32_t value = link_wire_get32(in); int32_t result;
++  memcpy(&result, &value, 4);
++  return result;
++}
++static inline void link_wire_put_double(unsigned char *out, double value)
++{
++  uint64_t bits; memcpy(&bits, &value, 8); link_wire_put64(out, bits);
++}
++static inline double link_wire_get_double(const unsigned char *in)
++{
++  uint64_t bits = link_wire_get64(in); double value;
++  memcpy(&value, &bits, 8); return value;
++}
++#endif

@@ -71,7 +71,8 @@ public:
     // Network commands cross to the core only through this worker queue.
     void setNetworkMode(int mode, const QString& storageId = {}); // 0 off, 1 host, 2 client
     bool networkActive() const { return networkMode_.load()!=0; }
-    void setNetworkRole(int role) { networkRole_.store(role); }
+    void setNetworkRole(int role);
+    void setNetworkLinkCableEnabled(bool enabled);
     void setNetworkWaiting(bool waiting) { networkWaiting_.store(waiting); }
     void requestNetworkSnapshot();
     void closeNetworkGame();
@@ -92,6 +93,7 @@ public:
     bool hasGame() const { return loaded_.load(); }
 signals:
     void networkModeFailed(const QString& error);
+    void networkLinkCableChanged(bool enabled);
     void networkCommandRequested(const QByteArray& command);
     void networkSnapshotReady(const QByteArray& snapshot);
 #ifdef KEGA_NETPLAY_TEST_INPUTS
@@ -101,6 +103,7 @@ signals:
     void networkStepRequested(quint64 epoch);
     void networkRewindPreviewReady(const QByteArray& preview);
     void networkSnapshotApplied(bool success, const QString& error);
+    void networkSnapshotDiscarded();
     void networkResyncRequested();
     void networkGameLoading(const QString& path,int archiveIndex);
     void networkGameSource(const QString& path, int archiveIndex);
@@ -133,7 +136,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable};
     struct Command {
         Type type;
         QString path;
@@ -148,9 +151,9 @@ private:
     static QByteArray encodeNetworkCommand(const Command& command);
     std::atomic_int networkMode_{0}, networkRole_{0};
     std::atomic_int networkQueuedDatagrams_{0};
-    std::atomic<quint64> networkPeerId_{0};
+    std::atomic<quint64> networkPeerId_{0}, networkLinkCableRevision_{0};
     std::atomic_bool networkSnapshotPending_{false}, networkPreviewPending_{false};
-    std::atomic_bool networkWaiting_{false};
+    std::atomic_bool networkWaiting_{false}, networkLinkCableDesired_{false};
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);

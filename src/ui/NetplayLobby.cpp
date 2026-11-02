@@ -222,6 +222,11 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     romStatus_->setWordWrap(true);
     romLayout->addWidget(romName_);
     romLayout->addWidget(romStatus_);
+    linkCable_ = new QCheckBox(t("Link Cable (две консоли Mega Drive)"), romBox);
+    linkCable_->setObjectName(QStringLiteral("netplayLinkCable"));
+    linkCable_->setToolTip(t("Хост может включить Link Cable в этом лобби. Включение перезапускает игру на двух консолях; выключение продолжает игру на консоли A. Игроки 1 и 2 управляют первым геймпадом консолей A и B."));
+    romLayout->addWidget(linkCable_);
+    connect(linkCable_, &QCheckBox::toggled, this, &NetplayLobby::linkCableRequested);
     progress_ = new QProgressBar(romBox);
     progress_->setObjectName(QStringLiteral("netplayTransferProgress"));
     progress_->setRange(0, 100);
@@ -435,11 +440,14 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
     {
         const QSignalBlocker commandsBlocker(allowCommands_);
         const QSignalBlocker downloadsBlocker(allowDownloads_);
+        const QSignalBlocker linkBlocker(linkCable_);
         allowCommands_->setChecked(state.value(QStringLiteral("allowCommands")).toBool());
         allowDownloads_->setChecked(state.value(QStringLiteral("allowDownloads")).toBool());
+        linkCable_->setChecked(state.value(QStringLiteral("linkCable")).toBool());
     }
     allowCommands_->setEnabled(host);
     allowDownloads_->setEnabled(host);
+    linkCable_->setEnabled(host);
     updateModerationButtons();
 }
 

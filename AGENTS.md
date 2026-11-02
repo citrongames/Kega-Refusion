@@ -6,7 +6,7 @@
 - Never delete or overwrite user ROMs, BIOS files, settings or saves during packaging.
 - Publish Windows test builds and Linux archives only at the end of the requested batch, not after each game. Internal incremental builds for focused verification are still allowed.
 - Keep the UI compact. Do not present unimplemented features as available.
-- The libretro core is a single process-wide instance, owned by the emulation thread. Qt GUI/audio objects live on the GUI thread.
+- One logical libretro session is owned by the emulation thread. Link Cable may own one additional isolated core module and cooperative context; ordinary sessions remain single-instance. Destroy the peer, contexts and paired history on disable/unload/leave. Qt GUI/audio objects live on the GUI thread.
 - Changes to states/input/timing require real-core integration checks. Use generated original ROM fixtures; never commit copyrighted game ROMs.
 - After context compression continue the last unfinished task from confirmed state, files and verification results. Status questions do not cancel the task.
 
