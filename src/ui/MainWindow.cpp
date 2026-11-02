@@ -615,6 +615,24 @@ void MainWindow::buildMenus() {
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
 
     QMenu* emulationMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Эмуляция")));
+    resetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сброс")));
+    resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    resetAction_->setAutoRepeat(false);
+    resetAction_->setEnabled(false);
+    shortcut(resetAction_);
+    connect(resetAction_, &QAction::triggered, this, [this] {
+        releaseInput();
+        session_.resetGame();
+    });
+    hardResetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перезапуск питания")));
+    hardResetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    hardResetAction_->setAutoRepeat(false);
+    hardResetAction_->setEnabled(false);
+    shortcut(hardResetAction_);
+    connect(hardResetAction_, &QAction::triggered, this, [this] {
+        releaseInput(); session_.hardResetGame();
+    });
+    emulationMenu->addSeparator();
     pauseAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза")));
     pauseAction_->setCheckable(true);
     pauseAction_->setShortcut(QKeySequence(QStringLiteral("P")));
@@ -636,23 +654,6 @@ void MainWindow::buildMenus() {
     QAction* achievementsAction = emulationMenu->addAction(Localization::text(QStringLiteral("Достижения…")));
     achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
     connect(achievementsAction, &QAction::triggered, this, &MainWindow::showAchievements);
-    resetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сброс")));
-    resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
-    resetAction_->setAutoRepeat(false);
-    resetAction_->setEnabled(false);
-    shortcut(resetAction_);
-    connect(resetAction_, &QAction::triggered, this, [this] {
-        releaseInput();
-        session_.resetGame();
-    });
-    hardResetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перезапуск питания")));
-    hardResetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
-    hardResetAction_->setAutoRepeat(false);
-    hardResetAction_->setEnabled(false);
-    shortcut(hardResetAction_);
-    connect(hardResetAction_, &QAction::triggered, this, [this] {
-        releaseInput(); session_.hardResetGame();
-    });
     regionMenu_ = emulationMenu->addMenu(Localization::text(QStringLiteral("Регион")));
     regionMenu_->setObjectName(QStringLiteral("regionMenu"));
     auto* regionGroup = new QActionGroup(this);
@@ -942,7 +943,7 @@ void MainWindow::editShaderParameters() {
     const auto parameters = view_->shaderParameters();
     if (parameters.isEmpty()) return;
     releaseInput();
-    QDialog dialog(this);
+    QDialog dialog(this, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog.setWindowTitle(Localization::text(QStringLiteral("Параметры шейдера")));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
@@ -1121,7 +1122,7 @@ void MainWindow::openRom(const QString& path) {
         }
         if (entries.size() == 1) archiveEntry = entries.first();
         else if (!smokeTest_) {
-            QDialog dialog(this);
+            QDialog dialog(this, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
             dialog.setWindowTitle(Localization::text(QStringLiteral("Выбор игры из архива")));
             dialog.resize(620, 420);
             dialog.setMinimumSize(380, 260);
@@ -1174,7 +1175,7 @@ void MainWindow::openRom(const QString& path) {
 void MainWindow::editSettings(int initialPage) {
     releaseInput();
     input_->setEnabled(false);
-    QDialog dialog(this);
+    QDialog dialog(this, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog.setObjectName(QStringLiteral("emulatorSettingsDialog"));
     dialog.setWindowTitle(Localization::text(QStringLiteral("Настройки эмулятора — Kega Refusion")));
     const QSize workArea = dialog.screen()->availableGeometry().size();

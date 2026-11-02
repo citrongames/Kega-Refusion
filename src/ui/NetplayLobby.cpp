@@ -85,7 +85,9 @@ void setCell(QTableWidget* table, int row, int column, const QString& value) {
 }
 }
 
-NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
+NetplayLobby::NetplayLobby(QWidget* parent)
+    : QWidget(parent, Qt::Window | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                      Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint) {
     setObjectName(QStringLiteral("netplayLobby"));
     setWindowTitle(t("Сетевое лобби — Kega Refusion"));
     setAttribute(Qt::WA_DeleteOnClose, false);
@@ -263,7 +265,7 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
 }
 
 void NetplayLobby::showCreateDialog() {
-    auto* dialog = new QDialog(this, Qt::Window);
+    auto* dialog = new QDialog(this, Qt::Window | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowModality(Qt::NonModal);
     dialog->setWindowTitle(t("Создать сетевой сеанс"));
@@ -347,7 +349,7 @@ void NetplayLobby::showCreateDialog() {
 }
 
 void NetplayLobby::showJoinDialog() {
-    auto* dialog = new QDialog(this, Qt::Window);
+    auto* dialog = new QDialog(this, Qt::Window | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowModality(Qt::NonModal);
     dialog->setWindowTitle(t("Присоединиться к сетевой игре"));

@@ -168,7 +168,7 @@ protected:
     }
 };
 
-AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
+AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint) {
     setObjectName(QStringLiteral("achievementsDialog"));
     setWindowTitle(Localization::text(QStringLiteral("Достижения — Kega Refusion")));
     setMinimumSize(780, 460);

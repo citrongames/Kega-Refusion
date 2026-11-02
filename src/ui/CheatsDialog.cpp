@@ -24,7 +24,7 @@ public:
 };
 }
 CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, const QString& gameName, QWidget* parent)
-    : QDialog(parent), platform_(platform), result_(entries) {
+    : QDialog(parent, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint), platform_(platform), result_(entries) {
     setWindowTitle(Localization::text(QStringLiteral("Читы — %1")).arg(gameName));
     resize(640,380); setMinimumSize(500,300); setSizeGripEnabled(true);
     auto* layout = new QVBoxLayout(this);
