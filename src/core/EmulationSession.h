@@ -71,24 +71,31 @@ public:
     void setNetworkMode(int mode, const QString& storageId = {}); // 0 off, 1 host, 2 client
     bool networkActive() const { return networkMode_.load()!=0; }
     void setNetworkRole(int role) { networkRole_.store(role); }
-    QByteArray networkLocalInput() const;
-    void setNetworkInput(const QByteArray& input);
     void setNetworkWaiting(bool waiting) { networkWaiting_.store(waiting); }
     void requestNetworkSnapshot();
     void closeNetworkGame();
     void receiveNetworkSlots(unsigned mask);
-    void acknowledgeNetworkFrame() { auto n=networkQueuedFrames_.load(); while(n>0&&!networkQueuedFrames_.compare_exchange_weak(n,n-1)){} }
+    void acknowledgeNetworkDatagram() { auto n=networkQueuedDatagrams_.load();while(n>0&&!networkQueuedDatagrams_.compare_exchange_weak(n,n-1)){} }
     void acknowledgeNetworkSnapshot() { networkSnapshotPending_.store(false); }
     void receiveNetworkSnapshot(const QByteArray& snapshot);
-    void receiveNetworkFrame(const QByteArray& frame);
+    void setNetworkRoster(const QByteArray& roster);
+    void setNetworkPeerId(quint64 id) { networkPeerId_.store(id); }
+    void receiveNetworkDatagram(quint64 peer, const QByteArray& packet);
+    void advanceNetworkFrame();
     void applyNetworkCommand(const QByteArray& command);
+    static bool isNetworkMomentaryCommand(const QByteArray& command);
+    static bool isNetworkMomentaryRelease(const QByteArray& command);
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
     void networkModeFailed(const QString& error);
     void networkCommandRequested(const QByteArray& command);
     void networkSnapshotReady(const QByteArray& snapshot);
+#ifdef KEGA_NETPLAY_TEST_INPUTS
     void networkFrameReady(const QByteArray& frame);
+#endif
+    void networkDatagramReady(quint64 peer, const QByteArray& packet);
+    void networkStepRequested(quint64 epoch);
     void networkSnapshotApplied(bool success, const QString& error);
     void networkResyncRequested();
     void networkGameLoading(const QString& path,int archiveIndex);
@@ -121,7 +128,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance};
     struct Command {
         Type type;
         QString path;
@@ -134,11 +141,11 @@ private:
     };
     static bool networkShared(Type type);
     static QByteArray encodeNetworkCommand(const Command& command);
-    std::atomic_int networkMode_{0}, networkRole_{0}, networkQueuedFrames_{0};
+    std::atomic_int networkMode_{0}, networkRole_{0};
+    std::atomic_int networkQueuedDatagrams_{0};
+    std::atomic<quint64> networkPeerId_{0};
     std::atomic_bool networkSnapshotPending_{false};
     std::atomic_bool networkWaiting_{false};
-    mutable std::mutex networkMutex_;
-    QByteArray networkInput_;
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio);
@@ -154,6 +161,9 @@ private:
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
     std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false};
     std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
+    // Local hold edges are separate from the shared state applied by the host.
+    std::atomic<bool> networkFastRequested_{false}, networkRewindRequested_{false};
+    std::atomic<bool> networkStepRequested_{false};
     std::atomic<unsigned> buttons_[3]{};
     std::atomic<quint64> gunPositions_[3]{{quint64(1)<<32},{quint64(1)<<32},{quint64(1)<<32}};
 };

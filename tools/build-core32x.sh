@@ -34,8 +34,9 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-32x-render-hooks.patch"
   "$root/tools/patches/genesis-plus-gx-32x-libretro.patch"
   "$root/tools/patches/genesis-plus-gx-paprium.patch"
-  "$root/tools/patches/genesis-plus-gx-expansions-metrics.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-expansions-metrics.patch"
+  "$root/tools/patches/genesis-plus-gx-network-state.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -283,7 +284,8 @@ PY
 
 # A removed source also requires relinking, even if every remaining .o is old.
 if (( sources_changed )); then rm -f "$checkout/genesis_plus_gx_libretro.$extension"; fi
-jobs=$(nproc)
+jobs=${KEGA_CORE_JOBS:-$(nproc)}
+[[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'KEGA_CORE_JOBS must be a positive integer.' >&2; exit 2; }
 if (( jobs > 8 )); then jobs=8; fi
 make -s -C "$checkout" -f Makefile.libretro "${make_args[@]}" -j "$jobs" all
 out="$root/build/core32x-$platform/core"

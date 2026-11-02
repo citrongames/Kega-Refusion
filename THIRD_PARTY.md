@@ -39,3 +39,5 @@ No game ROMs, Paprium soundtrack files, or console BIOS files are distributed. I
 
 - **rcheevos 12.5.0**: https://github.com/RetroAchievements/rcheevos at `1433173220a7eaede6a9ed7a18e94117be1821e0`. MIT license and copyright notices are retained in `third_party/rcheevos/LICENSE`. Unmodified public headers and runtime/API/hash/libretro-memory helper sources are vendored; `cmake/AchievementsDependencies.cmake` selects the linked subset. See `third_party/rcheevos/UPSTREAM.md`.
 - Achievement definitions, badge artwork and account data are fetched from RetroAchievements for the signed-in user; they are not bundled with this project. This integration is not an endorsement or Hardcore approval by RetroAchievements.
+
+- **GGPO (Flycast fork)**: MIT rollback and input networking SDK, pinned at Flycast `7adbf3caef251b153e348df3f469a0f35878339d`. Only the GGPO subtree is extracted; no Flycast emulator wrapper is copied. License and narrow transport/bounds changes are recorded in `third_party/GGPO-LICENSE.txt` and `third_party/GGPO-PROVENANCE.md`, included in both packages.

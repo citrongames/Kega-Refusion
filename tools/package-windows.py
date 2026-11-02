@@ -171,7 +171,7 @@ def main() -> None:
     shutil.copy2(root / "third_party/SDL2-LICENSE.txt", notices / "SDL2-LICENSE.txt")
     shutil.copy2(root / "third_party/minimp3/LICENSE", notices / "minimp3-CC0.txt")
     shutil.copy2(root / "third_party/rcheevos/LICENSE", notices / "rcheevos-LICENSE.txt")
-    for name in ("libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt", "gdapt-NOTICE.txt"):
+    for name in ("GGPO-LICENSE.txt", "GGPO-PROVENANCE.md", "libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt", "gdapt-NOTICE.txt"):
         shutil.copy2(root / "third_party" / name, notices / name)
 
     for source, name in (

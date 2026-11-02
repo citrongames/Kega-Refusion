@@ -875,6 +875,17 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
             next[player].controllerType = slotControllerType(d->profile, player,
                 static_cast<ControllerType>(kind.toInt()));
         }
+        bool unchanged = d->movieControllersActive && d->movieProfile == d->profile;
+        for (int player = 0; player < playerCount && unchanged; ++player) {
+            const auto& previous = d->movieMappings[player];
+            const auto& current = next[player];
+            unchanged = previous.connected == current.connected &&
+                        previous.sixButton == current.sixButton &&
+                        previous.controllerType == current.controllerType;
+        }
+        // A network snapshot repeats the same hardware description. Clearing
+        // keys here would release buttons still held by a remote player.
+        if (unchanged) return;
         d->movieProfile = d->profile;
         d->movieMappings = std::move(next);
         d->movieControllersActive = true;

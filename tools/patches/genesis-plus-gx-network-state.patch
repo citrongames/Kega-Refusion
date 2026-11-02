@@ -1,0 +1,223 @@
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -88,7 +88,7 @@
+    fpic := -fPIC
+    SHARED := -shared -Wl,--version-script=$(CORE_DIR)/libretro/link.T -Wl,--no-undefined
+    ENDIANNESS_DEFINES := -DLSB_FIRST -DBYTE_ORDER=LITTLE_ENDIAN
+-   PLATFORM_DEFINES := -DHAVE_ZLIB
++   PLATFORM_DEFINES := -DHAVE_ZLIB -DENABLE_SUB_68K_ADDRESS_ERROR_EXCEPTIONS
+    MAX_ROM_SIZE = 33554432
+ 
+    ifneq ($(findstring Linux,$(shell uname -s)),)
+--- a/core/state.c
++++ b/core/state.c
+@@ -161,6 +161,8 @@
+ 
+   /* Z80 */ 
+   load_param(&Z80, sizeof(Z80_Regs));
++  /* Genesis initializes the daisy chain to NULL. Never retain a foreign address. */
++  Z80.daisy = 0;
+   Z80.irq_callback = z80_irq_callback;
+ 
+   /* Extra HW */
+@@ -258,8 +260,13 @@
+     save_param(&m68k.stopped, sizeof(m68k.stopped));
+   }
+ 
+-  /* Z80 */ 
+-  save_param(&Z80, sizeof(Z80_Regs));
++  /* Z80: function pointers are reconstructed when the state is loaded. */
++  {
++    Z80_Regs saved_z80 = Z80;
++    saved_z80.daisy = 0;
++    saved_z80.irq_callback = 0;
++    save_param(&saved_z80, sizeof(saved_z80));
++  }
+ 
+   /* External HW */
+   if (system_hw == SYSTEM_MCD)
+--- a/core/sound/opll.h
++++ b/core/sound/opll.h
+@@ -209,6 +209,7 @@
+ 
+ } opll_t;
+ 
++void OPLL_RebindPatchRom(opll_t *chip);
+ void OPLL_Reset(opll_t *chip, uint32_t chip_type);
+ void OPLL_Clock(opll_t *chip, int32_t *buffer);
+ void OPLL_Write(opll_t *chip, uint32_t port, uint8_t data);
+--- a/core/sound/opll.c
++++ b/core/sound/opll.c
+@@ -266,6 +266,11 @@
+     }
+ }
+ 
++/* The selected patch table is an address in this process, never savestate data. */
++void OPLL_RebindPatchRom(opll_t *chip) {
++    chip->patchrom = chip->chip_type == opll_type_ds1001 ? patch_ds1001 : patch_ym2413;
++}
++
+ void OPLL_Reset(opll_t *chip, uint32_t chip_type) {
+     uint32_t i;
+     memset(chip, 0, sizeof(opll_t));
+@@ -275,16 +280,7 @@
+         chip->rhythm = 0x20;
+         chip->rm_enable = (int8_t)0x80;
+     }
+-    switch (chip_type) {
+-    case opll_type_ds1001:
+-        chip->patchrom = patch_ds1001;
+-        break;
+-    case opll_type_ym2413:
+-    case opll_type_ym2413b:
+-    default:
+-        chip->patchrom = patch_ym2413;
+-        break;
+-    }
++    OPLL_RebindPatchRom(chip);
+     for (i = 0; i < 18; i++) {
+         chip->eg_state[i] = eg_num_release;
+         chip->eg_level[i] = 0x7f;
+--- a/core/sound/sound.c
++++ b/core/sound/sound.c
+@@ -564,7 +564,9 @@
+     save_param(&config.opll, sizeof(config.opll));
+     if (config.opll)
+     {
+-      save_param(&opll, sizeof(opll));
++      opll_t saved_opll = opll;
++      saved_opll.patchrom = 0;
++      save_param(&saved_opll, sizeof(saved_opll));
+       save_param(&opll_accm, sizeof(opll_accm));
+       save_param(&opll_sample, sizeof(opll_sample));
+       save_param(&opll_cycles, sizeof(opll_cycles));
+@@ -616,6 +618,7 @@
+     if (config_opll)
+     {
+       load_param(&opll, sizeof(opll));
++      OPLL_RebindPatchRom(&opll);
+       load_param(&opll_accm, sizeof(opll_accm));
+       load_param(&opll_sample, sizeof(opll_sample));
+       load_param(&opll_cycles, sizeof(opll_cycles));
+--- a/core/sound/ym2612.c
++++ b/core/sound/ym2612.c
+@@ -148,6 +148,7 @@
+ /************************************************************************/
+ 
+ #include "shared.h"
++#include <stddef.h>
+ 
+ /* envelope generator */
+ #define ENV_BITS    10
+@@ -2252,8 +2253,20 @@
+   uint8 index;
+   int bufferptr = 0;
+ 
+-  /* save YM2612 context */
+-  save_param(&ym2612, sizeof(ym2612));
++  /* Save the machine fields, excluding process-local table/output pointers. */
++  {
++    YM2612 saved_ym2612 = ym2612;
++    for (c=0; c<6; c++)
++    {
++      for (s=0; s<4; s++) saved_ym2612.CH[c].SLOT[s].DT = 0;
++      saved_ym2612.CH[c].connect1 = 0;
++      saved_ym2612.CH[c].connect2 = 0;
++      saved_ym2612.CH[c].connect3 = 0;
++      saved_ym2612.CH[c].connect4 = 0;
++      saved_ym2612.CH[c].mem_connect = 0;
++    }
++    save_param(&saved_ym2612, sizeof(saved_ym2612));
++  }
+ 
+   /* save DT table index for each channel slots */
+   for (c=0; c<6; c++)
+@@ -2268,3 +2281,11 @@
+ 
+   return bufferptr;
+ }
++
++/* The network ABI is available only for the audited x64 native layout. */
++int YM2612NetworkLayout(void)
++{
++  return sizeof(YM2612) == 3576 && sizeof(FM_SLOT) == 80 &&
++         offsetof(FM_SLOT, DT) == 0 && sizeof(FM_CH) == 400 &&
++         offsetof(FM_CH, connect1) == 336;
++}
+--- a/core/sound/ym2612.h
++++ b/core/sound/ym2612.h
+@@ -30,5 +30,6 @@
+ extern unsigned int YM2612Read(void);
+ extern int YM2612LoadContext(unsigned char *state);
+ extern int YM2612SaveContext(unsigned char *state);
++extern int YM2612NetworkLayout(void);
+ 
+ #endif /* _YM2612_ */
+--- a/core/sound/ym2413.c
++++ b/core/sound/ym2413.c
+@@ -43,6 +43,7 @@
+ /************************************************/
+ 
+ #include "shared.h"
++#include <stddef.h>
+ 
+ #define FREQ_SH 16  /* 16.16 fixed point (frequency calculations) */
+ #define EG_SH   16  /* 16.16 fixed point (EG timing)              */
+@@ -1863,3 +1864,9 @@
+ {
+   return sizeof(YM2413);
+ }
++
++int YM2413NetworkLayout(void)
++{
++  return sizeof(YM2413) == 5984 && sizeof(YM2413_OPLL_SLOT) == 84 &&
++         sizeof(YM2413_OPLL_CH) == 184 && offsetof(YM2413, clock) == 5968;
++}
+--- a/core/sound/ym2413.h
++++ b/core/sound/ym2413.h
+@@ -19,5 +19,6 @@
+ extern unsigned int YM2413Read(void);
+ extern unsigned char *YM2413GetContextPtr(void);
+ extern unsigned int YM2413GetContextSize(void);
++extern int YM2413NetworkLayout(void);
+ 
+ #endif /*_H_YM2413_*/
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -78,6 +78,7 @@
+ #include "libretro_core_options.h"
+ 
+ #include "shared.h"
++#include "scd.h"
+ #ifdef KEGAREFUSION_32X
+ #include "kega32x/gpx/bridge.h"
+ #endif
+@@ -3624,6 +3625,27 @@
+-   return "kegarefusion-recording-v1";
++   return "kegarefusion-recording-v2";
+ }
+ 
++/* Network snapshots use the native GPX state, so restrict the contract to the
++ * audited x64 little-endian layout. It is intentionally independent of the OS,
++ * local binary hash and addresses. Bump it for deterministic behavior changes. */
++RETRO_API const char *retro_kegarefusion_network_state_abi(void)
++{
++#if defined(__x86_64__) && defined(HAVE_YM3438_CORE) && defined(HAVE_OPLL_CORE)
++   const uint16 endian = 1;
++   if (*(const uint8 *)&endian != 1 || sizeof(void *) != 8 || sizeof(int) != 4 ||
++       sizeof(double) != 8 || strcmp(STATE_VERSION, "GENPLUS-GX 1.7.6") ||
++       sizeof(Z80_Regs) != 88 || offsetof(Z80_Regs, daisy) != 72 ||
++       offsetof(Z80_Regs, irq_callback) != 80 || sizeof(cpu_idle_t) != 12 ||
++       sizeof(ssp1601_t) != 1280 || sizeof(ym3438_t) != 1252 ||
++       sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
++       sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
++       !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
++#else
++   return NULL;
++#endif
++}
++
+ /* Hardware identification and cached decoded CD header for achievements.
+  * Header retrieval never seeks the running drive or decodes audio. */
+ RETRO_API unsigned retro_kegarefusion_system_hw(void)

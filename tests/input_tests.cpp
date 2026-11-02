@@ -1,6 +1,9 @@
 #include "input/InputManager.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSettings>
 #include <QSet>
 #include <QStringList>
@@ -727,6 +730,40 @@ void testUnknownRawJoystick() {
     require(mask == 0, "raw joystick release left game buttons held");
 }
 
+void testSnapshotPreservesHeldKeys() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "snapshot input settings directory");
+    InputManager manager(temp.filePath("settings.ini"));
+    auto second = manager.mapping(ConsoleProfile::MegaDrive, 1);
+    second.connected = true;
+    second.keyboard[0] = Qt::Key_Q;
+    manager.setMapping(ConsoleProfile::MegaDrive, 1, second);
+    unsigned mask = 0;
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned value) { if (player == 1) mask = value; });
+    QJsonArray hardware;
+    for (int player = 0; player < 3; ++player) {
+        const auto mapping = manager.mapping(ConsoleProfile::MegaDrive, player);
+        hardware.append(QJsonObject{{"connected", mapping.connected},
+                                    {"sixButton", mapping.sixButton},
+                                    {"kind", int(mapping.controllerType)}});
+    }
+    const QByteArray snapshot = QJsonDocument(hardware).toJson(QJsonDocument::Compact);
+    manager.setMovieControllers(snapshot);
+    require(manager.keyEvent(Qt::Key_Q, true) && (mask & 1u),
+            "held second-player button not applied");
+    for (int i = 0; i < 5; ++i) {
+        manager.setMovieControllers(snapshot);
+        manager.poll();
+        require(mask & 1u, "unchanged network snapshot released a held key");
+    }
+    auto changed = hardware[1].toObject();
+    changed.insert("connected", false);
+    hardware[1] = changed;
+    manager.setMovieControllers(QJsonDocument(hardware).toJson(QJsonDocument::Compact));
+    require(mask == 0, "actual controller change did not release the key");
+}
+
 void testBackgroundGamepad() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create background gamepad settings directory");
@@ -779,6 +816,11 @@ int main(int argc, char** argv) {
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--background")) {
             testBackgroundGamepad();
             std::puts("background gamepad tests passed");
+            return 0;
+        }
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--snapshot-hold")) {
+            testSnapshotPreservesHeldKeys();
+            std::puts("snapshot held-key test passed");
             return 0;
         }
         testConnectedPorts();

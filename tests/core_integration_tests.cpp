@@ -764,6 +764,53 @@ void testNativeVideoGeometry(const QString& corePath) {
     }
 }
 
+// Two invocations of this mode verify that a Nuked OPLL snapshot can be
+// restored after the core is loaded at a different process address.
+void testNetworkOpll(const QString& corePath, const QString& directory, bool reader) {
+    require(QDir().mkpath(directory), "network OPLL test directory");
+    const QString romPath = directory + "/original-fm.sms";
+    const QString snapshotPath = directory + "/network-fm.state";
+    const QString expectedPath = directory + "/network-fm.expected";
+    if (!reader) {
+        QByteArray rom(32 * 1024, char(0));
+        // Original Z80 loop: enable FM and write a simple note to YM2413.
+        const auto program = QByteArray::fromHex("f331f0df3e10d3f03e20d3f13e20d3f03e11d3f118fe");
+        rom.replace(0, program.size(), program);
+        rom.replace(0x7ff0, 8, "TMR SEGA");
+        rom[0x7fff] = char(0x4c);
+        writeFile(romPath, rom);
+    }
+    LibretroHost host(corePath, directory + "/data");
+    QString error;
+    require(host.load(romPath, error), "network OPLL ROM load failed");
+    const auto compatibility = host.networkCompatibility();
+    require(compatibility.size() == 32, "network x64 core contract missing");
+    auto configuration = host.movieConfiguration();
+    auto options = configuration.value(QStringLiteral("options")).toObject();
+    options.insert(QStringLiteral("genesis_plus_gx_ym2413"), QStringLiteral("enabled"));
+    options.insert(QStringLiteral("genesis_plus_gx_ym2413_core"), QStringLiteral("nuked"));
+    configuration.insert(QStringLiteral("options"), options);
+    configuration.insert(QStringLiteral("networkCompatibility"), QString::fromLatin1(compatibility.toHex()));
+    require(host.prepareNetwork(configuration, error), "network OPLL setup failed");
+    if (reader) {
+        require(host.restoreNetworkState(readFile(snapshotPath), error), "network OPLL state restore failed");
+    } else {
+        for (int i = 0; i < 8; ++i) host.runFrame();
+        const auto snapshot = host.captureNetworkState();
+        require(snapshot.size() > 128, "network OPLL state capture failed");
+        writeFile(snapshotPath, snapshot);
+    }
+    QCryptographicHash fingerprint(QCryptographicHash::Sha256);
+    for (int i = 0; i < 12; ++i) {
+        host.runFrame();
+        require(!host.audio().isEmpty(), "network OPLL audio missing");
+        fingerprint.addData(host.audio());
+    }
+    fingerprint.addData(host.netplayDigest());
+    if (reader) require(fingerprint.result() == readFile(expectedPath), "network OPLL replay diverged");
+    else writeFile(expectedPath, fingerprint.result());
+}
+
 void testRewind(const QString& corePath) {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create rewind test directory");
@@ -822,13 +869,19 @@ void testRewind(const QString& corePath) {
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
-    const auto mode = argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString();
+    const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
-                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") || mode == QLatin1String("--lightguns")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports|--lightguns]\n");
+                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") || mode == QLatin1String("--lightguns"))) &&
+        !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--video-geometry|--archive-only|--controller-ports|--lightguns|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
+        if (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")) {
+            testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
+                            mode == QLatin1String("--network-opll-read"));
+            std::puts("network OPLL snapshot process passed"); return 0;
+        }
         if (mode == QLatin1String("--lightguns")) {
             testLightguns(QString::fromLocal8Bit(argv[1]));
             std::puts("Menacer and Justifier electrical detection and button routing passed");return 0;

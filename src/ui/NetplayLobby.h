@@ -16,7 +16,8 @@ class QTableWidget;
 // owns all state; this widget only renders snapshots and emits user requests.
 // setLobbyState() accepts:
 //   active, host, status, addressStatus, addressRetry, invite,
-//   inviteWithPassword, localInvite (includes password when configured),
+//   inviteWithPassword, localInvite, lanInvite (local links include password
+//   when configured),
 //   connections: [{id, name, ipv4, physical}] for the create dialog;
 //   allowCommands, allowDownloads;
 //   participants: [{id, nickname, role, readiness, pingMs, local, host}];
@@ -63,12 +64,12 @@ private:
     QLabel* romName_ = nullptr;
     QLabel* romStatus_ = nullptr;
     QLineEdit* invite_ = nullptr;
-    QComboBox* role_ = nullptr;
     QTableWidget* participants_ = nullptr;
     QProgressBar* progress_ = nullptr;
     QPushButton* copyInvite_ = nullptr;
     QPushButton* copyWithPassword_ = nullptr;
     QPushButton* copyLocalInvite_ = nullptr;
+    QPushButton* copyLanInvite_ = nullptr;
     QPushButton* retryAddress_ = nullptr;
     QPushButton* leave_ = nullptr;
     QPushButton* selectRom_ = nullptr;

@@ -133,10 +133,16 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     retryAddress_ = new QPushButton(t("Повторить"), inviteBox);
     retryAddress_->setObjectName(QStringLiteral("netplayRetryAddress"));
     addressRow->addWidget(retryAddress_);
+    inviteLayout->addLayout(addressRow);
+    auto* localInviteRow = new QHBoxLayout;
+    localInviteRow->addStretch();
     copyLocalInvite_ = new QPushButton(t("Копировать для этого компьютера"), inviteBox);
     copyLocalInvite_->setObjectName(QStringLiteral("netplayCopyLocalInvite"));
-    addressRow->addWidget(copyLocalInvite_);
-    inviteLayout->addLayout(addressRow);
+    localInviteRow->addWidget(copyLocalInvite_);
+    copyLanInvite_ = new QPushButton(t("Копировать для локальной сети"), inviteBox);
+    copyLanInvite_->setObjectName(QStringLiteral("netplayCopyLanInvite"));
+    localInviteRow->addWidget(copyLanInvite_);
+    inviteLayout->addLayout(localInviteRow);
     layout->addWidget(inviteBox);
     connect(copyInvite_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("invite")).toString());
@@ -147,27 +153,10 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     connect(copyLocalInvite_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(state_.value(QStringLiteral("localInvite")).toString());
     });
-    connect(retryAddress_, &QPushButton::clicked, this, &NetplayLobby::retryAddressRequested);
-
-    auto* roleRow = new QHBoxLayout;
-    roleRow->addWidget(new QLabel(t("Роль выбранного участника:"), this));
-    role_ = new QComboBox(this);
-    role_->setObjectName(QStringLiteral("netplayLocalRole"));
-    role_->addItem(t("Игрок 1"), QStringLiteral("player1"));
-    role_->addItem(t("Игрок 2"), QStringLiteral("player2"));
-    role_->addItem(t("Зритель"), QStringLiteral("spectator"));
-    roleRow->addWidget(role_);
-    roleRow->addStretch();
-    layout->addLayout(roleRow);
-    auto* roleHelp = new QLabel(t("Участник управляет назначенным ему портом с помощью своего первого контроллера."), this);
-    roleHelp->setObjectName(QStringLiteral("netplayRoleHelp"));
-    roleHelp->setWordWrap(true);
-    layout->addWidget(roleHelp);
-    connect(role_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        const QString id = selectedPeerId();
-        if (index >= 0 && !id.isEmpty() && state_.value(QStringLiteral("host")).toBool())
-            emit roleRequested(id, role_->itemData(index).toString());
+    connect(copyLanInvite_, &QPushButton::clicked, this, [this] {
+        QApplication::clipboard()->setText(state_.value(QStringLiteral("lanInvite")).toString());
     });
+    connect(retryAddress_, &QPushButton::clicked, this, &NetplayLobby::retryAddressRequested);
 
     participantsTitle_ = new QLabel(t("Участники"), this);
     auto headingFont = participantsTitle_->font();
@@ -177,10 +166,13 @@ NetplayLobby::NetplayLobby(QWidget* parent) : QWidget(parent, Qt::Window) {
     participants_ = new QTableWidget(0, 4, this);
     participants_->setObjectName(QStringLiteral("netplayParticipants"));
     participants_->setHorizontalHeaderLabels({t("Имя"), t("Роль"), t("Готовность"), t("Пинг")});
+    participants_->horizontalHeaderItem(1)->setToolTip(
+        t("Участник управляет назначенным ему портом с помощью своего первого контроллера."));
     participants_->verticalHeader()->hide();
     participants_->horizontalHeader()->setStretchLastSection(false);
     participants_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    participants_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    participants_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Interactive);
+    participants_->setColumnWidth(1, 150);
     participants_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     participants_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     participants_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -413,6 +405,9 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
     const QString localInvite = state.value(QStringLiteral("localInvite")).toString();
     copyLocalInvite_->setVisible(host);
     copyLocalInvite_->setEnabled(host && !localInvite.isEmpty());
+    const QString lanInvite = state.value(QStringLiteral("lanInvite")).toString();
+    copyLanInvite_->setVisible(host);
+    copyLanInvite_->setEnabled(host && !lanInvite.isEmpty());
     const QString addressStatus = host ? state.value(QStringLiteral("addressStatus")).toString() : QString();
     addressStatus_->setText(Localization::text(addressStatus));
     addressStatus_->setVisible(!addressStatus.isEmpty());
@@ -467,9 +462,30 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
         if (nameCell->data(Qt::UserRole).toString() != id) nameCell->setData(Qt::UserRole, id);
         if (nameCell->data(Qt::UserRole + 1).toBool() != local)
             nameCell->setData(Qt::UserRole + 1, local);
-        if (nameCell->data(Qt::UserRole + 2).toString() != role)
-            nameCell->setData(Qt::UserRole + 2, role);
         setCell(participants_, row, 1, roleName(role));
+        auto* roleBox = qobject_cast<QComboBox*>(participants_->cellWidget(row, 1));
+        if (state.value(QStringLiteral("active")).toBool() &&
+            state.value(QStringLiteral("host")).toBool() && !id.isEmpty()) {
+            if (!roleBox || roleBox->property("peerId").toString() != id) {
+                roleBox = new QComboBox(participants_);
+                roleBox->setObjectName(QStringLiteral("netplayParticipantRole"));
+                roleBox->setProperty("peerId", id);
+                roleBox->addItem(t("Зритель"), QStringLiteral("spectator"));
+                roleBox->addItem(t("Игрок 1"), QStringLiteral("player1"));
+                roleBox->addItem(t("Игрок 2"), QStringLiteral("player2"));
+                participants_->setCellWidget(row, 1, roleBox);
+                connect(roleBox, &QComboBox::currentIndexChanged, this, [this, roleBox, id](int index) {
+                    if (index >= 0 && state_.value(QStringLiteral("active")).toBool() &&
+                        state_.value(QStringLiteral("host")).toBool())
+                        emit roleRequested(id, roleBox->itemData(index).toString());
+                });
+            }
+            const QSignalBlocker roleBlocker(roleBox);
+            const int roleIndex = roleBox->findData(role);
+            if (roleBox->currentIndex() != roleIndex) roleBox->setCurrentIndex(roleIndex);
+        } else if (roleBox) {
+            participants_->removeCellWidget(row, 1);
+        }
         setCell(participants_, row, 2, readinessName(peer.value(QStringLiteral("readiness")).toString()));
         const int ping = peer.value(QStringLiteral("pingMs")).toInt(-1);
         setCell(participants_, row, 3, ping < 0 ? QStringLiteral("—") : t("%1 мс").arg(ping));
@@ -490,15 +506,6 @@ QString NetplayLobby::selectedPeerId() const {
 void NetplayLobby::updateModerationButtons() {
     const int row = participants_->currentRow();
     auto* item = row >= 0 ? participants_->item(row, 0) : nullptr;
-    const bool canAssignRole = state_.value(QStringLiteral("active")).toBool() &&
-        state_.value(QStringLiteral("host")).toBool() && item && item->isSelected() &&
-        !item->data(Qt::UserRole).toString().isEmpty();
-    {
-        const QSignalBlocker blocker(role_);
-        role_->setCurrentIndex(item && item->isSelected()
-            ? role_->findData(item->data(Qt::UserRole + 2).toString()) : -1);
-    }
-    role_->setEnabled(canAssignRole);
     const bool allowed = state_.value(QStringLiteral("active")).toBool() &&
         state_.value(QStringLiteral("host")).toBool() && item && item->isSelected() &&
         !item->data(Qt::UserRole).toString().isEmpty() &&

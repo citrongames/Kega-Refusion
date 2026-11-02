@@ -57,13 +57,17 @@ int main(int argc,char** argv){
     QObject::connect(&controller,&NetplayController::openRomRequested,&session,[&](const QString& p){session.loadGame(p);});
     QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& e){std::fprintf(stderr,"CORE: %s\n",qPrintable(e));app.exit(1);});
     QObject::connect(&controller,&NetplayController::notice,&app,[&](const QString& e){std::fprintf(stderr,"NOTICE: %s\n",qPrintable(e));});
-    int phase=0,combined=0,frames=0,applied=0,resyncs=0;bool pausedSeen=false,resumed=false,downloaded=false;
+    int phase=0,combined=0,frames=0,applied=0,resyncs=0,pausedFrames=0;bool pausedSeen=false,resumed=false,downloaded=false;
     QObject::connect(&session,&EmulationSession::networkResyncRequested,&app,[&]{++resyncs;});
     QObject::connect(&session,&EmulationSession::networkSnapshotApplied,&app,[&](bool ok,const QString& e){if(ok)++applied;else{std::fprintf(stderr,"STATE: %s\n",qPrintable(e));app.exit(1);}});
     QObject::connect(&session,&EmulationSession::videoFrameReady,&app,[&]{QImage image;double aspect;session.takeVideoFrame(image,aspect);++frames;});
     QObject::connect(&session,&EmulationSession::networkFrameReady,&app,[&](const QByteArray& b){MovieInput input;if(NetplayTimeline::parseInput(b.mid(16,30),input)&&input.buttons[0]==0x11)++combined;});
     QObject::connect(&session,&EmulationSession::pausedChanged,&app,[&](bool p){
-        if(!hosting&&p&&!pausedSeen){pausedSeen=true;QTimer::singleShot(150,&session,[&]{session.setPaused(false);});}
+        if(!hosting&&p&&!pausedSeen){
+            pausedSeen=true;const int before=frames;
+            QTimer::singleShot(100,&session,[&]{session.advanceFrame();session.setFrameAdvanceHeld(true);});
+            QTimer::singleShot(1000,&session,[&,before]{pausedFrames=frames-before;session.setFrameAdvanceHeld(false);session.setPaused(false);});
+        }
         if(hosting&&phase==2&&!p)resumed=true;
     });
     QTimer poll;poll.setInterval(50);
@@ -85,7 +89,7 @@ int main(int argc,char** argv){
             if(pausedSeen&&!downloaded&&NetplayScenario::needsDownload(controller)){downloaded=true;NetplayScenario::download(controller);}
             if(QFile::exists(root+"/done")){
                 std::fprintf(stderr,"client frames=%d snapshots=%d resyncs=%d paused=%d\n",frames,applied,resyncs,pausedSeen);
-                app.exit(frames>20&&applied>=5&&pausedSeen&&downloaded&&resyncs<=1?0:1);
+                app.exit(frames>20&&applied>=5&&pausedSeen&&downloaded&&pausedFrames>=2&&resyncs==0?0:1);
             }
         }
     });poll.start();

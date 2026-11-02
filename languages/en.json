@@ -279,6 +279,7 @@
     "Контрольная точка не совпадает с текущей веткой воспроизведения.": "The checkpoint does not match the current playback branch.",
     "Контрольная точка относится к другой записи или игре.": "The checkpoint refers to another record or game.",
     "Копировать": "Copy",
+    "Копировать для локальной сети": "Copy for local network",
     "Копировать для этого компьютера": "Copy for this computer",
     "Копировать приглашение вместе с паролем доступа": "Copy invite with access password",
     "Крестовина %1 (%2)": "D-pad %1 (%2)",

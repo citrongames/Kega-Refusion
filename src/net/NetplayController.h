@@ -1,5 +1,6 @@
 #pragma once
 #include "NetTransport.h"
+#include "NetDatagramChannel.h"
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPointer>
@@ -41,10 +42,12 @@ private:
     void sendState(quint64 peer);
     void sendInput();
     void acceptCommand(quint64,const QByteArray&);
+    void releasePeerCommands(quint64 peer);
     void onGameLoaded(const QString&);
     void queueSnapshot(quint64,const QByteArray&);
     void beginIncomingSnapshot(qsizetype size,quint64 epoch);
     void updateWaiting();
+    void updateRoster();
     void announceContent();
     void compareContent();
     void prepareSource(const QString&,int archiveIndex=-1);
@@ -53,9 +56,12 @@ private:
     QSettings& settings_;
     NetplayLobby* lobby_ = nullptr;
     kega::net::NetTransport transport_;
+    kega::net::NetDatagramChannel datagrams_;
+    QSet<quint64> udpReadyPeers_;
+    QByteArray rosterBytes_, lastLobbyBytes_;
     NetAddressDiscovery* addressDiscovery_=nullptr;
     QByteArray invitationKey_;
-    QString invitationPassword_,localInvite_,addressStatus_,connectionId_;
+    QString invitationPassword_,localInvite_,lanInvite_,addressStatus_,connectionId_;
     QJsonArray connections_;
     bool automaticAddress_=false,addressPending_=false,addressRetry_=false;
     QThread fileThread_;
@@ -70,6 +76,7 @@ private:
     QHash<quint64,QList<QByteArray>> heldFrames_;
     QHash<quint64,qint64> disconnectedAt_;
     QHash<quint64,qint64> commandTimes_;
+    QHash<int,QSet<quint64>> heldCommandOwners_;
     bool snapshotRequested_=false;
     QString storageId_, downloadedPath_;
     int sourceArchiveIndex_=-1;

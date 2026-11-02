@@ -75,6 +75,7 @@ public:
     quint16 localPort() const;
     QList<PeerInfo> peers() const;
     quint64 localPeerId() const;
+    QHostAddress peerAddress(quint64 peerId) const;
 
     static constexpr int maxPayloadBytes = 256 * 1024 - 1;
     static constexpr qint64 maxQueuedBytes = 4 * 1024 * 1024;
@@ -106,6 +107,7 @@ private:
     void close(Connection* connection, const QString& reason);
     bool enqueue(Connection* connection, MessageKind kind, const QByteArray& payload);
     void sendControl(Connection* connection, const QByteArray& json);
+    void reject(Connection* connection, const QString& reason);
     void handleHello(Connection* connection, const QByteArray& payload);
     void handleWelcome(Connection* connection, const QByteArray& payload);
     void handleChallenge(Connection* connection, const QByteArray& payload);

@@ -39,6 +39,7 @@ struct LibretroHost::Api {
     bool (*get_bram)(unsigned, const void**, size_t*, const char**) = nullptr;
     const char* (*state_abi)() = nullptr;
     const char* (*recording_abi)() = nullptr;
+    const char* (*network_state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
     unsigned (*system_hw)() = nullptr;
     bool (*input_polled)() = nullptr;
@@ -169,6 +170,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
     api_->recording_abi = reinterpret_cast<decltype(api_->recording_abi)>(library_.resolve("retro_kegarefusion_recording_abi"));
+    api_->network_state_abi = reinterpret_cast<decltype(api_->network_state_abi)>(library_.resolve("retro_kegarefusion_network_state_abi"));
     if (api_->recording_abi) {
         const char* abi = api_->recording_abi();
         if (abi) recordingAbi_ = QByteArray(abi);
@@ -983,12 +985,13 @@ unsigned LibretroHost::occupiedStateSlots() const {
 QByteArray LibretroHost::captureRewindState() const {
     const auto core = serialize();
     if (core.isEmpty()) return {};
-    QByteArray result("KRREW001", 8);
     qsizetype total = core.size() + 20;
     for (auto size : saveMemorySizes_) {
         if (size > size_t(maxStateSize) || total + qsizetype(size) > maxStateSize) return {};
         total += qsizetype(size);
     }
+    QByteArray result("KRREW001", 8);
+    result.reserve(total);
     for (quint32 size : {quint32(core.size()), quint32(saveMemorySizes_[0]), quint32(saveMemorySizes_[1])}) {
         const quint32 encoded = qToBigEndian(size);
         result.append(reinterpret_cast<const char*>(&encoded), 4);
@@ -1041,6 +1044,7 @@ QByteArray LibretroHost::captureMovieState(bool checksum) const {
     constexpr quint64 maxMovieStateSize = 128ull * 1024 * 1024;
     if (total > maxMovieStateSize) return {};
     QByteArray bytes("KRMOV002",8);
+    bytes.reserve(qsizetype(total));
     bytes += romHash_;
     bytes += recordingCoreHash_;
     for (size_t size : sizes) {
@@ -1059,6 +1063,20 @@ QByteArray LibretroHost::captureMovieState(bool checksum) const {
         bytes.replace(96,32,payloadHash.result());
     }
     return bytes;
+}
+QByteArray LibretroHost::networkCompatibility() const {
+    if (!loaded_ || !api_->network_state_abi) return {};
+    const char* contract = api_->network_state_abi();
+    if (!contract || !*contract) return {};
+    return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract));
+}
+QByteArray LibretroHost::captureNetworkState(bool checksum) const {
+    const auto identity = networkCompatibility();
+    if (identity.size() != 32) return {};
+    auto state = captureMovieState(checksum);
+    if (state.size() < 128 || !state.startsWith("KRMOV002")) return {};
+    state.replace(40,32,identity);
+    return state;
 }
 bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bool trusted) {
     error.clear();
@@ -1375,15 +1393,30 @@ QJsonObject LibretroHost::movieConfiguration() const {
         {QStringLiteral("bios"),movieBiosFingerprints()}};
 }
 bool LibretroHost::prepareNetwork(const QJsonObject& configuration,QString& error) {
+    const auto identity = networkCompatibility();
+    if (identity.size() != 32 ||
+        configuration.value(QStringLiteral("networkCompatibility")).toString() !=
+            QString::fromLatin1(identity.toHex())) {
+        error = Localization::text(QStringLiteral("Сетевые состояния ядер несовместимы."));
+        return false;
+    }
     // The coordinator has matched the complete canonical media manifest. Safe
     // CUE downloads rename track paths, so recording filename identities differ.
-    auto local=configuration;
+    auto local = configuration;
     local.insert(QStringLiteral("gameIdentity"),QString::fromLatin1(movieGameIdentity().toHex()));
+    local.insert(QStringLiteral("coreIdentity"),QString::fromLatin1(recordingCoreHash_.toHex()));
     return prepareMovie(local,error);
 }
 bool LibretroHost::restoreNetworkState(const QByteArray& state,QString& error) {
-    if(state.size()<128 || !state.startsWith("KRMOV002")) return false;
-    auto local=state; local.replace(8,32,romHash_);
+    const auto identity = networkCompatibility();
+    if (state.size() < 128 || !state.startsWith("KRMOV002") || identity.size() != 32 ||
+        state.mid(40,32) != identity) {
+        error = Localization::text(QStringLiteral("Сетевое состояние ядра несовместимо."));
+        return false;
+    }
+    auto local = state;
+    local.replace(8,32,romHash_);
+    local.replace(40,32,recordingCoreHash_);
     return restoreMovieState(local,error);
 }
 bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error) {

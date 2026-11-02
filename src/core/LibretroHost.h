@@ -67,6 +67,9 @@ public:
     bool restoreRewindState(const QByteArray& state);
     // Movie snapshots are independent of quick states and include every battery region.
     QByteArray captureMovieState(bool checksum = true) const;
+    // Network snapshots retain the movie payload but use an OS-independent core contract.
+    QByteArray captureNetworkState(bool checksum = true) const;
+    QByteArray networkCompatibility() const;
     // trusted is only for snapshots retained inside RewindBuffer, never files.
     bool restoreMovieState(const QByteArray& state, QString& error, bool trusted = false);
     QJsonObject movieConfiguration() const;

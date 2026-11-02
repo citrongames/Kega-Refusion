@@ -156,14 +156,18 @@ OpenSSL и их зависимости находятся внутри архи�
 используются из системы. Настройки и сохранения по умолчанию создаются в
 каталоге data рядом с приложением после первого запуска.
 
-Сетевая игра: подключение к лобби между Windows и Linux возможно, но обмен
-состоянием игры и синхронизация кадров сейчас требуют одинаковой ОС и
-совместимой версии ядра на обоих компьютерах.
+Для сетевой игры используйте одинаковую версию Kega Refusion на обоих ПК.
+Windows и Linux x86_64 используют общий контракт сетевых состояний. Порт хоста:
+33445 TCP и UDP (или выбранный им порт). В одной домашней сети копируйте
+приглашение кнопкой «Копировать для локальной сети»; для двух экземпляров на
+одном ПК — «Копировать для этого компьютера».
 """
     (stage / "ЗАПУСК-LINUX.txt").write_text(instruction, encoding="utf-8")
     notice = stage / "licenses"
     for source, name in (
         (root / "THIRD_PARTY.md", "THIRD_PARTY.md"),
+        (root / "third_party/GGPO-LICENSE.txt", "GGPO-LICENSE.txt"),
+        (root / "third_party/GGPO-PROVENANCE.md", "GGPO-PROVENANCE.md"),
         (root / "third_party/Genesis-Plus-GX-LICENSE.txt", "Genesis-Plus-GX-LICENSE.txt"),
         (root / "third_party/SDL2-LICENSE.txt", "SDL2-LICENSE.txt"),
         (Path("/usr/share/doc/libqt6core6t64/copyright"), "Qt-copyright.txt"),

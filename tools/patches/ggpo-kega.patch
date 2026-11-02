@@ -1,0 +1,461 @@
+diff --git a/include/ggponet.h b/include/ggponet.h
+--- a/include/ggponet.h
++++ b/include/ggponet.h
+@@ -38,7 +38,7 @@
+ #endif
+ #endif
+ 
+-#define GGPO_MAX_PLAYERS                  4
++#define GGPO_MAX_PLAYERS                 32
+ #define GGPO_MAX_PREDICTION_FRAMES        8
+ #define GGPO_MAX_SPECTATORS              32
+ 
+@@ -538,6 +538,11 @@
+  */
+ GGPO_API GGPOErrorCode __cdecl ggpo_advance_frame(GGPOSession *);
+ 
++/* Last input frame confirmed by all peers, or -1 before confirmation.
++ * Query after ggpo_idle or ggpo_advance_frame. For spectators this is the
++ * last consumed input frame. */
++GGPO_API GGPOErrorCode __cdecl ggpo_get_confirmed_frame(GGPOSession *, int *frame);
++
+ /*
+  * ggpo_get_network_stats --
+  *
+diff --git a/include/kega_ggpo_transport.h b/include/kega_ggpo_transport.h
+new file mode 100644
+--- /dev/null
++++ b/include/kega_ggpo_transport.h
+@@ -0,0 +1,26 @@
++/* Kega Refusion datagram transport for the MIT GGPO core. */
++#ifndef KEGA_GGPO_TRANSPORT_H
++#define KEGA_GGPO_TRANSPORT_H
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct KegaGgpoTransport {
++    void *user;
++    void (*send)(void *user, uint32_t address_host_order, uint16_t port_host_order,
++                 const void *data, int length);
++    /* Return 0 when empty, a positive datagram length, or a negative error. */
++    int (*receive)(void *user, uint32_t *address_host_order,
++                   uint16_t *port_host_order, void *data, int capacity);
++} KegaGgpoTransport;
++
++/* Copy hooks for this thread. Each subsequently created session copies them.
++ * Passing NULL clears the hooks and restores GGPO native UDP. Both callbacks
++ * are required when a transport is supplied. Keep user alive through session close. */
++void kega_ggpo_set_transport(const KegaGgpoTransport *transport);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/lib/ggpo/backends/backend.h b/lib/ggpo/backends/backend.h
+--- a/lib/ggpo/backends/backend.h
++++ b/lib/ggpo/backends/backend.h
+@@ -20,6 +20,7 @@
+    virtual GGPOErrorCode IncrementFrame(void) { return GGPO_OK; }
+    virtual GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) { return GGPO_OK; }
+    virtual GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) { return GGPO_OK; }
++   virtual GGPOErrorCode GetConfirmedFrame(int *frame) { return GGPO_ERRORCODE_UNSUPPORTED; }
+ 
+    virtual GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay) { return GGPO_ERRORCODE_UNSUPPORTED; }
+    virtual GGPOErrorCode SetDisconnectTimeout(int timeout) { return GGPO_ERRORCODE_UNSUPPORTED; }
+diff --git a/lib/ggpo/backends/p2p.h b/lib/ggpo/backends/p2p.h
+--- a/lib/ggpo/backends/p2p.h
++++ b/lib/ggpo/backends/p2p.h
+@@ -30,6 +30,7 @@
+    GGPOErrorCode IncrementFrame(void) override;
+    GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) override;
+    GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) override;
++   GGPOErrorCode GetConfirmedFrame(int *frame) override { *frame = _sync.GetLastConfirmedFrame(); return GGPO_OK; }
+    GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay) override;
+    GGPOErrorCode SetDisconnectTimeout(int timeout) override;
+    GGPOErrorCode SetDisconnectNotifyStart(int timeout) override;
+diff --git a/lib/ggpo/backends/spectator.h b/lib/ggpo/backends/spectator.h
+--- a/lib/ggpo/backends/spectator.h
++++ b/lib/ggpo/backends/spectator.h
+@@ -32,6 +32,7 @@
+    GGPOErrorCode IncrementFrame(void) override;
+    GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) override { return GGPO_ERRORCODE_UNSUPPORTED; }
+    GGPOErrorCode GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle handle) override { return GGPO_ERRORCODE_UNSUPPORTED; }
++   GGPOErrorCode GetConfirmedFrame(int *frame) override { *frame = _next_input_to_send - 1; return GGPO_OK; }
+    GGPOErrorCode SetFrameDelay(GGPOPlayerHandle player, int delay) override { return GGPO_ERRORCODE_UNSUPPORTED; }
+    GGPOErrorCode SetDisconnectTimeout(int timeout) override { return GGPO_ERRORCODE_UNSUPPORTED; }
+    GGPOErrorCode SetDisconnectNotifyStart(int timeout) override { return GGPO_ERRORCODE_UNSUPPORTED; }
+diff --git a/lib/ggpo/bitvector.h b/lib/ggpo/bitvector.h
+--- a/lib/ggpo/bitvector.h
++++ b/lib/ggpo/bitvector.h
+@@ -8,7 +8,7 @@
+ #ifndef _BITVECTOR_H
+ #define _BITVECTOR_H
+ 
+-#define BITVECTOR_NIBBLE_SIZE 8
++#define BITVECTOR_NIBBLE_SIZE 12
+ 
+ void BitVector_SetBit(uint8 *vector, int *offset);
+ void BitVector_ClearBit(uint8 *vector, int *offset);
+diff --git a/lib/ggpo/game_input.h b/lib/ggpo/game_input.h
+--- a/lib/ggpo/game_input.h
++++ b/lib/ggpo/game_input.h
+@@ -14,8 +14,8 @@
+ // GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS * 8 must be less than
+ // 2^BITVECTOR_NIBBLE_SIZE (see bitvector.h)
+ 
+-#define GAMEINPUT_MAX_BYTES      9
+-#define GAMEINPUT_MAX_PLAYERS    2
++#define GAMEINPUT_MAX_BYTES      7
++#define GAMEINPUT_MAX_PLAYERS   32
+ 
+ struct GameInput {
+    enum Constants {
+diff --git a/lib/ggpo/ggpo_types.h b/lib/ggpo/ggpo_types.h
+--- a/lib/ggpo/ggpo_types.h
++++ b/lib/ggpo/ggpo_types.h
+@@ -40,7 +40,11 @@
+ typedef int int32;
+ 
+ #include "ggponet.h"
+-#include "log/Log.h"
++/* The vendored GGPO core does not depend on Flycast logging. */
++#define DEBUG_LOG(...) ((void)0)
++#define ERROR_LOG(...) ((void)0)
++namespace LogTypes { enum { LDEBUG = 1 }; }
++#define MAX_LOGLEVEL 0
+ #include <stdexcept>
+ 
+ class GGPOException : public std::runtime_error {
+@@ -75,7 +79,7 @@
+       }                                                     \
+    } while (false)
+ 
+-#define Log(...) DEBUG_LOG(NETWORK, __VA_ARGS__)
++#define Log(...) ((void)0)
+ 
+ #ifndef ARRAY_SIZE
+ #  define ARRAY_SIZE(a)    (sizeof(a) / sizeof((a)[0]))
+diff --git a/lib/ggpo/main.cpp b/lib/ggpo/main.cpp
+--- a/lib/ggpo/main.cpp
++++ b/lib/ggpo/main.cpp
+@@ -33,6 +33,10 @@
+ 				   const void *verification,
+ 				   int verification_size)
+ {
++    if (!session || !cb || num_players < 1 || num_players > GGPO_MAX_PLAYERS ||
++        input_size < 1 || input_size > GAMEINPUT_MAX_BYTES ||
++        verification_size < 0 || verification_size > MAX_VERIFICATION_SIZE)
++        return GGPO_ERRORCODE_INVALID_REQUEST;
+ 	try {
+ 	   *session= (GGPOSession *)new Peer2PeerBackend(cb,
+ 													 game,
+@@ -169,6 +173,16 @@
+ }
+ 
+ GGPOErrorCode
++ggpo_get_confirmed_frame(GGPOSession *ggpo, int *frame)
++{
++   if (!ggpo)
++      return GGPO_ERRORCODE_INVALID_SESSION;
++   if (!frame)
++      return GGPO_ERRORCODE_INVALID_REQUEST;
++   return ggpo->GetConfirmedFrame(frame);
++}
++
++GGPOErrorCode
+ ggpo_get_network_stats(GGPOSession *ggpo,
+                        GGPOPlayerHandle player,
+                        GGPONetworkStats *stats)
+@@ -231,6 +245,11 @@
+ 									const void *verification,
+ 									int verification_size)
+ {
++    if (!session || !cb || !host_ip ||
++        num_players < 1 || num_players > GGPO_MAX_PLAYERS ||
++        input_size < 1 || input_size > GAMEINPUT_MAX_BYTES ||
++        verification_size < 0 || verification_size > MAX_VERIFICATION_SIZE)
++        return GGPO_ERRORCODE_INVALID_REQUEST;
+ 	try {
+ 	   *session= (GGPOSession *)new SpectatorBackend(cb,
+ 													 game,
+diff --git a/lib/ggpo/network/udp.cpp b/lib/ggpo/network/udp.cpp
+--- a/lib/ggpo/network/udp.cpp
++++ b/lib/ggpo/network/udp.cpp
+@@ -7,6 +7,13 @@
+ 
+ #include "ggpo_types.h"
+ #include "udp.h"
++
++static thread_local KegaGgpoTransport kega_thread_transport{};
++
++extern "C" void kega_ggpo_set_transport(const KegaGgpoTransport *transport)
++{
++   kega_thread_transport = transport ? *transport : KegaGgpoTransport{};
++}
+ 
+ SOCKET
+ CreateSocket(uint16 bind_port, int retries)
+@@ -60,7 +67,13 @@
+ Udp::Init(uint16 port, Poll *poll, Callbacks *callbacks)
+ {
+    _callbacks = callbacks;
++   _transport = kega_thread_transport;
++   if ((_transport.send == nullptr) != (_transport.receive == nullptr))
++      throw GGPOException("Incomplete GGPO transport hooks", GGPO_ERRORCODE_INVALID_REQUEST);
++   _custom_transport = _transport.send != nullptr;
+    poll->RegisterLoop(this);
++   if (_custom_transport)
++      return;
+ 
+    Log("binding udp socket to port %d.", port);
+    _socket = CreateSocket(port, 0);
+@@ -72,6 +85,13 @@
+ Udp::SendTo(char *buffer, int len, int flags, struct sockaddr *dst, int destlen)
+ {
+    struct sockaddr_in *to = (struct sockaddr_in *)dst;
++   if (_custom_transport) {
++      if (len > 0 && len <= (int)MAX_UDP_PACKET_SIZE && dst &&
++          destlen >= (int)sizeof(sockaddr_in) && to->sin_family == AF_INET)
++         _transport.send(_transport.user, ntohl(to->sin_addr.s_addr),
++                         ntohs(to->sin_port), buffer, len);
++      return;
++   }
+ 
+    int res = sendto(_socket, buffer, len, flags, dst, destlen);
+    if (res == SOCKET_ERROR) {
+@@ -89,6 +109,26 @@
+    uint8          recv_buf[MAX_UDP_PACKET_SIZE];
+    sockaddr_in    recv_addr;
+    socklen_t      recv_addr_len;
++
++   if (_custom_transport) {
++      // Drain a bounded batch so a busy relay cannot stall emulation.
++      for (int packet = 0; packet < 64; ++packet) {
++         uint32_t address = 0;
++         uint16_t port = 0;
++         int len = _transport.receive(_transport.user, &address, &port,
++                                      recv_buf, (int)MAX_UDP_PACKET_SIZE);
++         if (len <= 0)
++            break;
++         if (len > (int)MAX_UDP_PACKET_SIZE)
++            continue;
++         sockaddr_in from{};
++         from.sin_family = AF_INET;
++         from.sin_addr.s_addr = htonl(address);
++         from.sin_port = htons(port);
++         _callbacks->OnMsg(from, (UdpMsg *)recv_buf, len);
++      }
++      return true;
++   }
+ 
+    for (;;) {
+       recv_addr_len = sizeof(recv_addr);
+diff --git a/lib/ggpo/network/udp.h b/lib/ggpo/network/udp.h
+--- a/lib/ggpo/network/udp.h
++++ b/lib/ggpo/network/udp.h
+@@ -12,10 +12,12 @@
+ #include "udp_msg.h"
+ #include "ggponet.h"
+ #include "ring_buffer.h"
++#include "kega_ggpo_transport.h"
+ 
+-#define MAX_UDP_ENDPOINTS     16
++#define MAX_UDP_ENDPOINTS     32
+ 
+ constexpr size_t MAX_UDP_PACKET_SIZE = sizeof(UdpMsg);
++static_assert(MAX_UDP_PACKET_SIZE <= 8192, "GGPO packet exceeds relay limit");
+ 
+ class Udp : public IPollSink
+ {
+@@ -45,6 +47,8 @@
+ protected:
+    // Network transmission information
+    SOCKET         _socket;
++   KegaGgpoTransport _transport{};
++   bool _custom_transport = false;
+ 
+    // state management
+    Callbacks      *_callbacks;
+diff --git a/lib/ggpo/network/udp_msg.h b/lib/ggpo/network/udp_msg.h
+--- a/lib/ggpo/network/udp_msg.h
++++ b/lib/ggpo/network/udp_msg.h
+@@ -8,8 +8,8 @@
+ #ifndef _UDP_MSG_H
+ #define _UDP_MSG_H
+ 
+-#define MAX_COMPRESSED_BITS       4096
+-#define UDP_MSG_MAX_PLAYERS          4
++#define MAX_COMPRESSED_BITS      32768
++#define UDP_MSG_MAX_PLAYERS         32
+ #define MAX_VERIFICATION_SIZE      256
+ #define MAX_APPDATA_SIZE           512
+ 
+diff --git a/lib/ggpo/network/udp_proto.cpp b/lib/ggpo/network/udp_proto.cpp
+--- a/lib/ggpo/network/udp_proto.cpp
++++ b/lib/ggpo/network/udp_proto.cpp
+@@ -13,6 +13,66 @@
+ static const int UDP_HEADER_SIZE = 28;     /* Size of IP + UDP headers */
+ static const int NUM_SYNC_PACKETS = 5;
+ static const int SYNC_RETRY_INTERVAL = 2000;
++
++static bool IsValidAppData(const UdpMsg *msg, int len);
++
++static bool IsValidInput(const UdpMsg *msg, int len)
++{
++   const int header_size = (const uint8 *)msg->u.input.bits - (const uint8 *)msg;
++   if (len < header_size)
++      return false;
++   const int bits = msg->u.input.num_bits;
++   if (bits > MAX_COMPRESSED_BITS
++       || msg->u.input.input_size > GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS
++       || (bits != 0 && msg->u.input.input_size == 0)
++       || (bits + 7) / 8 > len - header_size)
++      return false;
++   // Check the complete compressed stream before OnInput updates any state.
++   int offset = 0;
++   int frames = 0;
++   const uint8 *data = msg->u.input.bits;
++   while (offset < bits) {
++      if (++frames > 64)
++         return false;
++      for (;;) {
++         if (offset >= bits)
++            return false; // Missing frame terminator.
++         const bool changed = (data[offset / 8] >> (offset % 8)) & 1;
++         ++offset;
++         if (!changed)
++            break;
++         if (offset + 1 + BITVECTOR_NIBBLE_SIZE > bits)
++            return false;
++         ++offset; // New bit value.
++         int button = 0;
++         for (int i = 0; i < BITVECTOR_NIBBLE_SIZE; ++i, ++offset)
++            button |= ((data[offset / 8] >> (offset % 8)) & 1) << i;
++         if (button >= msg->u.input.input_size * 8)
++            return false;
++      }
++   }
++   return true;
++}
++
++static bool IsValidMessage(const UdpMsg *msg, int len)
++{
++   if (len < (int)sizeof(msg->hdr) || len > (int)sizeof(UdpMsg))
++      return false;
++   const int base = (const uint8 *)&msg->u - (const uint8 *)msg;
++   switch (msg->hdr.type) {
++   case UdpMsg::SyncRequest:
++      return len >= (int)((const uint8 *)msg->u.sync_request.verification - (const uint8 *)msg)
++         && len <= base + (int)sizeof(msg->u.sync_request);
++   case UdpMsg::SyncReply: return len >= base + (int)sizeof(msg->u.sync_reply);
++   case UdpMsg::QualityReport: return len >= base + (int)sizeof(msg->u.quality_report);
++   case UdpMsg::QualityReply: return len >= base + (int)sizeof(msg->u.quality_reply);
++   case UdpMsg::KeepAlive: return true;
++   case UdpMsg::InputAck: return len >= base + (int)sizeof(msg->u.input_ack);
++   case UdpMsg::Input: return IsValidInput(msg, len);
++   case UdpMsg::AppData: return IsValidAppData(msg, len);
++   default: return false;
++   }
++}
+ 
+ static bool IsValidAppData(const UdpMsg *msg, int len)
+ {
+@@ -138,6 +198,14 @@
+       ASSERT(last.frame == -1 || last.frame + 1 == (int)msg->u.input.start_frame);
+       for (j = 0; j < _pending_output.size(); j++) {
+          GameInput &current = _pending_output.item(j);
++         // A frame must fit completely; unsent frames remain pending for
++         // retransmission after the previous packet is acknowledged.
++         int frame_bits = 1; // frame terminator
++         for (i = 0; i < current.size * 8; ++i)
++            if (current.value(i) != last.value(i))
++               frame_bits += 2 + BITVECTOR_NIBBLE_SIZE;
++         if (offset + frame_bits > MAX_COMPRESSED_BITS)
++            break;
+          if (memcmp(current.bits, last.bits, current.size) != 0) {
+             ASSERT((GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS * 8) < (1 << BITVECTOR_NIBBLE_SIZE));
+             for (i = 0; i < current.size * 8; i++) {
+@@ -166,7 +234,7 @@
+       memset(msg->u.input.peer_connect_status, 0, sizeof(UdpMsg::connect_status) * UDP_MSG_MAX_PLAYERS);
+    }
+ 
+-   ASSERT(offset < MAX_COMPRESSED_BITS);
++   ASSERT(offset <= MAX_COMPRESSED_BITS);
+ 
+    SendMsg(msg);
+ }
+@@ -329,12 +397,8 @@
+ void
+ UdpProtocol::OnMsg(UdpMsg *msg, int len)
+ {
+-   if (len < (int)sizeof(msg->hdr)) {
++   if (!IsValidMessage(msg, len))
+       return;
+-   }
+-   if (msg->hdr.type == UdpMsg::AppData && !IsValidAppData(msg, len)) {
+-      return;
+-   }
+ 
+    bool handled = false;
+    typedef bool (UdpProtocol::*DispatchFn)(UdpMsg *msg, int len);
+@@ -595,7 +659,10 @@
+       if (_last_received_input.frame < 0) {
+          _last_received_input.frame = msg->u.input.start_frame - 1;
+       }
++      int frames_decoded = 0;
+       while (offset < numBits) {
++         if (++frames_decoded > 64)
++            return false;
+          /*
+           * Keep walking through the frames (parsing bits) until we reach
+           * the inputs for the frame right after the one we're on.
+@@ -603,9 +670,17 @@
+          ASSERT(currentFrame <= (_last_received_input.frame + 1));
+          bool useInputs = currentFrame == _last_received_input.frame + 1;
+ 
+-         while (BitVector_ReadBit(bits, &offset)) {
++         for (;;) {
++            if (offset >= numBits)
++               return false; // Missing complete frame terminator.
++            if (!BitVector_ReadBit(bits, &offset))
++               break;
++            if (offset + 1 + BITVECTOR_NIBBLE_SIZE > numBits)
++               return false;
+             int on = BitVector_ReadBit(bits, &offset);
+             int button = BitVector_ReadNibblet(bits, &offset);
++            if (button >= _last_received_input.size * 8)
++               return false;
+             if (useInputs) {
+                if (on) {
+                   _last_received_input.set(button);
+diff --git a/lib/ggpo/network/udp_proto.h b/lib/ggpo/network/udp_proto.h
+--- a/lib/ggpo/network/udp_proto.h
++++ b/lib/ggpo/network/udp_proto.h
+@@ -91,9 +91,11 @@
+    void SetLocalFrameNumber(int num);
+    int RecommendFrameDelay();
+    void SetVerificationData(const void *verification, int verification_size) {
+-	   ASSERT(verification_size <= MAX_VERIFICATION_SIZE);
+-	   this->verification.resize(verification_size);
+-	   memcpy(&this->verification[0], verification, verification_size);
++      ASSERT(verification_size >= 0 && verification_size <= MAX_VERIFICATION_SIZE);
++      ASSERT(verification_size == 0 || verification != nullptr);
++      this->verification.resize(verification_size);
++      if (verification_size != 0)
++         memcpy(this->verification.data(), verification, verification_size);
+    }
+ 
+    void SetDisconnectTimeout(int timeout);
+diff --git a/lib/ggpo/sync.h b/lib/ggpo/sync.h
+--- a/lib/ggpo/sync.h
++++ b/lib/ggpo/sync.h
+@@ -56,6 +56,7 @@
+    void IncrementFrame(void);
+ 
+    int GetFrameCount() { return _framecount; }
++   int GetLastConfirmedFrame() const { return _last_confirmed_frame; }
+    bool InRollback() { return _rollingback; }
+    int GetPredictedFrames() { return _framecount - _last_confirmed_frame; }
+ 

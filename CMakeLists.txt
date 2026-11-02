@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.13.2 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.14.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -18,6 +18,7 @@ target_link_libraries(input_backend PUBLIC localization)
 include(cmake/ArchiveDependencies.cmake)
 include(cmake/AchievementsDependencies.cmake)
 include(cmake/NetplayDependencies.cmake)
+include(cmake/Ggpo.cmake)
 add_library(rom_archive STATIC src/core/RomArchive.cpp src/core/RomArchive.h)
 target_include_directories(rom_archive PUBLIC src)
 target_link_libraries(rom_archive PUBLIC Qt6::Core localization PRIVATE kega_archive)
@@ -39,10 +40,11 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/MovieSession.cpp src/core/MovieSession.h
     src/core/FramePacer.cpp src/core/FramePacer.h
     src/core/BatterySave.cpp src/core/BatterySave.h
-    src/net/NetplayTimeline.cpp src/net/NetplayTimeline.h)
+    src/net/NetplayTimeline.cpp src/net/NetplayTimeline.h
+    src/net/NetRollbackSession.cpp src/net/NetRollbackSession.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive)
+target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive kega_ggpo Qt6::Network)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)
 target_include_directories(video_renderer PUBLIC src)
@@ -59,6 +61,7 @@ add_executable(KegaRefusion WIN32
     src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
     src/net/NetplayController.cpp src/net/NetplayController.h
     src/net/NetAddressDiscovery.cpp src/net/NetAddressDiscovery.h
+    src/net/NetDatagramChannel.cpp src/net/NetDatagramChannel.h
     src/net/NetInterfaces.cpp src/net/NetInterfaces.h src/net/BoundHttpRequest.cpp src/net/BoundHttpRequest.h
     src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h
     src/ui/NetplaySettingsPage.cpp src/ui/NetplaySettingsPage.h
@@ -83,6 +86,10 @@ if(WIN32)
     target_link_libraries(KegaRefusion PRIVATE iphlpapi ws2_32)
 endif()
 if(BUILD_TESTING)
+    add_executable(net_datagram_channel_tests tests/net_datagram_channel_tests.cpp src/net/NetDatagramChannel.cpp src/net/NetDatagramChannel.h)
+    target_include_directories(net_datagram_channel_tests PRIVATE src)
+    target_link_libraries(net_datagram_channel_tests PRIVATE Qt6::Core Qt6::Network OpenSSL::Crypto)
+    add_test(NAME net_datagram_channel_tests COMMAND net_datagram_channel_tests)
     add_executable(net_interfaces_tests tests/net_interfaces_tests.cpp src/net/NetInterfaces.cpp)
     target_include_directories(net_interfaces_tests PRIVATE src)
     target_link_libraries(net_interfaces_tests PRIVATE Qt6::Core Qt6::Network)
@@ -102,17 +109,26 @@ if(BUILD_TESTING)
         src/core/EmulationSession.cpp src/core/EmulationSession.h
         src/net/NetplayController.cpp src/net/NetplayController.h
     src/net/NetAddressDiscovery.cpp src/net/NetAddressDiscovery.h
+    src/net/NetDatagramChannel.cpp src/net/NetDatagramChannel.h
     src/net/NetInterfaces.cpp src/net/NetInterfaces.h src/net/BoundHttpRequest.cpp src/net/BoundHttpRequest.h
         src/net/NetTransport.cpp src/net/NetTransport.h
         src/net/NetFileTransfer.cpp src/net/NetFileTransfer.h
         src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
         src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h)
+    target_compile_definitions(netplay_session_tests PRIVATE KEGA_NETPLAY_TEST_INPUTS)
     target_link_libraries(netplay_session_tests PRIVATE core_host Qt6::Widgets Qt6::Network OpenSSL::Crypto)
     if(WIN32)
         target_link_libraries(netplay_session_tests PRIVATE iphlpapi ws2_32)
     endif()
-    add_executable(netplay_timeline_tests tests/netplay_timeline_tests.cpp)
-    target_link_libraries(netplay_timeline_tests PRIVATE core_host)
+    add_executable(ggpo_packet_tests tests/ggpo_packet_tests.cpp)
+    target_include_directories(ggpo_packet_tests PRIVATE "${CMAKE_SOURCE_DIR}/build/deps/ggpo-src/lib/ggpo")
+    target_link_libraries(ggpo_packet_tests PRIVATE kega_ggpo)
+    if(MSVC)
+        target_compile_options(ggpo_packet_tests PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(ggpo_packet_tests PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME ggpo_packet_tests COMMAND ggpo_packet_tests)
     add_executable(net_file_tests tests/net_file_tests.cpp src/net/NetFileTransfer.cpp)
     target_link_libraries(net_file_tests PRIVATE rom_archive Qt6::Core localization)
     add_test(NAME net_file_tests COMMAND net_file_tests)

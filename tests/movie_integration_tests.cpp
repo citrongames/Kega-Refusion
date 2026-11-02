@@ -470,7 +470,7 @@ void compatibility(const QString& currentCore, const QString& legacyCore) {
     verifyPlayback(appendedCore,romPath,modernPath,temp.filePath("appended-data"),
                    modernExpected,false);
 
-    const QByteArray oldAbi("kegarefusion-recording-v1");
+    const QByteArray oldAbi("kegarefusion-recording-v2");
     const QByteArray newAbi("kegarefusion-recording-v9");
     require(currentBytes.count(oldAbi)==1 && oldAbi.size()==newAbi.size(),
             "recording ABI marker not uniquely present in current core");

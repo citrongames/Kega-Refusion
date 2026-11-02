@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
+#include <QNetworkProxy>
 #include <QSaveFile>
 #include <QSslCipher>
 #include <QSslConfiguration>
@@ -36,7 +37,7 @@ constexpr int kMaxFramesPerSecond = 4096;
 constexpr int kMaxBytesPerSecond = 128 * 1024 * 1024;
 constexpr int kDeadLinkMs = 5000;
 constexpr int kMaxBufferedBytes = 512 * 1024;
-constexpr int kProtocol = 1;
+constexpr int kProtocol = 2;
 constexpr int kHandshakeMs = 10000;
 constexpr quint8 kInternalKind = 0;
 
@@ -218,6 +219,7 @@ bool NetTransport::host(const HostOptions& options, QString* error) {
     hostOptions_ = options;
     loadBans();
     server_ = new Server(this);
+    server_->setProxy(QNetworkProxy::NoProxy);
     server_->onIncoming = [this](qintptr descriptor) { accept(descriptor); };
     connect(server_, &QTcpServer::acceptError, this, [this](QAbstractSocket::SocketError) {
         emit transportError(server_->errorString());
@@ -244,6 +246,7 @@ bool NetTransport::join(const JoinOptions& options, QString* error) {
     if (!validateTls(error)) return false;
     joinOptions_ = options;
     auto* socket = new QSslSocket(this);
+    socket->setProxy(QNetworkProxy::NoProxy);
     attach(socket, false);
     socket->connectToHostEncrypted(cleanHost(options.host), options.port);
     return true;
@@ -256,6 +259,7 @@ void NetTransport::accept(qintptr descriptor) {
         return;
     }
     auto* socket = new QSslSocket(this);
+    socket->setProxy(QNetworkProxy::NoProxy);
     if (!socket->setSocketDescriptor(descriptor)) {
         socket->deleteLater();
         return;
@@ -295,9 +299,13 @@ void NetTransport::attach(QSslSocket* socket, bool serverSide) {
     });
     connect(socket, &QSslSocket::readyRead, this, [this, connection] { read(connection); });
     connect(socket, &QSslSocket::disconnected, this, [this, connection] {
+        if (connections_.contains(connection) && !connection->serverSide &&
+            !connection->authenticated && connection->socket->bytesAvailable() > 0) read(connection);
         if (connections_.contains(connection)) close(connection, QStringLiteral("Disconnected"));
     });
     connect(socket, &QSslSocket::errorOccurred, this, [this, connection](QAbstractSocket::SocketError) {
+        if (connections_.contains(connection) && !connection->serverSide &&
+            !connection->authenticated && connection->socket->bytesAvailable() > 0) read(connection);
         if (connections_.contains(connection) && !connection->closing)
             close(connection, socketReason(connection->socket));
     });
@@ -326,7 +334,7 @@ void NetTransport::attach(QSslSocket* socket, bool serverSide) {
 }
 
 void NetTransport::read(Connection* connection) {
-    if (!connections_.contains(connection)) return;
+    if (!connections_.contains(connection) || connection->closing) return;
     int bytesRead = 0;
     int frames = 0;
     auto* socket = connection->socket;
@@ -398,6 +406,10 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
             else if (connection->serverSide && type == QStringLiteral("proof")) handleProof(connection, payload);
             else if (!connection->serverSide && type == QStringLiteral("challenge")) handleChallenge(connection, payload);
             else if (!connection->serverSide && type == QStringLiteral("welcome")) handleWelcome(connection, payload);
+            else if (!connection->serverSide && type == QStringLiteral("reject")) {
+                const QString reason = object.value(QStringLiteral("reason")).toString().left(256);
+                close(connection, reason.isEmpty() ? QStringLiteral("Доступ запрещён.") : reason);
+            }
             else close(connection, QStringLiteral("Unexpected authentication message"));
             return;
         }
@@ -457,8 +469,16 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
 void NetTransport::handleHello(Connection* connection, const QByteArray& payload) {
     if (!connection->challenge.isEmpty()) { close(connection, QStringLiteral("Duplicate hello")); return; }
     const auto object = QJsonDocument::fromJson(payload).object();
+    if (object.value(QStringLiteral("protocol")).toInt() != kProtocol) {
+        reject(connection, QStringLiteral("Несовместимая версия сетевой игры."));
+        return;
+    }
     const QString nickname = object.value(QStringLiteral("nickname")).toString().trimmed();
     const QByteArray publicKey = decoded(object.value(QStringLiteral("publicKey")).toString());
+    if (nickname.isEmpty() || nickname.size() > 48 || publicKey.size() != kSecretSize) {
+        reject(connection, QStringLiteral("Некорректное имя или идентификатор игрока."));
+        return;
+    }
     const QString identity = fingerprint(publicKey);
     const QString remoteAddress = connection->socket->peerAddress().toString();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -468,7 +488,21 @@ void NetTransport::handleHello(Connection* connection, const QByteArray& payload
         failures = {};
     }
     if (failures.second >= 5) {
-        close(connection, QStringLiteral("Too many password attempts"));
+        reject(connection, QStringLiteral("Слишком много попыток ввода пароля."));
+        return;
+    }
+    if (bannedIdentities_.contains(identity) || sessionBannedIdentities_.contains(identity)) {
+        reject(connection, QStringLiteral("Доступ запрещён: вы заблокированы."));
+        return;
+    }
+    int active = 0;
+    bool replacing = false;
+    for (auto* candidate : connections_) if (candidate->authenticated) {
+        ++active;
+        if (candidate->identityFingerprint == identity) replacing = true;
+    }
+    if (active >= hostOptions_.maxPeers && !replacing) {
+        reject(connection, QStringLiteral("Комната заполнена."));
         return;
     }
     const bool passwordMatches = equalSecret(
@@ -483,19 +517,7 @@ void NetTransport::handleHello(Connection* connection, const QByteArray& payload
         }
         passwordFailures_.insert(remoteAddress,
             qMakePair(failures.first ? failures.first : now, failures.second + 1));
-    }
-    int active = 0;
-    bool replacing = false;
-    for (auto* candidate : connections_) if (candidate->authenticated) {
-        ++active;
-        if (candidate->identityFingerprint == identity) replacing = true;
-    }
-    if (object.value(QStringLiteral("protocol")).toInt() != kProtocol || nickname.isEmpty() ||
-        nickname.size() > 48 || publicKey.size() != kSecretSize ||
-        (active >= hostOptions_.maxPeers && !replacing) || bannedIdentities_.contains(identity) ||
-        sessionBannedIdentities_.contains(identity) ||
-        !passwordMatches) {
-        close(connection, QStringLiteral("Access denied or lobby full"));
+        reject(connection, QStringLiteral("Неверный пароль."));
         return;
     }
     passwordFailures_.remove(remoteAddress);
@@ -531,7 +553,7 @@ void NetTransport::handleProof(Connection* connection, const QByteArray& payload
     const QByteArray signature = decoded(QJsonDocument::fromJson(payload).object()
         .value(QStringLiteral("signature")).toString());
     if (!verifyIdentity(connection->pendingPublicKey, connection->challenge, signature)) {
-        close(connection, QStringLiteral("Identity proof failed"));
+        reject(connection, QStringLiteral("Не удалось подтвердить идентификатор игрока."));
         return;
     }
     const QString identity = connection->pendingFingerprint;
@@ -542,11 +564,11 @@ void NetTransport::handleProof(Connection* connection, const QByteArray& payload
         if (candidate->identityFingerprint == identity) replacing = true;
     }
     if (active >= hostOptions_.maxPeers && !replacing) {
-        close(connection, QStringLiteral("Lobby full"));
+        reject(connection, QStringLiteral("Комната заполнена."));
         return;
     }
     if (bannedIdentities_.contains(identity) || sessionBannedIdentities_.contains(identity)) {
-        close(connection, QStringLiteral("Access denied"));
+        reject(connection, QStringLiteral("Доступ запрещён: вы заблокированы."));
         return;
     }
     PeerInfo peer;
@@ -594,8 +616,11 @@ void NetTransport::handleProof(Connection* connection, const QByteArray& payload
 void NetTransport::handleWelcome(Connection* connection, const QByteArray& payload) {
     const auto object = QJsonDocument::fromJson(payload).object();
     const PeerInfo self = parsePeer(object.value(QStringLiteral("self")).toObject());
-    if (object.value(QStringLiteral("protocol")).toInt() != kProtocol || !self.id ||
-        self.identityFingerprint != fingerprint(identityPublicKey(joinOptions_.identitySecret))) {
+    if (object.value(QStringLiteral("protocol")).toInt() != kProtocol) {
+        close(connection, QStringLiteral("Несовместимая версия сетевой игры."));
+        return;
+    }
+    if (!self.id || self.identityFingerprint != fingerprint(identityPublicKey(joinOptions_.identitySecret))) {
         close(connection, QStringLiteral("Invalid welcome message"));
         return;
     }
@@ -646,6 +671,20 @@ bool NetTransport::enqueue(Connection* connection, MessageKind kind, const QByte
 
 void NetTransport::sendControl(Connection* connection, const QByteArray& data) {
     enqueue(connection, MessageKind(kInternalKind), data);
+}
+
+void NetTransport::reject(Connection* connection, const QString& reason) {
+    if (!connections_.contains(connection)) return;
+    sendControl(connection, json({{QStringLiteral("type"), QStringLiteral("reject")},
+                                  {QStringLiteral("reason"), reason}}));
+    if (!connections_.contains(connection)) return;
+    connection->closing = true;
+    QPointer<QSslSocket> socket(connection->socket);
+    connection->socket->disconnectFromHost();
+    if (!connections_.contains(connection)) return;
+    QTimer::singleShot(1000, this, [this, connection, socket, reason] {
+        if (socket && connections_.contains(connection)) close(connection, reason);
+    });
 }
 
 NetTransport::Connection* NetTransport::byPeerId(quint64 peerId) const {
@@ -794,6 +833,10 @@ bool NetTransport::isConnected() const {
 }
 quint16 NetTransport::localPort() const { return server_ ? server_->serverPort() : 0; }
 quint64 NetTransport::localPeerId() const { return localPeerId_; }
+QHostAddress NetTransport::peerAddress(quint64 peerId) const {
+    const auto* connection = byPeerId(peerId);
+    return connection ? connection->socket->peerAddress() : QHostAddress();
+}
 QList<PeerInfo> NetTransport::peers() const {
     QList<PeerInfo> result;
     for (auto it = sessionPeers_.cbegin(); it != sessionPeers_.cend(); ++it)
