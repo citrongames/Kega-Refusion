@@ -32,7 +32,7 @@ signals:
     void openRomRequested(const QString&);
     void notice(const QString&);
 private:
-    void startHost(quint16, const QString&, const QString&);
+    void startHost(quint16, const QString&, const QString&, const QString& connectionId = {});
     void resolveHostAddress();
     void setHostAddress(const QString& address);
     void startJoin(const QString&, const QString&);
@@ -55,7 +55,8 @@ private:
     kega::net::NetTransport transport_;
     NetAddressDiscovery* addressDiscovery_=nullptr;
     QByteArray invitationKey_;
-    QString invitationPassword_,localInvite_,addressStatus_;
+    QString invitationPassword_,localInvite_,addressStatus_,connectionId_;
+    QJsonArray connections_;
     bool automaticAddress_=false,addressPending_=false,addressRetry_=false;
     QThread fileThread_;
     NetTransferWorker* files_ = nullptr;

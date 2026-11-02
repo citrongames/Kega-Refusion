@@ -17,6 +17,7 @@ class QTableWidget;
 // setLobbyState() accepts:
 //   active, host, status, addressStatus, addressRetry, invite,
 //   inviteWithPassword, localInvite (includes password when configured),
+//   connections: [{id, name, ipv4, physical}] for the create dialog;
 //   allowCommands, allowDownloads;
 //   participants: [{id, nickname, role, readiness, pingMs, local, host}];
 //   rom: {filename, status, message, progress (0..100), canSelect,
@@ -34,7 +35,7 @@ public:
 
 signals:
     void createRequested(quint16 port, const QString& advertisedAddress,
-                         const QString& password);
+                         const QString& password, const QString& connectionId);
     void joinRequested(const QString& invite, const QString& password);
     void leaveRequested();
     void roleRequested(const QString& peerId, const QString& role);

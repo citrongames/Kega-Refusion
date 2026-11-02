@@ -1,6 +1,7 @@
 #include "NetplayController.h"
 #include "NetTransferWorker.h"
 #include "NetAddressDiscovery.h"
+#include "NetInterfaces.h"
 #include "NetplayTimeline.h"
 #include "core/EmulationSession.h"
 #include "ui/NetplayLobby.h"
@@ -36,7 +37,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         if(!active_||!hosting_||!automaticAddress_||!addressPending_)return;
         addressPending_=false;addressRetry_=address.isEmpty();
         if(address.isEmpty())addressStatus_=t("Не удалось определить внешний адрес. Можно повторить или указать его в дополнительных параметрах при создании лобби.");
-        else {setHostAddress(address);addressStatus_=t("Внешний адрес определён автоматически. Для подключения нужен доступ к TCP-порту %1.").arg(transport_.localPort());}
+        else {setHostAddress(address);addressStatus_=t("Адрес определён через %1. Для подключения нужен доступ к TCP-порту %2.").arg(addressDiscovery_->connectionName()).arg(transport_.localPort());}
         Q_UNUSED(detail);
         refreshLobby();
     });
@@ -239,7 +240,12 @@ void NetplayController::unban(const QString& id){
     auto o=QJsonDocument::fromJson(f.readAll()).object();f.close();if(!o.contains(id))return;o.remove(id);
     QSaveFile out(path);if(out.open(QIODevice::WriteOnly)){out.write(json(o));out.commit();}
 }
-void NetplayController::createSession(){if(active_){showLobby();return;}lobby_->showCreateDialog();}
+void NetplayController::createSession(){
+    if(active_){showLobby();return;}
+    connections_={};
+    for(const auto& c:NetInterfaces::available())connections_.append(QJsonObject{{"id",c.id},{"name",c.name},{"ipv4",c.ipv4},{"physical",c.physical}});
+    refreshLobby();lobby_->showCreateDialog();
+}
 void NetplayController::joinSession(){if(active_){showLobby();return;}lobby_->showJoinDialog();}
 void NetplayController::showLobby(){refreshLobby();lobby_->show();lobby_->raise();lobby_->activateWindow();}
 void NetplayController::setHostAddress(const QString& address){
@@ -252,16 +258,16 @@ void NetplayController::setHostAddress(const QString& address){
 void NetplayController::resolveHostAddress(){
     if(!active_||!hosting_||!automaticAddress_||addressPending_)return;
     addressPending_=true;addressRetry_=false;addressStatus_=t("Определение внешнего адреса…");
-    invite_.clear();inviteWithPassword_.clear();refreshLobby();addressDiscovery_->cancel();addressDiscovery_->start();
+    invite_.clear();inviteWithPassword_.clear();refreshLobby();addressDiscovery_->cancel();addressDiscovery_->start(connectionId_);
 }
-void NetplayController::startHost(quint16 port,const QString& address,const QString& password){
+void NetplayController::startHost(quint16 port,const QString& address,const QString& password,const QString& connectionId){
     if(active_)return;
     HostOptions options;options.port=port;options.inviteSecret=NetTransport::generateSecret();options.password=password;
     options.banFilePath=QFileInfo(settings_.fileName()).absolutePath()+"/netplay-bans.json";
     QString error;if(!transport_.host(options,&error)){emit notice(error);QMessageBox::warning(lobby_,t("Онлайн"),error);return;}
     active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=false;
     storageId_=QString::fromLatin1(NetTransport::generateSecret().left(16).toHex());
-    invitationKey_=options.inviteSecret;invitationPassword_=password;
+    invitationKey_=options.inviteSecret;invitationPassword_=password;connectionId_=connectionId;
     setHostAddress(QStringLiteral("127.0.0.1"));localInvite_=inviteWithPassword_;
     automaticAddress_=address.trimmed().isEmpty();addressPending_=false;addressRetry_=false;
     addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
@@ -449,6 +455,6 @@ void NetplayController::refreshLobby(){
         int owners=0;for(const auto& participant:participants_)if(roleValue(participant.value("role").toString())==localRole_)++owners;
         session_.setNetworkRole(owners>1?0:localRole_);
     }
-    lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"localInvite",localInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},
+    lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"localInvite",localInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},{"connections",connections_},{"selectedConnectionId",connectionId_},
         {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_}});
 }

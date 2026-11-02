@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.13.1 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.13.2 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -59,6 +59,7 @@ add_executable(KegaRefusion WIN32
     src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
     src/net/NetplayController.cpp src/net/NetplayController.h
     src/net/NetAddressDiscovery.cpp src/net/NetAddressDiscovery.h
+    src/net/NetInterfaces.cpp src/net/NetInterfaces.h src/net/BoundHttpRequest.cpp src/net/BoundHttpRequest.h
     src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h
     src/ui/NetplaySettingsPage.cpp src/ui/NetplaySettingsPage.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
@@ -78,20 +79,38 @@ else()
     target_compile_options(KegaRefusion PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 include(CTest)
+if(WIN32)
+    target_link_libraries(KegaRefusion PRIVATE iphlpapi ws2_32)
+endif()
 if(BUILD_TESTING)
-    add_executable(net_address_tests tests/net_address_tests.cpp src/net/NetAddressDiscovery.cpp src/net/NetAddressDiscovery.h)
+    add_executable(net_interfaces_tests tests/net_interfaces_tests.cpp src/net/NetInterfaces.cpp)
+    target_include_directories(net_interfaces_tests PRIVATE src)
+    target_link_libraries(net_interfaces_tests PRIVATE Qt6::Core Qt6::Network)
+    if(WIN32)
+        target_link_libraries(net_interfaces_tests PRIVATE iphlpapi ws2_32)
+    endif()
+    add_test(NAME net_interfaces_tests COMMAND net_interfaces_tests)
+    add_executable(net_address_tests tests/net_address_tests.cpp src/net/NetAddressDiscovery.cpp src/net/NetAddressDiscovery.h
+    src/net/NetInterfaces.cpp src/net/NetInterfaces.h src/net/BoundHttpRequest.cpp src/net/BoundHttpRequest.h)
     target_include_directories(net_address_tests PRIVATE src)
     target_link_libraries(net_address_tests PRIVATE Qt6::Core Qt6::Network)
+    if(WIN32)
+        target_link_libraries(net_address_tests PRIVATE iphlpapi ws2_32)
+    endif()
     add_test(NAME net_address_tests COMMAND net_address_tests)
     add_executable(netplay_session_tests tests/netplay_session_tests.cpp
         src/core/EmulationSession.cpp src/core/EmulationSession.h
         src/net/NetplayController.cpp src/net/NetplayController.h
     src/net/NetAddressDiscovery.cpp src/net/NetAddressDiscovery.h
+    src/net/NetInterfaces.cpp src/net/NetInterfaces.h src/net/BoundHttpRequest.cpp src/net/BoundHttpRequest.h
         src/net/NetTransport.cpp src/net/NetTransport.h
         src/net/NetFileTransfer.cpp src/net/NetFileTransfer.h
         src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
         src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h)
     target_link_libraries(netplay_session_tests PRIVATE core_host Qt6::Widgets Qt6::Network OpenSSL::Crypto)
+    if(WIN32)
+        target_link_libraries(netplay_session_tests PRIVATE iphlpapi ws2_32)
+    endif()
     add_executable(netplay_timeline_tests tests/netplay_timeline_tests.cpp)
     target_link_libraries(netplay_timeline_tests PRIVATE core_host)
     add_executable(net_file_tests tests/net_file_tests.cpp src/net/NetFileTransfer.cpp)

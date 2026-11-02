@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include "NetInterfaces.h"
 #include <QNetworkAccessManager>
 #include <QPointer>
 #include <QTimer>
@@ -8,16 +9,19 @@
 #include <QUrl>
 #include <QVector>
 
+class BoundHttpRequest;
+
 // One-shot, asynchronous public IPv4 discovery after the user creates a lobby.
 // UPnP reads router status only; it never creates or changes port mappings.
 class NetAddressDiscovery final : public QObject {
     Q_OBJECT
 public:
     explicit NetAddressDiscovery(QObject* parent = nullptr);
+    QString connectionName() const { return connection_.name; }
     static bool isPublicIpv4(const QString& address);
 
 public slots:
-    void start();
+    void start(const QString& connectionId = {});
     void cancel();
 
 signals:
@@ -41,6 +45,7 @@ private:
     QUdpSocket socket_;
     QTimer discoveryTimer_, upnpTimer_;
     QNetworkAccessManager routerNetwork_;
-    QNetworkAccessManager network_;
+    NetInterfaces::Connection connection_;
+    QPointer<BoundHttpRequest> publicRequest_;
     bool usingHttps_ = false;
 };

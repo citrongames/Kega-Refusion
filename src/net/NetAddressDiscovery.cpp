@@ -1,4 +1,6 @@
 #include "NetAddressDiscovery.h"
+#include "BoundHttpRequest.h"
+#include <QNetworkInterface>
 #include <QHostAddress>
 #include <QNetworkDatagram>
 #include <QNetworkProxy>
@@ -12,7 +14,6 @@ namespace {
 constexpr int MaxRouters = 2; // Description + SOAP: at most four router HTTP requests.
 constexpr int DescriptionLimit = 128 * 1024;
 constexpr int SoapLimit = 8 * 1024;
-constexpr int PublicIpLimit = 64;
 struct Body { QByteArray bytes; bool overflow = false; };
 
 bool parseIpv4(const QString& text, quint32* value) {
@@ -139,14 +140,17 @@ bool NetAddressDiscovery::isPublicIpv4(const QString& text) {
     return true;
 }
 
-void NetAddressDiscovery::start() {
+void NetAddressDiscovery::start(const QString& connectionId) {
     if (active_ || attempted_) return;
     attempted_ = active_ = true;
     usingHttps_ = false;
     routers_.clear();
     routerReplies_ = 0;
     ++generation_;
-    if (!socket_.bind(QHostAddress::AnyIPv4, 0)) { fallbackHttps(); return; }
+    connection_ = NetInterfaces::choose(connectionId);
+    if (connection_.id.isEmpty()) { finish({},QStringLiteral("No suitable Ethernet/Wi-Fi connection"));return; }
+    if (!socket_.bind(QHostAddress(connection_.ipv4), 0)) { fallbackHttps(); return; }
+    socket_.setMulticastInterface(QNetworkInterface::interfaceFromIndex(int(connection_.index)));
     socket_.setSocketOption(QAbstractSocket::MulticastTtlOption, 2);
     for (const char* version : {"1", "2"}) {
         const QByteArray search = QByteArray("M-SEARCH * HTTP/1.1\r\n") +
@@ -165,6 +169,7 @@ void NetAddressDiscovery::cancel() {
     discoveryTimer_.stop(); upnpTimer_.stop(); socket_.close();
     for (auto& reply : replies_) if (reply) { reply->abort(); reply->deleteLater(); }
     replies_.clear(); routers_.clear(); routerReplies_ = 0;
+    if(publicRequest_) {auto request=publicRequest_;publicRequest_=nullptr;request->cancel();request->deleteLater();}
 }
 
 void NetAddressDiscovery::finish(const QString& address, const QString& detail) {
@@ -174,6 +179,7 @@ void NetAddressDiscovery::finish(const QString& address, const QString& detail) 
     discoveryTimer_.stop(); upnpTimer_.stop(); socket_.close();
     for (auto& reply : replies_) if (reply) { reply->abort(); reply->deleteLater(); }
     replies_.clear(); routers_.clear(); routerReplies_ = 0;
+    if(publicRequest_) {auto request=publicRequest_;publicRequest_=nullptr;request->cancel();request->deleteLater();}
     emit finished(address, detail);
 }
 
@@ -187,6 +193,12 @@ void NetAddressDiscovery::readSsdp() {
         }
         const auto datagram = socket_.receiveDatagram(4096);
         const QString responder = datagram.senderAddress().toString();
+        if(datagram.interfaceIndex() && datagram.interfaceIndex()!=connection_.index)continue;
+        bool sameSubnet=false;
+        for(const auto& entry:QNetworkInterface::interfaceFromIndex(int(connection_.index)).addressEntries())
+            if(entry.ip()==QHostAddress(connection_.ipv4)&&entry.prefixLength()>=0&&
+                datagram.senderAddress().isInSubnet(entry.ip(),entry.prefixLength())) {sameSubnet=true;break;}
+        if(!sameSubnet)continue;
         if (!privateRouter(responder) || datagram.data().size() > 4096 ||
             !datagram.data().startsWith("HTTP/1.1 200")) continue;
         QByteArray location, service;
@@ -285,22 +297,18 @@ void NetAddressDiscovery::fallbackHttps(int serviceIndex) {
     }
     const QUrl url(serviceIndex == 0 ? QStringLiteral("https://api.ipify.org")
                                       : QStringLiteral("https://ipv4.icanhazip.com"));
-    auto* reply = network_.get(boundedRequest(url, 2200));
-    replies_.append(reply);
-    const auto body = collect(reply, this, PublicIpLimit);
-    const int generation = generation_;
-    QTimer::singleShot(2500, this, [this,replyGuard=QPointer<QNetworkReply>(reply),generation] {
-        if (active_ && generation == generation_ && replyGuard) replyGuard->abort();
-    });
-    connect(reply, &QNetworkReply::finished, this, [this,reply,body,serviceIndex,generation] {
-        if (generation != generation_ || !active_) { reply->deleteLater(); return; }
-        if (finishBody(reply, body, PublicIpLimit)) {
-            const QString address = QString::fromLatin1(body->bytes).trimmed();
-            if (isPublicIpv4(address)) {
-                reply->deleteLater(); finish(address, QStringLiteral("HTTPS address service")); return;
-            }
+    auto* request = new BoundHttpRequest(this);
+    publicRequest_=request;
+    const int generation=generation_;
+    connect(request,&BoundHttpRequest::finished,this,[this,request,serviceIndex,generation](const QByteArray& body,const QString& error){
+        if(publicRequest_==request)publicRequest_=nullptr;
+        request->deleteLater();
+        if(generation!=generation_||!active_)return;
+        const QString address=QString::fromLatin1(body).trimmed();
+        if(error.isEmpty()&&isPublicIpv4(address)) {
+            finish(address,QStringLiteral("HTTPS on selected interface"));return;
         }
-        reply->deleteLater();
-        fallbackHttps(serviceIndex + 1);
+        fallbackHttps(serviceIndex+1);
     });
+    request->start(url,connection_,2500);
 }

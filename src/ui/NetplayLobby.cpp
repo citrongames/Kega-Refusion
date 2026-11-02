@@ -296,6 +296,22 @@ void NetplayLobby::showCreateDialog() {
     auto* advanced = new QWidget(dialog);
     auto* advancedForm = new QFormLayout(advanced);
     advancedForm->setContentsMargins(0, 0, 0, 0);
+    auto* connection = new QComboBox(advanced);
+    connection->setObjectName(QStringLiteral("netplayCreateConnection"));
+    connection->addItem(t("Автоматически — Ethernet / Wi-Fi"), QString());
+    const QJsonArray connections = state_.value(QStringLiteral("connections")).toArray();
+    for (int i = 0; i < qMin(connections.size(), 64); ++i) {
+        const QJsonObject entry = connections.at(i).toObject();
+        const QString id = entry.value(QStringLiteral("id")).toString();
+        if (id.isEmpty()) continue;
+        const QString name = entry.value(QStringLiteral("name")).toString().trimmed();
+        const QString ipv4 = entry.value(QStringLiteral("ipv4")).toString().trimmed();
+        QString label = name.isEmpty() ? ipv4 : name;
+        if (!ipv4.isEmpty() && ipv4 != label) label += QStringLiteral(" · ") + ipv4;
+        if (!entry.value(QStringLiteral("physical")).toBool()) label += t(" (VPN / виртуальное)");
+        connection->addItem(label, id);
+    }
+    advancedForm->addRow(t("Подключение для определения адреса:"), connection);
     auto* address = new QLineEdit(advanced);
     address->setObjectName(QStringLiteral("netplayAdvertisedAddress"));
     address->setPlaceholderText(t("Автоматически"));
@@ -319,7 +335,7 @@ void NetplayLobby::showCreateDialog() {
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, dialog,
-            [this, dialog, port, address, password, error, advancedToggle] {
+            [this, dialog, port, address, password, connection, error, advancedToggle] {
         const QString advertised = address->text().trimmed();
         if (!validManualAddress(advertised)) {
             error->setText(t("Укажите только IP-адрес или имя хоста, без схемы и порта."));
@@ -327,7 +343,8 @@ void NetplayLobby::showCreateDialog() {
             advancedToggle->setChecked(true);
             return;
         }
-        emit createRequested(quint16(port->value()), advertised, password->text());
+        emit createRequested(quint16(port->value()), advertised, password->text(),
+                             connection->currentData().toString());
         dialog->accept();
         show();
         raise();
