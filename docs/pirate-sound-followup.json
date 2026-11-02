@@ -1,0 +1,1772 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "subject": "Super Poker remaining protected sound driver and Feng Shen external sound fixes",
+  "scope": "Real native core runs with forwarded sound-data reads and table snapshots; no ROM writes. Optional board assignments/zero response are isolated diagnostic controls, not production behavior. Whole PCM equality is stronger evidence than a nonzero audio count; 1200 frames does not prove every track or a full playthrough.",
+  "identities": {
+    "C37E6858": {
+      "sha256": "5a3b66660e1de788b9b007d2e39affb4f8cc1a92a4b3e7d3b4d0a6588a137a65",
+      "size": 4194304,
+      "driver_offset": "0xE3B0E",
+      "driver_8k_sha256": "3feafe45a6fd2fa05a4b21948ad315a5615afb135300715bbdf8fb575f6c4284",
+      "driver_8k_crc32": "DCC2F413",
+      "initial_zram_0030": "ab5156db",
+      "bootstrap_instruction_at_0052": "213000",
+      "prefix_64k_crc32": "DD02797C"
+    },
+    "08275694": {
+      "sha256": "d16a2d4234ceb7ba8539bcb38dbf42eaaf4e4de1bc4cd75450471d4846f75350",
+      "size": 4194304,
+      "driver_offset": "0xE3B0E",
+      "driver_8k_sha256": "3feafe45a6fd2fa05a4b21948ad315a5615afb135300715bbdf8fb575f6c4284",
+      "driver_8k_crc32": "DCC2F413",
+      "initial_zram_0030": "ab5156db",
+      "bootstrap_instruction_at_0052": "213000",
+      "prefix_64k_crc32": "0162CDA5"
+    },
+    "6A382B60": {
+      "sha256": "870e1e55b356d76adf95c50dcafc52021572293224ab537217f9842ccba2fc85",
+      "size": 2097152,
+      "driver_offset": "0x1E3B02",
+      "driver_8k_sha256": "c701a939b3bd32e8b6bc2ed3a35abcabb8e055e656bd9782bfd96d7bbb89352f",
+      "driver_8k_crc32": "9FFBAD56",
+      "initial_zram_0030": "18000000",
+      "bootstrap_instruction_at_0052": "213000",
+      "prefix_64k_crc32": "91865EA4"
+    },
+    "DFACB9FF": {
+      "sha256": "9fbdf2f0447d71f792e7816eeea495c8e786448f7ff3b8f1c42b9fe87d68ada9",
+      "size": 2097152,
+      "driver_offset": "0x1E3B02",
+      "driver_8k_sha256": "990a4b17ff48a0572bf0d5717397deb96ca193be74bc4c02ed575d4a26d29bfb",
+      "driver_8k_crc32": "9C101D3D",
+      "initial_zram_0030": "00600000",
+      "bootstrap_instruction_at_0052": "213000",
+      "prefix_64k_crc32": "8483C712"
+    },
+    "C57FF39C": {
+      "sha256": "d0ab9085f95ec190bb3390658088ba8fa358ac151c33bc8ca968eeaba210e9d8",
+      "size": 2097152,
+      "driver_offset": "0x1E3B02",
+      "driver_8k_sha256": "990a4b17ff48a0572bf0d5717397deb96ca193be74bc4c02ed575d4a26d29bfb",
+      "driver_8k_crc32": "9C101D3D",
+      "initial_zram_0030": "00600000",
+      "bootstrap_instruction_at_0052": "213000",
+      "prefix_64k_crc32": "8483C712"
+    },
+    "F85DD66D": {
+      "sha256": "bf9b2e2131100672ac86adced519dc4c9b48a570653c4453b04425400c36dd2a",
+      "size": 2097152,
+      "driver_offset": "0x1E3B02",
+      "driver_8k_sha256": "527f6a9e61e785cc77da7f1d4584ddf919d02fba2b6c0bc4ef6c9c7373f2c0a7",
+      "driver_8k_crc32": "0D42CA1C",
+      "initial_zram_0030": "006000cb",
+      "bootstrap_instruction_at_0052": "c37f00",
+      "prefix_64k_crc32": "2407C90F"
+    }
+  },
+  "poker": {
+    "original_crc32": "C37E6858",
+    "branch_adjusted_crc32": "08275694",
+    "all_byte_differences": [
+      {
+        "offset": "0x068E",
+        "original": "6624",
+        "branch_adjusted": "603E",
+        "bytes": 2
+      }
+    ],
+    "sound_driver_unchanged": true,
+    "driver_seed": "AB5156DB",
+    "actual_native_protection_reads": [
+      {
+        "address": "0x400000",
+        "z80_pc": "0x0058",
+        "value": "55"
+      },
+      {
+        "address": "0x400002",
+        "z80_pc": "0x0066",
+        "value": "0F"
+      },
+      {
+        "address": "0x400004",
+        "z80_pc": "0x006C",
+        "value": "AA"
+      },
+      {
+        "address": "0x400006",
+        "z80_pc": "0x0072",
+        "value": "F0"
+      }
+    ],
+    "decoder": "ADD A,(HL), not XOR. AB+55=00, 51+0F=60, 56+AA=00, DB+F0=CB modulo 256.",
+    "expected_post_bootstrap_zram_0030": "006000CB",
+    "missing_hardware": "400000 returns FF; CP55 fails and branches to01A2 before decoding, so table stays AB5156DB and later fetches leave valid sound data.",
+    "correct_data_read_example": {
+      "z80_pc": "0x016B",
+      "first_physical_address": "0x0F42AC",
+      "first_bytes": [
+        128,
+        128,
+        128,
+        128,
+        127,
+        127
+      ]
+    },
+    "production_equals_supported_original": {
+      "full_1200_frame_pcm_sha256_equal": true,
+      "sampled_video_sequence_sha256_equal": true,
+      "first_1024_actual_data_reads_equal": true,
+      "all_data_read_counts_equal": true
+    },
+    "recognition_fix": {
+      "patch": "tools/patches/genesis-plus-gx-poker-family.patch",
+      "existing_hardware_entry": "FFFF:D7B0, registers55/0F/AA/F0 via default_regs_r",
+      "no_variant_database_entries": true,
+      "no_rom_patches": true,
+      "predicate": [
+        "4MiB image",
+        "three canonical1MiB copies are byte-identical",
+        "canonical prefixCRC DD02797C and canonical branch6624",
+        "first copy exactly matches canonical except checksum field18E..18F and branch068E..068F",
+        "first-copy branch must be6624 or603E"
+      ],
+      "cost": "One64KiB prefixCRC and bounded3MiB comparisons at load; no per-frame work.",
+      "checksum_guard": "Uses the same family matcher.",
+      "compatibility": "OriginalFFFF:6F41 keeps old ABI. Newly recognized headers/branch content gets poker-hardware-v1 recording/network tag; flag cleared on load/unload. Existing native register and state payloads reused."
+    }
+  },
+  "feng_shen": {
+    "original_crc32": "6A382B60",
+    "external_fixed_crcs": [
+      "DFACB9FF",
+      "C57FF39C"
+    ],
+    "released_reference_crc32": "F85DD66D",
+    "driver_proof": "Fengf1/f2 have identical entire8KiB sound drivers. Relative to original, only driver seed30..31 changes1800->0060. Original bootstrap remains active, including writes and additive response decoding.",
+    "expected_supported_table": "006000CB",
+    "baseline_external_fixed_table": "FF5FFFFF",
+    "forced_original_echo_table": "00C000CB",
+    "zero_diagnostic_table": "00600000",
+    "released_canon_table": "006000CB",
+    "released_canon_difference": "Seeds the complete decoded table006000CB and replaces LD HL,0030 atZ80PC52 with JP007F, skipping the protection decoder.",
+    "concrete_fetch_evidence": {
+      "original_correct": {
+        "frame": 1157,
+        "z80_pc": "0x0176",
+        "first_physical_address": "0x1E8520",
+        "values": "80 80 80 80 80 80"
+      },
+      "external_fixed_baseline_wrong": {
+        "frame": 1157,
+        "z80_pc": "0x0176",
+        "first_physical_address": "0x400520",
+        "value": "FF",
+        "next": "408521 ->FF"
+      },
+      "external_fixed_forced_echo_wrong": {
+        "frame": 1157,
+        "z80_pc": "0x0176",
+        "first_physical_address": "0x400520",
+        "value": "67 from prefetched open bus, not music ROM"
+      },
+      "zero_diagnostic": "First reads reach1E8520 and match original data, but table still lacksCB and this does not establish later-track correctness."
+    },
+    "assessment": "Confirmed inconsistent external sound patch: part of the table is predecoded while the original additive hardware bootstrap remains. Original protection cannot be enabled without doubling60 toC0. Returning zero globally would substitute hardware behavior and is not a justified emulator correction. No mapper or ROM repair is applied for these fixed images.",
+    "production_action": "Keep original and Canon behavior; document incomplete external fixed-driver behavior and prefer already supported original/complete released data when available.",
+    "audio_caution": "All examined cases emit many nonzero PCM samples, including invalid music pointers. Nonzero PCM is not a sound-correctness verdict."
+  },
+  "native_run_evidence": {
+    "poker-f1-baseline": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "ab5156db",
+          "zbank": "0x400000",
+          "z80_hl": "0xff2f"
+        },
+        {
+          "frame": 120,
+          "zram0030": "ab5156db",
+          "zbank": "0x400000",
+          "z80_hl": "0xff2d"
+        },
+        {
+          "frame": 600,
+          "zram0030": "ab5156db",
+          "zbank": "0x400000",
+          "z80_hl": "0xff2f"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "ab5156db",
+          "zbank": "0x200000",
+          "z80_hl": "0xff2f"
+        }
+      ],
+      "data_rom_read_count": 0,
+      "first_1024_data_read_trace_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "first_data_reads": [],
+      "non_rom_reads_sample": [
+        {
+          "address": "0xa07f2d",
+          "value": 255,
+          "z80_pc": "0x002003",
+          "frame": 53,
+          "handler": "zbank_lockup_r"
+        },
+        {
+          "address": "0x402b31",
+          "value": 255,
+          "z80_pc": "0x00020b",
+          "frame": 7,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x406df4",
+          "value": 255,
+          "z80_pc": "0x000203",
+          "frame": 7,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x407f2d",
+          "value": 255,
+          "z80_pc": "0x000033",
+          "frame": 53,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x407f2e",
+          "value": 255,
+          "z80_pc": "0x000033",
+          "frame": 53,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x407f2f",
+          "value": 255,
+          "z80_pc": "0x000033",
+          "frame": 7,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x407f30",
+          "value": 255,
+          "z80_pc": "0x00026d",
+          "frame": 7,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x407f32",
+          "value": 255,
+          "z80_pc": "0x00021b",
+          "frame": 7,
+          "handler": "zbank_unused_r"
+        }
+      ],
+      "protection_accesses": [
+        {
+          "calls": 4715,
+          "handler": {
+            "name": "zbank_unused_r",
+            "offset": "0x40dfe0"
+          },
+          "address": "0x400000",
+          "first_value": 255,
+          "last_value": 255,
+          "min_value": 255,
+          "max_value": 255,
+          "first_pc": "0x000058",
+          "last_pc": "0x000058",
+          "first_frame": 7,
+          "last_frame": 1200,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "open_bus"
+        }
+      ],
+      "pcm_sha256": "7b842f5f82c57324b268e610ceb5fea61d6d5c36d6fd2c042e1b903fdf25311c",
+      "nonzero_scalar_audio_samples": 1448714,
+      "video_sampled_sequence_sha256": "bfd93f6463205201f781d8d4e234ae178792934b58b91e448c32bc9652bcbc80"
+    },
+    "poker-f1-board": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "poker",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "006000cb",
+          "zbank": "0xf8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "006000cb",
+          "zbank": "0xe8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 140101,
+      "first_1024_data_read_trace_sha256": "1f130b9f595b608ac803eac224eb8896afaa237a6aa12708e0281d39e4029c05",
+      "first_data_reads": [
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ac",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ad",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ae",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42af",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b0",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b1",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b2",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b3",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b4",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b5",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b6",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b7",
+          "value": 130
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400000",
+          "first_value": 85,
+          "last_value": 85,
+          "min_value": 85,
+          "max_value": 85,
+          "first_pc": "0x000058",
+          "last_pc": "0x000058",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400002",
+          "first_value": 15,
+          "last_value": 15,
+          "min_value": 15,
+          "max_value": 15,
+          "first_pc": "0x000066",
+          "last_pc": "0x000066",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400004",
+          "first_value": 170,
+          "last_value": 170,
+          "min_value": 170,
+          "max_value": 170,
+          "first_pc": "0x00006c",
+          "last_pc": "0x00006c",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400006",
+          "first_value": 240,
+          "last_value": 240,
+          "min_value": 240,
+          "max_value": 240,
+          "first_pc": "0x000072",
+          "last_pc": "0x000072",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "9e69a462eed90267ae1ef0efa55714559b37af3c51f3961594f1bb8cca465004",
+      "nonzero_scalar_audio_samples": 1650989,
+      "video_sampled_sequence_sha256": "b2b2e880bfd51603c49149f0838de28b88ba53dddaca5876a8a9612734c7095c"
+    },
+    "poker-original": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "006000cb",
+          "zbank": "0xf8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "006000cb",
+          "zbank": "0xe8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 140101,
+      "first_1024_data_read_trace_sha256": "1f130b9f595b608ac803eac224eb8896afaa237a6aa12708e0281d39e4029c05",
+      "first_data_reads": [
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ac",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ad",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ae",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42af",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b0",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b1",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b2",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b3",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b4",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b5",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b6",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b7",
+          "value": 130
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400000",
+          "first_value": 85,
+          "last_value": 85,
+          "min_value": 85,
+          "max_value": 85,
+          "first_pc": "0x000058",
+          "last_pc": "0x000058",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400002",
+          "first_value": 15,
+          "last_value": 15,
+          "min_value": 15,
+          "max_value": 15,
+          "first_pc": "0x000066",
+          "last_pc": "0x000066",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400004",
+          "first_value": 170,
+          "last_value": 170,
+          "min_value": 170,
+          "max_value": 170,
+          "first_pc": "0x00006c",
+          "last_pc": "0x00006c",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400006",
+          "first_value": 240,
+          "last_value": 240,
+          "min_value": 240,
+          "max_value": 240,
+          "first_pc": "0x000072",
+          "last_pc": "0x000072",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "9e69a462eed90267ae1ef0efa55714559b37af3c51f3961594f1bb8cca465004",
+      "nonzero_scalar_audio_samples": 1650989,
+      "video_sampled_sequence_sha256": "b2b2e880bfd51603c49149f0838de28b88ba53dddaca5876a8a9612734c7095c"
+    },
+    "poker-f1-production": {
+      "core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "006000cb",
+          "zbank": "0xf8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "006000cb",
+          "zbank": "0xe8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 140101,
+      "first_1024_data_read_trace_sha256": "1f130b9f595b608ac803eac224eb8896afaa237a6aa12708e0281d39e4029c05",
+      "first_data_reads": [
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ac",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ad",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ae",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42af",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b0",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b1",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b2",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b3",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b4",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b5",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b6",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b7",
+          "value": 130
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400000",
+          "first_value": 85,
+          "last_value": 85,
+          "min_value": 85,
+          "max_value": 85,
+          "first_pc": "0x000058",
+          "last_pc": "0x000058",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400002",
+          "first_value": 15,
+          "last_value": 15,
+          "min_value": 15,
+          "max_value": 15,
+          "first_pc": "0x000066",
+          "last_pc": "0x000066",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400004",
+          "first_value": 170,
+          "last_value": 170,
+          "min_value": 170,
+          "max_value": 170,
+          "first_pc": "0x00006c",
+          "last_pc": "0x00006c",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400006",
+          "first_value": 240,
+          "last_value": 240,
+          "min_value": 240,
+          "max_value": 240,
+          "first_pc": "0x000072",
+          "last_pc": "0x000072",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "9e69a462eed90267ae1ef0efa55714559b37af3c51f3961594f1bb8cca465004",
+      "nonzero_scalar_audio_samples": 1650989,
+      "video_sampled_sequence_sha256": "b2b2e880bfd51603c49149f0838de28b88ba53dddaca5876a8a9612734c7095c"
+    },
+    "poker-original-production": {
+      "core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "006000cb",
+          "zbank": "0xf8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "006000cb",
+          "zbank": "0xe8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "006000cb",
+          "zbank": "0xf0000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 140101,
+      "first_1024_data_read_trace_sha256": "1f130b9f595b608ac803eac224eb8896afaa237a6aa12708e0281d39e4029c05",
+      "first_data_reads": [
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ac",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ad",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42ae",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42af",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b0",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b1",
+          "value": 127
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b2",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b3",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b4",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b5",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b6",
+          "value": 128
+        },
+        {
+          "frame": 53,
+          "z80_pc": "0x16b",
+          "address": "0xf42b7",
+          "value": 130
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400000",
+          "first_value": 85,
+          "last_value": 85,
+          "min_value": 85,
+          "max_value": 85,
+          "first_pc": "0x000058",
+          "last_pc": "0x000058",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400002",
+          "first_value": 15,
+          "last_value": 15,
+          "min_value": 15,
+          "max_value": 15,
+          "first_pc": "0x000066",
+          "last_pc": "0x000066",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400004",
+          "first_value": 170,
+          "last_value": 170,
+          "min_value": 170,
+          "max_value": 170,
+          "first_pc": "0x00006c",
+          "last_pc": "0x00006c",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 1,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400006",
+          "first_value": 240,
+          "last_value": 240,
+          "min_value": 240,
+          "max_value": 240,
+          "first_pc": "0x000072",
+          "last_pc": "0x000072",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "9e69a462eed90267ae1ef0efa55714559b37af3c51f3961594f1bb8cca465004",
+      "nonzero_scalar_audio_samples": 1650989,
+      "video_sampled_sequence_sha256": "b2b2e880bfd51603c49149f0838de28b88ba53dddaca5876a8a9612734c7095c"
+    },
+    "feng-f2-baseline": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "ff5fffff",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "ff5fffff",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "ff5fffff",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "ff5fffff",
+          "zbank": "0x408000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 0,
+      "first_1024_data_read_trace_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "first_data_reads": [],
+      "non_rom_reads_sample": [
+        {
+          "address": "0x400520",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408521",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408522",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408523",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408524",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408525",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408526",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        },
+        {
+          "address": "0x408527",
+          "value": 255,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "zbank_unused_r"
+        }
+      ],
+      "protection_accesses": [
+        {
+          "calls": 4,
+          "handler": {
+            "name": "zbank_unused_w",
+            "offset": "0x40dff0"
+          },
+          "address": "0x400004",
+          "first_value": 0,
+          "last_value": 203,
+          "min_value": 0,
+          "max_value": 203,
+          "first_pc": "0x00005a",
+          "last_pc": "0x00007a",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "write8",
+          "handler_behavior": "ignored_write"
+        },
+        {
+          "calls": 4,
+          "handler": {
+            "name": "zbank_unused_r",
+            "offset": "0x40dfe0"
+          },
+          "address": "0x400006",
+          "first_value": 255,
+          "last_value": 255,
+          "min_value": 255,
+          "max_value": 255,
+          "first_pc": "0x00005d",
+          "last_pc": "0x00007d",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "open_bus"
+        }
+      ],
+      "pcm_sha256": "9bf36c3cfbc831a7ca0be0d27f7196dd5e26aa8ae22d86185a4f4b0706b8706c",
+      "nonzero_scalar_audio_samples": 1763010,
+      "video_sampled_sequence_sha256": "c947cb2778d14d859688ad15cf7a776de12f9440b3d3e90dcede2a28def52bfc"
+    },
+    "feng-f2-echo": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "echo",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "00c000cb",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "00c000cb",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "00c000cb",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "00c000cb",
+          "zbank": "0x400000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 0,
+      "first_1024_data_read_trace_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "first_data_reads": [],
+      "non_rom_reads_sample": [
+        {
+          "address": "0x400520",
+          "value": 103,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400521",
+          "value": 57,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400522",
+          "value": 74,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400523",
+          "value": 57,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400524",
+          "value": 103,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400525",
+          "value": 248,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400526",
+          "value": 103,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        },
+        {
+          "address": "0x400527",
+          "value": 248,
+          "z80_pc": "0x000176",
+          "frame": 1157,
+          "handler": "default_regs_r"
+        }
+      ],
+      "protection_accesses": [
+        {
+          "calls": 4,
+          "handler": {
+            "name": "default_regs_w",
+            "offset": "0x4c7cf0"
+          },
+          "address": "0x400004",
+          "first_value": 0,
+          "last_value": 203,
+          "min_value": 0,
+          "max_value": 203,
+          "first_pc": "0x00005a",
+          "last_pc": "0x00007a",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "write8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 4,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400006",
+          "first_value": 0,
+          "last_value": 203,
+          "min_value": 0,
+          "max_value": 203,
+          "first_pc": "0x00005d",
+          "last_pc": "0x00007d",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "840246fd062daa98e1f98916604e7ac6f65a3d96cb7dd2b56e87048de3f211fc",
+      "nonzero_scalar_audio_samples": 1763231,
+      "video_sampled_sequence_sha256": "c947cb2778d14d859688ad15cf7a776de12f9440b3d3e90dcede2a28def52bfc"
+    },
+    "feng-f2-zero": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "zero",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "00600000",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "00600000",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "00600000",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "00600000",
+          "zbank": "0x1e8000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 3621,
+      "first_1024_data_read_trace_sha256": "16009228a229a505cd60d59c05ded7bef150980fbc03ddc81c3e326404f2bbe7",
+      "first_data_reads": [
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8520",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8521",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8522",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8523",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8524",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8525",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8526",
+          "value": 126
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8527",
+          "value": 145
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8528",
+          "value": 123
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8529",
+          "value": 120
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e852a",
+          "value": 150
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e852b",
+          "value": 146
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [
+        {
+          "calls": 4,
+          "handler": {
+            "name": "m68k_unused_8_w",
+            "offset": "0x40c1e0"
+          },
+          "address": "0x400004",
+          "first_value": 0,
+          "last_value": 203,
+          "min_value": 0,
+          "max_value": 203,
+          "first_pc": "0x00005a",
+          "last_pc": "0x00007a",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "write8",
+          "handler_behavior": "ignored_write"
+        },
+        {
+          "calls": 4,
+          "handler": {
+            "name": "unknown",
+            "offset": "0x97720180"
+          },
+          "address": "0x400006",
+          "first_value": 0,
+          "last_value": 0,
+          "min_value": 0,
+          "max_value": 0,
+          "first_pc": "0x00005d",
+          "last_pc": "0x00007d",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "ef1893e58f0cedcf7541a642812b7e185108e2994eb1607289ee41f539f5a0d3",
+      "nonzero_scalar_audio_samples": 1763230,
+      "video_sampled_sequence_sha256": "c947cb2778d14d859688ad15cf7a776de12f9440b3d3e90dcede2a28def52bfc"
+    },
+    "feng-original": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "006000cb",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "006000cb",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "006000cb",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "006000cb",
+          "zbank": "0x1e8000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 3621,
+      "first_1024_data_read_trace_sha256": "16009228a229a505cd60d59c05ded7bef150980fbc03ddc81c3e326404f2bbe7",
+      "first_data_reads": [
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8520",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8521",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8522",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8523",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8524",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8525",
+          "value": 128
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8526",
+          "value": 126
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8527",
+          "value": 145
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8528",
+          "value": 123
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e8529",
+          "value": 120
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e852a",
+          "value": 150
+        },
+        {
+          "frame": 1157,
+          "z80_pc": "0x176",
+          "address": "0x1e852b",
+          "value": 146
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [
+        {
+          "calls": 4,
+          "handler": {
+            "name": "default_regs_w",
+            "offset": "0x4c7cf0"
+          },
+          "address": "0x400004",
+          "first_value": 0,
+          "last_value": 203,
+          "min_value": 0,
+          "max_value": 203,
+          "first_pc": "0x00005a",
+          "last_pc": "0x00007a",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "write8",
+          "handler_behavior": "native_mapped_handler"
+        },
+        {
+          "calls": 4,
+          "handler": {
+            "name": "default_regs_r",
+            "offset": "0x4c82d0"
+          },
+          "address": "0x400006",
+          "first_value": 0,
+          "last_value": 203,
+          "min_value": 0,
+          "max_value": 203,
+          "first_pc": "0x00005d",
+          "last_pc": "0x00007d",
+          "first_frame": 7,
+          "last_frame": 7,
+          "category": "z80_cartridge",
+          "kind": "read8",
+          "handler_behavior": "native_mapped_handler"
+        }
+      ],
+      "pcm_sha256": "3b575892ded2e545bb67899e1c4cae229cacfcdd1b265be64c1cff5cb29ddbd0",
+      "nonzero_scalar_audio_samples": 1763232,
+      "video_sampled_sequence_sha256": "13decce6aaad757e9f95a8026cd0dc5c464def44828b3a7f963663d5788dd3b6"
+    },
+    "canon-reference": {
+      "core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+      "frames": 1200,
+      "diagnostic_board_override": "none",
+      "tables": [
+        {
+          "frame": 8,
+          "zram0030": "006000cb",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 120,
+          "zram0030": "006000cb",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 600,
+          "zram0030": "006000cb",
+          "zbank": "0x1f0000",
+          "z80_hl": "0x0"
+        },
+        {
+          "frame": 1200,
+          "zram0030": "006000cb",
+          "zbank": "0x1f8000",
+          "z80_hl": "0x0"
+        }
+      ],
+      "data_rom_read_count": 85340,
+      "first_1024_data_read_trace_sha256": "6437e81d2a45aac9111a7f1c3d89f001c6c476d82ef5d03f7fefebf9648acde6",
+      "first_data_reads": [
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42ac",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42ad",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42ae",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42af",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b0",
+          "value": 127
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b1",
+          "value": 127
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b2",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b3",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b4",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b5",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b6",
+          "value": 128
+        },
+        {
+          "frame": 165,
+          "z80_pc": "0x176",
+          "address": "0x1f42b7",
+          "value": 130
+        }
+      ],
+      "non_rom_reads_sample": [],
+      "protection_accesses": [],
+      "pcm_sha256": "7be840cec4e6b3a9ace361636d6054264383861f7562e3be35bb10a1040c11f6",
+      "nonzero_scalar_audio_samples": 1762212,
+      "video_sampled_sequence_sha256": "9f75a167452578cf36454fd2fc5d411f4d888f52e9ef0223cfa22ed2766d3241"
+    }
+  },
+  "validation": {
+    "mode": "--pirate-mappers",
+    "generated_cases": [
+      "original repeated copies",
+      "corrupted canonical copy rejected",
+      "wrong canonical prefix rejected",
+      "branch603E with same original board accepted",
+      "header-only corrected copy accepted",
+      "unknown branch rejected",
+      "unrelated first-copy byte change rejected"
+    ],
+    "checks": [
+      "auto checksum OFF/ON",
+      "native four register values",
+      "state save/restore",
+      "soft and hard reset",
+      "source image unchanged",
+      "scoped recording ABI",
+      "unload isolation"
+    ],
+    "regressions_passed": [
+      "--barver-hardware",
+      "--sdk99-hardware",
+      "--sonic-mapper",
+      "--checksum-only",
+      "--svp-bus"
+    ],
+    "forwarding_observer": "build/verification/exhaustive-audit/sound-followup/probe.py and sound_trace.c",
+    "scratch_evidence_directory": "build/verification/exhaustive-audit/sound-followup",
+    "final_tested_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+    "baseline_core_sha256": "600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1",
+    "full_playthrough_claimed": false
+  }
+}

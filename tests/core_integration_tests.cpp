@@ -679,9 +679,9 @@ void testCoreOptionsAndReset(const QString& corePath) {
     require(readFile(save) == oversized, "hard reset overwrote rejected user SRAM");
 }
 
-void setPrefixCrc(QByteArray& rom, quint32 target) {
-    const auto crc=[&](){return quint32(crc32(0,reinterpret_cast<const Bytef*>(rom.constData()),0x10000));};
-    constexpr int fix=0xfffc;
+void setPrefixCrc(QByteArray& rom, quint32 target, int begin = 0, int end = 0x10000) {
+    const auto crc=[&](){return quint32(crc32(0,reinterpret_cast<const Bytef*>(rom.constData()+begin),end-begin));};
+    const int fix=end-4;
     for(int i=0;i<4;++i)rom[fix+i]=0;
     const quint32 base=crc();quint32 basis[32]{}, combinations[32]{};
     for(unsigned bit=0;bit<32;++bit){
@@ -700,6 +700,147 @@ void setPrefixCrc(QByteArray& rom, quint32 target) {
     }
     for(int i=0;i<4;++i)rom[fix+i]=char(solution>>(8*i));
     require(crc()==target,"generated compatibility fingerprint is wrong");
+}
+
+// Original diagnostic; only functional guard signatures and a forged CRC select
+// SDK99's existing register board. No copyrighted ROM fixture is embedded.
+QByteArray makeSdk99HardwareRom(int variant) {
+    auto rom=makeTestRom();rom.append(QByteArray(0x200000-rom.size(),char(0)));
+    putLong(rom,4,0x300);putLong(rom,0x1a4,quint32(rom.size()-1));
+    rom[0x18e]=char(variant==1?0x2b:variant==2?0:0x7c);
+    rom[0x18f]=char(variant==1?0x2b:variant==2?0:0xdc);
+    int pc=0x300;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    const auto write=[&](quint16 v,quint32 address){word(0x13fc);word(v);word(quint16(address>>16));word(quint16(address));};
+    word(0x46fc);word(0x2700);
+    write(0x63,0x6800f1);write(1,0x6800f3);
+    word(0x1039);word(0x68);word(0x00f5); // MOVE.B protection result,D0.
+    word(0x13c0);word(0x68);word(0x00f1); // Feed it into the bit-reversal producer.
+    write(3,0x61eee3);
+    word(0x1239);word(0x6f);word(0xfff5); // Endgame consumer must read $8c.
+    word(0x13c0);word(0xff);word(0);word(0x13c1);word(0xff);word(1);
+    word(0x33fc);word(0xc0de);word(0xff);word(2);word(0x60fe);
+    rom.replace(0x5ad2,8,QByteArray::fromHex("428245f900005b28"));
+    rom.replace(0x5b28,16,QByteArray::fromHex("006800f1006800f3006800f50061eee3"));
+    rom.replace(0x14e6,18,QByteArray::fromHex("12140c01008c6700000a33fc000a00ff00e6"));
+    rom[0x1ffff5]=1; // Absent-board negative control reads the plain ROM mirror.
+    setPrefixCrc(rom,0x2419c93c,0x200);
+    if(variant==2)rom[0x130002]=char(0xcb); // Graphics/header changes preserve hardware.
+    if(variant==2){
+        rom[0x1ffffe]=rom[0x1fffff]=0;quint32 sum=0;
+        for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        const quint16 fix=quint16(0x16dc-sum);rom[0x1ffffe]=char(fix>>8);rom[0x1fffff]=char(fix);
+    }
+    if(variant==3)rom[0xe000]=char(quint8(rom[0xe000])^1); // Different program.
+    if(variant==4){rom[0x14eb]=char(0x8d);setPrefixCrc(rom,0x2419c93c,0x200);} // CRC alone is insufficient.
+    if(variant==5){rom.resize(0x100000);putLong(rom,0x1a4,quint32(rom.size()-1));}
+    return rom;
+}
+
+void testSdk99Hardware(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"SDK99 temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"SDK99 inspection failed");
+    using Memory=void* (*)(unsigned);using Preserve=int (*)(const unsigned char*,size_t,unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    const auto preserve=reinterpret_cast<Preserve>(inspect.resolve("retro_kegarefusion_preserve_header_checksum"));
+    require(memory&&preserve,"SDK99 inspection API missing");
+    using Abi=const char* (*)();const auto abi=reinterpret_cast<Abi>(inspect.resolve("retro_kegarefusion_recording_abi"));
+    require(abi,"SDK99 recording ABI missing");
+    const QString ordinary=temp.path()+"/ordinary.md";writeFile(ordinary,makeTestRom());
+    require(host.load(ordinary,error),"SDK99 ordinary identity load failed");
+    const auto ordinaryIdentity=host.movieCoreIdentity();const auto ordinaryNetwork=host.networkCompatibility();
+    constexpr int swap=QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0;
+    for(int variant=0;variant<6;++variant){
+        const auto rom=makeSdk99HardwareRom(variant);const bool identified=variant<3;
+        quint32 sum=0;for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        require(bool(preserve(reinterpret_cast<const unsigned char*>(rom.constData()),size_t(rom.size()),sum))==identified,"SDK99 checksum guard scope mismatch");
+        const QString path=temp.path()+QString("/sdk99-%1.md").arg(variant);writeFile(path,rom);
+        require(host.setAutoFixChecksum(true,error)&&host.load(path,error),"SDK99 diagnostic load failed");
+        require((host.movieCoreIdentity()!=ordinaryIdentity)==(variant<2),"SDK99 recording contract scope mismatch");
+        if(!ordinaryNetwork.isEmpty())require((host.networkCompatibility()!=ordinaryNetwork)==(variant<2),"SDK99 network contract scope mismatch");
+        const auto check=[&](){
+            auto* ram=static_cast<unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));require(ram,"SDK99 RAM missing");
+            require(ram[2^swap]==0xc0&&ram[3^swap]==0xde,"SDK99 CPU diagnostic did not finish");
+            if(identified)require(ram[0^swap]==0x31&&ram[1^swap]==0x8c,"SDK99 existing board did not produce endgame value");
+            else require(ram[0^swap]!=0x31||ram[1^swap]!=0x8c,"SDK99 negative selected board");
+        };
+        host.runFrame();check();
+        const auto state=host.serialize();require(!state.isEmpty(),"SDK99 state capture failed");
+        host.reset();host.runFrame();check();
+        require(host.unserialize(state),"SDK99 state restore failed");host.runFrame();check();
+        require(host.hardReset(error),"SDK99 hard reset failed");host.runFrame();check();
+        require(readFile(path)==rom,"SDK99 diagnostic source changed");
+        host.unload();require(std::strcmp(abi(),"kegarefusion-recording-v2")==0,"SDK99 contract leaked after unload");
+    }
+}
+
+// An original CPU probe and generated driver fingerprint exercise Barver's
+// existing echo register board, without embedding any game or driver program.
+QByteArray makeBarverHardwareRom(int variant) {
+    auto rom=makeTestRom();rom.append(QByteArray(0x200000-rom.size(),char(0)));
+    putLong(rom,4,0x300);putLong(rom,0x1a4,quint32(rom.size()-1));
+    rom[0x18e]=char(variant==2?0x30:0x7c);rom[0x18f]=char(variant==2?0xb9:0xdc);
+    int pc=0x300;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    word(0x46fc);word(0x2700);
+    int index=0;
+    for(quint16 value:{quint16(0),quint16(0x60),quint16(0),quint16(0xcb)}){
+        word(0x13fc);word(value);word(0x40);word(4);
+        word(0x1039);word(0x40);word(6);
+        word(0x13c0);word(0xff);word(quint16(index++));
+    }
+    word(0x33fc);word(0xc0de);word(0xff);word(4);word(0x60fe);
+    rom.replace(0x1e3b02,9,QByteArray::fromHex("f3ed56310020c34600"));
+    rom.replace(0x1e3b32,4,QByteArray::fromHex("01000000"));
+    setPrefixCrc(rom,0x62e910ff,0x1e3b02,0x1e5b02);
+    if(variant==1)rom[0x120002]=char(0xcb); // Translated graphics do not affect the driver.
+    if(variant==2){ // The already identified original keeps its behavior contract.
+        quint32 sum=0;for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        const quint16 fix=quint16(0x1c2a-sum);rom[0x1ffffe]=char(fix>>8);rom[0x1fffff]=char(fix);
+    }
+    if(variant==3){ // Even a forged CRC must not admit an altered sound seed.
+        rom[0x1e3b32]=0;rom[0x1e3b33]=char(0x60);
+        setPrefixCrc(rom,0x62e910ff,0x1e3b02,0x1e5b02);
+    }
+    if(variant==4)rom[0x1e4000]=char(quint8(rom[0x1e4000])^1);
+    if(variant==5){rom.resize(0x100000);putLong(rom,0x1a4,quint32(rom.size()-1));}
+    return rom;
+}
+
+void testBarverHardware(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"Barver temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"Barver inspection failed");
+    using Memory=void* (*)(unsigned);using Preserve=int (*)(const unsigned char*,size_t,unsigned);using Abi=const char* (*)();
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    const auto preserve=reinterpret_cast<Preserve>(inspect.resolve("retro_kegarefusion_preserve_header_checksum"));
+    const auto abi=reinterpret_cast<Abi>(inspect.resolve("retro_kegarefusion_recording_abi"));
+    require(memory&&preserve&&abi,"Barver inspection API missing");
+    const QString ordinary=temp.path()+"/ordinary.md";writeFile(ordinary,makeTestRom());
+    require(host.load(ordinary,error),"Barver ordinary load failed");
+    const auto ordinaryIdentity=host.movieCoreIdentity();const auto ordinaryNetwork=host.networkCompatibility();
+    constexpr int swap=QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0;
+    for(int variant=0;variant<6;++variant){
+        const auto rom=makeBarverHardwareRom(variant);const bool identified=variant<3;
+        quint32 sum=0;for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        require(bool(preserve(reinterpret_cast<const unsigned char*>(rom.constData()),size_t(rom.size()),sum))==identified,"Barver checksum guard scope mismatch");
+        const QString path=temp.path()+QString("/barver-%1.md").arg(variant);writeFile(path,rom);
+        require(host.setAutoFixChecksum(true,error)&&host.load(path,error),"Barver diagnostic load failed");
+        require((host.movieCoreIdentity()!=ordinaryIdentity)==(variant<2),"Barver recording contract scope mismatch");
+        if(!ordinaryNetwork.isEmpty())require((host.networkCompatibility()!=ordinaryNetwork)==(variant<2),"Barver network contract scope mismatch");
+        const auto check=[&](){
+            const auto* ram=static_cast<const unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));require(ram,"Barver RAM missing");
+            require(ram[4^swap]==0xc0&&ram[5^swap]==0xde,"Barver diagnostic did not finish");
+            const bool echo=ram[0^swap]==0&&ram[1^swap]==0x60&&ram[2^swap]==0&&ram[3^swap]==0xcb;
+            require(echo==identified,"Barver original board echo or negative scope mismatch");
+        };
+        host.runFrame();check();const auto state=host.serialize();require(!state.isEmpty(),"Barver state missing");
+        host.reset();host.runFrame();check();require(host.unserialize(state),"Barver state restore failed");host.runFrame();check();
+        require(host.hardReset(error),"Barver hard reset failed");host.runFrame();check();
+        require(readFile(path)==rom,"Barver source changed");host.unload();
+        require(std::strcmp(abi(),"kegarefusion-recording-v2")==0,"Barver contract leaked after unload");
+    }
 }
 
 // Original diagnostic ROM; a four-byte CRC fixup selects the same compatibility
@@ -754,6 +895,59 @@ void testVmvBusCompatibility(const QString& corePath) {
     }
 }
 
+// Original diagnostic program probes an absent SVP through the ordinary I/O
+// dispatch. Byte, word and long reads must return prefetched bus data; writes
+// are ignored. In particular, malformed guest programs must not dereference a
+// host-side null SVP device pointer.
+QByteArray makeAbsentSvpRom() {
+    auto rom=makeTestRom();int pc=0x200;
+    const auto word=[&](quint16 value){rom[pc++]=char(value>>8);rom[pc++]=char(value);};
+    word(0x46fc);word(0x2700); // Disable interrupts while storing observations.
+    for(unsigned address:{0xa15000u,0xa15001u,0xa15004u,0xa15005u}) {
+        word(0x1039);word(quint16(address>>16));word(quint16(address));
+        word(0x13c0);word(0x00ff);word(quint16(address&0xff));
+    }
+    for(unsigned address:{0xa15000u,0xa15002u,0xa15004u}) {
+        word(0x3039);word(quint16(address>>16));word(quint16(address));
+        word(0x33c0);word(0x00ff);word(quint16(0x10+(address&0xff)));
+    }
+    word(0x2039);word(0x00a1);word(0x5000); // MOVE.L (A15000).L,D0.
+    word(0x23c0);word(0x00ff);word(0x0020);
+    for(unsigned address:{0xa15000u,0xa15002u,0xa15004u}) {
+        word(0x33fc);word(0x5aa5);word(quint16(address>>16));word(quint16(address));
+    }
+    word(0x23fc);word(0xcafe);word(0x5a5a);word(0x00ff);word(0x0030);
+    word(0x60fe);
+    return rom;
+}
+
+void testAbsentSvpBus(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"SVP bus temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"SVP bus core inspection failed");
+    using Memory=void* (*)(unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory!=nullptr,"SVP bus memory API missing");
+    const auto rom=makeAbsentSvpRom();const QString path=temp.path()+"/absent-svp.md";writeFile(path,rom);
+    require(host.load(path,error),"SVP bus fixture load failed");
+    const auto check=[&](){
+        for(int i=0;i<3;++i)host.runFrame();
+        const auto* ram=static_cast<const unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+        require(ram!=nullptr,"SVP bus RAM missing");
+        const auto byte=[&](unsigned at){return ram[at^(QSysInfo::ByteOrder==QSysInfo::LittleEndian?1u:0u)];};
+        for(unsigned at:{0u,1u,4u,5u})
+            require(byte(at)==((at&1)?0xc0:0x13),"absent SVP byte read did not preserve open bus");
+        for(unsigned at:{0x10u,0x12u,0x14u})
+            require(byte(at)==0x33 && byte(at+1)==0xc0,"absent SVP word read did not preserve open bus");
+        for(unsigned at:{0x20u,0x22u})
+            require(byte(at)==0x23 && byte(at+1)==0xc0,"absent SVP long read did not preserve open bus");
+        require(byte(0x30)==0xca && byte(0x31)==0xfe && byte(0x32)==0x5a && byte(0x33)==0x5a,
+                "absent SVP write prevented following instructions");
+    };
+    check();host.reset();check();require(host.hardReset(error),"SVP bus power reset failed");check();
+    require(readFile(path)==rom,"SVP bus fixture source was modified");
+}
+
 // Generated four-copy cartridge exercises the same detection gates and existing
 // protection handlers as Super Poker, without embedding game bytes.
 QByteArray makePokerRom(int variant) {
@@ -776,6 +970,7 @@ QByteArray makePokerRom(int variant) {
         const quint16 value=quint16((quint8(rom[offset])<<8)|quint8(rom[offset+1]))+delta;
         rom[offset]=char(value>>8);rom[offset+1]=char(value);
     };
+    rom[0x68e]=char(0x66);rom[0x68f]=char(0x24); // Canonical first-copy branch.
     // Full repeated checksum is 4 * body + 3 * header (mod 65536).
     constexpr quint16 headerSum=quint16((0x6f41u-4u*0xd7b0u)*0xaaabu);
     adjust(0x1f0,quint16(headerSum-sum(0,0x200)));
@@ -789,6 +984,10 @@ QByteArray makePokerRom(int variant) {
         adjust(0x180000,1);adjust(0x180002,quint16(-1));
     }
     require(sum(0x200,rom.size())==0x6f41,"Poker diagnostic checksum mismatch");
+    if(variant==3){rom[0x68e]=char(0x60);rom[0x68f]=char(0x3e);}
+    if(variant==4){rom[0x18e]=char(0x6f);rom[0x18f]=char(0x41);}
+    if(variant==5){rom[0x68e]=char(0x60);rom[0x68f]=char(0xfe);}
+    if(variant==6)rom[0x70000]=char(1);
     return rom;
 }
 
@@ -801,9 +1000,12 @@ void testPokerOverdump(const QString& corePath) {
     const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
     const auto preserve=reinterpret_cast<Preserve>(inspect.resolve("retro_kegarefusion_preserve_header_checksum"));
     require(memory && preserve,"Poker core APIs missing");
-    for(int variant:{0,1,2}){
-        const auto rom=makePokerRom(variant);
-        require(bool(preserve(reinterpret_cast<const unsigned char*>(rom.constData()),size_t(rom.size()),0x6f41))==(variant==0),"Poker checksum guard scope mismatch");
+    using Abi=const char* (*)();const auto abi=reinterpret_cast<Abi>(inspect.resolve("retro_kegarefusion_recording_abi"));
+    require(abi,"Poker recording ABI missing");
+    for(int variant:{0,1,2,3,4,5,6}){
+        const auto rom=makePokerRom(variant);const bool identified=variant==0||variant==3||variant==4;
+        quint32 actualSum=0;for(int i=0x200;i<rom.size();i+=2)actualSum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        require(bool(preserve(reinterpret_cast<const unsigned char*>(rom.constData()),size_t(rom.size()),actualSum))==identified,"Poker checksum guard scope mismatch");
         const QString path=temp.path()+"/poker.md";writeFile(path,rom);
         for(bool autofix:{false,true}){
             require(host.setAutoFixChecksum(autofix,error) && host.load(path,error),"Poker load failed");
@@ -813,14 +1015,15 @@ void testPokerOverdump(const QString& corePath) {
                 require(ram,"Poker RAM missing");
                 const unsigned expected[4]={0x55,0x0f,0xaa,0xf0};bool match=true;
                 for(unsigned i=0;i<4;++i)match &= ram[i^(QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0)]==expected[i];
-                require(match==(variant==0),"Poker original protection missing or leaked");
+                require(match==identified,"Poker original protection missing or leaked");
             };
             check();
-            if(variant==0){
+            require((std::strstr(abi(),"poker-hardware-v1")!=nullptr)==(variant==3||variant==4),"Poker recording contract scope mismatch");
+            if(identified){
                 const auto state=host.serialize();require(!state.isEmpty() && host.unserialize(state),"Poker state restore failed");check();
                 host.reset();check();require(host.hardReset(error),"Poker power reset failed");check();
             }
-            host.unload();
+            host.unload();require(std::strcmp(abi(),"kegarefusion-recording-v2")==0,"Poker contract leaked after unload");
         }
         require(readFile(path)==rom,"Poker ROM modified");
     }
@@ -1508,9 +1711,9 @@ int main(int argc, char** argv) {
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
-                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper"))) &&
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper") || mode == QLatin1String("--svp-bus") || mode == QLatin1String("--sdk99-hardware") || mode == QLatin1String("--barver-hardware"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--sonic-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--barver-hardware|--sdk99-hardware|--svp-bus|--sonic-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -1518,6 +1721,19 @@ int main(int argc, char** argv) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));
             std::puts("network OPLL snapshot process passed"); return 0;
+        }
+        if (mode == QLatin1String("--barver-hardware")) {
+            testBarverHardware(QString::fromLocal8Bit(argv[1]));
+            std::puts("Barver protected driver recognition, echo, negatives, scoped ABI and reset/state passed"); return 0;
+        }
+        if (mode == QLatin1String("--sdk99-hardware")) {
+            testSdk99Hardware(QString::fromLocal8Bit(argv[1]));
+        testBarverHardware(QString::fromLocal8Bit(argv[1]));
+            std::puts("SDK99 code-family board identification, endgame value, negative controls and reset/state passed"); return 0;
+        }
+        if (mode == QLatin1String("--svp-bus")) {
+            testAbsentSvpBus(QString::fromLocal8Bit(argv[1]));
+            std::puts("Absent SVP byte/word/long open bus and ignored writes, reset/power passed"); return 0;
         }
         if (mode == QLatin1String("--sonic-mapper")) {
             testSonicMapper(QString::fromLocal8Bit(argv[1]));
@@ -1572,6 +1788,7 @@ int main(int argc, char** argv) {
         testPokerOverdump(QString::fromLocal8Bit(argv[1]));
         testJiujiProtection(QString::fromLocal8Bit(argv[1]));
         testVmvBusCompatibility(QString::fromLocal8Bit(argv[1]));
+        testAbsentSvpBus(QString::fromLocal8Bit(argv[1]));
         testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
         std::puts("core integration tests passed");
         return 0;

@@ -1,0 +1,133 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -311,6 +311,47 @@
+          !memcmp(rom, rom + 0x300000, 0x100000);
+ }
+ 
++/* Scoped deterministic behavior contract: only newly recognized family images. */
++int md_cart_sdk99_compat_active;
++
++/* SDK99 revisions share the original executable code and the late protection
++ * producer/consumer. Header corrections and translated graphics must keep the
++ * original register hardware; no per-variant database entries or ROM edits. */
++static int md_cart_sdk99_hardware(const uint8 *rom, size_t size, int native_order)
++{
++  static const uint8 producer[] = {0x42,0x82,0x45,0xf9,0x00,0x00,0x5b,0x28};
++  static const uint8 ports[] = {0x00,0x68,0x00,0xf1,0x00,0x68,0x00,0xf3,
++                              0x00,0x68,0x00,0xf5,0x00,0x61,0xee,0xe3};
++  static const uint8 ending[] = {0x12,0x14,0x0c,0x01,0x00,0x8c,0x67,0x00,0x00,0x0a,
++                               0x33,0xfc,0x00,0x0a,0x00,0xff,0x00,0xe6};
++  const struct { unsigned offset, length; const uint8 *bytes; } signatures[] = {
++    {0x5ad2, sizeof(producer), producer}, {0x5b28, sizeof(ports), ports},
++    {0x14e6, sizeof(ending), ending}
++  };
++  uint8 block[1024];
++  uint32 crc = 0;
++  unsigned i, j, offset, count;
++  if (size != 0x200000) return 0;
++  for (i = 0; i < sizeof(signatures)/sizeof(signatures[0]); i++)
++    for (j = 0; j < signatures[i].length; j++)
++    {
++      offset = signatures[i].offset + j;
++      if ((native_order ? READ_BYTE(rom, offset) : rom[offset]) != signatures[i].bytes[j])
++        return 0;
++    }
++  /* Canonical executable prefix excludes all mutable header bytes. A different
++   * King Kong 99 program has a different code CRC and retains its own DB row. */
++  for (offset = 0x200; offset < 0x10000; offset += count)
++  {
++    count = 0x10000 - offset;
++    if (count > sizeof(block)) count = sizeof(block);
++    for (i = 0; i < count; i++)
++      block[i] = native_order ? READ_BYTE(rom, offset + i) : rom[offset + i];
++    crc = crc32(crc, block, count);
++  }
++  return crc == 0x2419c93c;
++}
++
+ int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum)
+ {
+   unsigned int i;
+@@ -322,6 +363,7 @@
+   header = (rom[0x18e] << 8) | rom[0x18f];
+   real = calculated_checksum & 0xffff;
+   if (header == real) return 1;
++  if (md_cart_sdk99_hardware(rom, size, 0)) return 1;
+   if ((size == 0x200000) && (header == 0) && (real == 0xf456) &&
+       (md_cart_prefix_crc(rom, 0) == 0x8122ac8a)) return 1;
+   if ((header == 0xffff) && (real == 0x6f41) &&
+@@ -761,16 +803,27 @@
+   }
+ 
+   /* A verified repeated dump uses the existing one-copy hardware entry. */
++  uint16 hardware_header = rominfo.checksum;
+   uint16 hardware_checksum = rominfo.realchecksum;
+   if ((rominfo.checksum == 0xffff) && (hardware_checksum == 0x6f41) &&
+       md_cart_poker_overdump(cart.rom, cart.romsize, 1))
+     hardware_checksum = 0xd7b0;
+ 
++  md_cart_sdk99_compat_active = 0;
++  /* Reuse SDK99 original hardware for the same executable across headers and translations. */
++  if (md_cart_sdk99_hardware(cart.rom, cart.romsize, 1))
++  {
++    md_cart_sdk99_compat_active = (rominfo.checksum != 0x0000) ||
++                                (rominfo.realchecksum != 0x16dc);
++    hardware_header = 0x0000;
++    hardware_checksum = 0x16dc;
++  }
++
+   /* search for game into database */
+   for (i=0; i<(sizeof(rom_database)/sizeof(md_entry_t)); i++)
+   {
+     /* known cart found ! */
+-    if ((rominfo.checksum == rom_database[i].chk_1) &&
++    if ((hardware_header == rom_database[i].chk_1) &&
+         (hardware_checksum == rom_database[i].chk_2))
+     {
+       int j = rom_database[i].bank_start;
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -111,6 +111,9 @@
+ extern void md_cart_compat_state_save(uint8 *state);
+ extern void md_cart_compat_state_load(const uint8 *state);
+ 
++/* Immutable per loaded cartridge; existing native register/state format is unchanged. */
++extern int md_cart_sdk99_compat_active;
++
+ /* Function prototypes */
+ extern int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum);
+ extern void md_cart_init(void);
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3631,6 +3631,7 @@
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+    if (md_cart_sonic6_active) return "kegarefusion-recording-v2-sonic6-v1";
++   if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v2-sdk99-hardware-v1";
+    return md_cart_aq93c_active ? "kegarefusion-recording-v2-aq93c-v1" : "kegarefusion-recording-v2";
+ }
+ 
+@@ -3650,6 +3651,7 @@
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
+    if (md_cart_sonic6_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
++   if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+    return md_cart_aq93c_active ? "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+           "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
+ #else
+@@ -3722,6 +3724,7 @@
+    char content_path[256];
+    char content_ext[8];
+ 
++   md_cart_sdk99_compat_active = 0;
+    content_path[0] = '\0';
+    content_ext[0]  = '\0';
+ 
+@@ -4047,6 +4050,7 @@
+    sms_ntsc  = NULL;
+ 
+    paprium_shutdown();
++   md_cart_sdk99_compat_active = 0;
+    system_hw = 0;
+ }
+ 

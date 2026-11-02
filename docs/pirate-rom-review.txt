@@ -1,0 +1,2672 @@
+Индивидуальный аудит всей коллекции ROM — 2026-11-02
+
+Проверены все 325 уникальных SHA-256 и все 462 пути (137 дополнительных одинаковых копий). Непроанализированных записей нет. Это не утверждение, что все игры и утилиты полностью работают.
+
+Исходник/релиз: исследованный путь обслуживается: 132.
+Вариант: изменения и наблюдённый путь исследованы: 177.
+Повреждённый или неполный образ: 3.
+Пробел распознавания аппаратуры исправлен: 4.
+Устройство: требуется штатный режим аксессуара: 4.
+Отдельное внешнее оборудование не реализовано: 2.
+Внешний аудиопатч неполон/несогласован: 3.
+
+ОСТАВШИЕСЯ ОГРАНИЧЕНИЯ
+Art Tool 5353F532 требует Sega Loader Board и внешнюю программу/связь через третий порт. Magistr16 2488E685 — отдельная расширенная платформа с BIOS/ISA/SuperIO/FDD/дополнительной RAM; штатный MD core её не реализует. Эти случаи исследованы, но оборудование не объявляется исправленным.
+BF39D897 имеет неверный Sonic-загрузчик; A98BF454 лишён старшего банка Dragon Ball; Subor513B2B72 содержит необратимое AND-схлопывание байтов по всем 1048576 словам. ROM не ремонтировались.
+Barver81345C81 и FengShenDFACB9FF/C57FF39C содержат несовместимые seed-правки звукового bootstrap. Ненулевой PCM не доказывает правильный звук; придуманные ответы аппаратуры не добавлялись.
+
+CHECKSUM: исходный ELF600b2539…: 132 одинаковых образа в обоих режимах; 193 изменённых только в памяти образов реально сравнены по video/audio/CPU. После точечных исправлений guard: 133 одинаковых, 192 изменённых. Для каждого ROM ниже есть отдельная запись; полные хэши и контрольные кадры встроены в JSON.
+
+ИСПРАВЛЕНИЯ И ГЛУБОКИЕ ПРОВЕРКИ
+SVP: отсутствие устройства теперь ведёт к штатной открытой шине/игнорируемой записи вместо NULL crash. Сгенерированный тест воспроизводит падение старого ядра и проходит на исправленном; реальный Virtua Racing сохраняет video/PCM/CPU.
+SDK99: неизменённые защищённые процедуры распознают существующую плату несмотря на изменённый заголовок/перевод; фактические producer/endcheck, reset/state исследованы отдельно. См. pirate-sdk99-followup.json.
+BarverCA14B36B: неизменённый защищённый драйвер получает существующую echo-плату и правильную таблицу006000CB; seed0060 другого варианта исключён.
+SuperPoker08275694: сохранённый защищённый Z80-драйвер получает исходную плату, весь проверенный PCM/video и первые1024 чтения музыки совпадают с оригиналом. См. pirate-sound-followup.json.
+SMW64f2A20F98AA: только четыре байта JR NZ displacement в старших512KiB отличаются от оригинала (C6975/C6C82:17→00, C697D/C6C8A:0F→00). Исходник/f1/f2 реально инициализируют091B/091C=B7/02 на кадрах16/17/20. Чужой mapper к линейному fix не добавляется.
+Action Replay работает через настоящий режим аксессуара с target cartridge; устранение crash при загрузке как игры не означает самостоятельную работу trainer. Telebradesco дошёл до credential UI; модем/сетевая банковская служба не объявляются эмулированными.
+
+МЕТОД И ПРОИСХОЖДЕНИЕ
+SHA-256 ELF определяет исполнявшийся core. Подтверждённая исходная пара: ELF600b2539cb7f3d773f86f928196bbf372d5de69613df795922afb7f08938ded1; compiled md_cart2ddcdd7e8a2b6fc65a1a5a28492c1aac4faab1cbff7377a32c0a7ef3228bca4a. Другие source hashes в протоколах — снимки осматриваемого дерева, не доказательство компиляции этого ELF из него.
+Наблюдаются реальные forwarded68K/Z80 handlers с ограниченными журналами. Прямые ROM/RAM чтения не перехватываются. В JSON сохранены точные хэши video/PCM, CPU checkpoints, выбранные аппаратные порты и оба режима checksum. Нет полного прохождения/всех звуков/сохранений/схемы платы.
+
+ВСЕ ИНДИВИДУАЛЬНЫЕ ЗАПИСИ
+
+[000] 03739820 | Исходник/релиз: исследованный путь обслуживается
+SHA256 012f110326a5f2d119b550aaa6d0f9a6e6cfd95a15ab40b11ae7d2aa19ec98ae; 524288 bytes.
+  my-pirate/Tanks 2011 (Unl) [Rus].md
+Tank battle grid entered after title; later defeat screen proves the scene advances under supplied controls.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[001] F9BDF8C5 | Исходник/релиз: исследованный путь обслуживается
+SHA256 01d3421cd3e1c905ca2e93d3e61a0fecccc6694708ca0a25e84890592dd44cfc; 1048576 bytes.
+  my-pirate/Test Drive II - The Duel (USA, Europe) (Unl).md
+  omonim-pirate/Test Drive II - The Duel (UE) (Unl) [!].md
+Car selection and opponent selection entered; later input run reaches the road and dashboard.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC3370F8C9, различающихся байтов в общей части: 158846; shared chunks; relationship not established
+Checksum ON/OFF: одинаковые байты.
+
+[002] CA5D5966 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 0313f29475711c619cf0ad8abe2d4be38ea012f4fd3c6a1c1b8dc5262fff4bb4; 2097152 bytes.
+  omonim-pirate/Legend of Wukong (UE) (Super Fighter Team) (Unl) [f2] (SRAM).md
+SRAM variant enters the save/new-game menu; later run reaches an English NPC dialogue scene.
+Путь: SF-002 mapper and save RAM
+Сравнение: CRCD850391F, различающихся байтов в общей части: 12244; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[003] 7F93B916 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 04f3e6bffc7bd8db8be37ff694a1cbbd13847e9aeed61590ed3d9ae6ba4aa378; 2097152 bytes.
+  my-pirate/Water Margin - Tales of Clouds & Winds (U) (Unl) [c].md
+  omonim-pirate/Water Margin - A Tale of Clouds and Wind (U) (Piko Interactive) (Unl) [!].md
+Character selection advances to the stage/story explanation screen.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCC9829C16, различающихся байтов в общей части: 6589; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[004] 2B7758B5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 05a04fef4388020ea303c2c89dccc2bb09c50625ff3872967237dd9173647202; 2097152 bytes.
+  omonim-pirate/Shuihu Zhuan (T) (Unl) [f1].md
+Opening narrative advances to an indoor NPC dialogue scene with changing dialogue.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC61E458C3, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[005] 69F24500 | Исходник/релиз: исследованный путь обслуживается
+SHA256 071a25e4945cf79674e1056e8138a0c72cfe290158695f8cdb5a8769bfdba692; 1048576 bytes.
+  omonim-pirate/Jiuji Mahjong II (T) (Unl) [b1].md
+Protected dump passes its F000 check, advances from title and picture sequence to the mahjong table under later controls.
+Путь: rom_database /* (*) Jiu Ji Ma Jiang II: Ye Yan Bian (patched ROM, using expected register value $f0 crashes the game) (uses 16-bits reads) */
+Сравнение: CRCE9829B22, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[006] 8E7D9177 | Исходник/релиз: исследованный путь обслуживается
+SHA256 07d7ff49969a99c0dfaa3bfe201f43212df388e823ff0d0562f8ab9dbb056b00; 2097152 bytes.
+  my-pirate/Super Donkey Kong 99 (Unl) [!].md
+  omonim-pirate/Super Donkey Kong 99 (T) (Unl) [!].md
+Platform game entered with changing lives/scene; ending protection was not reached by normal boot inputs and is separately investigated.
+Путь: rom_database /* Super Donkey Kong 99 (bootleg version of Super King Kong 99 ? all protection checks seem patched except one, resulting in broken end game sequence if hardware is not implemented) */
+Сравнение: CRC5B9F7237, различающихся байтов в общей части: 151; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[007] AE28D9EB | Исходник/релиз: исследованный путь обслуживается
+SHA256 07da7a4baf3a1fce6c979c47495b823607ab513fc12d4c6994d293fca2dfce53; 1048576 bytes.
+  my-pirate/Queen of Poker Club (Sachen) (Ch).md
+  omonim-pirate/Poker Club 6 in 1 (T) (Unl).md
+Game-select menu advances to a card game table.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[008] C0C6F4B3 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 07e0bce2341db8497d5067d66be2eb50f8ba13bed5b9c4fa4dee3d12f81f7dae; 1835008 bytes.
+  my-pirate/Star Odyssey (W)[f1].md
+Title advances to the interactive save/new-game operations menu; choosing an empty slot shows the no-saved-game message.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC0B670A3E, различающихся байтов в общей части: 1447326; shared chunks; relationship not established
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[009] 2DF11312 | Исходник/релиз: исследованный путь обслуживается
+SHA256 07f110b778c41d524bed2864301c5f1a5b3036d6ac83764918c9365eb678e546; 1262584 bytes.
+  my-pirate/Wolfenstein (Demo 10.5).md
+Options and difficulty menus advance under later controls to a rendered first-person level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[010] DA5A4BFE | Исходник/релиз: исследованный путь обслуживается
+SHA256 083c8c9df4907330900c6801da777f90640b20dc36060920291e73debc562ed9; 4194304 bytes.
+  my-pirate/Xin Qi Gai Wang Zi (China) (Alt 1) (Unl).md
+  omonim-pirate/Xin Qigai Wangzi (T) (Unl) [a1].md
+Chinese title menu advances to the indoor player scene.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDD2F38B5, различающихся байтов в общей части: 535; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[011] 634D67A6 | Исходник/релиз: исследованный путь обслуживается
+SHA256 090233a259b96c34cddbf823b9b4343f52673f91cc9b458694612d696e2a21ef; 524288 bytes.
+  my-pirate/Turrican (USA, Europe) (Unl).md
+  omonim-pirate/Turrican (UE) (Unl) [!].md
+Title menu advances under later controls to the first platform level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC783F4346, различающихся байтов в общей части: 336; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[012] 63C90C7C | Исходник/релиз: исследованный путь обслуживается
+SHA256 09327b9fabfc3a7405308b0a4b1dc448b46b28fded3239f545904eb502562645; 1048576 bytes.
+  my-pirate/Pirates of the Caribbean On Stranger Tides (Unl) [Rus].md
+Title advances to the map playfield with a moving sprite.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[013] 352EBD49 | Исходник/релиз: исследованный путь обслуживается
+SHA256 099eefbd653deeb499af64d52d11a9be3f0256bb0c39f9ca48dbce8e7f31eaaa; 1048576 bytes.
+  my-pirate/Universal Soldier (USA, Europe) (Unl).md
+  omonim-pirate/Universal Soldier (UE) (Unl) [!].md
+Title menu advances under later controls to the first level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC3DD2DAD7, различающихся байтов в общей части: 4104; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[014] F3AF46CD | Исходник/релиз: исследованный путь обслуживается
+SHA256 0b5261d4c50f989dd677ab9dcadd3ea460c820b86306ba5bd307a56259b64327; 4194304 bytes.
+  my-pirate/Beggar Prince (Unl).md
+  omonim-pirate/Beggar Prince (UE) (v1.0) (Super Fighter Team) (Unl) [!].md
+English title menu advances to the indoor player scene.
+Путь: SF-001 mapper and save RAM
+Сравнение: CRC6332EDCC, различающихся байтов в общей части: 183; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[015] 568F7994 | Исходник/релиз: исследованный путь обслуживается
+SHA256 0bebe6f70e6ceef11e8d85dd689e23091c2edd00b7859f1e23ac207245e3ab78; 524288 bytes.
+  my-pirate/Mario & Battle City (Unl).md
+Two-game selector enters the Mario World 1-1/lives sequence; changing life count proves progression.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[016] 61E458C3 | Исходник/релиз: исследованный путь обслуживается
+SHA256 0c97ad517c57cbb8f85e4d0250652e878e0506afb16e5b67440b2e983741279f; 2097152 bytes.
+  my-pirate/Shui Hu Zhuan (China) (Unl).md
+  omonim-pirate/Shuihu Zhuan (T) (Unl).md
+Protected original advances to the indoor dialogue scene; protection exchange observed from both CPUs.
+Путь: rom_database /* Shui Hu Zhuan (registers accessed by Z80, related to sound engine ?) */
+Сравнение: CRC2B7758B5, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[017] ACE388B3 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 0c9dda18f0645fa96ad311ac33467f2ac31d94f117a4f1d29ede72e9cec8c066; 524288 bytes.
+  omonim-pirate/Thunderbolt II (W) (QUByte Classics) (Unl) [!].md
+Title advances to the shooter playfield; PAUSE is caused by the supplied repeated Start input.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCA2EF16DE, различающихся байтов в общей части: 25246; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[018] 4B97C744 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 0d1f92ad034aba87d887c0f95b4a917945be2fe7d46e2e4146f9fce3019575a5; 1048576 bytes.
+  my-pirate/Chip and Dale 2 (Unl) [Rus].md
+Title/menu advances to the platform playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC51EEBDDC, различающихся байтов в общей части: 0; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[019] DB6D066F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 0de4729b19c3e16104069ddab9f061eec6b1ec1bac61e23f645c4be81edf828a; 1048576 bytes.
+  omonim-pirate/Shisan Zhang Mahjong - Zhongguo Meinu Pian (T) (Unl) [f1].md
+Picture introduction advances to a mahjong table and action menu.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC962CDE71, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[020] 1BDD02B8 | Исходник/релиз: исследованный путь обслуживается
+SHA256 0e137267121d63408562dac226f692b70a5399e2e6d359b3e0e570ca011e16a0; 524288 bytes.
+  my-pirate/Whac-a-Critter (USA) (Unl).md
+  omonim-pirate/Whac-a-Critter (U) (Unl) [!].md
+Realtec bootstrap and multiple animated title phases observed; bank writes execute. Later controls still leave title/intro phases at sampled endpoints.
+Путь: rom_database /* Whac-a-Critter - Mallet Legend */
+Сравнение: CRC760D670A, различающихся байтов в общей части: 142; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[021] 18DDFCDC | Вариант: изменения и наблюдённый путь исследованы
+SHA256 0eb863e888495766ab92854f752b25eaad4b08c6f82842ebba381c0bf9b4bb33; 2097152 bytes.
+  my-pirate/Pokemon Stadium (Unl) [f2].md
+Character selection advances to the battle scene and attack text.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC31759E28, различающихся байтов в общей части: 10; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[022] EC1C468F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 10443ce4169d26529eb95fe3dcaebfce2df3c375841ded685d08fa6ff29c596f; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T-Rus Glorysun&MagicTeam] (BUGS).md
+Russian title advances under later controls to an NPC dialogue scene.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC81345C81, различающихся байтов в общей части: 1936; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[023] 5E67885D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 104a877cd07db89293fe3cf9a1a1fcb565175bced24e2e93b429bb23eff12fda; 3145728 bytes.
+  omonim-pirate/King of Fighters '99, The (T) (Unl) [f1].md
+Character selection advances to an animated fighting round.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCAB82AFBE, различающихся байтов в общей части: 113; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[024] 268AA96E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 11be5eb9d2a8dabbd1ea9a44baba4293ecb7901baba98acee2abff98f83bd79a; 2097152 bytes.
+  omonim-pirate/Top Fighter 2000 MK VIII (T) (Unl) [f1][T-Rus SergeyK&Pirate].md
+Russian character selection advances to an animated fighting round.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC683FD508, различающихся байтов в общей части: 1691; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[025] ED1C1A67 | Исходник/релиз: исследованный путь обслуживается
+SHA256 11d8170985df6cae4bf4bba5d13204637b7abffd84fc6b24c6265f68f29a07f5; 1048576 bytes.
+  my-pirate/Bug's Life (Unl).md
+  omonim-pirate/Bug's Life, A - Chong Chong Weiji (T) (Unl) [f3].md
+Title advances to a platform level; PAUSE is induced by supplied repeated Start.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCA911447F, различающихся байтов в общей части: 85009; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[026] 0E78C954 | Исходник/релиз: исследованный путь обслуживается
+SHA256 1313fdad0a9d80a615d7910180c629a9428de3c8fe53d5d9c74cd7c4eed83958; 2097152 bytes.
+  omonim-pirate/Al Michaels Announces HardBall III (UE) (Unl) [hI].md
+Hack intro advances to baseball setup and roster menus under later inputs.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCA4F2F011, различающихся байтов в общей части: 23562; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[027] B4F4249F | Исходник/релиз: исследованный путь обслуживается
+SHA256 13de06cf047cf8d6daafd2e4ea9407199fc91a176939dfd3b7a5168f3bb08bdd; 1048576 bytes.
+  my-pirate/16 Tiles Mahjong II (Ming, Creaton)[!].md
+  omonim-pirate/Shiliu Zhang Mahjong II (T) (Unl) [!].md
+Protected title and picture introduction advance to mahjong play/action menu under later controls.
+Путь: rom_database /* Shi Liu Zhang Ma Jiang II - 16 Tiles Mahjong II (uses 16-bits reads) */
+Сравнение: CRCEB88026D, различающихся байтов в общей части: 4; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[028] 17D3E61A | Вариант: изменения и наблюдённый путь исследованы
+SHA256 146c16a156ec8454c8baea26b84808b245bbb5fc7353570e683422675c099971; 2097152 bytes.
+  omonim-pirate/Super Mario World (T) (Unl) [T+Rus SergeyK(NewGame) (19.08.2003)].md
+Title advances to the platform playfield with movement.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCE8BDDE2B, различающихся байтов в общей части: 1709; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[029] 72F11771 | Исходник/релиз: исследованный путь обслуживается
+SHA256 173a45adaaecccd442b7a7afc5e58e8e2b3011f3acc94451e59c170b9fc07b44; 2228224 bytes.
+  my-pirate/Legend of Wukong (Unl).md
+  omonim-pirate/Legend of Wukong (UE) (Super Fighter Team) (Unl) [!].md
+Progressing long original opening with native SF002 banking; gameplay not claimed.
+Путь: SF-002 mapper and save RAM
+Сравнение: CRCD850391F, различающихся байтов в общей части: 13; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[030] ED9D573C | Вариант: изменения и наблюдённый путь исследованы
+SHA256 18e3a73bd4a5abfb0002a43238b4e9ee1930bd47609f3d1a77aaa1201aff89c3; 2097152 bytes.
+  my-pirate/Rockman X3 (Unl) [f1].md
+  omonim-pirate/Rockman X3 (T) (Unl) [f2].md
+Character selection advances to the first platform/shooter level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC3EE639F0, различающихся байтов в общей части: 5; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[031] DECDF740 | Исходник/релиз: исследованный путь обслуживается
+SHA256 19e0a2bdeaf4e2bc09efbbb5538a28cd9c5348030d42f73dbe320a07e0b2c8c7; 524288 bytes.
+  my-pirate/Huan Le Tao Qi Shu - Smart Mouse (China) (Unl).md
+  omonim-pirate/Huanle Taoqi Shu - Smart Mouse (T) (Unl).md
+Title option cursor changes; later Start reaches the puzzle board.
+Путь: rom_database /* Huan Le Tao Qi Shu - Smart Mouse */
+Сравнение: CRC702999A4, различающихся байтов в общей части: 31; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[032] DDD02BA4 | Исходник/релиз: исследованный путь обслуживается
+SHA256 1bc1cad1736cdebbe230fcb6b464cf02e0c53d8b4134084a1a3b007667885b3b; 1048576 bytes.
+  my-pirate/Mahjong Lover (Ch) (Unl) [!].md
+  omonim-pirate/Mahjong Qingren (T) (Unl) [!].md
+Introduction advances to the mahjong table; repeated protection reads continue.
+Путь: rom_database /* Ma Jiang Qing Ren: Ji Ma Jiang Zhi */
+Сравнение: CRCF6C2CFF2, различающихся байтов в общей части: 31; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[033] FF9200FD | Исходник/релиз: исследованный путь обслуживается
+SHA256 1cad5b6fb2ccbbb4d096ee951927457883ba8931f7df8f5ef19a08dc293a0a2c; 262144 bytes.
+  my-pirate/Battle City MD v1.00-final (PD).md
+Homebrew title menu accepts controls and advances to a stage screen.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[034] A1A18DD3 | Исходник/релиз: исследованный путь обслуживается
+SHA256 1d23987280c72b6c598c802c379f9c11c8f99c8a6d3064fd1e9b4029ad3da433; 1067336 bytes.
+  my-pirate/Wolfenstein (Demo 7).md
+Menu/difficulty controls reach a rendered first-person level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[035] E99C4C47 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 1db9d39ff9c3514859d60c6d9eb51bfe7970a5352e6f0e1e2cb18f75d7f8b7f8; 1048576 bytes.
+  my-pirate/Darkwing Duck (Unl) [Rus].md
+Russian title/lives screen advances under later controls to the platform level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[036] E0E31906 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 1fb1661f5de670dc215cc9c0da92952338fd9012c995f8133848f9fefd76882c; 2097152 bytes.
+  omonim-pirate/Sonic Jam 6 (T) (Unl) [f1].md
+Title advances to the platform level. Supplied Start input pauses it; altered graphics are consistent with its measured data differences.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC87D86501, различающихся байтов в общей части: 191964; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[037] FE187C5D | Исходник/релиз: исследованный путь обслуживается
+SHA256 2184b2ae034a68271e5f9c38b885a6d5acc6a3df7de77e76ed79b9e1ef369d6a; 2097152 bytes.
+  my-pirate/Pokemon Stadium (Unl).md
+  omonim-pirate/Guaishou Jingji Chang - Pokemon Stadium (T) (Unl).md
+Character selection advances to battle and attack scene with existing bank-write handler active.
+Путь: rom_database /* Pokemon Stadium */
+Сравнение: CRC31759E28, различающихся байтов в общей части: 6; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[038] 36412EDE | Исходник/релиз: исследованный путь обслуживается
+SHA256 229a08b9ec855201ff682e20df3c326f72b8c1fd66fe4dfefcec5989f5655ca9; 842308 bytes.
+  my-pirate/Wolfenstein (Demo 6).md
+Menu navigation and physical-A correction reach difficulty selection; initial mixed A/B/C sequence returned to the title. No gameplay claimed for this demo revision.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[039] C632E5AF | Исходник/релиз: исследованный путь обслуживается
+SHA256 23cb73f35c7129830df1bb5b5a0a49f35af1dd9e9e15496a5b81a5e1c47eac3a; 1048576 bytes.
+  my-pirate/Dial Q o Mawase! (Japan) (Unl).md
+  omonim-pirate/Dial Q o Mawase! (J) (Unl).md
+Initial text advances to the telephone/card dialogue screen; text and numeric field change with controls.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[040] 80194F90 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 2486ea317ee54e7075f76c218a68dc0ab8ecc6590286571b959b315b1d2a7223; 524288 bytes.
+  my-pirate/Super Tank War (Unl) [Sound Fix].md
+  omonim-pirate/Super Tank War (T) (Unl) [f1] (SOUND).md
+Opening advances through stage card to tank battle playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC5E519EA1, различающихся байтов в общей части: 0; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[041] 74A6D7A7 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 24c34fdcd11ad553603c52e30d7596b91edd0acc5e6cc8d52f498e795e6c29a1; 2097152 bytes.
+  my-pirate/Soul Edge VS Samurai Spirits (Unl) [f1].md
+  omonim-pirate/Samurai Shodown vs Soul Edge (T) (Unl) [f1].md
+Player selection changes with controls; later input enters an animated fighting round.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB11BD611, различающихся байтов в общей части: 19; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[042] 80B421C4 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 24d8447365bc1c6bb85271bd9cdf2d070e2ecd42c489104e1dde176fa1d63f44; 524288 bytes.
+  my-pirate/Link Dragon (Unl) [Sound Fix].md
+  omonim-pirate/Link Dragon (T) (Unl) [f1].md
+Opening logo advances under later controls to the dragon playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC1B86E623, различающихся байтов в общей части: 0; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[043] 3519C422 | Исходник/релиз: исследованный путь обслуживается
+SHA256 2552a6fd12772f650dd91b8a6686d1d423ccde640bb728611f3b6d8c74696e98; 524288 bytes.
+  my-pirate/Earth Defend, The (USA) (Unl).md
+  omonim-pirate/Earth Defense (UT) (Unl) [!].md
+Realtec bootstrap advances to animated aircraft introduction/title; supplied controls cause transitions but sampled endpoints do not establish ordinary play.
+Путь: rom_database /* Earth Defense */
+Сравнение: CRC8439E987, различающихся байтов в общей части: 12; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[044] 8E0555E4 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 25ff63da18ddc654f9db0332ea3a1ce2ed96a9efc5aab78826caf05a69f5a5e1; 2097152 bytes.
+  my-pirate/Lion King 3 (Unl).md
+Opening advances to platform playfield and moving player/life changes.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC9BFD61C8, различающихся байтов в общей части: 4970; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[045] 6078B310 | Исходник/релиз: исследованный путь обслуживается
+SHA256 2647f66998bf8694f9f9b7e985310bb457816d786328f161384dfdb47048a9ee; 1048576 bytes.
+  my-pirate/Mike Ditka Power Football (USA, Europe) (Unl).md
+  omonim-pirate/Mike Ditka Power Football (UE) (Unl) [!].md
+Intro advances to interactive football setup menu; supplied later inputs change player count. Match not claimed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8280D1B3, различающихся байтов в общей части: 27098; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[046] 83CDAB51 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 281b946354b6b83a7323a207df722169c239b009aa945ab63a686298af5f12bb; 2097152 bytes.
+  omonim-pirate/Diguo Wangchao (Ya Se Chuanshuo) (T) (Unl) [f3] (SOUND).md
+Opening story text and scenery advance; altered sound driver receives open-bus protection values by design of this fix. Ordinary gameplay not claimed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC359CB75A, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[047] 9C81E67F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 282802472a6641d55f1dbc893783deac7e7b24cdc39ec84183ed96ab61bcd52b; 524288 bytes.
+  omonim-pirate/Whac-a-Critter (U) (Unl) [f1].md
+Linear fix advances through same animated introduction/title as native counterpart; supplied controls cause title transitions. Ordinary play not claimed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC406628FE, различающихся байтов в общей части: 4; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[048] BF39D897 | Повреждённый или неполный образ
+SHA256 290c9f59f32cf1a835798dacdc8e6f34e2ea0f6188b1d5d7ed47e4e6a7d74333; 2097152 bytes.
+  my-pirate/Sonic Jam 6 (Unl) [!].md
+All sampled frames are black and PC remains 000200; exact reset vector points into FF filler rather than code.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC04F0C93E, различающихся байтов в общей части: 19; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[049] C004219D | Исходник/релиз: исследованный путь обслуживается
+SHA256 29b1226802d70cb90b84e9aa77738a29a2080936946b72bf3e99fb2b8b2b7295; 2097152 bytes.
+  omonim-pirate/Lion King III, The (T) (Unl).md
+Opening advances to moving platform game; native read/write protection handlers service many actual accesses.
+Путь: rom_database /* Lion King 3 */
+Сравнение: CRC8E0555E4, различающихся байтов в общей части: 416; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[050] D760A6E9 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 2b6f87b4d946fa33e630263e4b9a1d67529ab04c0baee036bd77d6ad8814e15a; 2097152 bytes.
+  omonim-pirate/Sonic Jam 6 (T) (Unl) [f2][T+Rus MagicGame].md
+Russian title advances to platform level; supplied Start input pauses it.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC04F0C93E, различающихся байтов в общей части: 9395; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[051] 69F5B02F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 2bb81fa19086b52c5c08ee6e39658b6272b883a1bfcab36fbc2c454e4074485b; 2097152 bytes.
+  my-pirate/Mario 3 (Unl)[Rus].md
+Russian story opening advances to the platform playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[052] D46404E5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 2cc96f571cf1803193477f36bd2ff24a7c0c7d2c2bd09910e425ebc22be333cf; 2097152 bytes.
+  omonim-pirate/Lion King II, The - Simba's Mighty Adventure (T) (Unl) [T+Rus Pirate].md
+Opening advances to the platform playfield with moving sprites.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCAFF46765, различающихся байтов в общей части: 26072; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[053] 2327B8A1 | Исходник/релиз: исследованный путь обслуживается
+SHA256 2de8f43c165aa1fbbc3ac1a9d134c3b8173b105efd5b622a791f97d40716bcb8; 1262858 bytes.
+  my-pirate/Wolfenstein (Demo 10.6).md
+Menu/difficulty controls reach a rendered first-person level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[054] 6332EDCC | Исходник/релиз: исследованный путь обслуживается
+SHA256 2e0abf49be236d286271525593228f9c2e5efbc0db98cb20d88d51a95bef552d; 4194304 bytes.
+  omonim-pirate/Beggar Prince (UE) (v1.1) (Super Fighter Team) (Unl) [!].md
+English title menu advances to indoor player scene, independently of the other revision.
+Путь: SF-001 mapper and save RAM
+Сравнение: CRCF3AF46CD, различающихся байтов в общей части: 183; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[055] B3436777 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 2e36e878966899bd18ac6edc029e31e0a11fde11b354b335dfbeebd5773e223a; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [T+Rus Pirate][b1][f1] (ARCADE).md
+Hack intro advances to the arcade fighting playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC6D882CEF, различающихся байтов в общей части: 240; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[056] 1046D696 | Исходник/релиз: исследованный путь обслуживается
+SHA256 2f187e85c970d183150e01c8bb7ccb69a46938cf62add7b44e654d4f1974b7d2; 2097152 bytes.
+  omonim-pirate/Power Rangers - The Fighting Edition (R) (Unl).md
+Character selection advances to the fighting round with native protection return 0F.
+Путь: rom_database /* Mighty Morphin Power Rangers - The Fighting Edition */
+Сравнение: CRCB53FF16C, различающихся байтов в общей части: 4; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[057] 3DD2DAD7 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 2f7fc2ca2f6057aacdd8779104450638a9c70747e85ca060c72f6092e58b6e88; 1048576 bytes.
+  omonim-pirate/Universal Soldier (UE) (Unl) [hI].md
+Hack intro/title advances under later controls to the first level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC352EBD49, различающихся байтов в общей части: 4104; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[058] 09B29775 | Исходник/релиз: исследованный путь обслуживается
+SHA256 30c7b339e67b71541483e0bae2fdc75969f42aef90b526a4c46f4a5a138e8c4d; 811012 bytes.
+  my-pirate/Wolfenstein (Demo 5).md
+Menu advances to a rendered first-person level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[059] 4A1ED102 | Исходник/релиз: исследованный путь обслуживается
+SHA256 313f6f280e3e646e7cd348b954109a1d7c27fdb926a46acbaac4a5785e7cebd7; 1048576 bytes.
+  my-pirate/Domino (Unl) [Rus].md
+Russian title advances to interactive domino table.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[060] D5B2580E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 32f4ea040c573a41995d6b1e62553ece67b36baa5617d4c4c6a190297cc08bee; 1048576 bytes.
+  my-pirate/Super Bubble Bobble MD (Unl) [f1].md
+  omonim-pirate/Super Bubble Bobble (T) (Unl) [f1].md
+Player selection advances to the platform playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC4820A161, различающихся байтов в общей части: 8; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[061] C8BE0B26 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 337596272374d3fc4a831660af57f2931f19beb590b3cb8c783ca2d2df0d7e65; 1048576 bytes.
+  my-pirate/Ben 10 (Unl)[Rus].md
+Russian opening advances to the level; supplied Start input pauses it.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[062] 28A88D6F | Исходник/релиз: исследованный путь обслуживается
+SHA256 33bbbcbda08672585b237decb5d2b2d83e56e5bb0a21ea0bca01d24d92eed8f1; 2097152 bytes.
+  my-pirate/Commandos (R).md
+Russian mission information advances under later controls to the scrolling playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[063] 2942F180 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 34b8d23c8969272b2b16a3ce66b13bf081ab89d4e91c7725439d751785fa1d1a; 2097152 bytes.
+  my-pirate/Samurai Spirits II (Unl) [p].md
+  omonim-pirate/Zhen Shihun - Samurai Spirits II (T) (Unl) [!].md
+Title advances to an animated fighting round.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDDE8C55D, различающихся байтов в общей части: 30; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[064] BE5F9397 | Исходник/релиз: исследованный путь обслуживается
+SHA256 37ff807a1edeb3c18162d36f83c9c757c3bee2bcae31e2961172cf9df1e99a12; 2097152 bytes.
+  my-pirate/Aladdin II (Unl).md
+  omonim-pirate/Aladdin II (T) (Unl).md
+Opening advances to the platform playfield with moving sprites.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[065] B53FF16C | Вариант: изменения и наблюдённый путь исследованы
+SHA256 39ab167cd641b95f92b42061fb619e112d3e5b4446d806add27855cf67f969f8; 2097152 bytes.
+  my-pirate/Mighty Morphin Power Rangers - The Fighting Edition (Unl) [f].md
+  omonim-pirate/Power Rangers - The Fighting Edition (R) (Unl) [f1].md
+Character selection advances to the fighting round despite its measured branch patches.
+Путь: rom_database /* Mighty Morphin Power Rangers - The Fighting Edition */
+Сравнение: CRC1046D696, различающихся байтов в общей части: 4; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[066] 30F7031F | Исходник/релиз: исследованный путь обслуживается
+SHA256 39f23e3f1e966237f3e9551a0069ddc4fafcb7b259b9590e204218c605c7bc9a; 2097152 bytes.
+  my-pirate/Pocket Monsters 2 (Unl) [!].md
+  omonim-pirate/Pikachu II - Pocket Monster II (T) (Unl) [!].md
+Title advances to the platform playfield; native bank-write handler actually runs.
+Путь: rom_database /* Pocket Monsters II */
+Сравнение: CRCC0F348EB, различающихся байтов в общей части: 7; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[067] 8362D852 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 3adac14636c30870395f933d6617fac49d2047287c1e76918d2aa13f685c1bb8; 1048576 bytes.
+  my-pirate/Magic Girl Featuring Ling Ling The Little Witch (W) (Unl) [c][!].md
+  omonim-pirate/Magic Girl (UE) (Super Fighter Team) (Unl) [!].md
+Title advances under later controls to the first platform level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8E49A92E, различающихся байтов в общей части: 4995; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[068] F4554624 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 3b89962935aadc8ae1b7db5b2556b38c8eff6035920f4bcb2f065d86da92d0ee; 2097152 bytes.
+  omonim-pirate/Brave Battle Saga - Legend of the Magic Warrior (UE) (Unl) [!] .md
+English opening advances to an NPC dialogue scene; dialogue changes under supplied buttons.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB2853EF5, различающихся байтов в общей части: 124913; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[069] CD7E53D0 | Исходник/релиз: исследованный путь обслуживается
+SHA256 3d1d82848ef9567b8ffe36f85f2e8e3b0c7f78c1d9dc353184f08f6833f4ef03; 2097152 bytes.
+  my-pirate/San Guo Zhi V (China) (Unl).md
+  omonim-pirate/Sanguozhi V (T) (Unl).md
+Chinese title menu advances to the strategic map and unit-selection display.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[070] 36407C82 | Исходник/релиз: исследованный путь обслуживается
+SHA256 3d9db23e1fcd77813c513add3ab96b2c152fe94abd9b2e93e3ab75b77dd3f067; 1048576 bytes.
+  my-pirate/16 Zhang Ma Jiang (China) (Unl).md
+  omonim-pirate/Shiliu Zhang Mahjong - Xiangyan Meiren Pian (T) (Unl).md
+Introduction advances to the mahjong table with tile and score changes.
+Путь: rom_database /* Shi Liu Zhang Ma Jiang - 16 Tiles Mahjong (uses 16-bits reads) */
+Checksum ON/OFF: одинаковые байты.
+
+[071] 3BAD2015 | Исходник/релиз: исследованный путь обслуживается
+SHA256 3e5ab2da224c2810617aa89834544b37ef2475ca0b92e0239fea177ae76eddae; 1638590 bytes.
+  my-pirate/Wolfenstein (Demo 11.1).md
+Menu/difficulty controls reach a rendered first-person level.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCAA5BA53E, различающихся байтов в общей части: 835468; shared chunks; relationship not established
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[072] 51DF933C | Вариант: изменения и наблюдённый путь исследованы
+SHA256 3f3a9d37ba751252e8c7780325362ee2efcf4e8b1d9b2e8ef9ef329dc7b8c6ea; 524288 bytes.
+  my-pirate/Balloon Boy (Unl) [f1].md
+Opening advances to active platform playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCA82F05F0, различающихся байтов в общей части: 3; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[073] 13CDD4DA | Вариант: изменения и наблюдённый путь исследованы
+SHA256 41dbcd3311fc375d64beae505815207bb1a244d89fe76137899ea336cbdc9b58; 1048576 bytes.
+  my-pirate/Wu Kong Wai Zhuan (Chi, Alt Rev)[unprot].md
+  omonim-pirate/Wukong Waizhuan (T) (Unl) [f1].md
+Chinese opening advances to normal village dialogue by 6000 frames.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC0BD70E54, различающихся байтов в общей части: 5; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[074] 42999A02 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 41fc36f1cfd38c13e46841597998deccd739f314b39a483d2932ce2322ee7076; 3145728 bytes.
+  omonim-pirate/Zhen Shihun - Samurai Spirits II (T) (Unl) [a1][f1].md
+Title advances to an animated fighting round, independently of the other Samurai variant.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDDE8C55D, различающихся байтов в общей части: 18; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[075] 8439E987 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 42dac2e12847f290ff1262afb2753ba95dc928443c6e74bd67c51e2b07be09dc; 524288 bytes.
+  my-pirate/Earth Defend, The (Unl) [f1].md
+Linear fix follows the native aircraft introduction/title sequence. Its retained bank writes are ignored because the bootstrap was redirected to the linear game.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC3519C422, различающихся байтов в общей части: 12; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[076] AA64AA59 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 43fb107067e273d367f06ed9af398c6c96d4289cc6af55c34cf5cee389e86029; 1048576 bytes.
+  omonim-pirate/Bug's Life, A - Chong Chong Weiji (T) (Unl) [f2].md
+Title advances to platform level; supplied Start input pauses it.
+Путь: rom_database /* A Bug's Life (bootleg version ? two last register returned values are ignored & first register test has been modified ?) */
+Сравнение: CRC10458E09, различающихся байтов в общей части: 3; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[077] D65D83D4 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 453b9fd0ecb5ac88866d137754717d274ecf791fe872c3f1e249b873c407fe4b; 1048576 bytes.
+  my-pirate/Tiny Toon Adventures 3 (Unl) [f].md
+  omonim-pirate/Tiny Toon Adventures 3 (T) (Unl) [f1].md
+Title advances to platform level with moving player/enemies despite bypassed register check.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCF22F569D, различающихся байтов в общей части: 4; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[078] 3370F8C9 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 461001f5ed80fff75cb75697b2331315df7d34d4cbfcd2eae590b772e3903069; 1048576 bytes.
+  omonim-pirate/Test Drive II - The Duel (UE) (Unl) [T+Rus MagicGame].md
+Russian car/opponent menus advance under later input to road and dashboard.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCF9BDF8C5, различающихся байтов в общей части: 158846; shared chunks; relationship not established
+Checksum ON/OFF: одинаковые байты.
+
+[079] 31449113 | Исходник/релиз: исследованный путь обслуживается
+SHA256 494fe51670bbfb50c8768c6b86a220af8535189596a69fac9e665d49b35acc50; 1048576 bytes.
+  my-pirate/Hei Tao 2 - Super Big 2 (China) (Unl).md
+  omonim-pirate/Hei Tao 2 - Super Big 2 (T) (Unl).md
+Player selection advances to active card table; all four native protection values read.
+Путь: rom_database /* (*) Hei Tao 2 - Super Big 2 (patched ROM, unused registers) */
+Checksum ON/OFF: одинаковые байты.
+
+[080] E5785D45 | Исходник/релиз: исследованный путь обслуживается
+SHA256 49785eaa4f8d3183ed56b1aaa3bc4ba8d7d73cfb44a4f1fd79c02984f4905666; 1048576 bytes.
+  my-pirate/Gunfight 3 in 1 (World) (Unl).md
+  omonim-pirate/GunFight 3 in 1 (T) (Unl) [!].md
+Opening advances to stage playfield; native banking writes actually run.
+Путь: rom_database /* Gunfight 3-in-1 */
+Сравнение: CRC76481D00, различающихся байтов в общей части: 10; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[081] E24AC6B2 | Исходник/релиз: исследованный путь обслуживается
+SHA256 49af7a29d88fb6e751999b89aee966f3297cf0597dcc511a7d7919a7b1fc12ad; 1048576 bytes.
+  my-pirate/Elf Wor (China) (Unl).md
+  omonim-pirate/Super Magican - Ling Huan Daoshi (T) (Unl).md
+Opening advances to platform playfield with moving player/enemies.
+Путь: rom_database /* Ling Huan Dao Shi - Super Magican */
+Сравнение: CRC486DFECD, различающихся байтов в общей части: 43; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[082] AEB3C10C | Вариант: изменения и наблюдённый путь исследованы
+SHA256 49b261a1f66467676e8b59ac4ea3db519638c13a4fb1a8fa74522b462850d02e; 2097152 bytes.
+  omonim-pirate/Generals of the Yang Family - Clan of Heroes (U) (Piko Interactive) (Unl) [!].md
+English title accepts later inputs and enters player selection.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC6604A79E, различающихся байтов в общей части: 97233; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[083] A911447F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 4a12bc4d52d474b08ef9407ad8222b320669bd913bcad65afb652d4115f454b8; 1048576 bytes.
+  omonim-pirate/Bug's Life, A - Chong Chong Weiji (T) (Unl) [T+Rus MagicGame].md
+Russian title advances to platform level; supplied Start input pauses it.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCED1C1A67, различающихся байтов в общей части: 85009; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[084] 5B9F7237 | Пробел распознавания аппаратуры исправлен
+SHA256 4ae451ff292525eb5d069322c56853f243ac53136ee9321a6f720b3173eaa62b; 2097152 bytes.
+  my-pirate/Super Donkey Kong 99 (Unl) [f1].md
+  omonim-pirate/Super Donkey Kong 99 (T) (Unl) [f1].md
+Platform game boots like original, but its code retains the same ending protection routine while checksum edits avoid the database. Late path requires separate analysis.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8E7D9177, различающихся байтов в общей части: 151; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[085] B7C39426 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 4e4323b99aae8e5d21b79a3b648eee9eae70ec2d1a93e43ca530319eb61cb0c7; 1048576 bytes.
+  my-pirate/Angry Birds Star Wars (Unl).md
+Title advances to platform playfield with moving sprites and score/life display.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[086] 880A916E | Исходник/релиз: исследованный путь обслуживается
+SHA256 4ebd36f5fde821c4144e59c0e49bb7f594c8aa66e3450c5bfbbfa0dfcb2bd394; 2097152 bytes.
+  my-pirate/Wu Kong Wai Zhuan (China) (Unl).md
+  omonim-pirate/Wukong Waizhuan (T) (Unl) [!].md
+Chinese opening advances to normal village dialogue by 6000 frames.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD850391F, различающихся байтов в общей части: 959077; shared chunks; relationship not established
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[087] D76BA1CE | Вариант: изменения и наблюдённый путь исследованы
+SHA256 4f0a6cb31d8f862057c126aa4a6bf63543e6d84f5c4393c23bf5d190f63ee9dd; 524288 bytes.
+  omonim-pirate/Adventurous Boy - Maoxian Xiaozi (T) (Unl) [f1].md
+Title advances to platform playfield; supplied Start input pauses it.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD4403913, различающихся байтов в общей части: 6; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[088] 10683E83 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 4f8754a63e8ad32cac779e6bd744e106c80c1e66c9621df5fac99baf5c37e555; 1048576 bytes.
+  my-pirate/Chess (Unl) [Rus v105].md
+  omonim-pirate/Chess (R) (Unl) [T+Rus1.05 Unknown].md
+Russian chess title advances to interactive configuration menu; cursor and option text change with supplied controls. Match not claimed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC47380EDD, различающихся байтов в общей части: 9877; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[089] 8541F16C | Исходник/релиз: исследованный путь обслуживается
+SHA256 4fe12f3b433c128bf4ef9e0be47e24d64cfa5d9c254cc2b0efffbc6f225561eb; 1048576 bytes.
+  my-pirate/Top Shooter (Unl).md
+Arcade power-on diagnostic advances to slot/reel playfield; custom arcade IO handlers actively service accesses.
+Путь: rom_database /* Top Shooter (arcade hardware) */
+Checksum ON/OFF: одинаковые байты.
+
+[090] FD1A83BD | Вариант: изменения и наблюдённый путь исследованы
+SHA256 5079333e5602d82410505408a9df358285901bdd7df0a3a5ae49a804b2e716de; 1048576 bytes.
+  omonim-pirate/Squirrel King (T) (Unl) [T+Rus Pirate (07.01.2005)].md
+Russian title/stage introduction advances to the platform playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8A0123F3, различающихся байтов в общей части: 27064; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[091] 1DB99045 | Исходник/релиз: исследованный путь обслуживается
+SHA256 50f7c770e9f05f00c769d002aca3ffcb0a5de4796c134e4fd8ea7d76d0ca9726; 262144 bytes.
+  my-pirate/Telebradesco Residencia (B) [!].md
+Boot and interactive credential UI supported; external modem/service dependency remains unverified and is not claimed emulated.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[092] A7F4ACA9 | Исходник/релиз: исследованный путь обслуживается
+SHA256 5109d54c160571ab192fb1d5b973e66dfd43d941593d35c570a56f254d4ba58a; 2621440 bytes.
+  my-pirate/Angry Birds (Angry Birds Demo Hack).md
+The animated title uses a pointer initially at (160,100). Down for 15 frames moves it onto START; physical B selects it. The exact program then reaches episode selection at 1200 frames.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[093] 9CFA2BD8 | Исходник/релиз: исследованный путь обслуживается
+SHA256 51a0b6004ccc5bd32715f372adf2d0a21721d81f03fa35dcecc3735c7c0e8919; 2097152 bytes.
+  my-pirate/Super Mario Bros. (Unl) [!].md
+  omonim-pirate/Super Mario Bros. (T) (Unl) [!].md
+Title advances to platform playfield; existing TIME protection reads execute.
+Путь: rom_database /* Super Mario World */
+Сравнение: CRCAF7D3375, различающихся байтов в общей части: 6; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[094] AF7D3375 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 5238bcf1a9ef14c5482b315b126212a6758b1ef2d055cf5e68399d258314bef1; 2097152 bytes.
+  my-pirate/Super Mario Bros. (Unl) [f1].md
+Changed-vector variant advances to the same platform playfield as its counterpart.
+Путь: rom_database /* Super Mario World */
+Сравнение: CRC9CFA2BD8, различающихся байтов в общей части: 6; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[095] A73ABD27 | Устройство: требуется штатный режим аксессуара
+SHA256 52e60077497ecd792a0ce088831207ca752254bffc1499ed0949a02ab08375be; 65536 bytes.
+  omonim-pirate/Pro Action Replay 2 (E) (v2.1) (Unl) [!].md
+The exact Action Replay image functions through the supported accessory path. The baseline standalone crash is repaired by the SVP bus guard; standalone trainer operation is not claimed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[096] 96B5C053 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 532af5a17d7ce6c0760f206722f1aba630c78792129a122752e13332db0666b0; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T-Rus1.0 Str@nger (28.12.2018)].md
+Russian opening advances to an NPC dialogue scene; text advances under buttons.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC80D0F101, различающихся байтов в общей части: 102; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[097] E8BDDE2B | Вариант: изменения и наблюдённый путь исследованы
+SHA256 53414af53b03f1b94d11aadbff85d95c953038ce948d8bf32f302b4138b82a39; 2097152 bytes.
+  omonim-pirate/Super Mario World (T) (Unl) [T+Rus SergeyK&Pirate].md
+Russian title advances to the platform playfield.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC17D3E61A, различающихся байтов в общей части: 1709; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[098] CF540BA6 | Исходник/релиз: исследованный путь обслуживается
+SHA256 56260ad82c684b56f061075e900426889c08129839b9e25cce3715b95d4c048d; 2097152 bytes.
+  my-pirate/Super Mario World (Unl) [!].md
+  omonim-pirate/Super Mario World (T) (Unl) [!].md
+Title advances to platform playfield with movement. Prior exact-CRC trace also reached gameplay without TIME accesses.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCE8BDDE2B, различающихся байтов в общей части: 6400; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[099] 82C88EC9 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 58abff3e52341e08b54a9e31186ddc97e1839990e1ddc2df5ee8b2b59e9664ec; 1048576 bytes.
+  omonim-pirate/Magic Girl (W) (Evercade) (Unl).md
+Evercade title advances to platform level; supplied Start input pauses it.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8E49A92E, различающихся байтов в общей части: 1374; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[100] 68B372F6 | Исходник/релиз: исследованный путь обслуживается
+SHA256 58c2282d4fdd2affeb1abce1b4289236f59fbf0c9b8e675a7ce0add3234c6b3b; 655360 bytes.
+  my-pirate/13 Tiles Mahjong - 98 Pretty Girl (Ch).md
+  omonim-pirate/Shisan Zhang Mahjong - 98 Mei Shaonu (T) (Unl).md
+Mahjong title advances to the tile table/action menu; scores and tiles change.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[101] 359CB75A | Вариант: изменения и наблюдённый путь исследованы
+SHA256 59146f5da1f2e2a4a663892b81f1ce08c9342a495bf0ce6c94b7252396ff11c9; 2097152 bytes.
+  omonim-pirate/Diguo Wangchao (Ya Se Chuanshuo) (T) (Unl) [f2] (SOUND).md
+Opening story text and scenery advance, matching the other SOUND variant apart from header checksum. Ordinary gameplay not claimed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC83CDAB51, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[102] B23C4166 | Исходник/релиз: исследованный путь обслуживается
+SHA256 59220f403d032032ae5bbc1050f2a07b110ddedb14b020b38db69b696423ae35; 2097152 bytes.
+  my-pirate/Tun Shi Tian Di III (China) (Unl).md
+  omonim-pirate/Tunshi Tiandi III (T) (Simplified) (Unl).md
+Title menu advances to indoor NPC dialogue despite an open-bus read at 400046.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCEA57B668, различающихся байтов в общей части: 61270; close byte variant
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[103] C37E6858 | Исходник/релиз: исследованный путь обслуживается
+SHA256 5a3b66660e1de788b9b007d2e39affb4f8cc1a92a4b3e7d3b4d0a6588a137a65; 4194304 bytes.
+  my-pirate/Cha Oji Pu Ke - Super Poker (Ch).md
+  omonim-pirate/Chaoji Poker (T) (Unl) [!].md
+Game-select menu advances to a card table; both CPUs read the four native protection values.
+Путь: rom_database /* Chao Ji Poker (correct ROM dump, original release is an overdump) */
+Сравнение: CRC08275694, различающихся байтов в общей части: 2; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[104] A5EF0B96 | Исходник/релиз: исследованный путь обслуживается
+SHA256 5a8f97afbd52d4d8dff7695840ba7396943f0aefe0c2ff529e573d63b7a2465e; 2097152 bytes.
+  my-pirate/Pokemon II (Unl).md
+  omonim-pirate/Pokemon II (Ch) (Unl) [!].md
+Title advances to the isometric playfield with moving characters/enemies.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[105] 9D3DDE48 | Исходник/релиз: исследованный путь обслуживается
+SHA256 5b86f8355ae889fc3564dfd9a7f4a8b3bea5ce498b920414bc58dff77b8d09fd; 1048576 bytes.
+  omonim-pirate/Zhanqi - Chinese Battle Chess (T) (Unl) [!].md
+Title advances to chess board, where repeated native protection reads continue.
+Путь: rom_database /* (*) Zhan Qi - Chinese Battle Chess (patched ROM ? registers values are read and compared to expected values but comparison results are unused) */
+Checksum ON/OFF: одинаковые байты.
+
+[106] 22E6FC04 | Исходник/релиз: исследованный путь обслуживается
+SHA256 5d9cc971a4c95ff4e4a623c8bc05ddc79e911d81fba87d67439ee332ad91ec16; 524288 bytes.
+  my-pirate/Exodus - Journey to the Promised Land (USA) (Unl).md
+  omonim-pirate/Exodus - Journey to the Promised Land (U) (Unl) [!].md
+Warning screen advances to the puzzle board; supplied controls alter the board.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[107] F22F569D | Исходник/релиз: исследованный путь обслуживается
+SHA256 5dc5c8709804ffaa4f89e3743bd4cc43f935205642093d1f4953f90dc3ee173e; 1048576 bytes.
+  omonim-pirate/Tiny Toon Adventures 3 (T) (Unl) [!].md
+Title advances to platform level; native write/read latch exchange executes.
+Путь: rom_database /* Tiny Toon Adventures 3 */
+Сравнение: CRCD65D83D4, различающихся байтов в общей части: 4; close byte variant
+Checksum ON/OFF: одинаковые байты.
+
+[108] 01CC364C | Вариант: изменения и наблюдённый путь исследованы
+SHA256 5e975a4c26919b478d0bc226e5dd6cd926b749e105e950dd953e63e1a90e1875; 1048576 bytes.
+  omonim-pirate/Iraq War 2003 (R) (Unl) [!].md
+Publisher logo, scrolling intro/map and Russian dialogue; extended 3600-frame path continued the story.
+Путь: default_rom_mapping
+Сравнение: CRC23689237, различающихся байтов в общей части: 715737; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[109] ED4826CE | Вариант: изменения и наблюдённый путь исследованы
+SHA256 60f595d09cccf59f153db3f5b3bb6b2c109014330268c663220c42930689301e; 3145728 bytes.
+  omonim-pirate/King of Fighters '99, The (T) (Unl) [f4].md
+KOF99 logo, character selection and active fight. Reset vector zero is executable in this modified image, not itself a bad-dump verdict.
+Путь: default_rom_mapping
+Сравнение: CRC54638C11, различающихся байтов в общей части: 122; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[110] 87A8C533 | Исходник/релиз: исследованный путь обслуживается
+SHA256 618b98a880f6e8733102bb35333fd7775ad4e08df9c5538508b29116752b7177; 65536 bytes.
+  my-pirate/Super Mario Bros. by mairtrus (V1.4.2) (PD).md
+Homebrew Super Mario Bros title then scrolling platform stage with HUD.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[111] 486DFECD | Вариант: изменения и наблюдённый путь исследованы
+SHA256 625262d6dc006fe30d3ccc200b349931a5c36998e426eb218847ae2e8521fa1e; 1048576 bytes.
+  my-pirate/Elf Wor (China) (Unl) [f1].md
+Elf Wor intro then platform stage with character and enemies.
+Путь: default_rom_mapping
+Сравнение: CRCE24AC6B2, различающихся байтов в общей части: 43; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[112] 3B859A1E | Исходник/релиз: исследованный путь обслуживается
+SHA256 62beb0dd4df875d112ae280710f85f5892467e45c132b2615648ce734c5e0e94; 2097152 bytes.
+  my-pirate/Harry Potter (Unl) [!].md
+  omonim-pirate/Harry Potter (Ch) (Unl) [!].md
+Harry Potter title then isometric outdoor scenes with player movement between views.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[113] 496EB1D1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 63a9905256dab44aa4e0331f81f1b8340ccd3f88156d20996a61c04750d304b2; 1048576 bytes.
+  my-pirate/Bao Xiao San Guo.md
+  omonim-pirate/Baoxiao Sanguo (T) (Unl).md
+Bao Xiao introduction then side-view gameplay scene.
+Путь: default_rom_mapping
+Сравнение: CRCDF107B54, различающихся байтов в общей части: 19252; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[114] 9B691779 | Исходник/релиз: исследованный путь обслуживается
+SHA256 63d3a71b39f93cc4b390acf7371d2b2da5786e8dd1bc0016c6667835114759f7; 1048576 bytes.
+  omonim-pirate/Shisan Zhang Mahjong - Zhongguo Meinu Pian (T) (Unl) [!].md
+Shisan title/intro then Mahjong table; actual protected-register read returned C9.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[115] 23689237 | Исходник/релиз: исследованный путь обслуживается
+SHA256 63dfc2f8cb081ab57711fb5c9bb6fa086c2e26b78fbd6950892fa1cc1e77f52f; 1048576 bytes.
+  my-pirate/Iraq War 2003 (Unl).md
+  omonim-pirate/Iraq War 2003 (Ch) (Unl) [!].md
+Iraq introduction, animation and numeric/text screen; no cartridge-register response was required on this bounded path.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[116] 796565B1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6404f6267e12d8809bd9d760a8de8a78071c06e31abb12084809bc4e7d83a4dd; 524288 bytes.
+  my-pirate/Magic Bubble (Unl).md
+Magic Bubble title and active puzzle board with changing pieces.
+Путь: default_rom_mapping
+Сравнение: CRC3EC61DC1, различающихся байтов в общей части: 4; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[117] F2BEB461 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6439fc58751b6dcb6684fa747fe9155dcd4cdf86132a70b7c72d62a3ab837919; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [h2] (ARCADE+SCROLL).md
+Double Dragon title then street fighting scene; modified arcade/scroll program runs.
+Путь: default_rom_mapping
+Сравнение: CRC054F5D53, различающихся байтов в общей части: 9; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[118] 6F630EBD | Вариант: изменения и наблюдённый путь исследованы
+SHA256 650556c1cadecadca83cff481778baee59f1bc8795166481ef46f292091e159c; 2097152 bytes.
+  my-pirate/Mario 3 (Unl)[Rus] [a1].md
+Russian Mario 3 title then platform stage. This does not establish every BGM effect or later level.
+Путь: default_rom_mapping
+Сравнение: CRC69F5B02F, различающихся байтов в общей части: 715711; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[119] E9829B22 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 66fa051fb8af8e5c7e8dca4968efe5c7ce1bd964a2990cc7cbab1906ef9579d0; 1048576 bytes.
+  my-pirate/Jiu Ji Ma Jiang II - Ye Yan Bian (China) (Unl).md
+  omonim-pirate/Jiuji Mahjong II (T) (Unl) [!].md
+Jiuji title and animated introductory image; actual last-register word read returned 0000 required by its two reversed branches.
+Путь: default_rom_mapping
+Сравнение: CRC69F24500, различающихся байтов в общей части: 2; Only two code-byte changes versus protected counterpart: 0x4F4 and 0x1C80 invert BEQ/BNE. Both checksum keys collide; current core discriminates protected prefix. See pirate-identification-fixes.txt.
+Checksum ON/OFF: одинаковые байты.
+
+[120] 065C139A | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6879337f3f8dbb9caac4cf9e28c97f1b53cda7519b4b84df69c932f5d2b84c9d; 262144 bytes.
+  my-pirate/Funny World (Unl) [f1].md
+Standalone Funny World extraction reached outdoor platform stage through linear mapping.
+Путь: default_rom_mapping
+Сравнение: CRCA82F05F0, различающихся байтов в общей части: 238319; Standalone extraction versus combined Realtec image: offset-wise differences alone cannot identify banking.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[121] CDDBECFC | Исходник/релиз: исследованный путь обслуживается
+SHA256 69353bd5014e04800c44a66d8d7ca7ea2269eb82e2e54bd96fc04d193c4f1af2; 1048576 bytes.
+  my-pirate/Commandos (Truco '96) (Unl).md
+  omonim-pirate/Truco '96 (Ar) (Unl).md
+Commandos title, language/options interaction and text/card interface.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[122] 2B4B40E3 | Исходник/релиз: исследованный путь обслуживается
+SHA256 69bed454db488105b5201da1d810e0f8d4b04a05813d73fecac183937a17dac5; 1048576 bytes.
+  my-pirate/SuperMajonClubvers0000.md
+  omonim-pirate/Chaoji Mahjong Club (T) (Unl) [!].md
+Mahjong Club introduction then gameplay table; repeated real 9000/D300 word responses observed.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[123] CBC38EEA | Исходник/релиз: исследованный путь обслуживается
+SHA256 6aebfd476fa4f19b7c11c18a02345848f0fb6273c7000d782abdba342fae74aa; 2097152 bytes.
+  omonim-pirate/King of Fighters 98', The (T) (Unl) [b1].md
+KOF98 character selection then active fight; literal b1 label did not prevent working protection reads.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[124] 12E35994 | Исходник/релиз: исследованный путь обслуживается
+SHA256 6c67f8a86be544f60f74b1b5d80d1a7265559ae94f9424a343c65877efeebd10; 1048576 bytes.
+  my-pirate/Ma Qiao E Mo Ta - Devilish Mahjong Tower (China) (Unl).md
+  omonim-pirate/Mahjong Emo Ta - Devilish Mahjong Tower (T) (Unl).md
+Devilish Mahjong Tower title and option screen changed under late input.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[125] 31759E28 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6cdefba450ba13a91fc04678c26d31fa84ce35e8ff35d24b1b8a91eb37eee76a; 2097152 bytes.
+  my-pirate/Pokemon Stadium (Unl) [f1].md
+Pokemon Stadium title, versus screen and battle scene.
+Путь: default_rom_mapping
+Сравнение: CRCFE187C5D, различающихся байтов в общей части: 6; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[126] B7F68B29 | Исходник/релиз: исследованный путь обслуживается
+SHA256 6cef146f38eb60cb22889c7fc0510472f2770d38b898b16ebf48a87303f3a487; 1048576 bytes.
+  my-pirate/Oh Mummy Genesis (World) (Unl).md
+Oh Mummy introduction then maze/puzzle stage.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[127] 00DA53A9 | Исходник/релиз: исследованный путь обслуживается
+SHA256 6d2adc065c8dc6a8b61d2f988e005c0ac3bd20c577fc08775f0d3e545c0fafa6; 524288 bytes.
+  my-pirate/Lego Batman (Unl).md
+Lego Batman title then active side-scrolling stage.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[128] 34CBAC5D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6e40371a1fd293a60c7d91c5e0ece4eddc86a53e79728ff721fa1fa7d403675d; 2097152 bytes.
+  omonim-pirate/King of Fighters 2000, The (T) (Unl) [!].md
+KOF2000 title then active fight.
+Путь: default_rom_mapping
+Сравнение: CRC54638C11, различающихся байтов в общей части: 1830186; Related fighting family comparison; different title is not proof of base/fix identity.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[129] 5353F532 | Отдельное внешнее оборудование не реализовано
+SHA256 6e8018188b7244880e3fb337a1a33b297ad2d6a39072cd38c6ca1b2f3ca9e846; 262144 bytes.
+  my-pirate/Sega Art Tool (Unl).md
+Utility splash remains while polling third controller-port data bit 4; ordinary pad input does not supply its external loader protocol.
+Путь: Sega Loader Board / host-PC link through controller port 3
+Checksum ON/OFF: одинаковые байты.
+
+[130] 15481EF0 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6edd0d04b75b00ef46010876877ede3a97ebfeaae2fd9f0a76ff7b995c4eec28; 1048576 bytes.
+  omonim-pirate/Chaoji Poker (T) (Unl) [f2] (SOUND).md
+Super Poker f2 title, game selection and poker interface; Z80 still reads FF, while this patch intentionally skips the 68K PCM command.
+Путь: default_rom_mapping
+Сравнение: CRCC37E6858, различающихся байтов в общей части: 16; Compare first 1 MiB of four-copy C37E6858; known 0x68E branch bypass and 0xE6AAA Z80 command skip. See pirate-identification-fixes.txt.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[131] C0F348EB | Вариант: изменения и наблюдённый путь исследованы
+SHA256 6f8e44554f1fb3b12155cefbd85674802d7ea6ef005c89977aa8f08ca1063fcf; 2097152 bytes.
+  my-pirate/Pocket Monsters 2 (Unl) [f1].md
+  omonim-pirate/Pikachu II - Pocket Monster II (T) (Unl) [f1].md
+Pocket Monsters II title then platform stage.
+Путь: default_rom_mapping
+Сравнение: CRC30F7031F, различающихся байтов в общей части: 7; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[132] 0CDBC87D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 7008a64d29800781d91b9ffc833fb06200a633eb733c5de2f53f1dbfde181383; 1048576 bytes.
+  omonim-pirate/Super Mario World 64 (T) (Unl) [f1][T+Rus Pirate].md
+Russian SMW64 title/story and platform stage; source comparison shows replacement of mapper calls and checks with linear code/NOPs.
+Путь: default_rom_mapping
+Сравнение: CRCE7AC4161, различающихся байтов в общей части: 3359; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[133] 6B575CC7 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 70b21742d4a7cff8eb00c82ef30039adce46325a29d95a0bab5045b7726be83e; 3145728 bytes.
+  my-pirate/King of Fighters 99 (Unl) [f2].md
+KOF99 f2 logo, character selection and fight.
+Путь: default_rom_mapping
+Сравнение: CRC54638C11, различающихся байтов в общей части: 24; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[134] 36A98BD5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 70c61d5558d74c5e8edffcee8a54a132232acd32f6a01fab066c8830f5d4fa0e; 2097152 bytes.
+  my-pirate/Lion King II, The (Unl) [f1].md
+Lion King II intro and platform stage; multiple original register operations are replaced with NOPs/constants.
+Путь: default_rom_mapping
+Сравнение: CRCAFF46765, различающихся байтов в общей части: 167; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[135] 8E2BCEAF | Исходник/релиз: исследованный путь обслуживается
+SHA256 70d392b95a0e526e10bb5882ffd3c791d28bbd7603aabb36689b18d79494b03c; 1572864 bytes.
+  my-pirate/Star Control (USA) (Unl).md
+  omonim-pirate/Star Control (UE) (Unl) [!].md
+Star Control logo, ship selection/interface and space scene.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[136] AF6DCA2B | Вариант: изменения и наблюдённый путь исследованы
+SHA256 72ebc5c3e6dd83d7e778488d082c269665e770fb3fc633da4fcbdf07387bbb9d; 1048576 bytes.
+  omonim-pirate/Chaoji Poker (T) (Unl) [f3] (SOUND).md
+Super Poker f3 title, selection and poker interface; sound-table seed/driver changes compensate absent registers on this branch.
+Путь: default_rom_mapping
+Сравнение: CRCC37E6858, различающихся байтов в общей части: 20; Compare first 1 MiB of four-copy C37E6858; known branch bypass plus changed Z80 protection-adjusted data at 0xE3B3E and branch at 0xE3B6C. See pirate-identification-fixes.txt.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[137] AA5BA53E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 73bfccb65652e1de0124c4224db9be23cf9ce65b5f2a06b50cad469cdb08c4f0; 1639156 bytes.
+  my-pirate/Wolfenstein (Demo 11).md
+Wolfenstein demo logo, options and difficulty menus; multiple explicit inputs exercised menu transitions.
+Путь: default_rom_mapping
+Сравнение: CRC3BAD2015, различающихся байтов в общей части: 835468; Different homebrew demo revisions; broad differences do not establish cartridge hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[138] F26F88D1 | Исходник/релиз: исследованный путь обслуживается
+SHA256 74d0c3d37396adcfcc36917d362ac9cddcbb7cba2fb7dbcc51c695923cc4ceea; 4194304 bytes.
+  omonim-pirate/Soul Blade (T) (Unl) [!].md
+Soul Blade title and active fight; native register read returned F0.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[139] BAF20F81 | Исходник/релиз: исследованный путь обслуживается
+SHA256 74d9403d7ca2b9087b8befcc0331cc0526ae9f5138ef844ce6fb1f158edab8c9; 1048576 bytes.
+  my-pirate/Taiwan Daheng (China) (Unl).md
+  omonim-pirate/Taiwan Daheng (T) (Unl).md
+Taiwan Daheng intro then text/character interface.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[140] DE50CA8E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 75da4d4d63b26577a2c37b0effc40aece62bf86cb786715f31a5fca9a402ee02; 1048576 bytes.
+  my-pirate/Mike Ditka Power Football (USA, Europe) (Alt 1) (Unl).md
+  omonim-pirate/Mike Ditka Power Football (UE) (Unl) [a1][!].md
+Mike Ditka title then option/instruction interface.
+Путь: default_rom_mapping
+Сравнение: CRC6078B310, различающихся байтов в общей части: 107967; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[141] 513EA675 | Исходник/релиз: исследованный путь обслуживается
+SHA256 76a85d4a4858ba0a176c3c86781446aa1965734be64b4686c72278af1650c4de; 2097152 bytes.
+  my-pirate/Lord of the Rings, The - The Return of the King (Unl).md
+  omonim-pirate/Lord of the Rings 3 - The Return of the King (Ch) (Unl) [!].md
+Lord of the Rings title, indoor and outdoor isometric scenes.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[142] AAEB7636 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 76d8b63bcb4f19e4e503c518bbce54a5ee34098ebb0ad53a0dfeb5b390b048ef; 2097152 bytes.
+  omonim-pirate/Tekken Special (T) (Unl) [a1][!].md
+Tekken title and fight; small byte patch removes original protection branches/compare loop.
+Путь: default_rom_mapping
+Сравнение: CRC010F6369, различающихся байтов в общей части: 8; Eight changed code bytes: BEQ->BRA at2981A/29A8A/29FA6/2A458; compare-loop instruction at2992A replaced with write and BNE at29930 becomes RTS. Actual fight works on this bounded path.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[143] 1B86E623 | Исходник/релиз: исследованный путь обслуживается
+SHA256 76f83f4fba94fbf0a512dd79c1cf4d453d5f9d047c20fca3eb4ca59426da0b55; 262144 bytes.
+  my-pirate/Link Dragon (Unl).md
+  omonim-pirate/Link Dragon (T) (Unl).md
+Link Dragon introduction then game screen; smaller file is the exact first half of doubled Sound Fix counterpart.
+Путь: default_rom_mapping
+Сравнение: CRC80B421C4, различающихся байтов в общей части: 0; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[144] 15065DEB | Вариант: изменения и наблюдённый путь исследованы
+SHA256 7860e6e82d9250b8540ca393480f8cbab63a4255d3be40964cef2f18f2e8f281; 2097152 bytes.
+  omonim-pirate/Lion King III, The (T) (Unl) [T+Rus SergeyK(NewGame) (10.11.2003)].md
+Russian Lion King III title and platform scene.
+Путь: default_rom_mapping
+Сравнение: CRCC004219D, различающихся байтов в общей части: 6181; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[145] 7AC9E951 | Исходник/релиз: исследованный путь обслуживается
+SHA256 787bcbdd46f8c5232b79a3a9b3e9bb4eb7ab960446ca4843f7d5dc7720cc7761; 1048576 bytes.
+  my-pirate/World of tanks (Unl) [Rus].md
+World of Tanks title then overhead tank map with action animation.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[146] 065D2019 | Исходник/релиз: исследованный путь обслуживается
+SHA256 792a045e54e03fedc09ea3831a50ba8316f7b1d27ffa05547537c84c72071618; 524288 bytes.
+  my-pirate/Bomboy (unl).md
+  omonim-pirate/Hongzha Xiaozi - Bomboy (T) (Unl) [!].md
+Bomboy title/intro then maze stage with sprites.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[147] 17255224 | Устройство: требуется штатный режим аксессуара
+SHA256 79711fa55e8a4ea66201cfa10e01e4e222380821bd10b03c660a1287ce5c64c3; 131072 bytes.
+  omonim-pirate/Pro Action Replay (E) (Unl) [!].md
+Plain ROM route stays black without accessory RAM; exact original dump in Action Replay lock-on mode reaches trainer and target Turrican startup.
+Путь: Action Replay (pro) accessory with read-only areplay.bin pointing to exact ROM; existing areplay.c board type PRO1 selected by SP high byte 42 plus ACTION REPLAY 2 signature. Only first 64KiB are board ROM; second 64KiB are all FF.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[148] 8809D666 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 7b07ea2e492f3b824d88630a38a2cf4a0ad8d8c57f954888db12c7234081cb8c; 2097152 bytes.
+  my-pirate/Action 52 (USA) (Alt 1) (Unl).md
+Action 52 introduction, selectable game list and launched starfield game.
+Путь: default_rom_mapping
+Сравнение: CRC29FF58AE, различающихся байтов в общей части: 1; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[149] 283784A2 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 7c38fed06cc0c4bc1b8000fa529b46b9c30a1f05d85102d41e39df084cd854ba; 2097152 bytes.
+  omonim-pirate/MK5 - Mortal Kombat Mythologies - Sub-Zero (T) (Unl) [T+Rus SergeyK&Pirate].md
+Russian MK5 title then Sub-Zero stage.
+Путь: default_rom_mapping
+Сравнение: CRC11E367A1, различающихся байтов в общей части: 62881; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[150] 76C62A8B | Исходник/релиз: исследованный путь обслуживается
+SHA256 7c9435b22eab34ed38fe76cce57c480440ea7ae72e45fd19ee672392c74979e0; 524288 bytes.
+  my-pirate/Zhuo Gui Da Shi - Ghost Hunter (China) (Unl).md
+  omonim-pirate/Zhua Gui Dashi - Ghost Hunter (T) (Unl).md
+Ghost Hunter publisher/title animation and active scene.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[151] 2E2EA687 | Исходник/релиз: исследованный путь обслуживается
+SHA256 7edf7c45747df7ab6961c3423493c71a665ad95860c27153b63589ca6b302e51; 1048576 bytes.
+  my-pirate/Chao Ji Da Fu Weng (China) (Unl).md
+  omonim-pirate/Chaoji Dafuweng (T) (Unl) [!].md
+Chao Ji Da Fu Weng introduction, character selection and board/interface.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[152] A98BF454 | Повреждённый или неполный образ
+SHA256 7fa0559ad38ef1db01903be7b07636c37ae6cedc31b873208401b3a9c1dce9e9; 2097152 bytes.
+  my-pirate/12-in-1 (Unl) [!].md
+Multicart menu and actual TIME selection writes. First Dragon Ball bank lies beyond this truncated image; available-bank selections boot other included programs.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[153] 796882B8 | Исходник/релиз: исследованный путь обслуживается
+SHA256 7fe803fd4f6a002516d0b5d1f707d90f230a62379babd0bde1305a32a401b5c5; 2097152 bytes.
+  my-pirate/Hua Mu Lan - Mulan (China) (Unl).md
+  omonim-pirate/Mulan (T) (Unl) [!].md
+Mulan intro then forest platform stage using existing mapper writes.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[154] 5B37D45E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 801c6ea63cae8ad90f19341faeecf6571c41e6f313de6957b10d43eb0048e123; 2097152 bytes.
+  omonim-pirate/Lion King II, The - Simba's Mighty Adventure (T) (Unl) [T+Rus NewGame].md
+Russian Lion King II intro and platform stage; retains the same explicit protection removals as small f1.
+Путь: default_rom_mapping
+Сравнение: CRCAFF46765, различающихся байтов в общей части: 10789; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[155] 143697ED | Исходник/релиз: исследованный путь обслуживается
+SHA256 80210b85786cf6ad2781484c1f43c6b0b7166e45536263925580186123e5aa29; 2097152 bytes.
+  my-pirate/WarpSpeed (USA) (Unl).md
+  omonim-pirate/WarpSpeed (UE) (Unl) [!].md
+WarpSpeed intro and options/interface.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[156] 702999A4 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 804d1d4f4e66fc185ca0afed2cfd79126cdfc282a1e30ed33d4d339572f9c7fd; 524288 bytes.
+  my-pirate/Huan Le Tao Qi Shu - Smart Mouse (Ch) [f1].md
+  omonim-pirate/Huanle Taoqi Shu - Smart Mouse (T) (Unl) [f1].md
+Smart Mouse title then tile/puzzle board under late input.
+Путь: default_rom_mapping
+Сравнение: CRCDECDF740, различающихся байтов в общей части: 31; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[157] 3EC61DC1 | Исходник/релиз: исследованный путь обслуживается
+SHA256 81371f416a59390ad3d52d23b7486b3088d85995e5b7b1f9334f532718e3ac97; 524288 bytes.
+  omonim-pirate/Magic Bubble (T) (Unl).md
+Magic Bubble title then active puzzle board.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[158] DD1C7A79 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 81d490a87a4700f4cd4bfd09f3856c39bcbdad40b1585f75254a1eb1773750fe; 3145728 bytes.
+  my-pirate/Soul Blade (Unl) [p].md
+  omonim-pirate/Soul Blade (T) (Unl) [f1].md
+Three-MiB Soul Blade reaches the same initial fight as full original; missing nonempty fourth MiB prevents treating this as equivalent complete data.
+Путь: default_rom_mapping
+Сравнение: CRCF26F88D1, различающихся байтов в общей части: 2175; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[159] DFB94F1B | Вариант: изменения и наблюдённый путь исследованы
+SHA256 838c10fcf13788eec4f938b3d2ed7d06ef47217b7ac72cbdbba4247def01eedd; 8388608 bytes.
+  my-pirate/Pier Solar and the Great Architects (World) (En,Es,Pt) (Rev C) (Unl).md
+Pier Solar initializes SPI/mapper for more than 1200 frames, then reaches its title by 3600; long preparation is not a boot hang.
+Путь: t5740_spi_eeprom
+Сравнение: CRC4261EA9B, различающихся байтов в общей части: 1955041; Different language/revision of Pier Solar; both use product T-5740 mapper with SPI EEPROM.
+Checksum ON/OFF: одинаковые байты.
+
+[160] C79E1074 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 8669510653ac1ea86bba22f4a5cda7b3358bc8b88a626a86467ecaa7d6d4bef8; 2097152 bytes.
+  my-pirate/King of Fighters '98, The (Unl) [p1][!].md
+  omonim-pirate/King of Fighters 98', The (T) (Unl) [!].md
+KOF98 bootleg character selection and active fight.
+Путь: default_rom_mapping
+Сравнение: CRCCBC38EEA, различающихся байтов в общей части: 678874; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[161] 9BFD61C8 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 86c83f5baf17f47a1fb2d47c85aadcbf8a4f37a8a3a71bfb01aaf74416112a07; 2097152 bytes.
+  omonim-pirate/Lion King III, The (T) (Unl) [T+Rus SergeyK&Pirate].md
+Russian Lion King III title then platform stage.
+Путь: default_rom_mapping
+Сравнение: CRCC004219D, различающихся байтов в общей части: 5386; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[162] 6A382B60 | Исходник/релиз: исследованный путь обслуживается
+SHA256 870e1e55b356d76adf95c50dcafc52021572293224ab537217f9842ccba2fc85; 2097152 bytes.
+  my-pirate/Feng Shen Ying Jie Chuan (China) (Unl).md
+  omonim-pirate/Feng Shen Yingjie Chuan (T) (Unl).md
+Feng Shen room/dialogue scenes; both 68K and Z80 use existing read/write echo registers.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[163] 44C660F1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 885c5a84641217cb8266b3aa4c54a0709e24716e54dee26023e92a70fc04c0a3; 1048576 bytes.
+  my-pirate/Insane Paradise (Creaton, 1995, Original)[unprot].md
+  omonim-pirate/Fengkuang Taohuayuan (T) (Unl) [f1].md
+Unprotected Insane Paradise intro and tile scene; fixed seed/immediate replacement bypasses original reads.
+Путь: default_rom_mapping
+Сравнение: CRC2F15BB22, различающихся байтов в общей части: 15; 15 code bytes replace400000/401000 reads with immediate9000D3 and NOPs; this is explicit removal of the protected dependency.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[164] FB176667 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 894fa2628d26f4a9559e2d8ebf9ee5c4aeed43d3fbfc671e517e4b91983eff0c; 2097152 bytes.
+  omonim-pirate/Pikachu - Pocket Monster (T) (Unl) [a1][!].md
+Pocket Monster bootleg intro, forest stage; actual TIME responses 14/01/1F observed.
+Путь: default_rom_mapping
+Сравнение: CRCF68F6367, различающихся байтов в общей части: 722; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[165] 503E0718 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 89720a2445d2331186689cad123d4a929f6ef45c1fb7205dd19bcd5e410814cb; 524288 bytes.
+  my-pirate/Magic Bubble (Unl) [a1].md
+Magic Bubble alternate header/startup reaches same puzzle scenes.
+Путь: default_rom_mapping
+Сравнение: CRC3EC61DC1, различающихся байтов в общей части: 85; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[166] 963F9DC5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 8a3aed6976af28811f312f7e9954b826775a86169f79c3df177d85a3836110f2; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [h5] (ARCADE+SCROLL).md
+Double Dragon h5 title then street fighting with altered visuals.
+Путь: default_rom_mapping
+Сравнение: CRC054F5D53, различающихся байтов в общей части: 59709; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[167] 2F15BB22 | Исходник/релиз: исследованный путь обслуживается
+SHA256 8bc9c0992f57287bc4f2e13344e3b7c2bce6b21a940073cef975370a7ff2914c; 1048576 bytes.
+  my-pirate/Insane Paradise (Creaton, 1995, Original)[!].md
+  omonim-pirate/Fengkuang Taohuayuan (T) (Unl) [!].md
+Original Insane Paradise intro then tile scene; repeated real register values 90/D3 observed.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[168] 87D86501 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 8cc6d3bfb481a252ea55e592cb0212172a9acc6cc5cfa332f2d705f6fec7e07e; 2097152 bytes.
+  my-pirate/Sonic Jam 6 (Unl) [f1].md
+  omonim-pirate/Sonic Jam 6 (T) (Unl) [f2].md
+Sonic Jam 6 fixed bootleg title then platform stage; its 430 changed bytes bypass original banked helpers.
+Путь: default_rom_mapping
+Сравнение: CRC04F0C93E, различающихся байтов в общей части: 430; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[169] 60F8BBDD | Вариант: изменения и наблюдённый путь исследованы
+SHA256 8cfe171d2ebbaf91058d6ff2b011da1055f189e620051c060ebd6c29a88986d4; 524288 bytes.
+  omonim-pirate/Turrican (UE) (Unl) [f1] (COLOR,HEALTH).md
+Turrican color/health variant initially waits at title; late Start reaches platform gameplay at PAL timing.
+Путь: default_rom_mapping
+Сравнение: CRC634D67A6, различающихся байтов в общей части: 109; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[170] 513B2B72 | Повреждённый или неполный образ
+SHA256 8e197fddb7547ae32f3918931b53c006096f594e4618b8fe4354687ab5a4d748; 2097152 bytes.
+  my-pirate/Sega Subor System Cartridge (Unl).md
+Corrupted Subor image stays black/exception path. Old core crashes on absent SVP I/O; guarded core survives 1200 frames but cannot restore lost ROM bits.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[171] 6C097CB1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 8eaed5ff03aa4f3bc454fd58e6a72a1cd191b22add2e79c8e47ceb773a7b285c; 2097152 bytes.
+  omonim-pirate/Diguo Wangchao (Ya Se Chuanshuo) (T) (Unl) [a1].md
+Alternate Diguo introduction and outdoor scene; relocated program/changed sound bootstrap differs substantially from original and has no observed original protection transaction.
+Путь: default_rom_mapping
+Сравнение: CRC095B9A15, различающихся байтов в общей части: 1555022; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[172] A82F05F0 | Исходник/релиз: исследованный путь обслуживается
+SHA256 8f36a8ea96bbb09f8d4a2d7efb77a3c3da9a69e14c8a714b40bcdb856da2ef97; 524288 bytes.
+  my-pirate/Funny World & Balloon Boy (USA) (Unl).md
+  omonim-pirate/Funny World & Balloon Boy (U) (Unl) [!].md
+Combined Realtec title/menu then included game scene; real boot-header reads and bank writes observed.
+Путь: realtec_database
+Checksum ON/OFF: одинаковые байты.
+
+[173] 3E9E010C | Исходник/релиз: исследованный путь обслуживается
+SHA256 9033d3b8175a1e28e0c1da7c934b81df90657e1c93d20bd5e6152aeb50ac4f32; 2097152 bytes.
+  my-pirate/Shui Hu - Feng Yun Zhuan (China) (Unl).md
+  omonim-pirate/Shuihu Fengyun Zhuan (T) (Unl).md
+Shui Hu Feng Yun title, character menu and demonstration scene.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[174] C0193CBA | Вариант: изменения и наблюдённый путь исследованы
+SHA256 91c01c3c27d21f2063197fb63bc3f473fbb0e86aa474fb3dae86c82be3545e61; 1264476 bytes.
+  my-pirate/Wolfenstein (Demo 10.7).md
+Wolfenstein 10.7 introduction, options and difficulty menus respond to supplied input.
+Путь: default_rom_mapping
+Сравнение: CRC2DF11312, различающихся байтов в общей части: 914555; Different homebrew demo revisions; broad differences do not establish cartridge hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[175] F768F74E | Исходник/релиз: исследованный путь обслуживается
+SHA256 9269ebef32cdb536d3171e71716cd2bd6461c2a1192d86a0767c4d259a8be538; 536576 bytes.
+  my-pirate/Cascade (W) (Unl) [c][!].md
+Cascade introduction then puzzle board.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[176] 2CDB499D | Исходник/релиз: исследованный путь обслуживается
+SHA256 93f51d3783e8bc22cfa602bb7391c1e11843b20d2323ffd1cd3ece7338e56e0a; 2097152 bytes.
+  my-pirate/Virtua Fighter 2 vs Tekken 2 (Unl).md
+  omonim-pirate/Virtua Fighter 2 VS Tekken 2 (T) (Unl).md
+Virtua Fighter vs Tekken intro then active fight.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[177] 64446B77 | Исходник/релиз: исследованный путь обслуживается
+SHA256 9630a1866055c6e7482ae0db1768080643f158de632202bf36ee8849d90a60c0; 524288 bytes.
+  my-pirate/Bible Adventures (USA) (Unl).md
+  omonim-pirate/Bible Adventures (U) (Unl) [!].md
+Bible Adventures introduction then platform stage with instructions.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[178] B318F10E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 96498fc16571bae477f9ef720378bd65cca795d2143b6fc6f5a73c462b18e045; 131072 bytes.
+  omonim-pirate/Ishido - The Way of Stones (U) (Unl) [T-Rus1.00 Chief-Net (04.11.2016)].md
+Russian Ishido introduction, board setup and tile board.
+Путь: default_rom_mapping
+Сравнение: CRCB1DE7D5E, различающихся байтов в общей части: 1791; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[179] D9528A29 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 98fb157d82ef42b47116a2577574b790109d62cc6c41f89853842aee2443c773; 2097152 bytes.
+  omonim-pirate/MK5 - Mortal Kombat Mythologies - Sub-Zero (T) (Unl) [T+Rus SergeyK(NewGame) (02.12.2003)].md
+Russian MK5 title then Sub-Zero stage.
+Путь: default_rom_mapping
+Сравнение: CRC11E367A1, различающихся байтов в общей части: 72126; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[180] DA11978B | Вариант: изменения и наблюдённый путь исследованы
+SHA256 9b59c650095a77bf359b373f6e7f5f6c19138752aa93db22ed94f79656b40e58; 1048576 bytes.
+  omonim-pirate/Deer Hunter (R) (Unl) [a1].md
+Deer Hunter title and interactive Russian game/help selection screen; no gun/peripheral accuracy claimed.
+Путь: default_rom_mapping
+Сравнение: CRC6AE8A57A, различающихся байтов в общей части: 664517; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[181] 62D50C4F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 9cd62b83ad7d8ec9ddedbcc7a4d1a8db57ef86195c7fb00ff863a48d2594445d; 1048576 bytes.
+  my-pirate/SuperMajonClubvers0000[h].md
+  omonim-pirate/Chaoji Mahjong Club (T) (Unl) [f1].md
+Mahjong Club modified variant reaches same table after replacing hardware-derived values with immediate values.
+Путь: default_rom_mapping
+Сравнение: CRC2B4B40E3, различающихся байтов в общей части: 3; Three code bytes at1BF7/1BF8/1BFA change hardware-derived values to immediate90/D3; no new protection board is implied.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[182] 81345C81 | Внешний аудиопатч неполон/несогласован
+SHA256 9d37dff4d8bd6933d43376e4b9ba03e11c9b5f741d7a7a4392d73c126fa9644c; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T-Rus Glorysun&MagicTeam] (BUGS+FONT).md
+Russian Barver enters room/dialogue, but native sound-bank table is FF5FFFFF. Altered seed does not work with original board either (00C000CB); treat as incomplete external audio bypass, not a new physical board.
+Путь: default_rom_mapping
+Сравнение: CRCD37A37C6, различающихся байтов в общей части: 145719; Translated game plus only two bytes changed in the original 0x1E3B02..0x1E7FFF sound region: seed0100->0060. Both open-bus and forced original-hardware table outcomes are wrong for the original driver; explicit incomplete external patch, not a newly identified board.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[183] AC201BEF | Вариант: изменения и наблюдённый путь исследованы
+SHA256 9e36cab37fda52dd425149a3ee8e294e4b9727680390e914d16e8ce02198851a; 2097152 bytes.
+  my-pirate/Super Mario World (Unl) [f1].md
+Super Mario World fixed program intro and platform stage without TIME protection reads on this path.
+Путь: default_rom_mapping
+Сравнение: CRCCF540BA6, различающихся байтов в общей части: 504509; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[184] BD741108 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 9e56cef376e492e73dbfb0c3d1b5afc270cda7415ced6f4c18f2f20ea186fdb8; 524288 bytes.
+  omonim-pirate/Tom Clown (T) (Unl) [f1].md
+Tom Clown linear bypass title then carnival gameplay after late Start.
+Путь: default_rom_mapping
+Сравнение: CRC0C543CAD, различающихся байтов в общей части: 12; Reset is redirected from300 to7E300; original bank setup near7E7A4 replaced with stack initialization and JMP300, explicit linear Realtec bypass.
+Checksum ON/OFF: одинаковые байты.
+
+[185] DFACB9FF | Внешний аудиопатч неполон/несогласован
+SHA256 9fbdf2f0447d71f792e7816eeea495c8e786448f7ff3b8f1c42b9fe87d68ada9; 2097152 bytes.
+  omonim-pirate/Feng Shen Yingjie Chuan (T) (Unl) [f1].md
+Feng Shen f1 reaches room/dialogue; its only post-header changes are 1800->0060 sound seed, while Z80 still receives FF. This is not proof of correct sound or need for original hardware on altered seed.
+Путь: default_rom_mapping
+Сравнение: CRC6A382B60, различающихся байтов в общей части: 77; 77 changed bytes total; only two after header: 0x1E3B32 1800->0060, an initial sound-table seed edit. Executable protection bootstrap still performs real writes/reads; do not infer complete unprotection.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[186] CEF91BDB | Исходник/релиз: исследованный путь обслуживается
+SHA256 a08588b5300e88ef794beb865d7f19dc90a55122c2f22506ab788c55764ca5da; 1048576 bytes.
+  my-pirate/TC 2000 (Unl).md
+TC2000 title/options then racing scene after late Start.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[187] 664680AE | Исходник/релиз: исследованный путь обслуживается
+SHA256 a1878729a5a8a1e2906eb8fd168ce84981410ffded1a49dabc4668a0609b6fdf; 1048576 bytes.
+  my-pirate/Lego Pirates of the Caribbean (Unl).md
+Lego Pirates title then platform stage.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[188] BF9BA3BC | Исходник/релиз: исследованный путь обслуживается
+SHA256 a2918334f7eeff8acbd0c06ada66c3ee74849f71de7b359af810306474a9508c; 1048576 bytes.
+  my-pirate/Felix the Cat (Unl) [Rus].md
+Felix title then forest platform stage.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[189] D37A37C6 | Исходник/релиз: исследованный путь обслуживается
+SHA256 a3a845d4e416c40e917063beb3a13aedaff71050a98e6e9490e12fb730fdf759; 2097152 bytes.
+  my-pirate/Barver Battle Saga - Tai Kong Zhan Shi (China) (Unl).md
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl).md
+Original Barver room/dialogue and real Z80 echo path; native bank table 006000CB. Production family patch preserves all observed video/PCM/CPU output.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[190] DA9E25AA | Исходник/релиз: исследованный путь обслуживается
+SHA256 a3d98699a7dbf70f0bedacc680ed001d2fa5ca2f74f6b43a4ea75115988b9821; 262144 bytes.
+  my-pirate/Joshua & The Battle of Jericho (USA) (Unl).md
+  omonim-pirate/Joshua & the Battle of Jericho (U) (Unl) [!].md
+Joshua introduction then overhead stage and message interface.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[191] 58BA8020 | Исходник/релиз: исследованный путь обслуживается
+SHA256 a4eced146542b16b1a4330a1ca886f3bade83e573c487cf095a2fa631ccd38ba; 59200 bytes.
+  my-pirate/Mode 7 - testm7_gt.md
+Mode 7 visual demo renders track/car scene; intended demo behavior, not a full game.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[192] 29FE4C29 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 a4f1292ece7965a8df8733f55e70fd2c8e92f2fa9d02aefc2bb9266b007dd9e9; 524288 bytes.
+  my-pirate/Tom Clown (Unl) [f1].md
+Second Tom Clown linear bypass reaches carnival stage after late Start.
+Путь: default_rom_mapping
+Сравнение: CRC0C543CAD, различающихся байтов в общей части: 16; Reset is redirected from300 to7E300; original bank setup near7E7A4 replaced with stack initialization and JMP300, explicit linear Realtec bypass.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[193] 292623DB | Исходник/релиз: исследованный путь обслуживается
+SHA256 a5373ee05b64f37807d161a45b392886155e226d715cdc41e99160da1b59c010; 2097152 bytes.
+  my-pirate/Hercules 2 (Unl).md
+  omonim-pirate/Hercules 2 (T) (Unl).md
+Hercules intro and responsive title/options screen under late input.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[194] 9BBCCB26 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 a6036dfda53dda48700bee7257f53f299ae7a472b417010d385d2bf9cc929a86; 524288 bytes.
+  omonim-pirate/Super Off Road (UE) (Unl) [T+Rus MagicGame (23.05.2005)].md
+Russian Super Off Road intro and interactive garage/letter-selection interface.
+Путь: default_rom_mapping
+Сравнение: CRC8F2FDADA, различающихся байтов в общей части: 52970; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[195] E7AC4161 | Исходник/релиз: исследованный путь обслуживается
+SHA256 a6a53d5d4f9696791042087ce5fb1fb99cc13ff3282bbfb2898f786144838912; 1048576 bytes.
+  my-pirate/Super Mario World 64 (Unl).md
+  omonim-pirate/Super Mario World 64 (T) (Unl) [!].md
+Original SMW64 intro/story then platform stage; real custom 640003/660001/660003 reads and mapper writes observed.
+Путь: super_mario_world_64
+Checksum ON/OFF: одинаковые байты.
+
+[196] 414648D2 | Исходник/релиз: исследованный путь обслуживается
+SHA256 a6b22cadd2cd21f23096b9cf6a4ea07f2ec01ade4b63f0006d5147e9c50c82b0; 524288 bytes.
+  my-pirate/Plants vs Zombies (Unl) [Rus].md
+Plants vs Zombies introduction and playfield interaction.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[197] 6389A658 | Исходник/релиз: исследованный путь обслуживается
+SHA256 a7069cc52c34a15eb6dc7ba9cab799b69101719d0807645a6c9fb1068bb0d376; 131072 bytes.
+  my-pirate/Bomber [!].md
+Bomber introduction then active grid stage.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[198] F6C2CFF2 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 a739227551de0bf8f68dda6fee791d8450ea7bd72f98dc51b24392ee4572b124; 1048576 bytes.
+  omonim-pirate/Mahjong Qingren (T) (Unl) [f1].md
+Mahjong Lover fixed variant intro and tile table; original protection loop is replaced with NOP even though reads remain open bus.
+Путь: default_rom_mapping
+Сравнение: CRCDDD02BA4, различающихся байтов в общей части: 31; 31 bytes differ, mostly headers; 0xF4A BNE66EC becomes NOP4E71, removing the rejection loop.
+Checksum ON/OFF: одинаковые байты.
+
+[199] 47380EDD | Вариант: изменения и наблюдённый путь исследованы
+SHA256 a76b9394f11575f9a8271e91185bc4787273c36068679cbfaeb4e5c9388a113d; 524288 bytes.
+  my-pirate/Chess (Unl) [!].md
+  omonim-pirate/Chess (R) (Unl) [!].md
+Chess title then setup/text interface with changed menu under input.
+Путь: default_rom_mapping
+Сравнение: CRC10683E83, различающихся байтов в общей части: 9877; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[200] C9829C16 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 a90d4633171234af42507108751ef676308e49cee5a0044ba570c9b9adda9365; 2097152 bytes.
+  omonim-pirate/Water Margin - A Tale of Clouds and Wind (W) (QUByte Classics) (Unl) [!].md
+QUByte Water Margin title/character selection and demonstration scene without original register handler selected.
+Путь: default_rom_mapping
+Сравнение: CRC3E9E010C, различающихся байтов в общей части: 113507; QUByte reissue versus original collection entry; substantial differences may be intentional reissue changes.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[201] 5E519EA1 | Исходник/релиз: исследованный путь обслуживается
+SHA256 a9a46f883d265959c27639c16e91060a222f36f1006e731bd9ba9a3a1a0f37ac; 262144 bytes.
+  my-pirate/Super Tank War (Unl).md
+  omonim-pirate/Super Tank War (T) (Unl) [!].md
+Super Tank War introduction then stage 01 with tank gameplay; doubled Sound Fix contains identical game bytes.
+Путь: default_rom_mapping
+Сравнение: CRC80194F90, различающихся байтов в общей части: 0; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[202] F285AAB1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 aa5120f90bf2723dc0b5db18f253849eb746bfc7b1c09ac5f0643ce83fb83453; 833410 bytes.
+  my-pirate/Wolfenstein (Demo 5.5).md
+Wolfenstein 5.5 title/options/episode menus under explicit input.
+Путь: default_rom_mapping
+Сравнение: CRC09B29775, различающихся байтов в общей части: 626203; Different homebrew demo revisions; broad differences do not establish cartridge hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[203] 13FC4E61 | Исходник/релиз: исследованный путь обслуживается
+SHA256 aaa841179cf4978bdcb79c7bae0a10790659f2b47f12693111e79cc89bbbfe79; 262144 bytes.
+  omonim-pirate/MD Soft Checker (U) (Proto) (Unl) [!].md
+MD Soft Checker renders interactive diagnostic/color screens and changes them with input.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[204] E833BC6E | Исходник/релиз: исследованный путь обслуживается
+SHA256 aafe4c8870ec9f4b574cede353f608bffff961852f6e8815668718ceaf08453e; 2097152 bytes.
+  omonim-pirate/Tenchi o Kurau III - Sangoku Gaiden (T) (Unl).md
+Chinese Fighter title, selection and active fight; existing custom-alt register board actually supplies dynamic values.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[205] 0BD70E54 | Исходник/релиз: исследованный путь обслуживается
+SHA256 ab0885055e8ac6265480ec99c959d5ddcab263300563e46912435ad98b91ba6d; 2097152 bytes.
+  my-pirate/Wu Kong Wai Zhuan (Chi, Alt Rev)[!].md
+  omonim-pirate/Wukong Waizhuan (T) (Unl) [a1][!].md
+Original Wu Kong introductory scroll/animation; protected reads return 63/98. Later save/load and complete text rendering not established by bounded test.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[206] CA14B36B | Пробел распознавания аппаратуры исправлен
+SHA256 acd3f9f080e024175e54172fdb2973c11431662bb247f8d803e7a8247b4e7dac; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T--Rus Glorysun].md
+Russian Barver originally produced FFFFFFFF sound table despite unchanged driver. New production family recognition restores 006000CB and matches independently forced original hardware video/PCM/CPU at 2400 frames.
+Путь: protected_barver_driver_family -> existing 30B9:1C2A echo-register database board
+Сравнение: CRCD37A37C6, различающихся байтов в общей части: 138437; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[207] 481B373C | Вариант: изменения и наблюдённый путь исследованы
+SHA256 adf6475986ed188ae9e6cecdfdee4c249d6d03ecb6d174ac5148fdb7da396f8b; 131072 bytes.
+  omonim-pirate/Ishido - The Way of Stones (U) (Unl) [T+Rus1.01 Chief-Net (12.12.2016)].md
+Later Russian Ishido introduction and tile board.
+Путь: default_rom_mapping
+Сравнение: CRCB1DE7D5E, различающихся байтов в общей части: 18011; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[208] DB8416CB | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ae43f06b4bb4398ff4c1cd08a49327ba573e76eb870194ccb78049c454a5df0b; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [h3] (ARCADE).md
+Double Dragon h3 title and street fight.
+Путь: default_rom_mapping
+Сравнение: CRC054F5D53, различающихся байтов в общей части: 240; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[209] 010F6369 | Исходник/релиз: исследованный путь обслуживается
+SHA256 ae813fe84a41b6fff2f70bc04815e0d706d1691df78bda93465da8d721cdec52; 2097152 bytes.
+  my-pirate/Tekken Special (Unl)[!].md
+  omonim-pirate/Tekken Special (T) (Unl) [!].md
+Protected Tekken intro and fight; existing Tekken register implementation reads actual value 02.
+Путь: default_rom_mapping
+Checksum ON/OFF: одинаковые байты.
+
+[210] 703704A0 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 af23de686ab632cb40cf6fbdbf3c489148e8e282461115bf645e68a119761069; 4194304 bytes.
+  omonim-pirate/Xin Qigai Wangzi (T) (Unl) (Beta).md
+Beggar Prince beta title and indoor scenes; differs substantially from release, but executes linear ROM/SRAM path without observed new protection.
+Путь: default_rom_mapping
+Сравнение: CRCDD2F38B5, различающихся байтов в общей части: 3679356; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[211] 0C543CAD | Исходник/релиз: исследованный путь обслуживается
+SHA256 b04b9a1f4b17ec5251857cf0a689f442229eecadba96adc405b84343c36ad0db; 524288 bytes.
+  my-pirate/Tom Clown (Unl).md
+  omonim-pirate/Tom Clown (T) (Unl) [!].md
+Original Realtec Tom Clown title then carnival stage using boot-header reads/bank writes.
+Путь: realtec_database
+Checksum ON/OFF: одинаковые байты.
+
+[212] 7FCAE658 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b0716ce4b8b2ab04b55b8ce2763492337711e96a16d0d680c1f3d040eb4bba9d; 2097152 bytes.
+  my-pirate/Tekken 3 Special (Unl).md
+  omonim-pirate/Tekken 3 Special (T) (Unl).md
+Tekken 3 bootleg intro and fight through modified startup/TIME routine.
+Путь: default_rom_mapping
+Сравнение: CRC010F6369, различающихся байтов в общей части: 10851; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[213] 63847005 | Исходник/релиз: исследованный путь обслуживается
+SHA256 b09df337b38033dbf8d5a07254a1b7e5d51806c2c235af45d0ced5cb6cfe8dce; 2097152 bytes.
+  my-pirate/Dragon Ball Z Final Bout (Unl) [p].md
+  omonim-pirate/Dragon Ball - Final Bout (T) (Unl) [!].md
+Dragon Ball title/selection then active fight; startup masks TIME input with ANDI.B #0.
+Путь: default_rom_mapping
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[214] EE0F035E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b175e3b39f8fb9396928e1d8ed11f89e89a0ed4702ce1b3dd9c3ddaa408bcd1b; 2097152 bytes.
+  omonim-pirate/Pikachu - Pocket Monster (T) (Unl) [a1][f1].md
+Pocket Monster bootleg variant changes only reset/stack vectors versus FB176667; title/intro and platform stage work with same TIME board.
+Путь: default_rom_mapping
+Сравнение: CRCFB176667, различающихся байтов в общей части: 5; Direct family comparison; code changes require runtime interpretation. A filename label is not evidence of altered hardware.
+Checksum ON/OFF: одинаковые байты.
+
+[215] B2853EF5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b1aff1e38f89f46eeb36fe240b2c3aad471bbb032694df2b6b5a416fe9a16476; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T+Eng1.00 MagicTeam+S.Martin (21.02.2010)].md
+English Barver rebuild enters room/dialogue with linear mapping; old protected sound bootstrap is absent from this rebuild.
+Путь: default_rom_mapping
+Сравнение: CRCF4554624, различающихся байтов в общей части: 124913; Direct English rebuild comparison; executable protected Chinese bootstrap is absent in both. The older Chinese base is a broadly rearranged build, not the closest byte counterpart.
+Checksum ON/OFF: одинаковые байты.
+
+[216] 506FCFAC | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b24bcd9fe822efdc092f36d848f5011f73ddd40cacb7d4fadaf2c2ad2dbefbab; 2097152 bytes.
+  my-pirate/Top Fighter 2000 MK VIII (Unl).md
+  omonim-pirate/Top Fighter 2000 MK VIII (T) (Unl) [f1].md
+Title, character selection, active fight; fixed program replaces indirect custom-register comparisons with constants/NOPs and removes bank writes, redirects code to physical banks.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCF75519DC, различающихся байтов в общей части: 104; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[217] DF107B54 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b28853f74fc70ca8542cbe24e41e6eaddf2695822d76e26be6da322496775fc2; 1048576 bytes.
+  omonim-pirate/Baoxiao Sanguo (T) (Unl) [a1].md
+Title then scrolling story/characters; native linear ROM, no cartridge-handler accesses in observed execution; substantial graphics/text variant of 496EB1D1.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC496EB1D1, различающихся байтов в общей части: 19252; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[218] 8F786D96 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b2ed7277ee317189b3b94c1f34a6520e8618183462be926ef85e17a419a511d8; 1048576 bytes.
+  omonim-pirate/Bug's Life, A - Chong Chong Weiji (T) (Unl) [f4] (JUMP).md
+Jump fix differs from DFC3ABE6 by one byte at1A86B; title->paused stage->active movement after unpause. Existing fixed startup, no extra mapper required.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDFC3ABE6, различающихся байтов в общей части: 1; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[219] 824442DB | Исходник/релиз: исследованный путь обслуживается
+SHA256 b37a3c48876945ff2f3f7bd91b0534d80105957f845ca8d8e04d64bb78e9e1d3; 808340 bytes.
+  my-pirate/Wolfenstein (Demo 4).md
+Demo4 title/options->active first-person scene; native linear program, no expansion accesses observed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[220] AB82AFBE | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b4ab8499ad4808b59452122ac7114ebef971f15964931f5740f468880a783c71; 3145728 bytes.
+  omonim-pirate/King of Fighters '99, The (T) (Unl).md
+KOF99 title->character choice->active fight; compare with f4/original reveals boot/protection edits, existing TIME path used.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCED4826CE, различающихся байтов в общей части: 115; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[221] 51EEBDDC | Исходник/релиз: исследованный путь обслуживается
+SHA256 b533b0e6353920556b6422a6248429f5e3a252c0a6632a4283f02dc16e3a7a2d; 616952 bytes.
+  my-pirate/Chip and Dale Rescue Rangers 2 (Unl).md
+Title->kitchen stage. Same bytes as4B97C744 over common length; extra length is separate overdump evidence. No missing mapped-device reads observed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC4B97C744, различающихся байтов в общей части: 0; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[222] 7EBAC09A | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b561008b3a40ef4a39e61a62a1bf3a91a0556b9f97363a30ad1463b84bfa459d; 2097152 bytes.
+  omonim-pirate/Guaishou Jingji Chang - Pokemon Stadium (T) (Unl) [f1].md
+Title->fighter select->active battle. Only header differences vs31759E28, not a new mapper implementation.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC31759E28, различающихся байтов в общей части: 13; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[223] 49DD6F52 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b566c5a84ab9352bb2347980ef725afd5193f324b3fe971304a9b8c9ba45b416; 1048576 bytes.
+  omonim-pirate/Iraq War 2003 (Ch) (Unl) [f1].md
+Intro->password selection->active turret play. Three-byte change vs23689237; observed208002 writes use existing SRAM mapping.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC23689237, различающихся байтов в общей части: 3; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[224] F68F6367 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b60bca6c5f18cff0e82f11eb2e2d5daee68debe81695b4f89f8284f07bf62519; 2097152 bytes.
+  my-pirate/Pocket Monsters (Unl) [!].md
+  omonim-pirate/Pikachu - Pocket Monster (T) (Unl) [!].md
+Original PocketMonsters stage1 runs; fixed counterpart removes JSRDD474 and failure branch. Existing original protection implementation is retained.
+Путь: rom_database /* Pocket Monster */
+Сравнение: CRC5C8DADD8, различающихся байтов в общей части: 115; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[225] D5FCC49F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b6d478efdfe8adc0dda23bc665e777dfe841ccec5ece6ce7e31f5757e004b54c; 524288 bytes.
+  my-pirate/Thunderbolt II (Unl).md
+  omonim-pirate/Leidian Chuanshuo II (Thunderbolt II) (T) (Unl) [!].md
+Original ThunderboltII active stage after unpause; original400000/400006 protection reads correspond to fixed variant5500/F000 constants.
+Путь: rom_database /* Lei Dian Chuan Shuo II - Thunderbolt II (uses 16-bits reads) */
+Сравнение: CRCA2EF16DE, различающихся байтов в общей части: 11; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[226] F7E1B3E1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b93dcb5dbf8008844eb68a581b41b17496588c6703993779416538afe2dbaaae; 2097152 bytes.
+  my-pirate/Super Mario 2 1998 (Unl) [!].md
+  omonim-pirate/Super Mario 2 (T) (Unl) [!].md
+Original SuperMario2 starts stage1; fixed variant redirects F24D6 to30000 instead of original helperF2584. TIME reads remain original recognized path.
+Путь: rom_database /* Super Mario 2 1998 */
+Сравнение: CRCEC7884E7, различающихся байтов в общей части: 51; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[227] B1DE7D5E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 b9c2618d70beb245a10b4f90852be3c8d88f265a6b830a202a3dfedb571782f3; 131072 bytes.
+  my-pirate/Ishido - The Way of Stones (USA) (Unl).md
+  omonim-pirate/Ishido - The Way of Stones (U) (Unl) [!].md
+Ishido title->board->stone placement; standard linear mapping, no expansion transactions.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB318F10E, различающихся байтов в общей части: 1791; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[228] 1D81A67C | Исходник/релиз: исследованный путь обслуживается
+SHA256 b9c6275f893380662e536cfc0cdb646627ce17f9e3e92576733ae38caa5a6d21; 1048576 bytes.
+  my-pirate/Super Majon Club (Creaton, 1995, Original)[!].md
+  omonim-pirate/Du Shen Zhi - Menghuan Poker (T) (Unl) [!].md
+SuperMajonClub title->player selection; native default_regs_r actually returns original protection at400000/401000 repeatedly.
+Путь: rom_database /* Du Shen Zhi Meng Huan Poker */
+Checksum ON/OFF: одинаковые байты.
+
+[229] A4F2F011 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bba8186e38d0d0938a439bda4fc2325c1b2c9760a643717fa4f372ebf9058fc2; 2097152 bytes.
+  my-pirate/HardBall III (USA) (Unl).md
+  omonim-pirate/Al Michaels Announces HardBall III (UE) (Unl) [!].md
+HardBallIII league and team menus respond; standard linear/SRAM path; related variant differs23,562bytes, not a tiny mapper bypass.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC0E78C954, различающихся байтов в общей части: 23562; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[230] 0B9E4B41 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bbd53cceaeb3a1d0326137be475e9287319d2d60a176f5032806fd9340162429; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T+Rus1.2 Str@nger (03.02.2020)].md
+Russian BarverSaga1.2 advances palace dialogue; normal backup SRAM transactions; translation differs131,941bytes from1.1.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC80D0F101, различающихся байтов в общей части: 131941; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[231] 172EBA98 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bc3901c8c63f9cc2c6106e37db4a2a38a3aedc5c28e30c0bc52538539a1693a7; 1048576 bytes.
+  my-pirate/Super Mario World 64 (Unl) [f1].md
+  omonim-pirate/Super Mario World 64 (T) (Unl) [f1].md
+SMW64 f1 reaches active stage; rebuilt fixed ROM uses linear map, no observed expansion accesses. Original hardware support audited separately.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCA20F98AA, различающихся байтов в общей части: 1290; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[232] 7FB1356E | Исходник/релиз: исследованный путь обслуживается
+SHA256 bd4938d35dc995e4b1e5c2b6e14d07bd6ff38052bccddf3a073455d89045873f; 1048576 bytes.
+  my-pirate/TMNT (Unl) [Rus].md
+TMNT title/story->actual stage with character; explicit pause label proves test input paused it, not loader freeze. Ordinary linear program.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[233] 95FF7C3E | Устройство: требуется штатный режим аксессуара
+SHA256 bd9fd9a63b6a631b57bfb952913b1236851ada491343e72f06b9d8f96edb544e; 32768 bytes.
+  omonim-pirate/Action Replay (E) (Unl) [!].md
+ActionReplay original32KiB opens and edits code menu. Trainer ROM is accessory, no claim of attached-target functionality from standalone boot.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[234] AFF46765 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 beeb1ce145cd382d049af87a23739c2a6dea31c20c61fbe8a89dab79996b4b17; 2097152 bytes.
+  my-pirate/Lion King II, The (Unl) [!].md
+  omonim-pirate/Lion King II, The - Simba's Mighty Adventure (T) (Unl) [!].md
+Original LionKingII reaches active stage and native register protection; fixed counterpart167bytes includes bypasses, no separate f1 database entry needed.
+Путь: rom_database /* Lion King 2 */
+Сравнение: CRC36A98BD5, различающихся байтов в общей части: 167; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[235] E6669A61 | Устройство: требуется штатный режим аксессуара
+SHA256 bf122867894f95789679df4923c807c886d6095e34a030d2493e19c9030d164b; 65536 bytes.
+  omonim-pirate/Pro Action Replay 2 (E) (v2.1) (Unl) [a1][!].md
+Standalone accessory has no attached target and board RAM is absent on ordinary ROM path. Crash due to unrelated absent-SVP dereference fixed by managed SVP patch, native proper accessory path supported; no ROM prohibition.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[236] 4467B527 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bf78e51aafb02569e65d028d02471e4ec1388e5cec804516f658c0ff1bc19fef; 2097152 bytes.
+  omonim-pirate/Rockman X3 (T) (Unl) [f1].md
+RockmanX3f1 reaches stage; same body asED9D573C, header-only differences. Open-bus protection reads tolerated by modified branch checks.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCED9D573C, различающихся байтов в общей части: 179; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[237] F85DD66D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bf9b2e2131100672ac86adced519dc4c9b48a570653c4453b04425400c36dd2a; 2097152 bytes.
+  omonim-pirate/Canon - The Legend of the New Gods (U) (Piko Interactive) (Unl).md
+Canon Piko title->NPC/gameplay; standard SRAM active. Translation/release rewrite differs121,113bytes from FengShenf2.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCC57FF39C, различающихся байтов в общей части: 121113; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[238] 10458E09 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bfaaa7399cf4a35719f1063cc656f20752476cfd000e3f68be039d20443d460d; 1048576 bytes.
+  omonim-pirate/Bug's Life, A - Chong Chong Weiji (T) (Unl) [!].md
+Original BugsLife title->active stage; exact body matches AA64AA59 with3headerbytes difference; uses existing TIME protection path.
+Путь: rom_database /* A Bug's Life (bootleg version ? two last register returned values are ignored & first register test has been modified ?) */
+Сравнение: CRCAA64AA59, различающихся байтов в общей части: 3; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[239] A5CEF7B6 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 bff4ded0db2b91dab5796b2250ca119b6b6df23401366bd72da90b49bda6b5c8; 524288 bytes.
+  my-pirate/Chess (Unl) [Rus].md
+  omonim-pirate/Chess (R) (Unl) [T+Rus NewGame].md
+Russian Chess menu and credits respond; ordinary ROM with no observed expansion access; translated binary differs197,627bytes.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC47380EDD, различающихся байтов в общей части: 197627; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[240] 413DFEE2 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c1015cf31a39d089c86fbefee4973c7bb7c42d5cc5b7334ab0cc65d4617ff3fa; 2097152 bytes.
+  omonim-pirate/Super King Kong 99 (T) (Unl) [!].md
+SuperKingKong99 original uses custom_regs_w/default_regs_r at6A/6B/6D aliases, stage and explicit pause respond. Does not share SDK99 family code fingerprint.
+Путь: rom_database /* Super King Kong 99 */
+Сравнение: CRC5B9F7237, различающихся байтов в общей части: 609719; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[241] A20F98AA | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c1654c4e660c798fc54ac5c2c4fe4482594538c60201b501cd3d402f8a7674c0; 1048576 bytes.
+  my-pirate/Super Mario World 64 (Unl) [f2].md
+  omonim-pirate/Super Mario World 64 (T) (Unl) [f2].md
+Complete f2 software bypass: protected Z80 CP5A/CP5B remain but both JR NZ displacements changed17/0F to00/00; returnedFF cannot branch to failure and is not used as data. Successstate091B=B7,091C=02 same asnativeoriginal/f1. No originalmapper attached to modifiedlayout; detailed liveproof from A forthcoming.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC172EBA98, различающихся байтов в общей части: 1290; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[242] 5C8DADD8 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c30cd402ad516d0da9ea40e6bede3ff7f50c30083d11f2f02419eafaef4e1778; 2097152 bytes.
+  my-pirate/Pocket Monsters (Unl) [f1].md
+  omonim-pirate/Pikachu - Pocket Monster (T) (Unl) [f1].md
+PocketMonstersf1 stage1 runs; 9bodybytes remove original protection call and failure branch, remaining differences header. Original exists and is recognized.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCF68F6367, различающихся байтов в общей части: 115; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[243] 96B0ECD9 | Исходник/релиз: исследованный путь обслуживается
+SHA256 c39b682b5ab037be20e983abbe025a90de3303d28c44e0305c54f811640085d4; 2097152 bytes.
+  my-pirate/Mario 4 (Unl)[Rus].md
+Mario4 reaches stage/pause screen; previously verified exact VMV audio quirk applies to this content, no generic timing override added.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[244] 6D882CEF | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c39c586ebf84b77818eaafe07cf71c08de35a17ecc45e0ae790e1de848c41289; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [T+Rus Pirate][b1][f1].md
+DoubleDragonRussianb1f1 active enemy fight; family uses ordinary mapping. Difference240bytes from B3436777 is not new hardware.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB3436777, различающихся байтов в общей части: 240; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[245] 1CE698C7 | Исходник/релиз: исследованный путь обслуживается
+SHA256 c42989bd8d9bf0e7565aeaf97c6b907717dc851849a1df4904c5794e69631b32; 849088 bytes.
+  my-pirate/Wolfenstein (Demo 6.3).md
+WolfensteinDemo6.3 responds through difficulty/episode selection; ordinary ROM with no expansion accesses.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[246] 6604A79E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c4337c1e5dc07d87ee1afe7fa2f24db97d373e88cfb8b89f1316539f28054688; 2097152 bytes.
+  my-pirate/Yang Jia Jiang - Yang Warrior Family (China) (Unl).md
+  omonim-pirate/Yimen Yinglie - Yangjia Jiang (T) (Unl).md
+YangWarrior original reaches active beat-em-up stage; existing TIME path; selection screen was waiting for game input.
+Путь: rom_database /* (*) Yi Men Ying Lie: Yang Jia Jiang - Yang Warrior Family (patched ROM, register value unused) */
+Сравнение: CRCAEB3C10C, различающихся байтов в общей части: 97233; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[247] F75519DC | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c4f10c5f9f28fe20879930302c4a24a853b5279dee42125caca716672dea14d7; 2097152 bytes.
+  omonim-pirate/Top Fighter 2000 MK VIII (T) (Unl) [!].md
+TopFighter original active fight; custom-reg reads/writes and banks actually observed; fixed216 bypasses these in its ROM program.
+Путь: rom_database /* Top Fighter */
+Сравнение: CRC506FCFAC, различающихся байтов в общей части: 104; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[248] EC7884E7 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c6208f95dcaf2a73b6a76c2ad21038b12c4f377600c0108546b70edb1825f56b; 2097152 bytes.
+  my-pirate/Super Mario 2 1998 (Unl) [f1].md
+  omonim-pirate/Super Mario 2 (T) (Unl) [f1].md
+SuperMario2f1 stage1 runs after unpause; branch replacement atF24D6 bypasses original startup hardware sequence.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCF7E1B3E1, различающихся байтов в общей части: 51; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[249] 04F0C93E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c64d7d448c212954dea51f26e51aa1922ebf87c186f038a6714b49c4c0c814a1; 2097152 bytes.
+  omonim-pirate/Sonic Jam 6 (T) (Unl) [!].md
+SonicJam6 original uses newly implemented native bank writes408xxx/409F00/40Axxx and enters stage. Prior exact mapper/state evidence retained separately.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCBF39D897, различающихся байтов в общей части: 19; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[250] BD1B9A04 | Исходник/релиз: исследованный путь обслуживается
+SHA256 c68102af9f76eb7a9850161d221536af35130a8803adca82e11c3e11bc7d9446; 1048576 bytes.
+  my-pirate/HardBall! (USA) (Unl).md
+  omonim-pirate/HardBall! (UE) (Unl) [!].md
+HardBall original menus respond; no cartridge expansion accesses observed; linear mapping.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[251] FB01C832 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c6c91247a77108ff9abede9f06f6e308b7de98f9d5d77b3a116f4e3d1db961ed; 524288 bytes.
+  omonim-pirate/Smart Mouse (U) (Piko Interactive) (Unl).md
+SmartMousePiko title->stage1 presentation after delayedStart; ordinary ROM release, differs19,879bytes from original variant.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC702999A4, различающихся байтов в общей части: 19879; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[252] D850391F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c6d8b6775b11d51e8059201a50ca2090bf6c7de1b8245f9bb7b24dd95de5168a; 2228224 bytes.
+  my-pirate/Legend of Wukong (Unl) [f1].md
+  omonim-pirate/Legend of Wukong (UE) (Super Fighter Team) (Unl) [f1].md
+Wukongf1 initially long masked intro, reaches village and NPC dialogue at3600. Native SF002 mapper writes and SRAM observed; not a frozen loader.
+Путь: SF-002 mapper and save RAM
+Сравнение: CRC72F11771, различающихся байтов в общей части: 13; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[253] DD2F38B5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c71e9deec88b15419042f57efa033d45752792e00ba2c36527488f54e3c2df16; 4194304 bytes.
+  my-pirate/Xin Qi Gai Wang Zi (China) (Unl).md
+  omonim-pirate/Xin Qigai Wangzi (T) (Unl).md
+XinQigai4MiB title->palace dialogue; normal extra SRAM at400000, counterpart535byte differences need distinguish content vs SF0013MiB release.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDA5A4BFE, различающихся байтов в общей части: 535; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[254] 597D5C23 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c7881034a8522d9ef5ccbeaa1b2283313412e13d559c4cbcad641d899e3ab146; 1048576 bytes.
+  omonim-pirate/Chaoji Dafuweng (T) (Unl) [f1].md
+Variant rewrites original valid aligned VDP counter reads into odd word reads C00009; this is emulator-specific ROM modification, not original cartridge hardware. Original supported; no automatic ROM repair.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC2E2EA687, различающихся байтов в общей части: 280; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[255] B8261FF5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c837405dcf46055b1c4c0c45a43d39c69d59a27867d43c41d48950b8aa41394e; 1048576 bytes.
+  my-pirate/Squirrel King (Unl) [!].md
+  omonim-pirate/Squirrel King (T) (Unl) [!].md
+SquirrelKing original active stage; observed400000/4 writes and400002/6 native register reads. Fixed variant116bytes replaces original register operations with constants/NOPs.
+Путь: rom_database /* Squirell King */
+Сравнение: CRC8A0123F3, различающихся байтов в общей части: 116; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[256] 17EEFEF9 | Пробел распознавания аппаратуры исправлен
+SHA256 c9eeaa8ed342f653dcd79eb23d8f7c304bd180822d9ae453a2f101e1431d9484; 2097152 bytes.
+  omonim-pirate/Super Donkey Kong 99 (T) (Unl) [T+Rus Pirate].md
+Existing SDK99board selected by invariant original code fingerprint despite translatedheader; actualproducer/endcheck now8C, state/reset pass. No ROMpatch/newf-entry. docs/pirate-sdk99-followup.json.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC5B9F7237, различающихся байтов в общей части: 6915; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[257] EB88026D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 c9f692541d341c7a91eefef77bae1f0e2e0c5d1f23853ba5f47ef3e9531f1d2d; 1048576 bytes.
+  my-pirate/16 Tiles Mahjong II (Ming, Creaton)[unprot].md
+  omonim-pirate/Shiliu Zhang Mahjong II (T) (Unl) [f1].md
+16TilesMahjongIIunprot title->intro, protection failure branch3FA removed vsB4F4249F; remaining400004 read ignored by patched conditional.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB4F4249F, различающихся байтов в общей части: 4; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[258] 8F2FDADA | Вариант: изменения и наблюдённый путь исследованы
+SHA256 cbe95c922637f3c6a2984ba30c91f92d352a7cbbb81d7768f40bc431e6fa40b0; 524288 bytes.
+  my-pirate/Super Off Road (USA, Europe) (Unl).md
+  omonim-pirate/Super Off Road (UE) (Unl) [!].md
+SuperOffRoad responds speed-shop name entry; ordinary mapping, no expansion accesses.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC9BBCCB26, различающихся байтов в общей части: 52970; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[259] 0B670A3E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 cc40cc26f3d1326a73615a6512035df08e817bb075e59c435e23e8265963f44b; 2097152 bytes.
+  my-pirate/Star Odyssey (World) (Unl).md
+StarOdyssey title->save-slot menu; SF004 banking/register writes and SRAM observed. Empty slots are expected in isolated no-user-save run.
+Путь: SF-004 mapper and save RAM
+Сравнение: CRCC0C6F4B3, различающихся байтов в общей части: 1447326; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[260] 962CDE71 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 cc446019497439b2e1e39d12c14f965878b6d78e4efb9923925300f88b3e1bf5; 1048576 bytes.
+  omonim-pirate/Shisan Zhang Mahjong - Zhongguo Meinu Pian (T) (Unl) [f2].md
+ShisanMahjongf2 reaches card play; two branch replacements1858C/185AA vsf1; residual400004 read remains but branch bypasses original hardware failure.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDB6D066F, различающихся байтов в общей части: 2; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[261] FCBFDAE1 | Исходник/релиз: исследованный путь обслуживается
+SHA256 ce054eb1552edbe3b2d234beb0558ebff3c16d00749a68037fa0a83b9f4f8ccb; 1738380 bytes.
+  my-pirate/Wolfenstein (Demo Big Screen).md
+WolfensteinBigScreen responds through difficulty/episode selection; standard SRAM read/write; ordinary ROM program.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[262] B11BD611 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 cefcae3a0d283d9a01a87cd499c7fdc7f753ce11af37b20d818f56c256364956; 2097152 bytes.
+  my-pirate/Soul Edge VS Samurai Spirits (Unl).md
+  omonim-pirate/Samurai Shodown vs Soul Edge (T) (Unl) [!].md
+SoulEdge/Samurai original reaches active fight; character selection responds; native protected identity retained.
+Путь: rom_database /* Soul Edge VS Samurai Spirits  */
+Сравнение: CRC74A6D7A7, различающихся байтов в общей части: 19; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[263] 84F49061 | Исходник/релиз: исследованный путь обслуживается
+SHA256 cf36269772eb4e75373b12e8ebe74514a2b264fcd59af4f07af2ec8ceca3bebf; 2097152 bytes.
+  my-pirate/Pokemon Crazy Drummer (Unl).md
+  omonim-pirate/Pokemon Crazy Drummer (Ch) (Unl) [!].md
+PokemonCrazyDrummer reaches score/rhythm gameplay; ordinary cartridge mapping, no missing expansion handler observed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[264] E05F2926 | Исходник/релиз: исследованный путь обслуживается
+SHA256 d0392c57ee40bae9efc7e02edfde0163b613d51b29f5154b82248b34bf50d709; 1170206 bytes.
+  my-pirate/Wolfenstein (Demo 8).md
+WolfensteinDemo8 responds through difficulty/episode selection; no expansion mapper required by observed program.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[265] 997CA558 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d09010cb52a57aa684c9a736479aa009b4ba1c857ab98989697046ecfd57b818; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [h4] (ARCADE).md
+DoubleDragonh4 active enemy fight; ARCADE modification of ordinary ROM, not mapper family.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC963F9DC5, различающихся байтов в общей части: 90; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[266] C57FF39C | Внешний аудиопатч неполон/несогласован
+SHA256 d0ab9085f95ec190bb3390658088ba8fa358ac151c33bc8ca968eeaba210e9d8; 2097152 bytes.
+  omonim-pirate/Feng Shen Yingjie Chuan (T) (Unl) [f2].md
+FengShenf2 changes originaldriverseed18000000 to00600000 but leaves ADD-based protectionbootstrap. DefaultFF producesFF5FFFFF, forcingoriginalecho produces00C000CB: bothwrong. ReleasedCanon usescomplete006000CB seed and bypassesbootstrap JP007F. ExternalfixedROM is internallyinconsistent; no fabricatedhardware or ROMrepair. docs/pirate-sound-followup.json.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDFACB9FF, различающихся байтов в общей части: 42131; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[267] 08275694 | Пробел распознавания аппаратуры исправлен
+SHA256 d16a2d4234ceb7ba8539bcb38dbf42eaaf4e4de1bc4cd75450471d4846f75350; 4194304 bytes.
+  my-pirate/Cha Oji Pu Ke - Super Poker (Ch) [f1].md
+  omonim-pirate/Chaoji Poker (T) (Unl) [f1].md
+Only initial68000branch068E changed; Z80driver remains originalprotected. Refined repeated-ROM recognizer validates canonicalcopies and allfirstcopybytes exceptverifiedbranch/headerchecksum then reusesoriginalboard. Productionf1gets55/0F/AA/F0 ->006000CB; all1200framePCM/video andfirst1024musicreads matchoriginal, state/reset andnewscopedABI validated. docs/pirate-sound-followup.json.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCC37E6858, различающихся байтов в общей части: 2; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[268] 174DEFE6 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d1b496a9e6020de9493b1dfd786fd33f40162ca72c0710010ded1f7cccf47fb5; 2097152 bytes.
+  my-pirate/Top Fighter 2005 (Unl) [p].md
+  omonim-pirate/Top Fighter 2005 - Gedou Wang (T) (Unl) [!].md
+TopFighter2005 active fight; externally modified linear program, fixed-bank counterpart60558byte changes.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC268AA96E, различающихся байтов в общей части: 60558; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[269] 783F4346 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d1fbbd90d906bd92d0f5f1f726bb2188c26a4c1e7cb60517092e87902d5c5209; 524288 bytes.
+  omonim-pirate/Turrican (UE) (Unl) [f2] (SOUND).md
+TurricanSOUNDfix title->active platform stage after delayedStart; ordinary ROM, original vs audiofixed variants compared separately.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC634D67A6, различающихся байтов в общей части: 336; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[270] 63ECA090 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d3f1629b41f566065d1de28a4e037a60d170299b8d0c0a3c9f00f94ba180b1fb; 2097152 bytes.
+  my-pirate/Battle of Red Cliffs, The (Unl) [f].md
+  omonim-pirate/Sanguo Yanyi - Huoshao Chibi (T) (Unl) [f1].md
+RedCliffsf active beat-em-up stage; NOP/branch edits14730/1D826/CE576 bypass original protection, native original299 recognized.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC3A71E961, различающихся байтов в общей части: 9; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[271] 8E49A92E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d4674c29103586e3d2f01ace545dc0d5d3d005f28746afd3108af09ebfdd3e8d; 524288 bytes.
+  my-pirate/Xiao Monv - Magic Girl (China) (Unl).md
+  omonim-pirate/Xiao Monu - Magic Girl (T) (Unl) [!].md
+MagicGirl active shooting stage after unpause; ordinary ROM mapping.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC82C88EC9, различающихся байтов в общей части: 1374; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[272] 8D40D64F | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d575dc6f55cc28b3a67152ec5879ef971b452c04866369386a7f59bc9675c43d; 1048576 bytes.
+  omonim-pirate/Fengkuang Taohuayuan (Ch) (Unl).md
+FengkuangTaohuayuan responds character setup; compared with2F15BB22, hardware reads1B2A replaced by immediate90/D3 plusNOPs. Other changes include text/graphics.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC2F15BB22, различающихся байтов в общей части: 297; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[273] 2488E685 | Отдельное внешнее оборудование не реализовано
+SHA256 d675ffecf7ae0936f6c16712183baa89e4adce2b73a59d94b264234c13e24e72; 4194304 bytes.
+  my-pirate/Magistr 16 (R).md
+Exact error100A matches missing separate Magistr16 flash BIOS at400000. Requires extendedconsole ISA/SuperIO/FDD/256KiBRAM and BIOS; existing standardMD core correctly cannot provide these. Primarysource:https://github.com/mamedev/mame/blob/master/src/mame/sega/magistr16.cpp; source marks platform MACHINE_NOT_WORKING and UNEMULATED_PROTECTION. Audit disposition established; platform not implemented.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[274] 42DC03E4 | Исходник/релиз: исследованный путь обслуживается
+SHA256 d6a102d99090cb5a6c57386ac1e2de8ad82f0f6e5b14e07d2dce19cd4b0ca072; 1048576 bytes.
+  my-pirate/777 Casino (Ch).md
+  my-pirate/Meng Huan Shui Guo Pan - 777 Casino (China) (Unl).md
+  omonim-pirate/Menghuan Shuiguo Pan - 777 Casino (T) (Unl).md
+777Casino reaches responsive player selection; existing cartridge identity, no special bus read observed in this window.
+Путь: rom_database /* Meng Huan Shui Guo Pan - 777 Casino (For first one, 0x55 works as well. Other values seem never used so they are guessed from other unlicensed games using similar mapper) */
+Checksum ON/OFF: одинаковые байты.
+
+[275] 095B9A15 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d78869174d96298c24baa71f31ef6551245b0b2cc2a264fc608091526b8d1a71; 2097152 bytes.
+  my-pirate/Ya Se Chuan Shuo (China) (Unl).md
+  omonim-pirate/Diguo Wangchao (Ya Se Chuanshuo) (T) (Unl).md
+YaSe original longstory advances through distinct scenes at3600; native SRAM used, protected original mapper retained. No fullplaythrough inferred.
+Путь: rom_database /* Ya-Se Chuanshuo */
+Сравнение: CRCFBA90DC4, различающихся байтов в общей части: 119; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[276] 683FD508 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d7e0ffedd4e2839f6a2aea85052c4397bfe3b184532eed1db08622f312427876; 2097152 bytes.
+  omonim-pirate/Top Fighter 2000 MK VIII (T) (Unl) [f1][T-Rus SergeyK(NewGame) (18.11.2003)].md
+TopFighterRussianf1 active fight; fixed linear code remains, translation differs1691bytes vs268AA96E.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC268AA96E, различающихся байтов в общей части: 1691; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[277] 6F98247D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 d9936977b3fa73e251d0b344274ea93f0aba05410154c7cf7e715b0e93175c61; 2097152 bytes.
+  my-pirate/Tun Shi Tian Di 3 Zhi San Guo Wai Zhuan - Chinese Fighter (Ch).md
+  omonim-pirate/Tunshi Tiandi III - Sanguo Waizhuan - Chinese Fighter (T) (Unl).md
+ChineseFighter patched active fight; NOPs at1780/1C22/1D18/61AC and physicalbank JSRs remove original register/bank dependencies.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCE833BC6E, различающихся байтов в общей части: 1096; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[278] 8280D1B3 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 da6c037756ba2713033e340964648f6cdbe173cd2bf1b6ef01412fd4a0eda067; 1048576 bytes.
+  omonim-pirate/Power Football (W) (Evercade) (Unl).md
+PowerFootballEvercade responsive main menu; normal linear/SRAM rules, release branding differs27,098bytes.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC6078B310, различающихся байтов в общей части: 27098; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[279] 3CD2C797 | Исходник/релиз: исследованный путь обслуживается
+SHA256 daf8cd6e2bd478017f8093aa6e63d2d0a77d3efc5839b2caaa558636d9ec1ce1; 4194304 bytes.
+  my-pirate/Death Caliber (Unl) [Rus].md
+  omonim-pirate/Death Caliber (R) (Unl) [!].md
+Targeted Start/physicalA without cancel-buttons reaches rendered first-person game; initial silence/menu not mapper failure. Evidence279-3CD2C797-start-only.json.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[280] D34A688E | Исходник/релиз: исследованный путь обслуживается
+SHA256 db02bbe47bd73dd7e6e531ebf5e4de01c9cd32dd56d6f2ee0d0157962296fe78; 393216 bytes.
+  omonim-pirate/Ishido - The Way of Stones (U) (Unl) [o1].md
+Ishido384KiB overdump common128KiB exactly equals B1DE7D5E; title/board placement works. Extra tail does not imply a new mapper.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB1DE7D5E, различающихся байтов в общей части: 0; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[281] 82E12E79 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 db31148cb7aa7b52b18db87bebcc65ef4eb9ff9e1a765fdec0319d615ddcd634; 2097152 bytes.
+  omonim-pirate/Summer Challenge (W) (Evercade) (Unl).md
+SummerChallengeEvercade responsive stadium/event selection; ordinary mapping.2223byte release changes vsoriginal.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD7D53DC1, различающихся байтов в общей части: 2223; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[282] D7D53DC1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 dc4b7a9386f948a7c5bcae10db4d46294d2397ba779986ac7c8e10e408003d0e; 2097152 bytes.
+  my-pirate/Summer Challenge (USA, Europe) (Unl).md
+  omonim-pirate/Summer Challenge (UE) (Unl) [!].md
+SummerChallengeoriginal same menus respond; ordinary mapping, no new mapper implied by copyright bypass/branding counterpart.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC82E12E79, различающихся байтов в общей части: 2223; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[283] 475215A0 | Исходник/релиз: исследованный путь обслуживается
+SHA256 dcedaf8c93dc043d111021c6d068719d8d12f7ebff27029db944188c6db28ce9; 524288 bytes.
+  my-pirate/Zhong Guo Xiang Qi (Ch).md
+  omonim-pirate/Zhongguo Xiangqi (T) (Unl).md
+ChineseChess board pieces move in response to input; no cartridge expansion accesses.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[284] 8A0123F3 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 dda54b7d095b4122aa18fecb04359e0085e265982b4976e2fb89e5b6ca506962; 1048576 bytes.
+  my-pirate/Squirrel King (Unl) [f1].md
+SquirrelKingf1 active stage;116byte patch removes register writes/reads and substitutes immediate results. Keep originalmapper, no f1 DBentry.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCB8261FF5, различающихся байтов в общей части: 116; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[285] 29FF58AE | Вариант: изменения и наблюдённый путь исследованы
+SHA256 dec23d1620c62bb4fd8737d6a49d530a01659aa6a43f435e0a6eaa9987caeb7a; 2097152 bytes.
+  my-pirate/Action 52 (USA) (Unl).md
+  omonim-pirate/Action 52 (U) (Unl) [!].md
+Action52 menu->selected minigame with player/enemies; one-byte alternate variant comparison, no custommapper access.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8809D666, различающихся байтов в общей части: 1; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[286] A0B5FFE9 | Исходник/релиз: исследованный путь обслуживается
+SHA256 dff81675ad53529ab63c05b0048dccba65f08e057e9bc414c65210c52a93a3df; 1048576 bytes.
+  my-pirate/Tanki (R).md
+Tanki reaches stage and death screen; backupRAM at200000 works through standard path; no missing mapper observed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[287] 4820A161 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 e0a310c89961d781432715f71ce92d2d559fc272a7b46ea7b77383365b27ce21; 1048576 bytes.
+  my-pirate/Super Bubble Bobble (China) (Unl).md
+  omonim-pirate/Super Bubble Bobble (T) (Unl) [!].md
+SuperBubbleBobble original character select->stage; native400000/400002 returns; eight-byte patched counterpart removes failureflag write123FC.
+Путь: rom_database /* Super Bubble Bobble */
+Сравнение: CRCD5B2580E, различающихся байтов в общей части: 8; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[288] A2EF16DE | Вариант: изменения и наблюдённый путь исследованы
+SHA256 e1d7696ac025622ca9d8b5623907fd126f0223cec04ed783776b6884dfae6658; 524288 bytes.
+  my-pirate/Thunderbolt II (Unl) [f1].md
+  omonim-pirate/Leidian Chuanshuo II (Thunderbolt II) (T) (Unl) [f1].md
+Thunderboltf1 active shooter;400000/400006 reads replaced by immediate5500/F000, original225 remains preferred supported dump.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD5FCC49F, различающихся байтов в общей части: 11; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[289] 9F19D6DF | Исходник/релиз: исследованный путь обслуживается
+SHA256 e288f1b5896a8e833272e869b91566c7ac166a43389e61a8b882282b8413253b; 524288 bytes.
+  my-pirate/Onslaught (USA, Europe) (Unl).md
+  omonim-pirate/Onslaught (UE) (Unl) [!].md
+Onslaught introduction/menu advances; no cartridge expansion accesses, ordinary ROM.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[290] 2C6CBD77 | Исходник/релиз: исследованный путь обслуживается
+SHA256 e4d9b5f7d2f7cc2f089dd35e2621fa06f79c4e79cd02ae7f338fb6bcee2ffe39; 1048576 bytes.
+  my-pirate/Aq Renkan Awa (China) (Unl).md
+  omonim-pirate/Ah Q Lianhuan Pao (T) (Unl).md
+AqRenkan original reaches character setup with actual aq93c_write8 at400001; prior native EEPROM/state/battery verification applies to exact identity.
+Путь: rom_database /* (*) Aq Renkan Awa - A Q Lian Huan Pao (patched ROM, ON/OFF bit sequence is written to register, unknown banking hardware ?) */
+Checksum ON/OFF: одинаковые байты.
+
+[291] 7C403C5B | Исходник/релиз: исследованный путь обслуживается
+SHA256 e710b6e74110f69ce93ecb20ebd4763437ac6ff87cd7bd7c7279ef58bc2c5daf; 524288 bytes.
+  my-pirate/Adventures of the Gummi Bears (Unl).md
+GummiBears reaches platform stage; ordinary linear mapping.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[292] 054F5D53 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 e7ddd28035a97c09cc5dcc6e7c8ce264f3667776741808e3302935c41e143c6a; 524288 bytes.
+  my-pirate/Double Dragon (USA, Europe) (Unl).md
+  omonim-pirate/Double Dragon (UE) (Unl) [!].md
+DoubleDragon original active fight; h1 counterpart differs3bytes, not a hardware variant.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC938D56E0, различающихся байтов в общей части: 3; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[293] 0A60C60A | Исходник/релиз: исследованный путь обслуживается
+SHA256 e916797c6c4bee0e98e9dc289535ed84de92184f232301e437957dca5ca12558; 524288 bytes.
+  my-pirate/Angry Birds in Russia (Unl).md
+AngryBirdsRussia reaches platform stage; ordinary ROM program, initialization ROM writes ignored normally.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[294] 4261EA9B | Вариант: изменения и наблюдённый путь исследованы
+SHA256 e9257f8b886fbd6fedb22f41ace215af4bdc374fe974d966d73c24789fb0e40c; 8388608 bytes.
+  my-pirate/Pier Solar and the Great Architects (World) (En,Fr,De) (Rev A) (Unl).md
+PierSolarRevA language/initialization->title; native T5740bank handler active. Checksum preserved by core, no patch to gamecontent.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC25B7063E, различающихся байтов в общей части: 1430100; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[295] 72DD884F | Исходник/релиз: исследованный путь обслуживается
+SHA256 ea43e90cfa2800248dd6c4e1d3757467f0d8bddd390ba7c57b482e55f2549e0f; 2097152 bytes.
+  my-pirate/Shi Jie Zhi Bang Zheng Ba Zhan - World Pro Baseball 94 (China) (Unl).md
+  omonim-pirate/Jin Guanjun Xiongdi Xiang - Shijie Zhibang Zhengba Zhan (T) (Unl).md
+WorldProBaseball94 responds mode select and advances story; standard backupRAM present.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[296] 938D56E0 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ea751e3add4574ab0d4052a716ea6f5669a00a028b7e94604a7124c681b4d7f7; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [h1] (ARCADE).md
+DoubleDragonh1 active enemy fight;3byte content variant oforiginal.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC054F5D53, различающихся байтов в общей части: 3; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[297] DFC3ABE6 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ea8d91c016036b60ae55edbfed896a417127d051c127569dc2a02823c5f2073a; 1048576 bytes.
+  my-pirate/Bug's Life, A (Unl) [f1].md
+  omonim-pirate/Bug's Life, A - Chong Chong Weiji (T) (Unl) [f1].md
+BugsLifef1 active platform stage; relatedJUMPvariant1byte difference; originalnative protection implemented separately.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC8F786D96, различающихся байтов в общей части: 1; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[298] 6AE8A57A | Исходник/релиз: исследованный путь обслуживается
+SHA256 ec6b9f99a6440d258a8ce059da51886b0d233aa66df0836272af4d6d829ec821; 1048576 bytes.
+  my-pirate/Deer Hunter (Unl) [Rus].md
+  omonim-pirate/Deer Hunter (R) (Unl) [!].md
+Targeted Start/physicalA opens trophy room; menu selection works.208002 uses existingSRAM; no hardwaregap observed.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[299] 3A71E961 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ecc48a2d33c2f1da2dc543e02ab3b9b4619fb9c421bd29992f54ae45196ed744; 2097152 bytes.
+  omonim-pirate/Sanguo Yanyi - Huohhao Chibi (T) (Unl) [!].md
+RedCliffsoriginal active stage; native default_regs_r at400004, modifiedcounterpart branchbypasses unnecessary for original.
+Путь: rom_database /* San Guo Yan Yi: Huo Shao Chi Bi - The Battle of Red Cliffs */
+Сравнение: CRC63ECA090, различающихся байтов в общей части: 9; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[300] 9C3158A0 | Исходник/релиз: исследованный путь обслуживается
+SHA256 edf66fa4d57c409cfcf55feba21d220072002bf39e50757798b58d0f5baa6e10; 1048576 bytes.
+  omonim-pirate/GunFight 3 in 1 (T) (Unl) [f1].md
+GunFight3in1f1 choosesstage and active gunfight; common512KiB byte-identical304. Extra512KiB tail does not create distinct mapper.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC76481D00, различающихся байтов в общей части: 0; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[301] 11E367A1 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ee0a0d1274a4215cdeff322e96c8aee3c8880c546c73fdc2ba99c7c59dbc28cb; 2097152 bytes.
+  my-pirate/MK 5 - Mortal Combat - SubZero (Unl) [!].md
+  omonim-pirate/MK5 - Mortal Kombat Mythologies - Sub-Zero (T) (Unl) [!].md
+MK5SubZero active stage/enemies; ordinary ROM mapping; relatedMK5 differences72126bytes.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD9528A29, различающихся байтов в общей части: 72126; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[302] 4F2451BB | Вариант: изменения и наблюдённый путь исследованы
+SHA256 eeeb37687ece787965aa1895f4490cf17816c637cb5a58e434bea7b77cad4c1f; 3145728 bytes.
+  omonim-pirate/King of Fighters '99, The (T) (Unl) [f3].md
+KOF99f3 characterselect->activefight; fourbodybytes replace original1FD0F6 BEQ withJMP300. Existingoriginal322nativepath retained.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC54638C11, различающихся байтов в общей части: 18; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[303] 3EE639F0 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ef432b9a283b9c7b6d8e51711d3803728ecd6658b98205fd17331cd71b0e6600; 2097152 bytes.
+  my-pirate/Rockman X3 (Unl) [!].md
+  omonim-pirate/Rockman X3 (T) (Unl) [!].md
+RockmanX3original active stage; native default_regs_r400004/400006. ED9D573C5bodybyte branchpatch removes checksC8B06/C8B90.
+Путь: rom_database /* Rockman X3 (bootleg version ? two last register returned values are ignored, note that 0xaa/0x18 would work as well) */
+Сравнение: CRCED9D573C, различающихся байтов в общей части: 5; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[304] 76481D00 | Исходник/релиз: исследованный путь обслуживается
+SHA256 f1a370b87a934050372f0870cba74d569a15ae337a640df1364f549ae1d6a438; 524288 bytes.
+  my-pirate/GunFight 3 in 1 (Unl) [f1].md
+GunFight3in1f1512KiB active stage; exactly equals lowerhalf of300; ignored777777 write shared by patched loader.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC9C3158A0, различающихся байтов в общей части: 0; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[305] 25B7063E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f2dbd13177226552eefe1f96fb31366b04f80d256a1e684d3263ad8719f3eb6e; 8388608 bytes.
+  my-pirate/Pier Solar and the Great Architects (World) (En,Fr,De) (Rev B) (Unl).md
+PierSolarRevB language/init->title; nativeT5740mappedreads. No fullgame claim from startup.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCDFB94F1B, различающихся байтов в общей части: 1196004; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[306] EA57B668 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f3b7aac93fb61c38f38ab903b24c9cefd7a95f67b20c05d0d20efebce44d687e; 2097152 bytes.
+  my-pirate/Tun Shi Tian Di III (China) (Simple Chinese) (Unl).md
+  omonim-pirate/Tunshi Tiandi III (T) (Traditional) (Unl).md
+TunshiIII Chinese title->gameplaydialogue; normal backupRAM active; release differences61270bytes.
+Путь: rom_database /* (*) Tun Shi Tian Di III (patched ROM, unused register) */
+Сравнение: CRCB23C4166, различающихся байтов в общей части: 61270; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[307] FBA90DC4 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f44a7598fe03d14173d9fa31ed057a474c714ad19ea4d8b8db0d1eef6f2afce1; 2097152 bytes.
+  omonim-pirate/Diguo Wangchao (Ya Se Chuanshuo) (T) (Unl) [f1].md
+Diguof1 story scenes advance; original vsfixed branch edits2836/2D1E and Z80code modifications, furtherf2changesC2D4. Prefer recognizedoriginal for hardware.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC359CB75A, различающихся байтов в общей части: 20; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[308] D9EF92D5 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f4ae44c076e63373f89392489d731ee514d937e6a57014a257760ca6240507c8; 524288 bytes.
+  my-pirate/Whac-A-Critter (Unl) [f2].md
+Native original20 and f2 match scene progression and fades under same input. Original Realtec routes complete512KiB as linear after boot regs4/0/1; f2 direct7E300 boot and ignoredmapperwrites deliberately bypass hardware. Blackcheckpoint alone is scene timing, notCPUhalt; no new mapper justified.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC760D670A, различающихся байтов в общей части: 4; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[309] D4403913 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f551e9be21f0c653bb8a7ced711f661855effc406529e8e39450f948834e1b42; 524288 bytes.
+  my-pirate/Adventurous Boy - Mao Xian Xiao Zi (China) (Unl).md
+  omonim-pirate/Adventurous Boy - Maoxian Xiaozi (T) (Unl).md
+AdventurousBoyoriginal active stage after unpause; six-byte counterpart is gameplay cheat(return/no life decrement atB316/B4C2), not mapper patch.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD76BA1CE, различающихся байтов в общей части: 6; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[310] 406628FE | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f5bae34c6ebfdbba88ac5715735820b7e53626457a4bc744368f2c72b2e398e3; 524288 bytes.
+  my-pirate/Whac-A-Critter (Unl) [f1].md
+Direct300boot plusmodifiedfailurebranches remove originalRealtec bootstrap.6000frames produces animatedchild/flowers aftertitle; Vblankwait1924 and scan1D52 advance normally. Originalnativehardwareexists; no fixedentryadded.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC9C81E67F, различающихся байтов в общей части: 4; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[311] 6643A308 | Исходник/релиз: исследованный путь обслуживается
+SHA256 f6ab60ebcb11ee6ca7f36f3289211e6d3bf2914658cc91db45c8d9705fd84905; 2097152 bytes.
+  my-pirate/NBA Showdown '94 (USA) (Unl) (Pirate).md
+NBAshowdown94pirate title->controller setup; standardbackupRAM reads, unrelatedtitle with no custommapper.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[312] D9A364FF | Исходник/релиз: исследованный путь обслуживается
+SHA256 f6d3657d85a866830ab1906061cf8b390fe2084621c7164afed794806aa3df58; 524288 bytes.
+  my-pirate/Spiritual Warfare (USA) (Unl).md
+  omonim-pirate/Spiritual Warfare (U) (Unl) [!].md
+SpiritualWarfare title->active topdown stage; ordinaryROM.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[313] D41C0D81 | Исходник/релиз: исследованный путь обслуживается
+SHA256 f75a19ea32eeb3af5390b265a754dd27041968812ef07f249f477541468c276a; 1048576 bytes.
+  my-pirate/Mega Bomberman - 8 Player Demo (Unl).md
+MegaBomberman8PlayerDemo renders arena; title explicitly requires2SegaTeamPlayer adapters. Observed single-pad run not proof8players work; existingcontroller implementation separate.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: одинаковые байты.
+
+[314] 51DD463F | Исходник/релиз: исследованный путь обслуживается
+SHA256 f77d9188a79720117ad1ee7e77f39b340f9f66bd910ab4ed7b581671be3e9962; 1243848 bytes.
+  my-pirate/Wolfenstein (Demo 10).md
+WolfensteinDemo10 backupRAM initialization prompt then actualfirstpersonstage; standard SRAM handles initialblank state.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[315] 0C85B820 | Исходник/релиз: исследованный путь обслуживается
+SHA256 f7a67b464db11653821492316812ff31094d3bbc6a622d4c9a6d558178ce88e1; 1048576 bytes.
+  my-pirate/Chip and Dale Rescue Rangers 2012 (unl) [o1].md
+ChipDale2012overdump reaches platformstage; ordinaryROM initialization includes harmlessROMwrites; no protectionbusreads.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[316] DDE8C55D | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f8bf2cd9de755b55d72248d503c95a694a2a9b2d87b2e17797d1e6df34648679; 2097152 bytes.
+  omonim-pirate/Zhen Shihun - Samurai Spirits II (T) (Unl) [a1].md
+SamuraiSpiritsIIa1 activefight;30changedbytes scatteredin data/tables vs2942F180, not newbanklogic from tinyheaderchange.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC2942F180, различающихся байтов в общей части: 30; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[317] 4F04783E | Вариант: изменения и наблюдённый путь исследованы
+SHA256 f8ce7f79f4c1acdc47028e862012fe753f1c4d3de080467e778b7318030dce8e; 2097152 bytes.
+  my-pirate/Hua Mu Lan - Mulan (China) (Unl) [f1] (Complete).md
+  omonim-pirate/Mulan (T) (Unl) [f1].md
+MulanCompletef1 activeforeststage; eightbytes vs796882B8 include fixedphysicalbankJSR andunconditionalbranches; originalnativehardware remainsseparate.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC796882B8, различающихся байтов в общей части: 8; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[318] 0B3AB7E9 | Исходник/релиз: исследованный путь обслуживается
+SHA256 fa64d43711cf5b16f145699de704217a7f1560f4b26577af802a04643d97fe94; 131072 bytes.
+  my-pirate/Fix-It Felix Jr (Unl).md
+FixItFelixJr activebuildingstage; ordinarylinear mapping.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[319] 80D0F101 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 fc8816d6780e03c5ff6a6b81a70daa5f895cfd36a8bb9949ef13aa6a19914977; 2097152 bytes.
+  omonim-pirate/Taikong Zhanshi - Mofa Zhanshi (Barver Battle Saga) (T) (Unl) [T-Rus1.1 Str@nger (19.01.2019)].md
+BarverSagaRussian1.1 advancespalacedialogue; normalbackupRAM; translationbodydiffers1.2.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC96B5C053, различающихся байтов в общей части: 102; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[320] CA72973C | Исходник/релиз: исследованный путь обслуживается
+SHA256 fc9ddc40732b28808cb878415454186c93e73bb1388f5895f8f26a62ca60a32a; 1048576 bytes.
+  my-pirate/Divine Sealing (Japan) (Unl).md
+  omonim-pirate/Divine Sealing (J) (Unl) [!].md
+DivineSealing title->story dialogue advances; noexpansionbusaccess, ordinaryROM, nofullgameclaim.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[321] 760D670A | Вариант: изменения и наблюдённый путь исследованы
+SHA256 fcd61cdb0fd283523ef497eb0d7856b3dc4805b85deb8f2c054cd161600a7187; 524288 bytes.
+  omonim-pirate/Whac-a-Critter (U) (Unl) [f2].md
+Only4headerbytesHACK vsSEGA differ fromD9EF92D5; same scene progression, no neednewmapperidentity. See originalRealtecboard andf2comparison.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRCD9EF92D5, различающихся байтов в общей части: 4; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[322] 54638C11 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 fe101be1147587d20674c768051bd9aa4192aa8de1c18a3aced32cfb101cc2d8; 3145728 bytes.
+  my-pirate/King of Fighters '99, The (Unl).md
+  omonim-pirate/King of Fighters '99, The (T) (Unl) [f2].md
+KOF99original reaches activefight through native protection path; f3andf4bypassesnotnewmapperrequirements.
+Путь: rom_database /* King of Fighter 99 */
+Сравнение: CRC4F2451BB, различающихся байтов в общей части: 18; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+[323] CB5DC993 | Исходник/релиз: исследованный путь обслуживается
+SHA256 fe2c28c7dabd40b4aad8b1d52ad9d0ca5fa5039114b340eb7312212577f9306b; 1048576 bytes.
+  my-pirate/Iron Man (Unl).md
+IronMan activeplatformstage; ordinarylinearprogram, noexpansionaccess.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Checksum ON/OFF: изменённая копия: video/audio/CPU совпали в проверенном окне.
+
+[324] 12F69EC3 | Вариант: изменения и наблюдённый путь исследованы
+SHA256 ff1a2a1e28703353e095b4cd150f7631744166dacc9165fc8dfe040e0d7a56ef; 524288 bytes.
+  omonim-pirate/Double Dragon (UE) (Unl) [T+Rus Pirate][b1].md
+DoubleDragonRussianb1 activefight; companionf1changescontent, standardmapping.
+Путь: default_linear_ROM_with_standard_SRAM_rules
+Сравнение: CRC6D882CEF, различающихся байтов в общей части: 563; точные выбранные диапазоны сохранены в JSON
+Checksum ON/OFF: одинаковые байты.
+
+
+RELEASE 0.14.7
+Linux core SHA256: 332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252
+Windows core SHA256: d828620820d56e22a47e00a844be59a34d2382dca8a4597ba6ec8da0dc43906b
+Windows EXE SHA256: 7394d173f284d3b4d03c26c7b9d69051fa003fda8a227d99bb5d9647526887df
+Final compiled md_cart SHA256: 3fd10d38d0e3aafef610f219fce8c1cae73a8cb34b32e253dfede440f1b32487
+Финальная Linux-пара подтверждена известной сборкой tools/build-core32x.sh и managed receipts. Это отдельная пара от исходного ELF600b; сведения о старых запусках не переписываются. Runtime-доказательства в отчёте относятся к Linux. Windows-сборка и хэши проверены; проверку запуска Windows выполняет пользователь.
+
+Уточнение metadata старых checksum-прогонов: поле rom.sha256 относилось к исходному файлу, а rom.crc32 — к изменённой копии в памяти. В этом отчёте CRC32 всех325 записей взят из проверенного исходного inventory; loaded_sha256 и сравнения режимов действительны. tools/rom-audit/observe.py исправлен: source CRC32 и loaded_crc32 записываются раздельно. Повторного запуска ROM не требовалось.

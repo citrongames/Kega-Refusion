@@ -22,3 +22,8 @@
 - Preserve the recording compatibility contract across compatible rebuilds/optimizations. Change it deliberately when native state layout or deterministic execution changes; retain old file readers where feasible.
 - Core-version mismatch is advisory: show the recorded and current version/build and attempt playback/resume. Do not reject solely because a core binary or compatibility ID differs. Validate file bounds/checksums, game identity and the actual native-state decoder independently.
 - Save the actual post-power-reset region frame rate in recording metadata. OSD time derives from recorded frames/rate, not wall-clock time or an assumed 60 Hz; legacy files use the restored core rate.
+
+## Audit completion and evidence
+- Keep a per-ROM ledger for collection audits. Inventory, database recognition and startup smoke are distinct from individual mapper/protection analysis.
+- Never claim all ROMs or all groups are fully reviewed because representative samples passed. Report exact coverage and remaining entries.
+- Continue authorized batch work until every requested unique ROM has evidence-backed disposition and confirmed core defects are resolved, or explain a concrete external blocker without claiming completion.

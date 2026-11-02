@@ -1,0 +1,106 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -302,13 +302,27 @@
+   return crc;
+ }
+ 
++/* The sound driver remains protected in the branch-adjusted first bank.
++ * Verify the canonical three copies and every other byte of the first copy;
++ * checksum-header changes do not change the original cartridge board. */
++int md_cart_poker_compat_active;
+ static int md_cart_poker_overdump(const uint8 *rom, size_t size, int native_order)
+ {
+-  if ((size != 0x400000) || (md_cart_prefix_crc(rom, native_order) != 0xdd02797c))
+-    return 0;
+-  return !memcmp(rom, rom + 0x100000, 0x100000) &&
+-         !memcmp(rom, rom + 0x200000, 0x100000) &&
+-         !memcmp(rom, rom + 0x300000, 0x100000);
++  const uint8 *canonical;
++  unsigned branch, original_branch;
++  if (size != 0x400000) return 0;
++  canonical = rom + 0x100000;
++  branch = native_order ? (READ_BYTE(rom, 0x68e) << 8) | READ_BYTE(rom, 0x68f) :
++                          (rom[0x68e] << 8) | rom[0x68f];
++  original_branch = native_order ? (READ_BYTE(canonical, 0x68e) << 8) | READ_BYTE(canonical, 0x68f) :
++                                   (canonical[0x68e] << 8) | canonical[0x68f];
++  if ((original_branch != 0x6624) || ((branch != 0x6624) && (branch != 0x603e)) ||
++      (md_cart_prefix_crc(canonical, native_order) != 0xdd02797c)) return 0;
++  return !memcmp(canonical, rom + 0x200000, 0x100000) &&
++         !memcmp(canonical, rom + 0x300000, 0x100000) &&
++         !memcmp(rom, canonical, 0x18e) &&
++         !memcmp(rom + 0x190, canonical + 0x190, 0x68e - 0x190) &&
++         !memcmp(rom + 0x690, canonical + 0x690, 0x100000 - 0x690);
+ }
+ 
+ /* Scoped deterministic behavior contract: only newly recognized family images. */
+@@ -393,8 +407,7 @@
+   if (md_cart_barver_hardware(rom, size, 0)) return 1;
+   if ((size == 0x200000) && (header == 0) && (real == 0xf456) &&
+       (md_cart_prefix_crc(rom, 0) == 0x8122ac8a)) return 1;
+-  if ((header == 0xffff) && (real == 0x6f41) &&
+-      md_cart_poker_overdump(rom, size, 0)) return 1;
++  if (md_cart_poker_overdump(rom, size, 0)) return 1;
+ 
+   /* This is the same table md_cart_init() searches, with the original key. */
+   for (i=0; i<(sizeof(rom_database)/sizeof(md_entry_t)); i++)
+@@ -832,9 +845,14 @@
+   /* A verified repeated dump uses the existing one-copy hardware entry. */
+   uint16 hardware_header = rominfo.checksum;
+   uint16 hardware_checksum = rominfo.realchecksum;
+-  if ((rominfo.checksum == 0xffff) && (hardware_checksum == 0x6f41) &&
+-      md_cart_poker_overdump(cart.rom, cart.romsize, 1))
++  md_cart_poker_compat_active = 0;
++  if (md_cart_poker_overdump(cart.rom, cart.romsize, 1))
++  {
++    md_cart_poker_compat_active = (rominfo.checksum != 0xffff) ||
++                                (rominfo.realchecksum != 0x6f41);
++    hardware_header = 0xffff;
+     hardware_checksum = 0xd7b0;
++  }
+ 
+   md_cart_sdk99_compat_active = 0;
+   /* Reuse SDK99 original hardware for the same executable across headers and translations. */
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -113,6 +113,7 @@
+ 
+ /* Immutable per loaded cartridge; existing native register/state format is unchanged. */
+ extern int md_cart_sdk99_compat_active;
++extern int md_cart_poker_compat_active;
+ extern int md_cart_barver_compat_active;
+ 
+ /* Function prototypes */
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3632,6 +3632,7 @@
+ {
+    if (md_cart_sonic6_active) return "kegarefusion-recording-v2-sonic6-v1";
+    if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v2-sdk99-hardware-v1";
++   if (md_cart_poker_compat_active) return "kegarefusion-recording-v2-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-recording-v2-barver-hardware-v1";
+    return md_cart_aq93c_active ? "kegarefusion-recording-v2-aq93c-v1" : "kegarefusion-recording-v2";
+ }
+@@ -3653,6 +3654,7 @@
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
+    if (md_cart_sonic6_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
+    if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
++   if (md_cart_poker_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
+    return md_cart_aq93c_active ? "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+           "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
+@@ -3727,6 +3729,7 @@
+    char content_ext[8];
+ 
+    md_cart_sdk99_compat_active = 0;
++   md_cart_poker_compat_active = 0;
+    md_cart_barver_compat_active = 0;
+    content_path[0] = '\0';
+    content_ext[0]  = '\0';
+@@ -4054,6 +4057,7 @@
+ 
+    paprium_shutdown();
+    md_cart_sdk99_compat_active = 0;
++   md_cart_poker_compat_active = 0;
+    md_cart_barver_compat_active = 0;
+    system_hw = 0;
+ }
