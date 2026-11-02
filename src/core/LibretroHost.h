@@ -155,6 +155,7 @@ private:
     QString storageRoot() const { return netplaySaveRoot_.isEmpty() ? dataPath_ : netplaySaveRoot_; }
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
     QString movieCompatibilityWarning_;
+    void refreshRecordingIdentity();
     QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_, exactCoreHash_, recordingAbi_, recordingCoreHash_;
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};

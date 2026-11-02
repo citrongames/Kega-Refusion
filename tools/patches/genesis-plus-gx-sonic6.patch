@@ -1,0 +1,324 @@
+--- a/core/cart_hw/sonic6.c
++++ b/core/cart_hw/sonic6.c
+@@ -0,0 +1,121 @@
++/* Observed Sonic Jam 6 CRC04F0C93E banking protocol. Scoped to this dump;
++ * undocumented board modes are not inferred. Original ROM remains unchanged. */
++#include "shared.h"
++#include <stdlib.h>
++uint8 md_cart_sonic6_active;
++static uint8 mask, code_mode;
++static uint8 *pages[6];
++static const uint8 banks[5]={0,1,4,9,12};
++static const uint16 within[5]={0x8000,0,0,0x6000,0xa000};
++static const uint32 physical[5]={0x2000,0x20000,0x20000,0xf0000,0xf0000};
++static void (*under_write8)(unsigned int,unsigned int);
++static void (*under_write16)(unsigned int,unsigned int);
++static void (*under_zwrite)(unsigned int,unsigned int);
++static int prepare(uint8 wanted,uint8 mode)
++{
++  unsigned i;
++  for(i=0;i<5;i++)if((wanted&(1u<<i))&&!pages[i])
++  {pages[i]=(uint8*)malloc(0x10000);if(!pages[i])return 0;}
++  if(mode&&!pages[5]){pages[5]=(uint8*)malloc(0x10000);if(!pages[5])return 0;}
++  return 1;
++}
++void md_cart_sonic6_rebuild(void)
++{
++  unsigned i;
++  if(!md_cart_sonic6_active)return;
++  for(i=0;i<5;i++)
++  {
++    if(mask&(1u<<i))
++    {
++      memcpy(pages[i],cart.rom+((uint32)banks[i]<<16),0x10000);
++      memcpy(pages[i]+within[i],cart.rom+physical[i],0x2000);
++      m68k.memory_map[banks[i]].base=pages[i];
++    }
++    else m68k.memory_map[banks[i]].base=cart.rom+((uint32)banks[i]<<16);
++  }
++  if(code_mode)
++  {
++    memcpy(pages[5],cart.rom+0x1a0000,0x10000);
++    memcpy(pages[5]+(code_mode==1?0x2000:0xa000),
++           cart.rom+(code_mode==1?0x1c4000:0x1c6000),0x2000);
++    m68k.memory_map[0x1a].base=pages[5];
++  }
++  else m68k.memory_map[0x1a].base=cart.rom+0x1a0000;
++}
++static int control(uint32 address,uint32 data)
++{
++  uint8 next_mask=mask,next_mode=code_mode;
++  switch(address)
++  {
++    case 0x408000:if(data==0x100)next_mask|=1;break;
++    case 0x4080f0:if(data==0x100)next_mode=1;break;
++    case 0x408100:case 0x40a100:if(data==0){next_mask=0;next_mode=0;}break;
++    case 0x408600:if(data==0x100){next_mask|=2;next_mode=2;}break;
++    case 0x4088f0:if(data==0x300)next_mask|=4;break;
++    case 0x409f00:if(data==0x200)next_mask|=8;break;
++    case 0x40a000:if(data==0x100)next_mode=1;else if(data==0x200)next_mask|=16;break;
++    default:return 0;
++  }
++  if((next_mask!=mask||next_mode!=code_mode)&&prepare(next_mask,next_mode))
++  {mask=next_mask;code_mode=next_mode;md_cart_sonic6_rebuild();}
++  return 1;
++}
++static void write8(uint32 address,uint32 data)
++{
++  /* Observed commands use the upper byte lane. */
++  if(!(address&1)&&control(address,(data&0xff)<<8))return;
++  if(under_write8)under_write8(address,data);
++}
++static void write16(uint32 address,uint32 data)
++{if(!control(address,data&0xffff)&&under_write16)under_write16(address,data);}
++static void zwrite(uint32 address,uint32 data)
++{
++  if(!(address&1)&&control(address,(data&0xff)<<8))return;
++  if(under_zwrite)under_zwrite(address,data);
++}
++void md_cart_sonic6_map(void)
++{
++  if(!md_cart_sonic6_active)return;
++  if(m68k.memory_map[0x40].write16!=write16)
++  {
++    under_write8=m68k.memory_map[0x40].write8;
++    under_write16=m68k.memory_map[0x40].write16;
++    under_zwrite=zbank_memory_map[0x40].write;
++    m68k.memory_map[0x40].write8=write8;
++    m68k.memory_map[0x40].write16=write16;
++    zbank_memory_map[0x40].write=zwrite;
++  }
++  md_cart_sonic6_rebuild();
++}
++void md_cart_sonic6_release(void)
++{
++  unsigned i;for(i=0;i<6;i++){free(pages[i]);pages[i]=NULL;}
++  md_cart_sonic6_active=mask=code_mode=0;under_write8=under_write16=under_zwrite=NULL;
++}
++void md_cart_sonic6_reset(void)
++{if(md_cart_sonic6_active){mask=code_mode=0;md_cart_sonic6_rebuild();}}
++int md_cart_sonic6_mapped_bank(unsigned bank)
++{
++  unsigned i;if(!md_cart_sonic6_active)return 0;if(bank==0x1a)return 1;
++  for(i=0;i<5;i++)if(bank==banks[i])return 1;return 0;
++}
++int md_cart_sonic6_state_valid(const uint8 *s)
++{
++  uint32 expected;if(memcmp(s,"KRSJ6MAP",8))return 1;
++  if(s[8]!=1||s[9]||s[10]||s[11]!=MD_CART_COMPAT_STATE_SIZE||s[16]>31||s[17]>2)return 0;
++  expected=((uint32)s[12]<<24)|((uint32)s[13]<<16)|((uint32)s[14]<<8)|s[15];
++  if(crc32(0,s+16,MD_CART_COMPAT_STATE_SIZE-16)!=expected)return 0;
++  return prepare(s[16],s[17]);
++}
++void md_cart_sonic6_state_save(uint8 *s)
++{
++  uint32 crc;memset(s,0,MD_CART_COMPAT_STATE_SIZE);memcpy(s,"KRSJ6MAP",8);
++  s[8]=1;s[11]=MD_CART_COMPAT_STATE_SIZE;s[16]=mask;s[17]=code_mode;
++  crc=crc32(0,s+16,MD_CART_COMPAT_STATE_SIZE-16);
++  s[12]=crc>>24;s[13]=crc>>16;s[14]=crc>>8;s[15]=crc;
++}
++void md_cart_sonic6_state_load(const uint8 *s)
++{
++  mask=code_mode=0;if(!memcmp(s,"KRSJ6MAP",8)){mask=s[16];code_mode=s[17];}
++  md_cart_sonic6_map();
++}
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -322,6 +322,8 @@
+   header = (rom[0x18e] << 8) | rom[0x18f];
+   real = calculated_checksum & 0xffff;
+   if (header == real) return 1;
++  if ((size == 0x200000) && (header == 0) && (real == 0xf456) &&
++      (md_cart_prefix_crc(rom, 0) == 0x8122ac8a)) return 1;
+   if ((header == 0xffff) && (real == 0x6f41) &&
+       md_cart_poker_overdump(rom, size, 0)) return 1;
+ 
+@@ -488,34 +490,37 @@
+ 
+ /* Optional packed trailer in existing native-state capacity. No struct padding,
+  * pointers or offsets in the ordinary MD/CD/32X payload are changed. */
+-int md_cart_aq93c_state_valid(const uint8 *s)
+-{
++int md_cart_compat_state_valid(const uint8 *s)
++{
++  if (md_cart_sonic6_active) return md_cart_sonic6_state_valid(s);
+   uint32 expected, actual;
+   if (memcmp(s, "KRAQ93C!", 8)) return 1; /* pre-device legacy state */
+-  if (s[8] != 1 || s[9] || s[10] || s[11] != MD_AQ93C_STATE_SIZE) return 0;
++  if (s[8] != 1 || s[9] || s[10] || s[11] != MD_CART_COMPAT_STATE_SIZE) return 0;
+   expected = ((uint32)s[12]<<24) | ((uint32)s[13]<<16) | ((uint32)s[14]<<8) | s[15];
+-  actual = crc32(0, s + 16, MD_AQ93C_STATE_SIZE - 16);
++  actual = crc32(0, s + 16, MD_CART_COMPAT_STATE_SIZE - 16);
+   if (expected != actual || s[16]>1 || s[17]>1 || s[18]>1 || s[20]>1 ||
+       s[24]>READ_WORD || s[25]>1 || s[19]>16) return 0;
+   if ((s[24]==GET_OPCODE && s[19]>=8) ||
+       ((s[24]==READ_WORD || s[24]==WRITE_WORD) && s[19]>=16)) return 0;
+   return 1;
+ }
+-void md_cart_aq93c_state_save(uint8 *s)
+-{
++void md_cart_compat_state_save(uint8 *s)
++{
++  if (md_cart_sonic6_active) { md_cart_sonic6_state_save(s); return; }
+   uint32 crc;
+-  memset(s, 0, MD_AQ93C_STATE_SIZE);
+-  memcpy(s, "KRAQ93C!", 8); s[8]=1; s[11]=MD_AQ93C_STATE_SIZE;
++  memset(s, 0, MD_CART_COMPAT_STATE_SIZE);
++  memcpy(s, "KRAQ93C!", 8); s[8]=1; s[11]=MD_CART_COMPAT_STATE_SIZE;
+   s[16]=eeprom_93c.cs; s[17]=eeprom_93c.clk; s[18]=eeprom_93c.data;
+   s[19]=eeprom_93c.cycles; s[20]=eeprom_93c.we; s[21]=eeprom_93c.opcode;
+   s[22]=eeprom_93c.buffer>>8; s[23]=eeprom_93c.buffer;
+   s[24]=eeprom_93c.state; s[25]=eeprom_93c.enabled;
+   memcpy(s+32,sram.sram,128);
+-  crc=crc32(0,s+16,MD_AQ93C_STATE_SIZE-16);
++  crc=crc32(0,s+16,MD_CART_COMPAT_STATE_SIZE-16);
+   s[12]=crc>>24;s[13]=crc>>16;s[14]=crc>>8;s[15]=crc;
+ }
+-void md_cart_aq93c_state_load(const uint8 *s)
+-{
++void md_cart_compat_state_load(const uint8 *s)
++{
++  if (md_cart_sonic6_active) { md_cart_sonic6_state_load(s); return; }
+   eeprom_93c_init(); /* legacy states retain existing battery bytes */
+   if (!memcmp(s,"KRAQ93C!",8))
+   {
+@@ -603,6 +608,10 @@
+   cart.mask = size - 1;
+ 
+   gen_z80_bus_unlocked = md_cart_vmv_z80_bus_quirk();
++  md_cart_sonic6_active = (cart.romsize == 0x200000) &&
++      (rominfo.checksum == 0) && (rominfo.realchecksum == 0xf456) &&
++      (md_cart_prefix_crc(cart.rom, 1) == 0x8122ac8a);
++
+ 
+   /* no special external hardware required by default */
+   cart.special = 0;
+@@ -1293,6 +1302,7 @@
+ {
+   int i;
+   if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
++  md_cart_sonic6_reset();
+ 
+   /* Realtec mapper */
+   if (cart.hw.realtec)
+@@ -1385,6 +1395,9 @@
+   /* cartridge mapping */
+   for (i=0; i<0x40; i++)
+   {
++    /* Shadow/fractional banks are reconstructed from the mapper trailer. */
++    if (md_cart_sonic6_mapped_bank(i)) { state[bufferptr++] = i; continue; }
++
+     /* get base address */
+     base = m68k.memory_map[i].base;
+ 
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -95,12 +95,21 @@
+ } md_cart_t;
+ 
+ 
+-#define MD_AQ93C_STATE_SIZE 160
++#define MD_CART_COMPAT_STATE_SIZE 160
++extern uint8 md_cart_sonic6_active;
++extern void md_cart_sonic6_map(void);
++extern void md_cart_sonic6_rebuild(void);
++extern void md_cart_sonic6_reset(void);
++extern void md_cart_sonic6_release(void);
++extern int md_cart_sonic6_mapped_bank(unsigned bank);
++extern int md_cart_sonic6_state_valid(const uint8 *state);
++extern void md_cart_sonic6_state_save(uint8 *state);
++extern void md_cart_sonic6_state_load(const uint8 *state);
+ extern uint8 md_cart_aq93c_active;
+ extern void md_cart_aq93c_map(void);
+-extern int md_cart_aq93c_state_valid(const uint8 *state);
+-extern void md_cart_aq93c_state_save(uint8 *state);
+-extern void md_cart_aq93c_state_load(const uint8 *state);
++extern int md_cart_compat_state_valid(const uint8 *state);
++extern void md_cart_compat_state_save(uint8 *state);
++extern void md_cart_compat_state_load(const uint8 *state);
+ 
+ /* Function prototypes */
+ extern int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum);
+--- a/core/genesis.c
++++ b/core/genesis.c
+@@ -66,6 +66,7 @@
+ {
+   gen_z80_bus_unlocked = 0;
+   md_cart_aq93c_active = 0;
++  md_cart_sonic6_release();
+   int i;
+ 
+   /* initialize Z80 */
+@@ -235,6 +236,7 @@
+     }
+   }
+   md_cart_aq93c_map();
++  md_cart_sonic6_map();
+ }
+ 
+ void gen_reset(int hard_reset)
+--- a/core/state.c
++++ b/core/state.c
+@@ -61,8 +61,8 @@
+   }
+ 
+   /* Validate the optional cartridge trailer before resetting any machine state. */
+-  if (md_cart_aq93c_active &&
+-      !md_cart_aq93c_state_valid(state + STATE_SIZE - MD_AQ93C_STATE_SIZE)) return 0;
++  if ((md_cart_aq93c_active || md_cart_sonic6_active) &&
++      !md_cart_compat_state_valid(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE)) return 0;
+ 
+   /* reset system */
+   reset_do_not_clear_buffers = fast_savestates;
+@@ -185,8 +185,8 @@
+     sms_cart_switch(~io_reg[0x0E]);
+   }
+ 
+-  if (md_cart_aq93c_active)
+-    md_cart_aq93c_state_load(state + STATE_SIZE - MD_AQ93C_STATE_SIZE);
++  if (md_cart_aq93c_active || md_cart_sonic6_active)
++    md_cart_compat_state_load(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE);
+ 
+   return bufferptr;
+ }
+@@ -284,10 +284,10 @@
+     bufferptr += sms_cart_context_save(&state[bufferptr]);
+   }
+ 
+-  if (md_cart_aq93c_active)
+-  {
+-    if (bufferptr > STATE_SIZE - MD_AQ93C_STATE_SIZE) return 0;
+-    md_cart_aq93c_state_save(state + STATE_SIZE - MD_AQ93C_STATE_SIZE);
++  if (md_cart_aq93c_active || md_cart_sonic6_active)
++  {
++    if (bufferptr > STATE_SIZE - MD_CART_COMPAT_STATE_SIZE) return 0;
++    md_cart_compat_state_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE);
+   }
+ 
+   /* return total size */
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3610,6 +3610,7 @@
+ #ifdef KEGAREFUSION_32X
+ RETRO_API void retro_kegarefusion_invalidate_code(void)
+ {
++   md_cart_sonic6_rebuild();
+    kegarefusion_32x_invalidate_code();
+ }
+ 
+@@ -3629,6 +3630,7 @@
+  * Bump only for incompatible state layout or deterministic execution changes. */
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
++   if (md_cart_sonic6_active) return "kegarefusion-recording-v2-sonic6-v1";
+    return md_cart_aq93c_active ? "kegarefusion-recording-v2-aq93c-v1" : "kegarefusion-recording-v2";
+ }
+ 
+@@ -3647,6 +3649,7 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   if (md_cart_sonic6_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
+    return md_cart_aq93c_active ? "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+           "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
+ #else

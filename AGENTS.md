@@ -4,6 +4,7 @@
 - Keep architecture/core synchronization with the lead agent. Independent UI/build tasks may be delegated to Sol at xhigh when requested by the user.
 - Keep build outputs, downloaded dependencies and scratch files under ignored `build/` or external caches. Remove obsolete scratch artifacts after work; preserve source, useful incremental builds and user data.
 - Never delete or overwrite user ROMs, BIOS files, settings or saves during packaging.
+- Publish Windows test builds and Linux archives only at the end of the requested batch, not after each game. Internal incremental builds for focused verification are still allowed.
 - Keep the UI compact. Do not present unimplemented features as available.
 - The libretro core is a single process-wide instance, owned by the emulation thread. Qt GUI/audio objects live on the GUI thread.
 - Changes to states/input/timing require real-core integration checks. Use generated original ROM fixtures; never commit copyrighted game ROMs.

@@ -1,0 +1,264 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -42,6 +42,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "eeprom_93c.h"
+ #include "eeprom_i2c.h"
+ #include "eeprom_spi.h"
+ #include "flash_cfi.h"
+@@ -404,6 +405,128 @@
+          ((cart.romsize == 0x200000) && ((crc == 0xe302585a) || (crc == 0xb8c4ff2d)));
+ }
+ 
++
++/* Aq Renkan Awa: a 64x16 Microwire save device on the odd byte at 400001.
++ * Reuse the existing 93C46 engine; board DI is bit3, CS/CLK remain bits2/1. */
++uint8 md_cart_aq93c_active;
++static cpu_memory_map aq93c_underlay;
++static t_zbank_memory_map aq93c_z_underlay;
++
++static uint32 aq93c_read8(uint32 address)
++{
++  if (address == 0x400001) return eeprom_93c_read() & 1;
++  if (aq93c_underlay.read8) return aq93c_underlay.read8(address);
++  return READ_BYTE(aq93c_underlay.base, address & 0xffff);
++}
++static uint32 aq93c_read16(uint32 address)
++{
++  uint32 value = aq93c_underlay.read16 ? aq93c_underlay.read16(address) :
++                 READ_WORD(aq93c_underlay.base, address & 0xffff);
++  return address == 0x400000 ? (value & 0xff00) | (eeprom_93c_read() & 1) : value;
++}
++static void aq93c_write8(uint32 address, uint32 data)
++{
++  if (address == 0x400001) eeprom_93c_write((data & 6) | ((data >> 3) & 1));
++  else if (aq93c_underlay.write8) aq93c_underlay.write8(address, data);
++  else { WRITE_BYTE(aq93c_underlay.base, address & 0xffff, data); }
++}
++static void aq93c_write16(uint32 address, uint32 data)
++{
++  if (address == 0x400000) eeprom_93c_write((data & 6) | ((data >> 3) & 1));
++  else if (aq93c_underlay.write16) aq93c_underlay.write16(address, data);
++  else { WRITE_WORD(aq93c_underlay.base, address & 0xffff, data); }
++}
++static uint32 aq93c_zread(uint32 address)
++{
++  if (address == 0x400001) return eeprom_93c_read() & 1;
++  if (aq93c_z_underlay.read) return aq93c_z_underlay.read(address);
++  return READ_BYTE(aq93c_underlay.base, address & 0xffff);
++}
++static void aq93c_zwrite(uint32 address, uint32 data)
++{
++  if (address == 0x400001) eeprom_93c_write((data & 6) | ((data >> 3) & 1));
++  else if (aq93c_z_underlay.write) aq93c_z_underlay.write(address, data);
++  else { WRITE_BYTE(aq93c_underlay.base, address & 0xffff, data); }
++}
++static void aq93c_time_write(uint32 address, uint32 data)
++{
++  /* This serial-save board does not decode Sega TIME bankswitch registers. */
++  (void)address; (void)data;
++}
++void md_cart_aq93c_map(void)
++{
++  int i;
++  if (!md_cart_aq93c_active) return;
++  /* Old states may contain the erroneous generic parallel SRAM map. */
++  for (i = 0; i < 0x40; i++) if (m68k.memory_map[i].base == sram.sram)
++  {
++    m68k.memory_map[i].base = cart.rom + ((i << 16) & cart.mask);
++    m68k.memory_map[i].read8 = NULL;
++    m68k.memory_map[i].read16 = NULL;
++    m68k.memory_map[i].write8 = m68k_unused_8_w;
++    m68k.memory_map[i].write16 = m68k_unused_16_w;
++    zbank_memory_map[i].read = NULL;
++    zbank_memory_map[i].write = zbank_unused_w;
++  }
++  /* Overlay only the actual EEPROM port, preserving CD BIOS and other reads. */
++  if (m68k.memory_map[0x40].read8 != aq93c_read8)
++  {
++    aq93c_underlay = m68k.memory_map[0x40];
++    aq93c_z_underlay = zbank_memory_map[0x40];
++    m68k.memory_map[0x40].read8 = aq93c_read8;
++    m68k.memory_map[0x40].read16 = aq93c_read16;
++    m68k.memory_map[0x40].write8 = aq93c_write8;
++    m68k.memory_map[0x40].write16 = aq93c_write16;
++    zbank_memory_map[0x40].read = aq93c_zread;
++    zbank_memory_map[0x40].write = aq93c_zwrite;
++  }
++  if (cart.hw.time_w != aq93c_time_write)
++  {
++    cart.hw.time_w = aq93c_time_write;
++  }
++}
++
++/* Optional packed trailer in existing native-state capacity. No struct padding,
++ * pointers or offsets in the ordinary MD/CD/32X payload are changed. */
++int md_cart_aq93c_state_valid(const uint8 *s)
++{
++  uint32 expected, actual;
++  if (memcmp(s, "KRAQ93C!", 8)) return 1; /* pre-device legacy state */
++  if (s[8] != 1 || s[9] || s[10] || s[11] != MD_AQ93C_STATE_SIZE) return 0;
++  expected = ((uint32)s[12]<<24) | ((uint32)s[13]<<16) | ((uint32)s[14]<<8) | s[15];
++  actual = crc32(0, s + 16, MD_AQ93C_STATE_SIZE - 16);
++  if (expected != actual || s[16]>1 || s[17]>1 || s[18]>1 || s[20]>1 ||
++      s[24]>READ_WORD || s[25]>1 || s[19]>16) return 0;
++  if ((s[24]==GET_OPCODE && s[19]>=8) ||
++      ((s[24]==READ_WORD || s[24]==WRITE_WORD) && s[19]>=16)) return 0;
++  return 1;
++}
++void md_cart_aq93c_state_save(uint8 *s)
++{
++  uint32 crc;
++  memset(s, 0, MD_AQ93C_STATE_SIZE);
++  memcpy(s, "KRAQ93C!", 8); s[8]=1; s[11]=MD_AQ93C_STATE_SIZE;
++  s[16]=eeprom_93c.cs; s[17]=eeprom_93c.clk; s[18]=eeprom_93c.data;
++  s[19]=eeprom_93c.cycles; s[20]=eeprom_93c.we; s[21]=eeprom_93c.opcode;
++  s[22]=eeprom_93c.buffer>>8; s[23]=eeprom_93c.buffer;
++  s[24]=eeprom_93c.state; s[25]=eeprom_93c.enabled;
++  memcpy(s+32,sram.sram,128);
++  crc=crc32(0,s+16,MD_AQ93C_STATE_SIZE-16);
++  s[12]=crc>>24;s[13]=crc>>16;s[14]=crc>>8;s[15]=crc;
++}
++void md_cart_aq93c_state_load(const uint8 *s)
++{
++  eeprom_93c_init(); /* legacy states retain existing battery bytes */
++  if (!memcmp(s,"KRAQ93C!",8))
++  {
++    eeprom_93c.cs=s[16];eeprom_93c.clk=s[17];eeprom_93c.data=s[18];
++    eeprom_93c.cycles=s[19];eeprom_93c.we=s[20];eeprom_93c.opcode=s[21];
++    eeprom_93c.buffer=(s[22]<<8)|s[23];eeprom_93c.state=(T_STATE_93C)s[24];
++    eeprom_93c.enabled=s[25];memcpy(sram.sram,s+32,128);
++  }
++  md_cart_aq93c_map();
++}
++
+ void md_cart_init(void)
+ {
+   int i;
+@@ -534,6 +657,16 @@
+   ***********************************************/
+   sram_init();
+   eeprom_i2c_init();
++
++  md_cart_aq93c_active = (cart.romsize == 0x100000) &&
++      (rominfo.checksum == 0x8104) && (rominfo.realchecksum == 0x0517) &&
++      (md_cart_prefix_crc(cart.rom, 1) == 0x34e04945);
++  if (md_cart_aq93c_active)
++  {
++    eeprom_93c_init();
++    sram.on = sram.detected = 1;
++    sram.start = sram.end = 0x400001;
++  }
+ 
+   /* memory-mapped SRAM */
+   if (sram.on && !sram.type)
+@@ -1159,6 +1292,7 @@
+ void md_cart_reset(int hard_reset)
+ {
+   int i;
++  if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
+ 
+   /* Realtec mapper */
+   if (cart.hw.realtec)
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -95,6 +95,13 @@
+ } md_cart_t;
+ 
+ 
++#define MD_AQ93C_STATE_SIZE 160
++extern uint8 md_cart_aq93c_active;
++extern void md_cart_aq93c_map(void);
++extern int md_cart_aq93c_state_valid(const uint8 *state);
++extern void md_cart_aq93c_state_save(uint8 *state);
++extern void md_cart_aq93c_state_load(const uint8 *state);
++
+ /* Function prototypes */
+ extern int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum);
+ extern void md_cart_init(void);
+--- a/core/genesis.c
++++ b/core/genesis.c
+@@ -65,6 +65,7 @@
+ void gen_init(void)
+ {
+   gen_z80_bus_unlocked = 0;
++  md_cart_aq93c_active = 0;
+   int i;
+ 
+   /* initialize Z80 */
+@@ -233,6 +234,7 @@
+       }
+     }
+   }
++  md_cart_aq93c_map();
+ }
+ 
+ void gen_reset(int hard_reset)
+--- a/core/state.c
++++ b/core/state.c
+@@ -59,6 +59,10 @@
+   {
+     return 0;
+   }
++
++  /* Validate the optional cartridge trailer before resetting any machine state. */
++  if (md_cart_aq93c_active &&
++      !md_cart_aq93c_state_valid(state + STATE_SIZE - MD_AQ93C_STATE_SIZE)) return 0;
+ 
+   /* reset system */
+   reset_do_not_clear_buffers = fast_savestates;
+@@ -181,6 +185,9 @@
+     sms_cart_switch(~io_reg[0x0E]);
+   }
+ 
++  if (md_cart_aq93c_active)
++    md_cart_aq93c_state_load(state + STATE_SIZE - MD_AQ93C_STATE_SIZE);
++
+   return bufferptr;
+ }
+ 
+@@ -277,6 +284,12 @@
+     bufferptr += sms_cart_context_save(&state[bufferptr]);
+   }
+ 
++  if (md_cart_aq93c_active)
++  {
++    if (bufferptr > STATE_SIZE - MD_AQ93C_STATE_SIZE) return 0;
++    md_cart_aq93c_state_save(state + STATE_SIZE - MD_AQ93C_STATE_SIZE);
++  }
++
+   /* return total size */
+   return bufferptr;
+ }
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3510,7 +3510,7 @@
+    if (size != STATE_SIZE)
+       return FALSE;
+ 
+-   state_save(data);
++   if (!state_save(data)) return FALSE;
+    if (fast_savestates) save_sound_buffer();
+ 
+    return TRUE;
+@@ -3629,7 +3629,7 @@
+  * Bump only for incompatible state layout or deterministic execution changes. */
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+-   return "kegarefusion-recording-v2";
++   return md_cart_aq93c_active ? "kegarefusion-recording-v2-aq93c-v1" : "kegarefusion-recording-v2";
+ }
+ 
+ /* Network snapshots use the native GPX state, so restrict the contract to the
+@@ -3647,7 +3647,8 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
+-   return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
++   return md_cart_aq93c_active ? "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
++          "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
+ #else
+    return NULL;
+ #endif

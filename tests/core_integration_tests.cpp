@@ -855,6 +855,296 @@ void testJiujiProtection(const QString& corePath) {
     }
 }
 
+// Original 68000 mailbox: execute batched serial line writes/reads requested by
+// the test through work RAM, exercising the real CPU memory map.
+QByteArray makeAqRom() {
+    auto rom=makeTestRom();rom.append(QByteArray(0x100000-rom.size(),char(0)));
+    putLong(rom,0x1a4,quint32(rom.size()-1));rom[0x18e]=char(0x81);rom[0x18f]=4;
+    int pc=0x200;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    const auto branch=[&](quint16 op){word(op);const int at=pc;word(0);return at;};
+    const auto target=[&](int at,int to){const quint16 d=quint16(to-at);rom[at]=char(d>>8);rom[at+1]=char(d);};
+    word(0x46fc);word(0x2700);
+    word(0x33fc);word(1);word(0xa1);word(0x30f0); // Reject word SRAM enable.
+    word(0x13fc);word(1);word(0xa1);word(0x3060); // Reject its generic alias.
+    word(0x13f9);word(0x20);word(0);word(0xff);word(0x80);
+    const int idle=pc;
+    word(0x4a79);word(0xff);word(0);const int wait=branch(0x6700);target(wait,idle);
+    word(0x3239);word(0xff);word(0); // MOVE.W count,D1
+    word(0x4279);word(0xff);word(0); // CLR.W count
+    word(0x41f9);word(0xff);word(0x100);
+    word(0x43f9);word(0xff);word(0x1000);
+    const int next=pc;
+    word(0x1018);word(0x4a00);const int read=branch(0x6700);
+    word(0x13d8);word(0x40);word(1);const int advance=branch(0x6000);
+    target(read,pc);word(0x5288);word(0x12f9);word(0x40);word(1);
+    target(advance,pc);word(0x5341);const int more=branch(0x6600);target(more,next);
+    const int again=branch(0x6000);target(again,idle);
+    setPrefixCrc(rom,0x34e04945);
+    quint32 sum=0;for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+    const quint16 fix=quint16(0x0517-sum);rom[0xffffe]=char(fix>>8);rom[0xfffff]=char(fix);
+    return rom;
+}
+
+void testAqMicrowire(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"Aq temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"Aq core inspection failed");
+    using Memory=void* (*)(unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory,"Aq memory API missing");
+    const auto rom=makeAqRom();const QString path=temp.path()+"/aq.md";writeFile(path,rom);
+    require(host.setAutoFixChecksum(true,error) && host.load(path,error),"Aq fixture load failed");
+    const auto aqIdentity=host.movieCoreIdentity();host.runFrame();
+    constexpr int swap=QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0;
+    auto* ram=static_cast<unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+    auto* battery=static_cast<unsigned char*>(memory(RETRO_MEMORY_SAVE_RAM));
+    require(ram && battery && ram[0x80^swap]==0,"Aq incorrectly mapped parallel SRAM");
+    QByteArray script;
+    const auto line=[&](unsigned value){script.append(char(1));script.append(char(value));};
+    const auto sample=[&](){script.append(char(0));script.append(char(0));};
+    const auto bits=[&](unsigned value,int count){for(int b=count-1;b>=0;--b){const unsigned v=4|(((value>>b)&1)<<3);line(v);line(v|2);}};
+    const auto command=[&](unsigned value){line(0);line(4);bits(1,1);bits(value,8);};
+    const auto run=[&](){
+        require(script.size()/2<0x10000 && script.size()<0xe00,"Aq script too large");
+        for(int i=0;i<script.size();++i)ram[(0x100+i)^swap]=quint8(script[i]);
+        const unsigned count=unsigned(script.size()/2);ram[0^swap]=count>>8;ram[1^swap]=count;
+        script.clear();host.runFrame();
+        require(!ram[0^swap] && !ram[1^swap],"Aq mailbox not consumed");
+    };
+    const auto enable=[&](){command(0x30);line(0);run();};
+    const auto write=[&](unsigned address,unsigned value){command(0x40|address);bits(value,16);line(0);run();};
+    const auto read=[&](unsigned address){
+        command(0x80|address);sample();
+        for(int i=0;i<16;++i){line(4);line(6);sample();}
+        line(0);run();require(ram[0x1000^swap]==0,"Aq READ dummy bit missing");
+        unsigned value=0;for(int i=1;i<=16;++i)value=(value<<1)|(ram[(0x1000+i)^swap]&1);return value;
+    };
+    require(read(0)==0xffff,"Aq initial battery not erased");
+    write(0,0);require(read(0)==0xffff,"Aq WRITE ignored disabled latch");
+    enable();write(0,0xa55a);write(63,0x1234);
+    require(read(0)==0xa55a && read(63)==0x1234,"Aq serial write/read mismatch");
+    // Sequential word63 wraps to word0, without a second command.
+    command(0xbf);for(int i=0;i<32;++i){line(4);line(6);sample();}line(0);run();
+    quint32 pair=0;for(int i=0;i<32;++i)pair=(pair<<1)|(ram[(0x1000+i)^swap]&1);
+    require(pair==0x1234a55a,"Aq sequential wrap failed");
+    // Restore in the middle of a WRITE and then in the middle of a READ.
+    command(0x41);bits(0xabcd>>9,7);run();const auto partial=host.serialize();
+    bits(0xabcd&0x1ff,9);line(0);run();require(read(1)==0xabcd,"Aq first partial write failed");
+    require(host.unserialize(partial),"Aq partial WRITE restore failed");
+    bits(0xabcd&0x1ff,9);line(0);run();require(read(1)==0xabcd,"Aq restored write shifted");
+    command(0x81);for(int i=0;i<5;++i){line(4);line(6);}run();const auto reading=host.serialize();
+    const auto tail=[&](){for(int i=0;i<11;++i){line(4);line(6);sample();}line(0);run();unsigned v=0;for(int i=0;i<11;++i)v=(v<<1)|(ram[(0x1000+i)^swap]&1);return v;};
+    require(tail()==(0xabcd&0x7ff),"Aq READ tail failed");
+    require(host.unserialize(reading) && tail()==(0xabcd&0x7ff),"Aq partial READ restore shifted");
+    const auto before=host.serialize();auto invalid=before;invalid[invalid.size()-160+8]=7;
+    require(!host.unserialize(invalid) && host.serialize()==before,"Aq invalid trailer changed machine");
+    auto legacy=before;std::memset(legacy.data()+legacy.size()-160,0,160);
+    require(host.unserialize(legacy) && read(1)==0xabcd,"Aq legacy state lost battery");
+    write(1,0);require(read(1)==0xabcd,"Aq legacy state kept stale write-enable");
+    enable();host.reset();host.runFrame();write(2,0x2468);require(read(2)==0x2468,"Aq soft reset changed write latch");
+    require(host.flushSaveRam(error) && host.hardReset(error),"Aq battery power reset failed");
+    ram=static_cast<unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));host.runFrame();
+    require(read(0)==0xa55a && read(2)==0x2468,"Aq power reset lost saved data");
+    write(2,0);require(read(2)==0x2468,"Aq power reset kept write enable");
+    enable();command(0x00);line(0);run();write(0,0);require(read(0)==0xa55a,"Aq EWDS ignored");
+    require(readFile(path)==rom,"Aq source ROM changed");
+    const QString other=temp.path()+"/ordinary.md";writeFile(other,makeTestRom());
+    require(host.load(other,error) && host.movieCoreIdentity()!=aqIdentity,"Aq identity leaked to next game");
+    const auto ordinary=host.serialize();require(ordinary.mid(ordinary.size()-160,8)!="KRAQ93C!","Aq state leaked to next game");
+}
+
+// Generated, original diagnostic for the identified Sonic Jam 6 bank board.
+// Uses the existing makeTestRom(), setPrefixCrc(), putLong() and file helpers.
+// No game instructions or data are included.
+QByteArray makeSonicMapperRom() {
+    auto rom=makeTestRom();rom.append(QByteArray(0x200000-rom.size(),char(0)));
+    putLong(rom,0,0x00fff000);putLong(rom,4,0x001f0000);
+    putLong(rom,0x1a4,quint32(rom.size()-1));rom[0x18e]=rom[0x18f]=0;
+    // Address-dependent words distinguish an entire 8 KiB window from both
+    // neighbors and its physical source, including offsets beyond the helper.
+    for(int at=0x200;at<rom.size();at+=2) {
+        const quint32 x=quint32(at);
+        const quint16 value=quint16((x>>1)^(x>>11)^((x>>17)*0x9e37u)^0xa55au);
+        rom[at]=char(value>>8);rom[at+1]=char(value);
+    }
+    const auto helper=[&](quint32 at) {
+        // MOVE.L #distinct physical address marker,D0; RTS.
+        rom[int(at)]=char(0x20);rom[int(at)+1]=char(0x3c);
+        putLong(rom,int(at)+2,0x51000000u|at);
+        rom[int(at)+6]=char(0x4e);rom[int(at)+7]=char(0x75);
+    };
+    for(const quint32 at:{0x002000u,0x008000u,0x010000u,0x020000u,
+                          0x040000u,0x096000u,0x0ca000u,0x0f0000u,
+                          0x1a2000u,0x1aa000u,0x1c4000u,0x1c6000u}) helper(at);
+    // Execute the mailbox from a page outside every observed bank window.
+    // Records are [operation:u16,address:u32,value:u16], all in 68000 order.
+    // Operations: 1=WRITE.W, 2=READ.W, 3=READ.B, 4=JSR (helper returns D0).
+    int pc=0x1f0000;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    const auto branch=[&](quint16 op){word(op);const int at=pc;word(0);return at;};
+    const auto target=[&](int at,int to){const quint16 d=quint16(to-at);rom[at]=char(d>>8);rom[at+1]=char(d);};
+    word(0x46fc);word(0x2700); // Mask interrupts; no VDP setup is required.
+    const int idle=pc;
+    word(0x4a79);word(0xff);word(0);const int wait=branch(0x6700);target(wait,idle);
+    word(0x3e39);word(0xff);word(0); // MOVE.W count,D7.
+    word(0x4279);word(0xff);word(0); // Consume pending count.
+    word(0x41f9);word(0xff);word(0x100);
+    word(0x43f9);word(0xff);word(0x1000);
+    const int next=pc;
+    word(0x3218);word(0x2458);word(0x3418); // Read op,D1; address,A2; value,D2.
+    word(0x0c41);word(1);const int toWrite=branch(0x6700);
+    word(0x0c41);word(2);const int toReadWord=branch(0x6700);
+    word(0x0c41);word(3);const int toReadByte=branch(0x6700);
+    word(0x0c41);word(4);const int toCall=branch(0x6700);
+    word(0x70ff);const int bad=branch(0x6000);
+    target(toWrite,pc);word(0x3482);word(0x7000);const int wrote=branch(0x6000);
+    target(toReadWord,pc);word(0x7000);word(0x3012);const int readWord=branch(0x6000);
+    target(toReadByte,pc);word(0x7000);word(0x1012);const int readByte=branch(0x6000);
+    target(toCall,pc);word(0x7000);word(0x4e92);
+    const int record=pc;
+    for(const int at:{bad,wrote,readWord,readByte})target(at,record);
+    word(0x22c0);word(0x5347);const int more=branch(0x6600);target(more,next);
+    word(0x33fc);word(0xc0de);word(0xff);word(2); // Completion, after all results.
+    const int again=branch(0x6000);target(again,idle);
+    setPrefixCrc(rom,0x8122ac8a);
+    rom[0x1ffffe]=rom[0x1fffff]=0;
+    quint32 sum=0;for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+    const quint16 fix=quint16(0xf456-sum);
+    rom[0x1ffffe]=char(fix>>8);rom[0x1fffff]=char(fix);
+    return rom;
+}
+
+void testSonicMapper(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"Sonic mapper temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"Sonic mapper core inspection failed");
+    using Memory=void* (*)(unsigned);
+    using Preserve=int (*)(const unsigned char*,size_t,unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    const auto preserve=reinterpret_cast<Preserve>(inspect.resolve("retro_kegarefusion_preserve_header_checksum"));
+    require(memory && preserve,"Sonic mapper inspection API missing");
+    const QString ordinaryPath=temp.path()+"/ordinary.md";
+    writeFile(ordinaryPath,makeTestRom());
+    require(host.setAutoFixChecksum(true,error) && host.load(ordinaryPath,error),"Sonic ordinary baseline load failed");
+    const auto ordinaryIdentity=host.movieCoreIdentity();
+    const auto ordinaryNetwork=host.networkCompatibility();
+    const auto rom=makeSonicMapperRom();
+    const auto sum=[](const QByteArray& bytes){quint32 v=0;for(int i=0x200;i<bytes.size();i+=2)v+=(quint8(bytes[i])<<8)|quint8(bytes[i+1]);return quint16(v);};
+    require(sum(rom)==0xf456 && quint32(crc32(0,reinterpret_cast<const Bytef*>(rom.constData()),0x10000))==0x8122ac8a,"Sonic generated fingerprint mismatch");
+    require(preserve(reinterpret_cast<const unsigned char*>(rom.constData()),size_t(rom.size()),sum(rom)),"Sonic auto-fix did not preserve mapper key");
+    const QString path=temp.path()+"/sonic-mapper.md";writeFile(path,rom);
+    require(host.load(path,error),"Sonic mapper fixture load failed");
+    const auto sonicIdentity=host.movieCoreIdentity();
+    require(sonicIdentity!=ordinaryIdentity,"Sonic mapper recording contract not distinguished");
+    if(!ordinaryNetwork.isEmpty())require(host.networkCompatibility()!=ordinaryNetwork,"Sonic mapper network contract not distinguished");
+    host.runFrame();
+    constexpr int swap=QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0;
+    unsigned char* ram=nullptr;
+    const auto refreshRam=[&](){ram=static_cast<unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));require(ram,"Sonic work RAM missing");};
+    refreshRam();
+    const auto ramWord=[&](int at,unsigned value){ram[at^swap]=quint8(value>>8);ram[(at+1)^swap]=quint8(value);};
+    const auto romWord=[&](quint32 at){return (quint32(quint8(rom[int(at)]))<<8)|quint8(rom[int(at)+1]);};
+    struct Check{quint16 operation;quint32 address,expected;};
+    QByteArray script;std::vector<Check> checks;
+    const auto queue=[&](quint16 operation,quint32 address,quint16 value,quint32 expected){
+        const int at=int(script.size());script.resize(at+8);
+        script[at]=char(operation>>8);script[at+1]=char(operation);
+        putLong(script,at+2,address);script[at+6]=char(value>>8);script[at+7]=char(value);
+        checks.push_back({operation,address,expected});
+    };
+    const auto write=[&](quint32 address,quint16 value){queue(1,address,value,0);};
+    const auto read=[&](quint32 address,quint32 physical){
+        queue(2,address,0,romWord(physical));
+        queue(3,address,0,quint8(rom[int(physical)]));
+        queue(3,address+1,0,quint8(rom[int(physical)+1]));
+    };
+    const auto call=[&](quint32 address,quint32 physical){queue(4,address,0,0x51000000u|physical);};
+    const auto window=[&](quint32 address,quint32 physical,quint32 size){
+        for(const quint32 offset:{0u,2u,4u,size-2})read(address+offset,physical+offset);
+        read(address-2,address-2);read(address+size,address+size);
+    };
+    const auto page1a=[&](unsigned mode){
+        // Only the selected 8 KiB code window moves. All other bytes in
+        // page1A, including the other mode's helper, retain their ROM address.
+        window(0x1a2000,mode==1?0x1c4000:0x1a2000,0x2000);
+        window(0x1aa000,mode==2?0x1c6000:0x1aa000,0x2000);
+        call(0x1a2000,mode==1?0x1c4000:0x1a2000);
+        call(0x1aa000,mode==2?0x1c6000:0x1aa000);
+        read(0x1a0000,0x1a0000);read(0x1a6000,0x1a6000);
+        read(0x1afffe,0x1afffe);read(0x1b0000,0x1b0000);
+    };
+    const auto all=[&](unsigned mask,unsigned mode){
+        const std::pair<quint32,quint32> windows[]={{0x008000,0x002000},
+                {0x010000,0x020000},{0x040000,0x020000},
+                {0x096000,0x0f0000},{0x0ca000,0x0f0000}};
+        unsigned index=0;
+        for(const auto [address,physical]:windows){
+            const bool mapped=bool(mask&(1u<<index++));
+            window(address,mapped?physical:address,0x2000);
+            call(address,mapped?physical:address);
+        }
+        page1a(mode);
+    };
+    const auto run=[&](){
+        require(!script.isEmpty() && script.size()%8==0 && script.size()<0xe00,"Sonic mailbox script size invalid");
+        for(int i=0;i<script.size();++i)ram[(0x100+i)^swap]=quint8(script[i]);
+        ramWord(2,0);ramWord(0,unsigned(checks.size()));host.runFrame();
+        require(ram[0^swap]==0 && ram[1^swap]==0 && ram[2^swap]==0xc0 && ram[3^swap]==0xde,"Sonic mailbox did not finish");
+        for(size_t i=0;i<checks.size();++i){
+            quint32 observed=0;for(int b=0;b<4;++b)observed=(observed<<8)|ram[(0x1000+int(i)*4+b)^swap];
+            const auto& check=checks[i];
+            const auto detail=QStringLiteral("Sonic op%1 at%2 expected%3 got%4").arg(check.operation).arg(check.address,6,16,QLatin1Char('0')).arg(check.expected,8,16,QLatin1Char('0')).arg(observed,8,16,QLatin1Char('0')).toLocal8Bit();
+            require(observed==check.expected,detail.constData());
+        }
+        script.clear();checks.clear();
+    };
+    all(0,0);run();
+    write(0x408000,0x0100);window(0x008000,0x002000,0x2000);call(0x008000,0x002000);run();
+    const auto partial=host.serialize();require(!partial.isEmpty(),"Sonic partial mapper state missing");
+    write(0x4080f0,0x0100);page1a(1);call(0x008000,0x002000);run();
+    write(0x408600,0x0100);window(0x010000,0x020000,0x2000);call(0x010000,0x020000);page1a(2);run();
+    write(0x4088f0,0x0300);window(0x040000,0x020000,0x2000);call(0x040000,0x020000);run();
+    write(0x409f00,0x0200);window(0x096000,0x0f0000,0x2000);call(0x096000,0x0f0000);run();
+    write(0x40a000,0x0200);all(0x1f,2);run();
+    const auto alternate=host.serialize();require(!alternate.isEmpty(),"Sonic alternate code-bank state missing");
+    write(0x40a000,0x0100);all(0x1f,1);run();
+    const auto active=host.serialize();require(!active.isEmpty(),"Sonic active mapper state missing");
+    // A partial-mask restore must remove banks active only in the future.
+    require(host.unserialize(partial),"Sonic partial mapper state restore failed");refreshRam();all(1,0);run();
+    require(host.unserialize(alternate),"Sonic alternate code-bank restore failed");refreshRam();all(0x1f,2);run();
+    require(host.unserialize(active),"Sonic active mapper state restore failed");refreshRam();all(0x1f,1);run();
+    // Both observed reset commands undo every active data and code window.
+    write(0x408100,0);all(0,0);run();
+    require(host.unserialize(active),"Sonic post-reset active restore failed");refreshRam();all(0x1f,1);run();
+    write(0x40a100,0);all(0,0);run();
+    // Reset policy follows the core's bankshift model: /VRES clears banks and
+    // the original cartridge bootstrap programs them again. This is inferred.
+    require(host.unserialize(active),"Sonic pre-reset state restore failed");refreshRam();
+    host.reset();host.runFrame();refreshRam();all(0,0);run();
+    require(host.unserialize(active),"Sonic pre-power state restore failed");refreshRam();
+    require(host.hardReset(error),"Sonic mapper power reset failed");host.runFrame();refreshRam();
+    all(0,0);run();
+    require(host.movieCoreIdentity()==sonicIdentity && readFile(path)==rom,"Sonic reset changed contract or source ROM");
+    // Keep the exact prefix and header but move only the body checksum outside
+    // the prefix. Auto-fix is disabled here so this is specifically a checksum
+    // negative control, rather than a second changed-prefix control.
+    auto negative=rom;const quint16 tail=quint16(romWord(0x1ffffe)+1);
+    negative[0x1ffffe]=char(tail>>8);negative[0x1fffff]=char(tail);
+    require(sum(negative)==0xf457 && negative.left(0x10000)==rom.left(0x10000),"Sonic negative fixture scope invalid");
+    require(!preserve(reinterpret_cast<const unsigned char*>(negative.constData()),size_t(negative.size()),sum(negative)),"Sonic wrong checksum incorrectly preserved");
+    const QString negativePath=temp.path()+"/same-prefix-wrong-checksum.md";writeFile(negativePath,negative);
+    require(host.setAutoFixChecksum(false,error) && host.load(negativePath,error),"Sonic negative fixture load failed");
+    host.runFrame();refreshRam();
+    require(host.movieCoreIdentity()==ordinaryIdentity,"Sonic wrong checksum selected mapper contract");
+    write(0x408000,0x0100);write(0x4080f0,0x0100);write(0x408600,0x0100);
+    write(0x4088f0,0x0300);write(0x409f00,0x0200);write(0x40a000,0x0100);write(0x40a000,0x0200);
+    all(0,0);run();
+    require(readFile(negativePath)==negative,"Sonic negative source ROM changed");
+    require(host.setAutoFixChecksum(true,error) && host.load(ordinaryPath,error),"Sonic generic reload failed");
+    require(host.movieCoreIdentity()==ordinaryIdentity && host.networkCompatibility()==ordinaryNetwork,"Sonic mapper ABI leaked to generic reload");
+}
+
 void testChecksumFix(const QString& corePath) {
     QTemporaryDir temp; require(temp.isValid(), "checksum test temp failed");
     const auto rom = makeChecksumRom();
@@ -1218,9 +1508,9 @@ int main(int argc, char** argv) {
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
-                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers"))) &&
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--sonic-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -1228,6 +1518,14 @@ int main(int argc, char** argv) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));
             std::puts("network OPLL snapshot process passed"); return 0;
+        }
+        if (mode == QLatin1String("--sonic-mapper")) {
+            testSonicMapper(QString::fromLocal8Bit(argv[1]));
+            std::puts("Sonic original mapper data/fetch, windows, reset/state and identification passed"); return 0;
+        }
+        if (mode == QLatin1String("--aq-microwire")) {
+            testAqMicrowire(QString::fromLocal8Bit(argv[1]));
+            std::puts("Aq Microwire serial I/O, partial states, legacy/corruption, battery/reset and isolation passed"); return 0;
         }
         if (mode == QLatin1String("--pirate-mappers")) {
             testPokerOverdump(QString::fromLocal8Bit(argv[1]));
@@ -1269,6 +1567,8 @@ int main(int argc, char** argv) {
         testArchiveCore(QString::fromLocal8Bit(argv[1]));
         testCoreOptionsAndReset(QString::fromLocal8Bit(argv[1]));
         testChecksumFix(QString::fromLocal8Bit(argv[1]));
+        testSonicMapper(QString::fromLocal8Bit(argv[1]));
+        testAqMicrowire(QString::fromLocal8Bit(argv[1]));
         testPokerOverdump(QString::fromLocal8Bit(argv[1]));
         testJiujiProtection(QString::fromLocal8Bit(argv[1]));
         testVmvBusCompatibility(QString::fromLocal8Bit(argv[1]));

@@ -38,8 +38,10 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-network-state.patch"
   "$root/tools/patches/genesis-plus-gx-checksum-guard.patch"
   "$root/tools/patches/genesis-plus-gx-vmv-audio.patch"
-  "$root/tools/patches/genesis-plus-gx-pirate-identification.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-pirate-identification.patch"
+  "$root/tools/patches/genesis-plus-gx-aq-microwire.patch"
+  "$root/tools/patches/genesis-plus-gx-sonic6.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")

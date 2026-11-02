@@ -174,15 +174,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
     api_->recording_abi = reinterpret_cast<decltype(api_->recording_abi)>(library_.resolve("retro_kegarefusion_recording_abi"));
     api_->network_state_abi = reinterpret_cast<decltype(api_->network_state_abi)>(library_.resolve("retro_kegarefusion_network_state_abi"));
-    if (api_->recording_abi) {
-        const char* abi = api_->recording_abi();
-        if (abi) recordingAbi_ = QByteArray(abi);
-    }
-    // Native serialization is platform/architecture dependent. The core's explicit
-    // contract covers both the state layout and deterministic execution behavior.
-    recordingCoreHash_ = recordingAbi_.isEmpty() ? exactCoreHash_
-        : digest(QByteArrayLiteral("KegaRefusion-recording-contract:") + recordingAbi_ + ':'
-                 + QSysInfo::kernelType().toUtf8() + ':' + QSysInfo::buildAbi().toUtf8());
+    refreshRecordingIdentity();
     api_->set_paprium_music = reinterpret_cast<decltype(api_->set_paprium_music)>(library_.resolve("retro_kegarefusion_set_paprium_music"));
     api_->paprium_active = reinterpret_cast<decltype(api_->paprium_active)>(library_.resolve("retro_kegarefusion_paprium_active"));
     api_->paprium_cd_active = reinterpret_cast<decltype(api_->paprium_cd_active)>(library_.resolve("retro_kegarefusion_paprium_cd_active"));
@@ -334,6 +326,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         unload(); return false;
     }
     loaded_ = true;
+    refreshRecordingIdentity();
     if (!CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
     gamePath_ = QFileInfo(path).absoluteFilePath(); contentName_ = QFileInfo(path).fileName();
     api_->get_system_av_info(&av_);
@@ -518,6 +511,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
+    refreshRecordingIdentity();
     gamePath_ = info.absoluteFilePath();
     if (api_->set_paprium_music && api_->paprium_active && api_->paprium_active())
         papriumMusic_.configure(gamePath_);
@@ -659,6 +653,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     loaded_ = true;
+    refreshRecordingIdentity();
     if (!discs_.isEmpty() && !CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
     if (!discs_.isEmpty() && !registerDiscs(error)) { unload(); return false; }
     saveRamWritable_ = false;
@@ -1176,6 +1171,18 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     }
     audio_.clear();
     return true;
+}
+void LibretroHost::refreshRecordingIdentity() {
+    recordingAbi_.clear();
+    if (api_->recording_abi) {
+        const char* abi = api_->recording_abi();
+        if (abi) recordingAbi_ = QByteArray(abi);
+    }
+    // Native serialization is platform/architecture dependent. The core's explicit
+    // contract covers both the state layout and deterministic execution behavior.
+    recordingCoreHash_ = recordingAbi_.isEmpty() ? exactCoreHash_
+        : digest(QByteArrayLiteral("KegaRefusion-recording-contract:") + recordingAbi_ + ':'
+                 + QSysInfo::kernelType().toUtf8() + ':' + QSysInfo::buildAbi().toUtf8());
 }
 QByteArray LibretroHost::movieCoreIdentity() const { return loaded_ ? recordingCoreHash_ : QByteArray(); }
 

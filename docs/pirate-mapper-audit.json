@@ -1948,6 +1948,11 @@
         "core_preserves_checksum": false,
         "header_after": "5083",
         "loses_exact_database_match": false
+      },
+      "followup_0_14_6": {
+        "status": "invalid_reset_target_ff",
+        "report": "sonic-jam6-mapper.txt",
+        "rom_modified": false
       }
     },
     {
@@ -9728,6 +9733,12 @@
         "core_preserves_checksum": false,
         "header_after": "F456",
         "loses_exact_database_match": false
+      },
+      "hardware_identification_0_14_6": {
+        "rule": "sonic6_observed_8k_banking",
+        "report": "sonic-jam6-mapper.txt",
+        "scope": "exact_size_header_body_checksum_and_prefix_crc",
+        "full_gameplay_verified": false
       }
     },
     {
@@ -11336,6 +11347,12 @@
         "core_preserves_checksum": true,
         "header_after": "8104",
         "loses_exact_database_match": false
+      },
+      "hardware_identification_0_14_6": {
+        "rule": "aq_93c46_serial_saves",
+        "report": "aq-microwire.txt",
+        "scope": "exact_size_header_body_checksum_and_prefix_crc",
+        "full_gameplay_verified": false
       }
     },
     {
