@@ -20,12 +20,13 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--gun=menacer|justifier] [--companion-pad]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--p2-buttons=FRAME:COUNT:MASK]... [--gun=menacer|justifier] [--companion-pad]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -161,6 +162,8 @@ int main(int argc, char** argv) {
     QString saveRawState, loadRawState;
     int heldAt = -1, heldCount = 0;
     unsigned heldMask = 0;
+    struct ButtonInterval { int at, count; unsigned mask; };
+    std::vector<ButtonInterval> p2Intervals;
     bool recordRewind = false, port2Disconnected = false;
     for (int i = 6; i < args.size(); ++i) {
         const auto& option = args[i];
@@ -202,6 +205,17 @@ int main(int argc, char** argv) {
             if (!atOk || !countOk || !maskOk || heldAt < 0 || heldAt >= frames ||
                 heldCount < 1 || heldCount > frames - heldAt || heldMask > 0xffff)
                 return usage(QStringLiteral("Button interval or libretro mask is out of range."));
+        } else if (option.startsWith(QLatin1String("--p2-buttons="))) {
+            const auto parts = option.mid(13).split(QLatin1Char(':'));
+            bool atOk = false, countOk = false, maskOk = false;
+            if (parts.size() != 3 || p2Intervals.size() >= 64)
+                return usage(QStringLiteral("Use at most 64 --p2-buttons=FRAME:COUNT:MASK intervals."));
+            const int at = parts[0].toInt(&atOk), count = parts[1].toInt(&countOk);
+            const unsigned mask = parts[2].toUInt(&maskOk, 0);
+            if (!atOk || !countOk || !maskOk || at < 0 || at >= frames ||
+                count < 1 || count > frames - at || mask > 0xffff)
+                return usage(QStringLiteral("P2 button interval or libretro mask is out of range."));
+            p2Intervals.push_back({at, count, mask});
         } else if (option == QLatin1String("--port2-disconnected")) {
             port2Disconnected = true;
         } else if (option == QLatin1String("--record-rewind")) {
@@ -231,6 +245,8 @@ int main(int argc, char** argv) {
         else if (option == QLatin1String("--companion-pad")) companionPad = true;
         else return usage(QStringLiteral("Unknown option: %1").arg(option));
     }
+    if (!p2Intervals.empty() && (port2Disconnected || gun != ControllerType::Pad))
+        return usage(QStringLiteral("--p2-buttons requires an enabled P2 pad."));
     try {
         const QString core = QFileInfo(args[1]).absoluteFilePath();
         const QString source = QFileInfo(args[2]).absoluteFilePath();
@@ -267,6 +283,10 @@ int main(int argc, char** argv) {
         using Features = unsigned (*)();
         const auto features = reinterpret_cast<Features>(diagnostics.resolve("retro_kegarefusion_core_features"));
         const unsigned initialFeatures = features ? features() : 0;
+        using Active = int (*)();
+        const auto papriumCdActive = reinterpret_cast<Active>(
+            diagnostics.resolve("retro_kegarefusion_paprium_cd_active"));
+        const bool initialPapriumCdActive = papriumCdActive && papriumCdActive() != 0;
         using Debug = int (*)(std::uint64_t*, size_t);
         const auto debug = reinterpret_cast<Debug>(diagnostics.resolve("retro_kegarefusion_debug"));
         if (!loadRawState.isEmpty()) {
@@ -282,6 +302,8 @@ int main(int argc, char** argv) {
             require(setDevice != nullptr, QStringLiteral("Controller device API missing."));
             setDevice(1, RETRO_DEVICE_NONE);
         }
+
+        if (!p2Intervals.empty()) host.setControllerConnected(1, true);
 
         qint64 videoUpdates = 0, framesWithVideo = 0, audioChunks = 0, audioBytes = 0;
         qsizetype minAudioBytes = std::numeric_limits<qsizetype>::max(), maxAudioBytes = 0;
@@ -305,6 +327,13 @@ int main(int argc, char** argv) {
             if (heldAt >= 0 && frame >= heldAt && frame < heldAt + heldCount) buttons |= heldMask;
             host.setButtons(gun == ControllerType::Pad ? 0 : gunPlayer, buttons);
             if (companionPad) host.setButtons(gunPlayer^1u,buttons);
+            if (!p2Intervals.empty()) {
+                unsigned p2Buttons = 0;
+                for (const auto& interval : p2Intervals)
+                    if (frame >= interval.at && frame < interval.at + interval.count)
+                        p2Buttons |= interval.mask;
+                host.setButtons(1, p2Buttons);
+            }
             const auto previous = host.frame().cacheKey();
             host.runFrame(true, true);
             if (!host.frame().isNull()) {
@@ -371,6 +400,7 @@ int main(int argc, char** argv) {
         QJsonObject result{
             {"core", core}, {"game", game}, {"output_png", output},
             {"isolated_data", true}, {"is_cd", host.isCd()},
+            {"paprium_cd_active", initialPapriumCdActive},
             {"initial_core_features", int(initialFeatures)}, {"core_features", int(benchmarkFeatures)},
             {"bios_32x_imported", labels(x32Imported)}, {"bios_cd_imported", labels(cdImported)},
             {"input", input == Input::Play ? "start_pulses_120_123_240_243_480_483_abc_600_603_720_723" :

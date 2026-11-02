@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.9.0 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.9.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -38,7 +38,7 @@ target_include_directories(video_renderer PUBLIC src)
 target_link_libraries(video_renderer PUBLIC Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
 add_executable(KegaRefusion WIN32
     assets/app.qrc
-    src/ui/ControlsDialog.cpp src/ui/ControlsDialog.h
+    src/ui/ControlsPage.cpp src/ui/ControlsPage.h
     src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
     src/ui/ControllerDiagram.cpp src/ui/ControllerDiagram.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h

@@ -226,7 +226,7 @@ void EmulationSession::run() {
             case Type::Reset:
                 if (host.loaded()) {
                     host.reset(); clearHistory(); clearAudio();
-                    emit actionCompleted(QStringLiteral("Мягкий сброс"));
+                    emit actionCompleted(QStringLiteral("Сброс"));
                     pacer.reset(nowNs());
                 }
                 break;
@@ -234,7 +234,7 @@ void EmulationSession::run() {
                 if (host.loaded()) {
                     if (host.hardReset(error)) {
                         clearHistory(); clearAudio(); rewindStatus(false);
-                        emit actionCompleted(QStringLiteral("Жёсткий сброс"));
+                        emit actionCompleted(QStringLiteral("Перезапуск питания"));
                         emit stateSlotsChanged(-1,host.occupiedStateSlots());
                         pacer.reset(nowNs());
                     } else emit errorOccurred(error);

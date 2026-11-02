@@ -99,6 +99,11 @@ static uint32 paprium_random(void) {
     return punchium_s.rng = x;
 }
 int paprium_active(void) { return (cart.special & HW_PUNCHIUM) != 0; }
+int paprium_cd_active(void) { return paprium_active() && system_hw==SYSTEM_MCD; }
+size_t paprium_extra_state_size(void) {
+    /* GPX's fixed buffer covers CD alone; Mode 1 also appends cartridge HLE. */
+    return paprium_cd_active() ? sizeof(punchium_s)+9*sizeof(int) : 0;
+}
 void paprium_set_music_callback(paprium_music_callback callback, void *user) {
     music_callback = callback; music_user = user;
     punchium_track.track_last = -1; punchium_track.cache_frames = 0;
@@ -2405,6 +2410,11 @@ static void punchium_init()
 static void punchium_reset()
 {
 	punchium_init();
+    /* HLE boot bypasses the cartridge's sound initialization. A console-only
+     * reset leaves the minigame's PSG tone running otherwise. Reset both the
+     * sources and their resamplers so no old tone or delta baseline survives. */
+    sound_reset();
+    audio_reset();
 
 	//extern int trace_start;
 	//trace_start = 1;

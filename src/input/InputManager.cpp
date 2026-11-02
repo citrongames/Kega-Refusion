@@ -781,8 +781,8 @@ QString InputManager::targetName(ConsoleProfile profile, int target, ControllerT
     case FastForwardCommand: return QStringLiteral("Ускорение");
     case SaveCommand: return QStringLiteral("Сохранить состояние");
     case LoadCommand: return QStringLiteral("Загрузить состояние");
-    case ResetCommand: return QStringLiteral("Мягкий сброс");
-    case HardResetCommand: return QStringLiteral("Жёсткий сброс");
+    case ResetCommand: return QStringLiteral("Сброс");
+    case HardResetCommand: return QStringLiteral("Перезапуск питания");
     case FrameAdvanceCommand: return QStringLiteral("Следующий кадр");
     case FullscreenCommand: return QStringLiteral("Полный экран");
     case MuteCommand: return QStringLiteral("Без звука");

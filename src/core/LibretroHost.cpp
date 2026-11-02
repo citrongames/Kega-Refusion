@@ -36,6 +36,7 @@ struct LibretroHost::Api {
                                                     std::int16_t*, std::size_t);
     void (*set_paprium_music)(PapriumMusicCallback, void*) = nullptr;
     int (*paprium_active)() = nullptr;
+    int (*paprium_cd_active)() = nullptr;
 };
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
@@ -151,6 +152,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
     api_->set_paprium_music = reinterpret_cast<decltype(api_->set_paprium_music)>(library_.resolve("retro_kegarefusion_set_paprium_music"));
     api_->paprium_active = reinterpret_cast<decltype(api_->paprium_active)>(library_.resolve("retro_kegarefusion_paprium_active"));
+    api_->paprium_cd_active = reinterpret_cast<decltype(api_->paprium_cd_active)>(library_.resolve("retro_kegarefusion_paprium_cd_active"));
     if (api_->manage_bram && api_->get_bram && api_->state_abi &&
         QByteArray(api_->state_abi()) == "kegarefusion-gpx-f27655b-battery-v1") {
         // This extension only exposes battery memory; the pinned core's state
@@ -873,6 +875,8 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
 QByteArray LibretroHost::stateCoreIdentity() const {
     // Ordinary MD/CD retain their stable GPX state identity. The attachment
     // has its own versioned state contract, independent of executable hashes.
+    if (api_->paprium_cd_active && api_->paprium_cd_active())
+        return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-cd-v1"));
     if (api_->paprium_active && api_->paprium_active())
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-v1"));
     if (api_->features && (api_->features() & 2u))

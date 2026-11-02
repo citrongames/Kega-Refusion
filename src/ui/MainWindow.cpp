@@ -1,6 +1,6 @@
 #include "MainWindow.h"
 #include "AudioOutput.h"
-#include "ControlsDialog.h"
+#include "ControlsPage.h"
 #include "CheatsDialog.h"
 #include <cmath>
 #include "../core/EmulationSession.h"
@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QAudioDevice>
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QDateTime>
@@ -22,6 +23,7 @@
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QCryptographicHash>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -40,6 +42,9 @@
 #include <QMimeData>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStackedWidget>
+#include <QScrollArea>
+#include <QScreen>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidgetAction>
@@ -346,7 +351,7 @@ void MainWindow::buildMenus() {
     cheatsAction_ = emulationMenu->addAction(QStringLiteral("Читы…"));
     cheatsAction_->setEnabled(false);
     connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
-    resetAction_ = emulationMenu->addAction(QStringLiteral("Мягкий сброс"));
+    resetAction_ = emulationMenu->addAction(QStringLiteral("Сброс"));
     resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     resetAction_->setAutoRepeat(false);
     resetAction_->setEnabled(false);
@@ -355,7 +360,7 @@ void MainWindow::buildMenus() {
         releaseInput();
         session_.resetGame();
     });
-    hardResetAction_ = emulationMenu->addAction(QStringLiteral("Жёсткий сброс"));
+    hardResetAction_ = emulationMenu->addAction(QStringLiteral("Перезапуск питания"));
     hardResetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
     hardResetAction_->setAutoRepeat(false);
     hardResetAction_->setEnabled(false);
@@ -379,45 +384,13 @@ void MainWindow::buildMenus() {
             session_.setRegion(region);
         });
     }
-    QAction* checksumAction = emulationMenu->addAction(QStringLiteral("Автоисправление контрольной суммы ROM"));
-    checksumAction->setObjectName(QStringLiteral("autoFixChecksum"));
-    checksumAction->setCheckable(true);
-    checksumAction->setChecked(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
-    checksumAction->setToolTip(QStringLiteral("Для Mega Drive/Genesis. Исправляется копия в памяти; применится при следующей загрузке игры или хард-ресете."));
-    connect(checksumAction, &QAction::toggled, this, [this](bool enabled) {
-        settings_.setValue(QStringLiteral("emulation/autoFixChecksum"), enabled);
-        session_.setAutoFixChecksum(enabled);
-    });
     fastForwardAction_ = emulationMenu->addAction(QStringLiteral("Ускорение (Tab)"));
     fastForwardAction_->setCheckable(true);
     fastForwardAction_->setEnabled(false);
     connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
-    QMenu* speedMenu = emulationMenu->addMenu(QStringLiteral("Скорость ускорения"));
-    auto* speedGroup = new QActionGroup(this);
-    for (int factor : {2,3,4,6,8,12,16,32,0}) {
-        QAction* action = speedMenu->addAction(factor == 0 ? QStringLiteral("Без ограничения") : QStringLiteral("×%1").arg(factor));
-        action->setCheckable(true); action->setChecked(factor == fastForwardFactor_);
-        speedGroup->addAction(action);
-        connect(action, &QAction::triggered, this, [this, factor] {
-            fastForwardFactor_ = factor;
-            settings_.setValue(QStringLiteral("emulation/fastForwardFactor"), factor);
-            session_.setFastForwardFactor(factor); view_->setFastForwardFactor(factor);
-        });
-    }
     rewindAction_ = emulationMenu->addAction(QStringLiteral("Перемотка назад (R)"));
     rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
     connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
-    QAction* historyAction = emulationMenu->addAction(QStringLiteral("Записывать историю перемотки"));
-    historyAction->setCheckable(true);
-    historyAction->setChecked(rewindEnabled_);
-    connect(historyAction, &QAction::toggled, this, [this](bool enabled) {
-        rewindEnabled_ = enabled;
-        settings_.setValue(QStringLiteral("emulation/rewindEnabled"), enabled);
-        session_.setRewindEnabled(enabled);
-        if (!enabled) { rewindHeld_ = rewindPadHeld_ = false; rewindAction_->setChecked(false); }
-        rewindAction_->setEnabled(session_.hasGame() && enabled);
-        updateRewind();
-    });
     QAction* focusPause = emulationMenu->addAction(QStringLiteral("Пауза при потере фокуса"));
     focusPause->setCheckable(true); focusPause->setChecked(pauseOnFocusLoss_);
     connect(focusPause, &QAction::toggled, this, [this](bool enabled) {
@@ -465,13 +438,6 @@ void MainWindow::buildMenus() {
     });
 
     QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&Вид"));
-    QAction* osdAction = viewMenu->addAction(QStringLiteral("Экранные сообщения (OSD)"));
-    osdAction->setCheckable(true);
-    osdAction->setChecked(settings_.value(QStringLiteral("view/osd"), true).toBool());
-    connect(osdAction, &QAction::toggled, this, [this](bool enabled) {
-        settings_.setValue(QStringLiteral("view/osd"), enabled);
-        view_->setOsdEnabled(enabled);
-    });
     QMenu* aspectMenu = viewMenu->addMenu(QStringLiteral("Соотношение сторон"));
     QActionGroup* aspectGroup = new QActionGroup(this);
     aspectGroup->setExclusive(true);
@@ -629,7 +595,7 @@ void MainWindow::buildMenus() {
     QMenu* settingsMenu = menuBar()->addMenu(QStringLiteral("&Настройки"));
     QAction* emulatorSettingsAction = settingsMenu->addAction(QStringLiteral("Настройки эмулятора…"));
     emulatorSettingsAction->setObjectName(QStringLiteral("emulatorSettingsAction"));
-    connect(emulatorSettingsAction, &QAction::triggered, this, &MainWindow::editSettings);
+    connect(emulatorSettingsAction, &QAction::triggered, this, [this] { editSettings(); });
     QAction* controlsAction = settingsMenu->addAction(QStringLiteral("Управление…"));
     connect(controlsAction, &QAction::triggered, this, &MainWindow::editControls);
     QMenu* helpMenu = menuBar()->addMenu(QStringLiteral("&Справка"));
@@ -1013,13 +979,61 @@ void MainWindow::openRom(const QString& path) {
     else session_.loadGame(file.absoluteFilePath());
 }
 
-void MainWindow::editSettings() {
+void MainWindow::editSettings(int initialPage) {
     releaseInput();
+    input_->setEnabled(false);
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("emulatorSettingsDialog"));
     dialog.setWindowTitle(QStringLiteral("Настройки эмулятора — Kega Refusion"));
+    const QSize workArea = dialog.screen()->availableGeometry().size();
+    const QSize target = QSize(1100, 720).boundedTo(workArea - QSize(48, 72));
+    dialog.setMinimumSize(QSize(800, 560).boundedTo(target));
+    dialog.resize(target);
+    dialog.setSizeGripEnabled(true);
+
     auto* layout = new QVBoxLayout(&dialog);
-    auto* form = new QFormLayout;
+    layout->setContentsMargins(20, 18, 20, 16);
+    layout->setSpacing(14);
+    auto* content = new QHBoxLayout;
+    content->setSpacing(18);
+    auto* navigation = new QListWidget(&dialog);
+    navigation->setObjectName(QStringLiteral("settingsNavigation"));
+    navigation->setFixedWidth(190);
+    navigation->setSpacing(4);
+    navigation->addItems({QStringLiteral("Общие"), QStringLiteral("Игры"),
+                          QStringLiteral("Перемотка"), QStringLiteral("Управление")});
+    auto* pages = new QStackedWidget(&dialog);
+    pages->setObjectName(QStringLiteral("settingsPages"));
+    content->addWidget(navigation);
+    content->addWidget(pages, 1);
+    layout->addLayout(content, 1);
+
+    const auto addPage = [pages](const QString& title, const QString& description) {
+        auto* page = new QWidget(pages);
+        auto* pageLayout = new QVBoxLayout(page);
+        pageLayout->setContentsMargins(14, 8, 14, 8);
+        pageLayout->setSpacing(14);
+        auto* heading = new QLabel(title, page);
+        auto headingFont = heading->font();
+        headingFont.setPointSize(headingFont.pointSize() + 3);
+        headingFont.setBold(true);
+        heading->setFont(headingFont);
+        pageLayout->addWidget(heading);
+        auto* summary = new QLabel(description, page);
+        summary->setWordWrap(true);
+        pageLayout->addWidget(summary);
+        auto* form = new QFormLayout;
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        form->setHorizontalSpacing(20);
+        form->setVerticalSpacing(14);
+        pageLayout->addLayout(form);
+        pageLayout->addStretch();
+        pages->addWidget(page);
+        return form;
+    };
+
+    auto* general = addPage(QStringLiteral("Общие"),
+        QStringLiteral("Изображение и скорость работы эмулятора."));
     const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
                           .toString() == QLatin1String("jpeg");
     auto* screenshotFormat = new QComboBox(&dialog);
@@ -1027,30 +1041,61 @@ void MainWindow::editSettings() {
     screenshotFormat->addItem(QStringLiteral("PNG (без потерь)"), QStringLiteral("png"));
     screenshotFormat->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
     screenshotFormat->setCurrentIndex(jpeg ? 1 : 0);
-    form->addRow(QStringLiteral("Формат скриншотов:"), screenshotFormat);
+    general->addRow(QStringLiteral("Формат скриншотов:"), screenshotFormat);
+    const bool osdEnabled = settings_.value(QStringLiteral("view/osd"), true).toBool();
+    auto* showOsd = new QCheckBox(QStringLiteral("Показывать экранные сообщения (OSD)"), &dialog);
+    showOsd->setObjectName(QStringLiteral("osdEnabled"));
+    showOsd->setChecked(osdEnabled);
+    general->addRow(showOsd);
+    auto* speed = new QComboBox(&dialog);
+    speed->setObjectName(QStringLiteral("fastForwardFactor"));
+    for (int factor : {2, 3, 4, 6, 8, 12, 16, 32, 0})
+        speed->addItem(factor ? QStringLiteral("×%1").arg(factor)
+                              : QStringLiteral("Без ограничения"), factor);
+    speed->setCurrentIndex(speed->findData(fastForwardFactor_));
+    speed->setToolTip(QStringLiteral("Скорость при удержании Tab или назначенной кнопки ускорения."));
+    general->addRow(QStringLiteral("Скорость ускорения:"), speed);
+
+    auto* games = addPage(QStringLiteral("Игры"),
+        QStringLiteral("Совместимость картриджей и загрузка Sega CD."));
+    const bool fixChecksum = settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool();
+    auto* checksum = new QCheckBox(QStringLiteral("Автоисправлять контрольную сумму ROM"), &dialog);
+    checksum->setObjectName(QStringLiteral("autoFixChecksum"));
+    checksum->setChecked(fixChecksum);
+    games->addRow(checksum);
+    auto* checksumHelp = new QLabel(QStringLiteral(
+        "Исправляется только копия ROM в памяти. Настройка применится при следующей "
+        "загрузке игры или перезапуске питания."), &dialog);
+    checksumHelp->setWordWrap(true);
+    games->addRow(checksumHelp);
     const bool fastCd = settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool();
     auto* cdLoading = new QComboBox(&dialog);
     cdLoading->setObjectName(QStringLiteral("cdLoadingMode"));
     cdLoading->addItem(QStringLiteral("Обычная (как на консоли)"), false);
     cdLoading->addItem(QStringLiteral("Ускоренная"), true);
     cdLoading->setCurrentIndex(fastCd ? 1 : 0);
-    form->addRow(QStringLiteral("Загрузка CD:"), cdLoading);
+    games->addRow(QStringLiteral("Загрузка CD:"), cdLoading);
     auto* cdHelp = new QLabel(QStringLiteral(
         "Ускоренный режим убирает задержки поиска дорожек. "
         "Если игра зависает или звук рассинхронизируется, верните обычный режим."), &dialog);
     cdHelp->setWordWrap(true);
-    cdHelp->setMinimumWidth(360);
-    form->addRow(cdHelp);
+    games->addRow(cdHelp);
     const bool noSpriteLimit = settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool();
     auto* spriteLimit = new QComboBox(&dialog);
     spriteLimit->setObjectName(QStringLiteral("spriteLimitMode"));
     spriteLimit->addItem(QStringLiteral("Как на консоли"), false);
     spriteLimit->addItem(QStringLiteral("Снять ограничение"), true);
     spriteLimit->setCurrentIndex(noSpriteLimit ? 1 : 0);
-    form->addRow(QStringLiteral("Лимит спрайтов:"), spriteLimit);
     spriteLimit->setToolTip(QStringLiteral(
-        "Уменьшает мигание и исчезновение спрайтов. "
-        "В отдельных играх может нарушать графические эффекты."));
+        "Уменьшает мигание спрайтов; в отдельных играх может нарушать графические эффекты."));
+    games->addRow(QStringLiteral("Лимит спрайтов:"), spriteLimit);
+
+    auto* rewind = addPage(QStringLiteral("Перемотка"),
+        QStringLiteral("Запись истории игры для возврата к предыдущим кадрам."));
+    auto* recordHistory = new QCheckBox(QStringLiteral("Записывать историю перемотки"), &dialog);
+    recordHistory->setObjectName(QStringLiteral("rewindHistoryEnabled"));
+    recordHistory->setChecked(rewindEnabled_);
+    rewind->addRow(recordHistory);
     const int memoryMiB = qBound(16, settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt(), 1024);
     auto* rewindMemory = new QSpinBox(&dialog);
     rewindMemory->setObjectName(QStringLiteral("rewindMemoryLimit"));
@@ -1058,29 +1103,64 @@ void MainWindow::editSettings() {
     rewindMemory->setSingleStep(16);
     rewindMemory->setSuffix(QStringLiteral(" МиБ"));
     rewindMemory->setValue(memoryMiB);
-    form->addRow(QStringLiteral("Память перемотки:"), rewindMemory);
+    rewind->addRow(QStringLiteral("Память перемотки:"), rewindMemory);
     auto* rewindHelp = new QLabel(QStringLiteral(
-        "История ограничена только памятью, без предела по времени. При заполнении удаляются самые старые кадры. "
+        "История ограничена только памятью. При заполнении удаляются старые кадры. "
         "Изменение лимита очищает историю; память выделяется по мере накопления."), &dialog);
     rewindHelp->setWordWrap(true);
-    form->addRow(rewindHelp);
+    rewind->addRow(rewindHelp);
     rewindMemory->setToolTip(QStringLiteral(
-        "Лимит сохранённой истории. Рабочие буферы и прочая память эмулятора учитываются отдельно."));
-    layout->addLayout(form);
+        "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно."));
+
+    auto* controlsViewport = new QScrollArea(pages);
+    controlsViewport->setObjectName(QStringLiteral("controlsPageViewport"));
+    controlsViewport->setWidgetResizable(true);
+    controlsViewport->setFrameShape(QFrame::NoFrame);
+    pages->addWidget(controlsViewport);
+    ControlsPage* controls = nullptr;
+    connect(navigation, &QListWidget::currentRowChanged, &dialog,
+            [this, pages, controlsViewport, &controls](int row) {
+        if (pages->currentIndex() == 3 && row != 3 && controls)
+            controls->cancelCapture();
+        if (row == 3 && !controls) {
+            controls = new ControlsPage(*input_, controlsViewport);
+            controlsViewport->setWidget(controls);
+        }
+        pages->setCurrentIndex(row);
+    });
+    navigation->setCurrentRow(qBound(0, initialPage, 3));
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("ОК"));
     buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, navigation, &controls] {
+        if (!controls || controls->apply()) dialog.accept();
+        else navigation->setCurrentRow(3);
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, [&dialog, &controls] {
+        if (controls) controls->cancelCapture();
+        dialog.reject();
+    });
     layout->addWidget(buttons);
+
     if (dialog.exec() == QDialog::Accepted) {
-        if (rewindMemory->value() != memoryMiB) {
-            settings_.setValue(QStringLiteral("emulation/rewindMemoryMiB"), rewindMemory->value());
-            session_.setRewindMemoryMiB(rewindMemory->value());
-        }
         if ((screenshotFormat->currentIndex() == 1) != jpeg)
             settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
+        if (showOsd->isChecked() != osdEnabled) {
+            settings_.setValue(QStringLiteral("view/osd"), showOsd->isChecked());
+            view_->setOsdEnabled(showOsd->isChecked());
+        }
+        const int selectedSpeed = speed->currentData().toInt();
+        if (selectedSpeed != fastForwardFactor_) {
+            fastForwardFactor_ = selectedSpeed;
+            settings_.setValue(QStringLiteral("emulation/fastForwardFactor"), selectedSpeed);
+            session_.setFastForwardFactor(selectedSpeed);
+            view_->setFastForwardFactor(selectedSpeed);
+        }
+        if (checksum->isChecked() != fixChecksum) {
+            settings_.setValue(QStringLiteral("emulation/autoFixChecksum"), checksum->isChecked());
+            session_.setAutoFixChecksum(checksum->isChecked());
+        }
         const bool selectedFastCd = cdLoading->currentData().toBool();
         if (selectedFastCd != fastCd) {
             settings_.setValue(QStringLiteral("emulation/fastCdLoading"), selectedFastCd);
@@ -1090,6 +1170,21 @@ void MainWindow::editSettings() {
         if (selectedNoSpriteLimit != noSpriteLimit) {
             settings_.setValue(QStringLiteral("emulation/removeSpriteLimit"), selectedNoSpriteLimit);
             session_.setRemoveSpriteLimit(selectedNoSpriteLimit);
+        }
+        if (recordHistory->isChecked() != rewindEnabled_) {
+            rewindEnabled_ = recordHistory->isChecked();
+            settings_.setValue(QStringLiteral("emulation/rewindEnabled"), rewindEnabled_);
+            session_.setRewindEnabled(rewindEnabled_);
+            if (!rewindEnabled_) {
+                rewindHeld_ = rewindPadHeld_ = false;
+                rewindAction_->setChecked(false);
+            }
+            rewindAction_->setEnabled(session_.hasGame() && rewindEnabled_);
+            updateRewind();
+        }
+        if (rewindMemory->value() != memoryMiB) {
+            settings_.setValue(QStringLiteral("emulation/rewindMemoryMiB"), rewindMemory->value());
+            session_.setRewindMemoryMiB(rewindMemory->value());
         }
     }
     view_->setFocus();
@@ -1135,14 +1230,7 @@ void MainWindow::updateGunConfiguration() {
     }
 }
 
-void MainWindow::editControls() {
-    releaseInput();
-    input_->setEnabled(false);
-    ControlsDialog dialog(*input_, this);
-    dialog.exec();
-    updateInputEnabled();
-    view_->setFocus();
-}
+void MainWindow::editControls() { editSettings(3); }
 
 void MainWindow::releaseInput() {
     view_->setLightgunInputEnabled(false);

@@ -70,7 +70,7 @@ QSize ControllerDiagram::sizeHint() const {
 
 void ControllerDiagram::setProfile(ConsoleProfile profile) {
     if (profile_ == profile) {
-        // ControlsDialog also reapplies the profile when switching players.
+        // ControlsPage also reapplies the profile when switching players.
         // Clear the previous player's indicators without reloading the image.
         if (selectedTarget_ != -1 || pressedMask_) {
             selectedTarget_ = -1;

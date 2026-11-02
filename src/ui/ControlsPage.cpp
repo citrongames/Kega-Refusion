@@ -1,20 +1,16 @@
-#include "ControlsDialog.h"
+#include "ControlsPage.h"
 
 #include "ControllerDiagram.h"
 
-#include <QCloseEvent>
+#include <QHideEvent>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDialogButtonBox>
-#include <QFormLayout>
 #include <QGridLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QKeySequenceEdit>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -37,8 +33,8 @@ QString commandName(int command) {
     case FastForwardCommand: return QStringLiteral("Ускорение (удерживать)");
     case SaveCommand: return QStringLiteral("Сохранить состояние");
     case LoadCommand: return QStringLiteral("Загрузить состояние");
-    case ResetCommand: return QStringLiteral("Мягкий сброс");
-    case HardResetCommand: return QStringLiteral("Жёсткий сброс");
+    case ResetCommand: return QStringLiteral("Сброс");
+    case HardResetCommand: return QStringLiteral("Перезапуск питания");
     case FrameAdvanceCommand: return QStringLiteral("Следующий кадр");
     case FullscreenCommand: return QStringLiteral("Полный экран");
     case MuteCommand: return QStringLiteral("Без звука");
@@ -112,12 +108,8 @@ QString padName(const PlayerMapping& mapping, int target) {
 }
 }
 
-ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
-    : QDialog(parent), input_(input) {
-    setWindowTitle(QStringLiteral("Управление — Kega Refusion"));
-    setMinimumSize(860, 580);
-    resize(950, 660);
-    setSizeGripEnabled(true);
+ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
+    : QWidget(parent), input_(input) {
 
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setSpacing(9);
@@ -150,16 +142,16 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     scope->addWidget(profileBox_, 1, 0);
     scope->addWidget(new QLabel(QStringLiteral("Порт консоли"), this), 0, 1);
     scope->addWidget(playerBox_, 1, 1);
-    scope->addWidget(new QLabel(QStringLiteral("Источник ввода"), this), 0, 2);
-    scope->addWidget(deviceBox_, 1, 2);
-    scope->addWidget(new QLabel(QStringLiteral("Мёртвая зона"), this), 0, 3);
+    scope->addWidget(new QLabel(QStringLiteral("Источник ввода"), this), 2, 0);
+    scope->addWidget(deviceBox_, 3, 0);
+    scope->addWidget(new QLabel(QStringLiteral("Мёртвая зона"), this), 2, 1);
     auto* deadzoneRow = new QHBoxLayout;
     deadzoneRow->setContentsMargins(0, 0, 0, 0);
     deadzoneRow->addWidget(deadzoneSlider_);
     deadzoneRow->addWidget(deadzoneValue_);
-    scope->addLayout(deadzoneRow, 1, 3);
-    scope->setColumnStretch(2, 2);
-    scope->setColumnStretch(3, 1);
+    scope->addLayout(deadzoneRow, 3, 1);
+    scope->setColumnStretch(0, 1);
+    scope->setColumnStretch(1, 1);
     controllerTypeLabel_ = new QLabel(QStringLiteral("Тип геймпада"), this);
     controllerTypeBox_ = new QComboBox(this);
     controllerTypeBox_->setObjectName(QStringLiteral("controllerTypeBox"));
@@ -170,17 +162,17 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     controllerTypeRow->addWidget(controllerTypeLabel_);
     controllerTypeRow->addWidget(controllerTypeBox_);
     controllerTypeRow->addStretch(1);
-    scope->addLayout(controllerTypeRow, 2, 2, 1, 2);
+    scope->addLayout(controllerTypeRow, 5, 1);
     deviceTypeLabel_ = new QLabel(QStringLiteral("Контроллер"), this);
     deviceTypeBox_ = new QComboBox(this);
     deviceTypeBox_->setObjectName(QStringLiteral("deviceTypeBox"));
     deviceTypeBox_->setToolTip(QStringLiteral("Контроллер, который видит игра. «Нет» отключает порт, сохраняя назначения."));
-    scope->addWidget(deviceTypeLabel_, 2, 0);
-    scope->addWidget(deviceTypeBox_, 2, 1);
+    scope->addWidget(deviceTypeLabel_, 4, 0);
+    scope->addWidget(deviceTypeBox_, 5, 0);
     secondJustifierBox_ = new QCheckBox(QStringLiteral("Второй пистолет"), this);
     secondJustifierBox_->setObjectName(QStringLiteral("secondJustifierBox"));
     secondJustifierBox_->setToolTip(QStringLiteral("Второй Justifier в паре на порту 2; назначения настраиваются отдельно."));
-    scope->addWidget(secondJustifierBox_, 3, 0, 1, 2);
+    scope->addWidget(secondJustifierBox_, 6, 0);
     aimSourceLabel_ = new QLabel(QStringLiteral("Прицеливание"), this);
     aimSourceBox_ = new QComboBox(this);
     aimSourceBox_->setObjectName(QStringLiteral("aimSourceBox"));
@@ -190,15 +182,15 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     aimRow->addWidget(aimSourceLabel_);
     aimRow->addWidget(aimSourceBox_);
     aimRow->addStretch(1);
-    scope->addLayout(aimRow, 3, 2, 1, 2);
+    scope->addLayout(aimRow, 6, 1);
     showCrosshairBox_ = new QCheckBox(QStringLiteral("Показывать прицел"), this);
     showCrosshairBox_->setObjectName(QStringLiteral("showCrosshairBox"));
-    scope->addWidget(showCrosshairBox_, 4, 0, 1, 4);
+    scope->addWidget(showCrosshairBox_, 7, 0, 1, 2);
     aimHint_ = new QLabel(QStringLiteral(
         "Мышь доступна одному пистолету; для второго выберите левый стик. "
         "Прицелы: первый пистолет — голубой, второй — оранжевый."), this);
     aimHint_->setWordWrap(true);
-    scope->addWidget(aimHint_, 5, 0, 1, 4);
+    scope->addWidget(aimHint_, 8, 0, 1, 2);
     mainLayout->addLayout(scope);
 
     tabs_ = new QTabWidget(this);
@@ -272,12 +264,6 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
     feedback_->setWordWrap(true);
     feedback_->setMinimumHeight(25);
     mainLayout->addWidget(feedback_);
-
-    auto* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
-    buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("Сохранить"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
-    mainLayout->addWidget(buttons);
 
     connect(profileBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this] { stopCapture(); refreshContents(); });
@@ -356,16 +342,16 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
         }
     });
     connect(diagram_, &ControllerDiagram::targetClicked,
-            this, &ControlsDialog::selectTarget);
+            this, &ControlsPage::selectTarget);
     connect(assignButton_, &QPushButton::clicked, this, [this] {
         stopCapture();
         if (selectedTarget_ >= 0)
             beginCaptureFor(selectedTarget_);
     });
     connect(sequenceButton_, &QPushButton::clicked,
-            this, &ControlsDialog::startSequence);
+            this, &ControlsPage::startSequence);
     connect(skipButton_, &QPushButton::clicked,
-            this, &ControlsDialog::skipCapture);
+            this, &ControlsPage::skipCapture);
     connect(clearButton_, &QPushButton::clicked, this, [this] {
         if (selectedTarget_ < 0) return;
         stopCapture();
@@ -382,14 +368,8 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
         refreshContents();
         setFeedback(QStringLiteral("Настройки этого игрока и системы сброшены к исходным."));
     });
-    connect(buttons, &QDialogButtonBox::accepted, this, &ControlsDialog::save);
-    connect(buttons, &QDialogButtonBox::rejected, this, [this] {
-        stopCapture();
-        reject();
-    });
-
     connect(&input_, &InputManager::devicesChanged,
-            this, &ControlsDialog::refreshDevices);
+            this, &ControlsPage::refreshDevices);
     connect(&input_, &InputManager::captureReady, this, [this] {
         if (captureTarget_ < 0) return;
         const QString label = captureTarget_ < 16
@@ -399,9 +379,9 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
                                    "или отклоните ось. Esc — отмена.").arg(label));
     });
     connect(&input_, &InputManager::bindingCaptured,
-            this, &ControlsDialog::onCaptured);
+            this, &ControlsPage::onCaptured);
     connect(&input_, &InputManager::captureCancelled,
-            this, &ControlsDialog::onCaptureCancelled);
+            this, &ControlsPage::onCaptureCancelled);
     connect(&input_, &InputManager::previewChanged, this,
             [this](unsigned player, unsigned mask) {
                 if (int(player) == selectedPlayer() &&
@@ -420,31 +400,39 @@ ControlsDialog::ControlsDialog(InputManager& input, QWidget* parent)
         "«Авто» использует стандартную раскладку подключённого геймпада."));
 }
 
-ConsoleProfile ControlsDialog::selectedProfile() const {
+ControlsPage::~ControlsPage() {
+    stopCapture();
+}
+
+void ControlsPage::cancelCapture() {
+    stopCapture();
+}
+
+ConsoleProfile ControlsPage::selectedProfile() const {
     return static_cast<ConsoleProfile>(profileBox_->currentData().toInt());
 }
 
-int ControlsDialog::selectedPlayer() const {
+int ControlsPage::selectedPlayer() const {
     return playerBox_->currentData().toInt();
 }
 
-int ControlsDialog::draftKey() const {
+int ControlsPage::draftKey() const {
     return static_cast<int>(selectedProfile()) * 3 + selectedPlayer();
 }
 
-PlayerMapping& ControlsDialog::draft() {
+PlayerMapping& ControlsPage::draft() {
     const int key = draftKey();
     if (!drafts_.contains(key))
         drafts_.insert(key, input_.mapping(selectedProfile(), selectedPlayer()));
     return drafts_[key];
 }
 
-QVector<int> ControlsDialog::activeGameTargets() {
+QVector<int> ControlsPage::activeGameTargets() {
     const auto& mapping = draft();
     return InputManager::gameTargets(selectedProfile(), mapping.sixButton, mapping.controllerType);
 }
 
-void ControlsDialog::refreshPlayerChoices() {
+void ControlsPage::refreshPlayerChoices() {
     const int current = selectedPlayer();
     const int secondaryKey = int(selectedProfile()) * 3 + 2;
     const int parentKey = int(selectedProfile()) * 3 + 1;
@@ -462,7 +450,7 @@ void ControlsDialog::refreshPlayerChoices() {
     playerBox_->setCurrentIndex(playerBox_->findData(current == 2 && !pair ? 1 : current));
 }
 
-QString ControlsDialog::captureDeviceKey() {
+QString ControlsPage::captureDeviceKey() {
     const QString key = draft().deviceKey;
     if (key != QStringLiteral("auto"))
         return key;
@@ -501,7 +489,7 @@ QString ControlsDialog::captureDeviceKey() {
     return assigned[selectedPlayer()];
 }
 
-void ControlsDialog::refreshDevices() {
+void ControlsPage::refreshDevices() {
     if (!deviceBox_) return;
     const QString currentKey = draft().deviceKey;
     const QSignalBlocker blocker(deviceBox_);
@@ -528,7 +516,7 @@ void ControlsDialog::refreshDevices() {
     updateActionButtons();
 }
 
-void ControlsDialog::refreshContents() {
+void ControlsPage::refreshContents() {
     refreshing_ = true;
     refreshPlayerChoices();
     const PlayerMapping mapping = draft();
@@ -584,7 +572,7 @@ void ControlsDialog::refreshContents() {
     selectTarget(targets.isEmpty() ? -1 : targets.first());
 }
 
-void ControlsDialog::fillGameTable() {
+void ControlsPage::fillGameTable() {
     const QVector<int> targets = activeGameTargets();
     const PlayerMapping mapping = draft();
     gameTable_->clearContents();
@@ -595,6 +583,7 @@ void ControlsDialog::fillGameTable() {
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target, mapping.controllerType), target));
         auto* keyEdit = new PhysicalKeySequenceEdit(gameTable_);
+        keyEdit->installEventFilter(this);
         keyEdit->setToolTip(QStringLiteral("Клавиша по положению, независимо от раскладки. 0–9 — выбор слота; точка — следующий кадр."));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         keyEdit->setMaximumSequenceLength(1);
@@ -644,7 +633,7 @@ void ControlsDialog::fillGameTable() {
     }
 }
 
-void ControlsDialog::fillCommandTable() {
+void ControlsPage::fillCommandTable() {
     const PlayerMapping mapping = draft();
     commandTable_->clearContents();
     commandTable_->setRowCount(commands.size());
@@ -657,7 +646,7 @@ void ControlsDialog::fillCommandTable() {
     }
 }
 
-void ControlsDialog::selectTarget(int target) {
+void ControlsPage::selectTarget(int target) {
     selectedTarget_ = target;
     if (target >= 0 && target < 16)
         diagram_->setSelectedTarget(target);
@@ -675,7 +664,7 @@ void ControlsDialog::selectTarget(int target) {
     updateActionButtons();
 }
 
-void ControlsDialog::refreshPadCell(int target) {
+void ControlsPage::refreshPadCell(int target) {
     QTableWidget* table = target < 16 ? gameTable_ : commandTable_;
     for (int row = 0; row < table->rowCount(); ++row) {
         const auto* item = table->item(row, 0);
@@ -686,7 +675,7 @@ void ControlsDialog::refreshPadCell(int target) {
     }
 }
 
-void ControlsDialog::updateActionButtons() {
+void ControlsPage::updateActionButtons() {
     if (!assignButton_) return;
     const bool connected = draft().connected;
     deviceBox_->setEnabled(connected);
@@ -703,7 +692,7 @@ void ControlsDialog::updateActionButtons() {
     clearButton_->setEnabled(targetSelected);
 }
 
-void ControlsDialog::setFeedback(const QString& message, bool warning) {
+void ControlsPage::setFeedback(const QString& message, bool warning) {
     feedback_->setText(message);
     const QColor color = warning
         ? (palette().color(QPalette::Base).lightness() < 128
@@ -712,7 +701,7 @@ void ControlsDialog::setFeedback(const QString& message, bool warning) {
     feedback_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
 }
 
-void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence) {
+void ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
     if (refreshing_) return;
     int key = 0;
     const Qt::KeyboardModifiers modifiers =
@@ -751,7 +740,7 @@ void ControlsDialog::onKeyboardChanged(int target, const QKeySequence& sequence)
         : QStringLiteral("Клавиша очищена."));
 }
 
-void ControlsDialog::beginCaptureFor(int target) {
+void ControlsPage::beginCaptureFor(int target) {
     if (target < 16 && (!draft().connected || !activeGameTargets().contains(target))) return;
     if (draft().deviceKey == QStringLiteral("none")) {
         setFeedback(QStringLiteral("Сначала выберите устройство."), true);
@@ -781,7 +770,7 @@ void ControlsDialog::beginCaptureFor(int target) {
     updateActionButtons();
 }
 
-void ControlsDialog::startSequence() {
+void ControlsPage::startSequence() {
     stopCapture();
     sequence_ = tabs_->currentIndex() == 0
         ? activeGameTargets() : commands;
@@ -790,7 +779,7 @@ void ControlsDialog::startSequence() {
         beginCaptureFor(sequence_.first());
 }
 
-void ControlsDialog::advanceSequence() {
+void ControlsPage::advanceSequence() {
     if (sequence_.isEmpty()) return;
     ++sequenceIndex_;
     if (sequenceIndex_ >= sequence_.size()) {
@@ -803,7 +792,7 @@ void ControlsDialog::advanceSequence() {
     beginCaptureFor(sequence_[sequenceIndex_]);
 }
 
-void ControlsDialog::skipCapture() {
+void ControlsPage::skipCapture() {
     if (captureTarget_ < 0 || sequence_.isEmpty()) return;
     skipping_ = true;
     captureTarget_ = -1;
@@ -814,7 +803,7 @@ void ControlsDialog::skipCapture() {
     });
 }
 
-void ControlsDialog::stopCapture() {
+void ControlsPage::stopCapture() {
     captureTarget_ = -1;
     sequence_.clear();
     sequenceIndex_ = 0;
@@ -824,7 +813,7 @@ void ControlsDialog::stopCapture() {
     updateActionButtons();
 }
 
-void ControlsDialog::onCaptured(const PadBinding& binding) {
+void ControlsPage::onCaptured(const PadBinding& binding) {
     if (captureTarget_ < 0) return;
     const int target = captureTarget_;
     captureTarget_ = -1;
@@ -855,14 +844,14 @@ void ControlsDialog::onCaptured(const PadBinding& binding) {
             InputManager::bindingName(binding)));
         updateActionButtons();
     } else {
-        QTimer::singleShot(0, this, &ControlsDialog::advanceSequence);
+        QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
     }
 }
 
-void ControlsDialog::onCaptureCancelled() {
+void ControlsPage::onCaptureCancelled() {
     if (skipping_) {
         skipping_ = false;
-        QTimer::singleShot(0, this, &ControlsDialog::advanceSequence);
+        QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
         return;
     }
     if (captureTarget_ >= 0) {
@@ -873,7 +862,7 @@ void ControlsDialog::onCaptureCancelled() {
     }
 }
 
-bool ControlsDialog::validateDrafts() {
+bool ControlsPage::validateDrafts() {
     // Validate the physical ports and any chained Justifier together.
     for (int profile = 0; profile < 4; ++profile) {
         if (!dirty_.contains(profile * 3) && !dirty_.contains(profile * 3 + 1) &&
@@ -949,30 +938,43 @@ bool ControlsDialog::validateDrafts() {
     return true;
 }
 
-void ControlsDialog::save() {
+bool ControlsPage::apply() {
     if (captureTarget_ >= 0 || !sequence_.isEmpty() || input_.capturing()) {
         setFeedback(QStringLiteral("Завершите или отмените текущее назначение."), true);
-        return;
+        return false;
     }
     if (!validateDrafts())
-        return;
+        return false;
     for (int key : dirty_)
         input_.setMapping(static_cast<ConsoleProfile>(key / 3),
                           key % 3, drafts_[key]);
-    accept();
+    dirty_.clear();
+    return true;
 }
 
-void ControlsDialog::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Escape && captureTarget_ >= 0) {
+bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::KeyPress &&
+        (captureTarget_ >= 0 || !sequence_.isEmpty() || input_.capturing()) &&
+        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        stopCapture();
+        setFeedback(QStringLiteral("Назначение отменено."));
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ControlsPage::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape &&
+        (captureTarget_ >= 0 || !sequence_.isEmpty() || input_.capturing())) {
         stopCapture();
         setFeedback(QStringLiteral("Назначение отменено."));
         event->accept();
         return;
     }
-    QDialog::keyPressEvent(event);
+    QWidget::keyPressEvent(event);
 }
 
-void ControlsDialog::closeEvent(QCloseEvent* event) {
+void ControlsPage::hideEvent(QHideEvent* event) {
     stopCapture();
-    QDialog::closeEvent(event);
+    QWidget::hideEvent(event);
 }

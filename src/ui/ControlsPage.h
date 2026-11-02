@@ -2,12 +2,12 @@
 
 #include "../input/InputManager.h"
 
-#include <QDialog>
+#include <QWidget>
 #include <QMap>
 #include <QSet>
 #include <QVector>
 
-class QCloseEvent;
+class QHideEvent;
 class QCheckBox;
 class QComboBox;
 class QKeyEvent;
@@ -19,14 +19,18 @@ class QTableWidget;
 class QTabWidget;
 class ControllerDiagram;
 
-class ControlsDialog final : public QDialog {
+class ControlsPage final : public QWidget {
     Q_OBJECT
 public:
-    explicit ControlsDialog(InputManager& input, QWidget* parent = nullptr);
+    explicit ControlsPage(InputManager& input, QWidget* parent = nullptr);
+    ~ControlsPage() override;
+    bool apply();
+    void cancelCapture();
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
-    void closeEvent(QCloseEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     ConsoleProfile selectedProfile() const;
@@ -53,7 +57,6 @@ private:
     void onCaptured(const PadBinding& binding);
     void onCaptureCancelled();
     bool validateDrafts();
-    void save();
 
     InputManager& input_;
     QComboBox* profileBox_ = nullptr;

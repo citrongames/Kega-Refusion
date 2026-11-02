@@ -47,7 +47,7 @@ private:
     void editSegaCdBios();
     void editSega32xBios();
     void updateDiscMenu();
-    void editSettings();
+    void editSettings(int initialPage = 0);
     void editControls();
     void editCheats();
     void updateGunConfiguration();

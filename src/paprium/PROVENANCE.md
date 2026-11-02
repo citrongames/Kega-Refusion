@@ -47,7 +47,15 @@ remain approximations. This is not a cycle-accurate model of the
 DATENMEISTER hardware. Music playback uses the user's adjacent MP3
 soundtrack as a substitute for the undumped cartridge synthesizer.
 
-The Paprium board uses its full 8 MiB cartridge map. The generic Mega CD
-Mode 1 auto-detection is disabled for this board; the optional CPU MATE
-companion mode is not implemented. Music is streamed at the source MP3 rate
-(44.1 or 48 kHz stereo), with bounded PCM and tile buffers.
+CPU MATE uses GPX's existing Mega CD Mode 1 hardware when a regional user
+BIOS is present. The ROM uploads its own sub-68000 program and tables into
+emulated CD RAM; no replacement AI or firmware is bundled. The existing
+scheduler and shared communication registers execute that program. Without
+a BIOS the standalone cartridge path is retained. Combined CD/cartridge
+states reserve space for the cartridge HLE in addition to GPX's CD state;
+ordinary games retain their existing state size and identity.
+
+Paprium's HLE reset explicitly resets PSG/FM and clears audio resamplers,
+preventing a minigame PSG tone from surviving into the main game. Music is
+streamed at the source MP3 rate (44.1 or 48 kHz stereo), with bounded PCM
+and tile buffers.

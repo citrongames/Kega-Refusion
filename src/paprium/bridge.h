@@ -8,6 +8,8 @@
 typedef uint64_t (*paprium_music_callback)(void *, unsigned, uint64_t, int16_t *, size_t);
 void paprium_set_music_callback(paprium_music_callback callback, void *user);
 int paprium_active(void);
+int paprium_cd_active(void);
+size_t paprium_extra_state_size(void);
 void paprium_shutdown(void);
 void punchium_audio(int output_samples);
 #endif

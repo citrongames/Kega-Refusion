@@ -156,7 +156,7 @@
     libretro_supports_option_categories = false;
     libretro_supports_bitmasks          = false;
  
-@@ -4229,3 +4232,14 @@
+@@ -4229,3 +4232,19 @@
  }
  
  #undef  CHUNKSIZE
@@ -171,18 +171,21 @@
 +{
 +   return paprium_active();
 +}
---- a/core/loadrom.c
-+++ b/core/loadrom.c
-@@ -747,7 +747,11 @@
-   }
++
++RETRO_API int retro_kegarefusion_paprium_cd_active(void)
++{
++   return paprium_cd_active();
++}
+--- a/core/state.h
++++ b/core/state.h
+@@ -39,7 +39,9 @@
+ #ifndef _STATE_H_
+ #define _STATE_H_
  
-   /* 16-bit ROM cartridge (max. 8MB) with optional CD hardware add-on support enabled */
--  else if ((system_hw == SYSTEM_MD) && (cart.romsize <= 0x800000) && (config.add_on != HW_ADDON_NONE))
-+  /* Paprium is a full 8MB cartridge, despite its CD peripheral header bit. */
-+  else if ((system_hw == SYSTEM_MD) && (cart.romsize <= 0x800000) &&
-+           !((cart.romsize == 0x800000) &&
-+             (memcmp(rominfo.product, " T-574120-00", 12) == 0)) &&
-+           (config.add_on != HW_ADDON_NONE))
-   {
-     int len;
-     char fname[256];
+-#define STATE_SIZE    0xfd000
++#include "kegapaprium/bridge.h"
++/* Reserve cartridge state only when it is combined with CD hardware. */
++#define STATE_SIZE    (0xfd000u + paprium_extra_state_size())
+ #define STATE_VERSION "GENPLUS-GX 1.7.6"
+ 
+ #define load_param(param, size) \
