@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QIcon>
+#include <QLibraryInfo>
 #include <QKeyEvent>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -16,8 +17,48 @@
 #include <QOpenGLWidget>
 #include <atomic>
 #include <cstdio>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <vector>
+#endif
+
+namespace {
+QString executableDirectory() {
+#ifdef Q_OS_WIN
+    // Resolve the module itself, not argv[0] or the process working directory.
+    std::vector<wchar_t> buffer(MAX_PATH);
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), DWORD(buffer.size()));
+        if (length == 0) return {};
+        if (length < buffer.size())
+            return QFileInfo(QString::fromWCharArray(buffer.data(), int(length))).absolutePath();
+        if (buffer.size() >= 32768) return {};
+        buffer.resize(qMin<std::size_t>(buffer.size() * 2, 32768));
+    }
+#elif defined(Q_OS_LINUX)
+    const QString target = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
+    return target.isEmpty() ? QString() : QFileInfo(target).absolutePath();
+#else
+    return {};
+#endif
+}
+
+void configurePluginPaths() {
+    const QString directory = executableDirectory();
+    if (directory.isEmpty()) return;
+    QStringList paths;
+    const QString bundled = QDir(directory).filePath(QStringLiteral("plugins"));
+    if (QDir(bundled).exists()) paths.append(bundled);
+    const QString installed = QLibraryInfo::path(QLibraryInfo::PluginsPath);
+    if (!installed.isEmpty() && !paths.contains(installed)) paths.append(installed);
+    for (const QString& path : QCoreApplication::libraryPaths())
+        if (!paths.contains(path)) paths.append(path);
+    QCoreApplication::setLibraryPaths(paths);
+}
+}
 
 int main(int argc, char* argv[]) {
+    configurePluginPaths(); // The platform plugin loads in QApplication's constructor.
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Kega Refusion"));
     QApplication::setOrganizationName(QStringLiteral("Kega Refusion"));

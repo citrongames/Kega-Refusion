@@ -1,0 +1,259 @@
+#include "MovieSession.h"
+#include "LibretroHost.h"
+#include "VideoFrameGeometry.h"
+#include <QCryptographicHash>
+#include <QDataStream>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QSaveFile>
+#include <QtEndian>
+#include <cmath>
+#include <cstring>
+#include <utility>
+
+namespace {
+constexpr qsizetype MaxSnapshot = 32 * 1024 * 1024;
+constexpr qsizetype MaxPrefix = 72 * 1024 * 1024;
+constexpr qsizetype MaxPixels = 16 * 1024 * 1024;
+constexpr qsizetype MaxSlot = MaxSnapshot + MaxPrefix + MaxPixels + 256;
+QByteArray hash(const QByteArray& bytes) { return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256); }
+bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+        error = QStringLiteral("Не удалось создать папку сохранения мувика."); return false;
+    }
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+        error = QStringLiteral("Не удалось записать сохранение мувика: %1").arg(file.errorString()); return false;
+    }
+    return true;
+}
+// Failure recovery only: successful takeover keeps the current game/disc running.
+void restorePreviousSession(LibretroHost& host, const QByteArray& state,
+                            int disc, bool wasPrepared, QString& error) {
+    QString recovery;
+    bool restored = host.restoreMovieConfiguration(recovery);
+    if (restored && host.loaded() && host.isCd() && host.discIndex() != disc)
+        restored = host.selectDisc(disc, recovery);
+    // Reapply the original region/options/ROM patches before restoring its state.
+    if (restored && wasPrepared && host.loaded()) restored = host.hardReset(recovery);
+    if (restored) restored = host.restoreMovieState(state, recovery);
+    host.setMoviePlayback(false);
+    if (!restored) error += QStringLiteral("\nНе удалось восстановить прежнюю сессию: %1").arg(recovery);
+}
+void applyInput(LibretroHost& host, const MovieInput& input) {
+    if (input.commands & MovieTape::SoftReset) host.reset();
+    for (unsigned p = 0; p < 3; ++p) {
+        host.setButtons(p, input.buttons[p]);
+        const quint64 aim = input.aim[p];
+        host.setGunAim(p, qint16(aim & 0xffff), qint16((aim >> 16) & 0xffff), bool((aim >> 32) & 1));
+    }
+}
+}
+MovieSession::MovieSession(LibretroHost& host, QString dataPath)
+    : host_(host), dataPath_(std::move(dataPath)) {}
+
+bool MovieSession::startRecording(const QString& path, QString& error) {
+    if (active() || !host_.loaded()) { error = QStringLiteral("Сначала откройте игру и закончите текущий мувик."); return false; }
+    if (!host_.flushSaveRam(error)) return false;
+    const int previousDisc = host_.discIndex();
+    const auto previous = host_.captureMovieState();
+    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед началом мувика."); return false; }
+    host_.setMoviePlayback(true); // Movie editing must not write imported/rewound battery data to normal saves.
+    const auto config = host_.movieConfiguration();
+    if (!host_.prepareMovie(config, error)) {
+        restorePreviousSession(host_, previous, previousDisc, false, error);
+        return false;
+    }
+    const auto initial = host_.captureMovieState();
+    MovieTape candidate;
+    // Normalize the record start through exactly the same restoration path as replay.
+    if (initial.isEmpty() || !host_.restoreMovieState(initial, error) ||
+        !candidate.create(config, initial, error) ||
+        !candidate.setResumeState(initial, 0, error) || !candidate.save(path, error)) {
+        restorePreviousSession(host_, previous, previousDisc, true, error);
+        if (error.isEmpty()) error = QStringLiteral("Не удалось подготовить начальное состояние мувика.");
+        return false;
+    }
+    tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
+    cursor_ = 0; mode_ = Recording;
+    return true;
+}
+
+bool MovieSession::play(const QString& path, bool resumeRecording, QString& error) {
+    if (active() || !host_.loaded()) { error = QStringLiteral("Сначала откройте игру и закончите текущий мувик."); return false; }
+    MovieTape candidate;
+    if (!candidate.load(path, error)) return false;
+    if (resumeRecording && candidate.resumeState().isEmpty()) {
+        error = QStringLiteral("В этом мувике нет точки продолжения. Воспроизведите его и выберите запись с нужного места."); return false;
+    }
+    if (!host_.flushSaveRam(error)) return false;
+    const int previousDisc = host_.discIndex();
+    const auto previous = host_.captureMovieState();
+    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой мувика."); return false; }
+    host_.setMoviePlayback(true); // Preparing replay must not flush imported movie battery data.
+    const bool prepared = host_.prepareMovie(candidate.metadata(), error);
+    if (!prepared || !host_.restoreMovieState(
+            resumeRecording ? candidate.resumeState() : candidate.initialState(), error)) {
+        restorePreviousSession(host_, previous, previousDisc, prepared, error);
+        return false;
+    }
+    cursor_ = resumeRecording ? candidate.resumeFrame() : 0;
+    tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
+    mode_ = resumeRecording ? Recording : (tape_.size() ? Playback : Finished);
+    host_.setMoviePlayback(true);
+    return true;
+}
+
+bool MovieSession::rerecord(const QString& path, QString& error) {
+    if (!readOnly()) { error = QStringLiteral("Сначала включите воспроизведение мувика."); return false; }
+    if (QFileInfo(path).absoluteFilePath() == QFileInfo(path_).absoluteFilePath()) {
+        error = QStringLiteral("Выберите новое имя: исходный мувик останется без изменений."); return false;
+    }
+    MovieTape candidate = tape_;
+    if (!candidate.forkAt(cursor_, error) ||
+        !candidate.setResumeState(host_.captureMovieState(), cursor_, error) ||
+        !candidate.save(path, error)) return false;
+    tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
+    mode_ = Recording; host_.setMoviePlayback(true);
+    return true;
+}
+
+bool MovieSession::saveRecording(QString& error) {
+    if (!recording()) return true;
+    // A session ended after rewinding is a deliberate shorter final timeline.
+    if (!tape_.truncate(cursor_) ||
+        !tape_.setResumeState(host_.captureMovieState(), cursor_, error)) return false;
+    return tape_.save(path_, error);
+}
+bool MovieSession::finish(bool unload, QString& error) {
+    if (!saveRecording(error)) return false;
+    if (unload) host_.unload(); // Keep the read-only battery guard until after unloading.
+    if (active() && !host_.restoreMovieConfiguration(error)) return false;
+    host_.setMoviePlayback(false);
+    mode_ = Off; cursor_ = 0; path_.clear(); tape_.clear();
+    return true;
+}
+
+bool MovieSession::beforeFrame(const MovieInput& live, QString& error) {
+    if (mode_ == Off) { applyInput(host_, live); return true; }
+    if (mode_ == Finished) return false;
+    MovieInput input;
+    if (recording()) {
+        if (cursor_ < tape_.size()) tape_.truncate(cursor_);
+        if (!tape_.append(live, error)) return false;
+        input = live;
+    } else if (!tape_.inputAt(cursor_, input)) {
+        error = QStringLiteral("Мувик не содержит ожидаемый кадр."); return false;
+    }
+    applyInput(host_, input);
+    return true;
+}
+void MovieSession::afterFrame() {
+    if (!active() || mode_ == Finished) return;
+    ++cursor_;
+    if (mode_ == Playback && cursor_ == tape_.size()) mode_ = Finished;
+}
+QByteArray MovieSession::controllers() const {
+    return active() ? QJsonDocument(tape_.metadata().value(QStringLiteral("controllers")).toArray()).toJson(QJsonDocument::Compact) : QByteArray();
+}
+QString MovieSession::slotPath(int slot) const {
+    const QString name = QFileInfo(path_).completeBaseName();
+    // Readable movie name plus recording identity prevents same-named movies sharing slots.
+    return QDir(dataPath_).filePath(QStringLiteral("states/movies/%1_%2/slot%3.krs")
+        .arg(name, QString::fromLatin1(tape_.id().toHex())).arg(slot));
+}
+unsigned MovieSession::occupiedSlots() const {
+    unsigned result = 0;
+    if (active()) for (int i = 0; i < 10; ++i) if (QFileInfo::exists(slotPath(i))) result |= 1u << i;
+    return result;
+}
+
+bool MovieSession::saveSlot(int slot, QString& error) {
+    if (!active() || slot < 0 || slot > 9) { error = QStringLiteral("Нет активного мувика."); return false; }
+    const auto state = host_.captureMovieState();
+    const auto prefix = tape_.checkpoint(cursor_, error);
+    if (state.isEmpty() || state.size() > MaxSnapshot || prefix.isEmpty() || prefix.size() > MaxPrefix) {
+        if (error.isEmpty()) error = QStringLiteral("Состояние мувика слишком велико или недоступно.");
+        return false;
+    }
+    const auto frame = host_.frame().convertToFormat(QImage::Format_RGB32);
+    const auto native = VideoFrameGeometry::nativeSize(host_.frame());
+    if (frame.sizeInBytes() > MaxPixels) { error = QStringLiteral("Кадр мувика слишком велик."); return false; }
+    const auto pixels = frame.isNull() ? QByteArray() : qCompress(frame.constBits(), frame.sizeInBytes(), 1);
+    QByteArray payload;
+    QDataStream stream(&payload, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_6_0);
+    stream << quint32(state.size()) << quint32(prefix.size()) << quint32(pixels.size())
+           << qint32(frame.width()) << qint32(frame.height()) << qint32(native.width()) << qint32(native.height())
+           << host_.aspectRatio();
+    stream.writeRawData(state.constData(), state.size());
+    stream.writeRawData(prefix.constData(), prefix.size());
+    stream.writeRawData(pixels.constData(), pixels.size());
+    return atomicWrite(slotPath(slot), QByteArrayLiteral("KRMSLOT1") + hash(payload) + payload, error);
+}
+
+bool MovieSession::loadSlot(int slot, QImage& frame, double& aspect, bool& missing, QString& error) {
+    missing = false;
+    if (!active() || slot < 0 || slot > 9) { error = QStringLiteral("Нет активного мувика."); return false; }
+    QFile file(slotPath(slot));
+    if (!file.open(QIODevice::ReadOnly)) {
+        missing = !QFileInfo::exists(file.fileName());
+        error = missing ? QStringLiteral("Сохранение мувика в слоте %1 не найдено").arg(slot)
+                        : QStringLiteral("Не удалось прочитать сохранение мувика: %1").arg(file.errorString());
+        return false;
+    }
+    const auto bad = [&] { error = QStringLiteral("Сохранение мувика повреждено или несовместимо."); return false; };
+    if (file.size() < 76 || file.size() > MaxSlot) return bad();
+    const auto data = file.readAll();
+    if (data.size() != file.size() || data.left(8) != QByteArrayLiteral("KRMSLOT1") || data.mid(8,32) != hash(data.mid(40))) return bad();
+    const auto payload = data.mid(40);
+    QDataStream stream(payload); stream.setVersion(QDataStream::Qt_6_0);
+    quint32 stateSize = 0, prefixSize = 0, pixelSize = 0;
+    qint32 w = 0, h = 0, nw = 0, nh = 0; double ratio = 0;
+    stream >> stateSize >> prefixSize >> pixelSize >> w >> h >> nw >> nh >> ratio;
+    constexpr qsizetype header = 36;
+    if (stream.status() != QDataStream::Ok || !stateSize || stateSize > MaxSnapshot ||
+        !prefixSize || prefixSize > MaxPrefix || pixelSize > MaxPixels ||
+        quint64(header) + stateSize + prefixSize + pixelSize != quint64(payload.size()) ||
+        !std::isfinite(ratio) || ratio <= 0 || ratio > 16 || w < 0 || h < 0 ||
+        w > 4096 || h > 4096 || quint64(w)*h*4 > MaxPixels ||
+        ((w == 0 || h == 0) && (w != 0 || h != 0 || pixelSize != 0))) return bad();
+    QImage savedFrame;
+    if (pixelSize) {
+        const auto packed = payload.mid(header + stateSize + prefixSize, pixelSize);
+        if (packed.size() < 4 || qFromBigEndian<quint32>(packed.constData()) != quint64(w)*h*4) return bad();
+        const auto raw = qUncompress(packed);
+        if (quint64(raw.size()) != quint64(w)*h*4) return bad();
+        savedFrame = QImage(w,h,QImage::Format_RGB32);
+        if (savedFrame.isNull()) return bad();
+        std::memcpy(savedFrame.bits(), raw.constData(), size_t(raw.size()));
+        if (nw > 0 && nh > 0 && nw <= 4096 && nh <= 4096) VideoFrameGeometry::setNativeSize(savedFrame, QSize(nw,nh));
+    } else if (w || h) return bad();
+    MovieTape candidate = tape_;
+    quint64 target = 0;
+    if (!candidate.restoreCheckpoint(payload.mid(header + stateSize, prefixSize), target, readOnly(), error)) return false;
+    if (!host_.restoreMovieState(payload.mid(header,stateSize), error)) return false;
+    tape_ = std::move(candidate); cursor_ = target;
+    if (readOnly()) mode_ = cursor_ == tape_.size() ? Finished : Playback;
+    frame = savedFrame; aspect = ratio;
+    return true;
+}
+
+QByteArray MovieSession::captureRewind() const {
+    auto state = host_.captureMovieState(false);
+    if (state.isEmpty()) return {};
+    const auto cursor = qToBigEndian(cursor_);
+    state.append(reinterpret_cast<const char*>(&cursor), sizeof(cursor));
+    return state;
+}
+bool MovieSession::restoreRewind(const QByteArray& state, QString& error) {
+    if (!active() || state.size() < 8) return false;
+    const quint64 cursor = qFromBigEndian<quint64>(state.constData() + state.size() - 8);
+    if (cursor > tape_.size() || !host_.restoreMovieState(state.left(state.size()-8), error, true)) return false;
+    cursor_ = cursor;
+    if (readOnly()) mode_ = cursor == tape_.size() ? Finished : Playback;
+    return true;
+}

@@ -943,6 +943,18 @@ bool ControlsPage::validateDrafts() {
     return true;
 }
 
+void ControlsPage::setHardwareConfigurationLocked(bool locked) {
+    deviceTypeBox_->setEnabled(!locked);
+    controllerTypeBox_->setEnabled(!locked);
+    secondJustifierBox_->setEnabled(!locked);
+    const QString hint = locked
+        ? QStringLiteral("Тип и подключение контроллеров берутся из мувика до окончания записи или воспроизведения.")
+        : QString();
+    deviceTypeBox_->setToolTip(hint);
+    controllerTypeBox_->setToolTip(hint);
+    secondJustifierBox_->setToolTip(hint);
+}
+
 bool ControlsPage::apply() {
     if (captureTarget_ >= 0 || !sequence_.isEmpty() || input_.capturing()) {
         setFeedback(QStringLiteral("Завершите или отмените текущее назначение."), true);

@@ -132,7 +132,7 @@ def main() -> None:
         output = stage / relative
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, output)
-    (stage / "qt.conf").write_text("[Paths]\nPlugins = plugins\n", encoding="utf-8")
+    # Plugin search paths are configured by the executable before QApplication starts.
 
     notices = stage / "licenses"
     notices.mkdir()
@@ -167,6 +167,9 @@ def main() -> None:
             target = destination / source.relative_to(stage)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    generated_qt_conf = destination / "qt.conf"
+    if generated_qt_conf.is_file() and generated_qt_conf.read_bytes() == b"[Paths]\nPlugins = plugins\n":
+        generated_qt_conf.unlink()
     print(f"Packaged {len(sources)} binaries in {destination}")
     print("Existing saves, ROMs, and other files in the destination were retained.")
 

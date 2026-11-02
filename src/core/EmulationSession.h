@@ -42,6 +42,13 @@ public:
     void setControllerKind(unsigned player, ControllerType type);
     void setGunAim(unsigned player, int x, int y, bool offscreen);
     void advanceFrame();
+    void setFrameAdvanceHeld(bool held);
+    void startMovieRecording(const QString& path);
+    void playMovie(const QString& path);
+    void resumeMovieRecording(const QString& path);
+    void rerecordMovie(const QString& path);
+    void takeOverMovie();
+    void stopMovie();
     void setCheats(const CheatList& cheats);
     void releaseButtons();
     void setFastForward(bool enabled);
@@ -54,6 +61,8 @@ public:
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length);
+    void movieHardwareChanged(const QByteArray& controllersJson);
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
     void audioReset();
@@ -74,7 +83,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject };
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver };
     struct Command {
         Type type;
         QString path;
@@ -94,7 +103,7 @@ private:
     std::deque<Command> commands_;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
-    std::atomic<bool> rewindEnabled_{true};
+    std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false};
     std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
     std::atomic<unsigned> buttons_[3]{};
     std::atomic<quint64> gunPositions_[3]{{quint64(1)<<32},{quint64(1)<<32},{quint64(1)<<32}};

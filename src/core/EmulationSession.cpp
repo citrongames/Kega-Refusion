@@ -1,5 +1,6 @@
 #include "EmulationSession.h"
 #include "LibretroHost.h"
+#include "MovieSession.h"
 #include "RewindBuffer.h"
 #include "FramePacer.h"
 #include <QFileInfo>
@@ -48,6 +49,13 @@ void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) 
     gunPositions_[player].store(packed);
 }
 void EmulationSession::advanceFrame() { enqueue({Type::FrameAdvance,{}}); }
+void EmulationSession::setFrameAdvanceHeld(bool held) { frameAdvanceHeld_.store(held); }
+void EmulationSession::startMovieRecording(const QString& path) { enqueue({Type::MovieRecord,path}); }
+void EmulationSession::playMovie(const QString& path) { enqueue({Type::MoviePlay,path}); }
+void EmulationSession::resumeMovieRecording(const QString& path) { enqueue({Type::MovieResume,path}); }
+void EmulationSession::rerecordMovie(const QString& path) { enqueue({Type::MovieFork,path}); }
+void EmulationSession::takeOverMovie() { enqueue({Type::MovieTakeOver,{}}); }
+void EmulationSession::stopMovie() { enqueue({Type::MovieStop,{}}); }
 void EmulationSession::setCheats(const CheatList& cheats) {
     Command command{Type::Cheats,{}}; command.cheats = cheats; enqueue(std::move(command));
 }
@@ -94,12 +102,14 @@ void EmulationSession::run() {
     using Clock = std::chrono::steady_clock;
     LibretroHost host(corePath_,dataPath_);
     host.message = [this](const QString& message) { emit notification(message); };
-    auto syncInput = [&] {
-        for (unsigned player=0;player<3;++player) {
-            host.setButtons(player,buttons_[player].load());
-            const quint64 aim = gunPositions_[player].load();
-            host.setGunAim(player,int16_t(aim & 0xffff),int16_t((aim >> 16) & 0xffff),bool(aim >> 32));
+    MovieSession movie(host, dataPath_);
+    auto liveInput = [&] {
+        MovieInput input;
+        for (unsigned player = 0; player < 3; ++player) {
+            input.buttons[player] = quint16(buttons_[player].load());
+            input.aim[player] = gunPositions_[player].load();
         }
+        return input;
     };
     auto cheatStatus = [&] {
         emit cheatsChanged(host.cheats(),int(host.cheatPlatform()),host.cheatsSupported(),host.cheatSupportText());
@@ -139,14 +149,113 @@ void EmulationSession::run() {
     auto lastBatteryCheck = Clock::now();
     bool optionsPending = false, fastLatched = false;
     qint64 nextPresentationNs = 0;
+    qint64 nextMovieStatusNs = 0, nextHeldFrameNs = 0;
+    bool stepHeldLatched = false;
+    auto slotStatus = [&](int selected = -1) {
+        emit stateSlotsChanged(selected, movie.active() ? movie.occupiedSlots() : host.occupiedStateSlots());
+    };
+    auto movieStatus = [&](bool force = false) {
+        if (force || (movie.active() && nowNs() >= nextMovieStatusNs)) {
+            emit movieStatusChanged(int(movie.mode()), movie.path(), movie.position(), movie.length());
+            nextMovieStatusNs = nowNs() + 100000000;
+        }
+    };
+    auto movieBoundary = [&] {
+        emit movieHardwareChanged(movie.controllers());
+        movieStatus(true); slotStatus();
+        clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
+        frameAdvanceHeld_.store(false); stepHeldLatched = false;
+        pacer.reset(nowNs()); nextPresentationNs = 0;
+    };
+    auto beforeFrame = [&] {
+        QString error;
+        if (movie.beforeFrame(liveInput(), error)) return true;
+        paused = true; frameAdvanceHeld_.store(false);
+        clearAudio(); emit pausedChanged(true);
+        if (movie.recording() && !error.isEmpty()) {
+            QString saveError;
+            if (movie.finish(false,saveError)) {
+                movieBoundary();
+                error += QStringLiteral("\nЗаписанная часть мувика сохранена; игра оставлена на паузе.");
+            } else error += QStringLiteral("\n") + saveError;
+        }
+        if (!error.isEmpty()) emit errorOccurred(error);
+        return false;
+    };
+    auto afterFrame = [&] {
+        movie.afterFrame();
+        if (movie.mode() == MovieSession::Finished) {
+            paused = true; frameAdvanceHeld_.store(false);
+            clearAudio(); emit pausedChanged(true); movieStatus(true);
+            emit actionNotice(QStringLiteral("Мувик завершён"));
+        } else movieStatus();
+    };
+    auto captureHistory = [&] {
+        return movie.active() ? movie.captureRewind() : host.captureRewindState();
+    };
     while (!quitting_.load()) {
         std::deque<Command> pending;
         { std::lock_guard<std::mutex> lock(mutex_); pending.swap(commands_); }
         bool frameRequested = false;
         for (const auto& command : pending) {
             QString error;
+            if (movie.active()) {
+                // Recorded hardware/logic is fixed; pause, speed, input bindings and rewind remain live.
+                bool blocked = false;
+                switch (command.type) {
+                case Type::Port:
+                    blocked = host.controllerConnected(unsigned(command.value & 3)) != bool(command.value & 4);
+                    if (!blocked) continue;
+                    break;
+                case Type::ControllerType:
+                    blocked = host.controllerSixButton(unsigned(command.value & 3)) != bool(command.value & 4);
+                    if (!blocked) continue;
+                    break;
+                case Type::ControllerKind:
+                    blocked = host.controllerKind(unsigned(command.value & 3)) != ControllerType(command.value >> 2);
+                    if (!blocked) continue;
+                    break;
+                case Type::Reset: case Type::HardReset: case Type::Region: case Type::Filter:
+                case Type::CdLoading: case Type::SpriteLimit: case Type::Checksum: case Type::Cheats:
+                case Type::Disc: case Type::DiscIndex: case Type::Eject: blocked = true; break;
+                default: break;
+                }
+                if (blocked) {
+                    emit actionNotice(QStringLiteral("Сначала завершите мувик: параметры консоли зафиксированы в записи."));
+                    continue;
+                }
+            }
             switch (command.type) {
+            case Type::MovieRecord:
+            case Type::MoviePlay:
+            case Type::MovieResume:
+            case Type::MovieFork: {
+                const bool ok = command.type == Type::MovieRecord ? movie.startRecording(command.path,error)
+                    : command.type == Type::MovieFork ? movie.rerecord(command.path,error)
+                    : movie.play(command.path,command.type == Type::MovieResume,error);
+                loaded_.store(host.loaded());
+                if (!ok) {
+                    if (!host.loaded()) emit gameClosed();
+                    emit errorOccurred(error); break;
+                }
+                releaseButtons(); movieBoundary(); optionsPending = false;
+                paused = movie.mode() == MovieSession::Finished;
+                emit pausedChanged(paused);
+                break;
+            }
+            case Type::MovieStop:
+            case Type::MovieTakeOver:
+                if (movie.active()) {
+                    if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
+                    movieBoundary(); cheatStatus(); discStatus();
+                    if (command.type == Type::MovieTakeOver) { paused = false; emit pausedChanged(false); }
+                } else movieStatus(true); // Acknowledge stop after a failed pending start (window-close handshake).
+                break;
             case Type::Load:
+                if (movie.active()) {
+                    if (!movie.finish(true,error)) { emit errorOccurred(error); break; }
+                    movieBoundary();
+                }
                 if (host.load(command.path,error,command.value,
                               command.archiveEntry ? &*command.archiveEntry : nullptr)) {
                     loaded_.store(true); releaseButtons(); paused = false;
@@ -163,6 +272,10 @@ void EmulationSession::run() {
                 loaded_.store(host.loaded()); discStatus(); cheatStatus();
                 break;
             case Type::Close:
+                if (movie.active()) {
+                    if (!movie.finish(true,error)) { emit errorOccurred(error); break; }
+                    movieBoundary();
+                }
                 // Keep the running game intact if a changed battery save cannot be written.
                 if (host.loaded() && !host.flushSaveRam(error)) {
                     emit errorOccurred(error);
@@ -203,6 +316,10 @@ void EmulationSession::run() {
                 emit gameClosed();
                 break;
             case Type::FrameAdvance:
+                if (movie.mode() == MovieSession::Finished) {
+                    if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
+                    movieBoundary(); cheatStatus();
+                }
                 if (host.loaded() && paused && !backgroundPaused_.load() && !rewind_.load()) frameRequested = true;
                 break;
             case Type::Cheats: {
@@ -218,6 +335,10 @@ void EmulationSession::run() {
                 }
                 break;
             case Type::Pause:
+                if (!command.value && movie.mode() == MovieSession::Finished) {
+                    if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
+                    movieBoundary(); cheatStatus();
+                }
                 paused = command.value != 0;
                 clearAudio();
                 emit pausedChanged(paused);
@@ -297,26 +418,34 @@ void EmulationSession::run() {
                 } else emit errorOccurred(error);
                 break;
             case Type::Save:
-                if (host.saveState(command.value,error)) {
-                    emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                if (movie.active() ? movie.saveSlot(command.value,error) : host.saveState(command.value,error)) {
+                    slotStatus();
                     emit actionCompleted(QStringLiteral("Сохранено: слот %1").arg(command.value));
                 } else emit errorOccurred(error);
                 break;
             case Type::Restore: {
-                LibretroHost::StateLoadError failure;
-                if (host.loadState(command.value,error,&failure)) {
-                    clearHistory(); clearAudio();
-                    emit actionCompleted(QStringLiteral("Загружено: слот %1").arg(command.value));
-                    pacer.reset(nowNs());
-                } else if (failure == LibretroHost::StateLoadError::Missing) {
-                    emit actionNotice(error);
-                } else emit errorOccurred(error);
-                emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                if (movie.active()) {
+                    bool missing = false; QImage frame; double aspect = host.aspectRatio();
+                    if (movie.loadSlot(command.value,frame,aspect,missing,error)) {
+                        clearHistory(); clearAudio();
+                        if (!frame.isNull()) publishVideo(frame,aspect);
+                        movieStatus(true);
+                        emit actionCompleted(QStringLiteral("Загружено: слот %1").arg(command.value));
+                        pacer.reset(nowNs());
+                    } else emit actionNotice(error);
+                } else {
+                    LibretroHost::StateLoadError failure;
+                    if (host.loadState(command.value,error,&failure)) {
+                        clearHistory(); clearAudio();
+                        emit actionCompleted(QStringLiteral("Загружено: слот %1").arg(command.value));
+                        pacer.reset(nowNs());
+                    } else if (failure == LibretroHost::StateLoadError::Missing) emit actionNotice(error);
+                    else emit errorOccurred(error);
+                }
+                slotStatus();
                 break;
             }
-            case Type::Slots:
-                emit stateSlotsChanged(command.value,host.occupiedStateSlots());
-                break;
+            case Type::Slots: slotStatus(command.value); break;
             }
         }
         const bool requestedHistoryEnabled = rewindEnabled_.load();
@@ -350,8 +479,9 @@ void EmulationSession::run() {
             QImage frame;
             double aspect = 4.0 / 3.0;
             if (history.stepBack(state,frame,aspect)) {
-                if (host.restoreRewindState(state)) {
-                    captureFrame = 0; publishVideo(frame,aspect);
+                QString restoreError;
+                if (movie.active() ? movie.restoreRewind(state,restoreError) : host.restoreRewindState(state)) {
+                    captureFrame = 0; publishVideo(frame,aspect); movieStatus();
                 } else {
                     clearHistory(); historyHealthy = false;
                     emit errorOccurred(QStringLiteral("Ядро отклонило состояние перемотки. История очищена."));
@@ -378,13 +508,20 @@ void EmulationSession::run() {
             if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
             lastBatteryCheck = batteryNow;
         }
+        const bool stepHeld = frameAdvanceHeld_.load() && host.loaded() && paused && !background;
+        if (stepHeld && !stepHeldLatched) nextHeldFrameNs = nowNs() + 350000000;
+        if (stepHeld && stepHeldLatched && nowNs() >= nextHeldFrameNs) {
+            frameRequested = true; nextHeldFrameNs = nowNs() + 33333333;
+        }
+        stepHeldLatched = stepHeld;
         if (frameRequested && host.loaded() && paused && !background) {
-            syncInput();
+            if (!beforeFrame()) continue;
             host.runFrame(true,false); // Exactly one video frame; no burst of queued sound.
+            afterFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
             if (optionsPending) { optionsPending = false; clearHistory(); }
             if (historyEnabled && historyHealthy && ++captureFrame % 2 == 0 &&
-                !history.capture(host.captureRewindState(),host.frame(),host.aspectRatio())) {
+                !history.capture(captureHistory(),host.frame(),host.aspectRatio())) {
                 history.clear(); historyHealthy = false;
             }
             publishVideo(host.frame(),host.aspectRatio());
@@ -400,11 +537,13 @@ void EmulationSession::run() {
             if (fast) clearHistory();
         }
         const int factor = fast ? fastForwardFactor_.load() : 1;
-        const bool present = !fast || nowNs() >= nextPresentationNs;
-        syncInput();
+        const bool finalMovieFrame = movie.readOnly() && movie.position() + 1 >= movie.length();
+        const bool present = !fast || finalMovieFrame || nowNs() >= nextPresentationNs;
+        if (!beforeFrame()) continue;
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
         host.runFrame(!fast || present || optionsPending, !fast);
+        afterFrame();
         if (host.isCd() && host.discEjected() != lastDiscEjected) {
             clearHistory(); discStatus();
         }
@@ -412,7 +551,7 @@ void EmulationSession::run() {
             optionsPending = false; clearHistory(); clearAudio(); pacer.reset(nowNs());
         }
         if (!fast && historyEnabled && historyHealthy && ++captureFrame % 2 == 0) {
-            if (!history.capture(host.captureRewindState(),host.frame(),host.aspectRatio())) {
+            if (!history.capture(captureHistory(),host.frame(),host.aspectRatio())) {
                 history.clear(); historyHealthy = false;
                 emit notification(QStringLiteral("История перемотки недоступна для текущей игры."));
             }
@@ -421,13 +560,17 @@ void EmulationSession::run() {
             publishVideo(host.frame(),host.aspectRatio());
             nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
         }
-        if (!fast && !host.audio().isEmpty()) emit audioSamples(host.audio(),host.sampleRate());
+        if (!fast && !paused && !host.audio().isEmpty()) emit audioSamples(host.audio(),host.sampleRate());
         const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
             audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
         if (factor != 0) {
             const auto deadline = pacer.next(nowNs(),qint64(1000000000.0 * clockScale / (host.fps() * factor)));
             waiter.waitUntil(deadline);
         } else pacer.reset(nowNs());
+    }
+    QString movieError;
+    if (movie.active()) {
+        if (!movie.finish(true,movieError)) emit errorOccurred(movieError);
     }
     host.unload();
     loaded_.store(false);

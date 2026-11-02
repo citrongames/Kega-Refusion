@@ -25,6 +25,7 @@ public:
     explicit ControlsPage(InputManager& input, QWidget* parent = nullptr);
     ~ControlsPage() override;
     bool apply();
+    void setHardwareConfigurationLocked(bool locked);
     void cancelCapture();
 
 protected:

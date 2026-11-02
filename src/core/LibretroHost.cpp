@@ -5,9 +5,12 @@
 #include "Sega32xBios.h"
 #include "CoreFileSystem.h"
 #include <QCryptographicHash>
+#include <QByteArrayView>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonValue>
 #include <QSaveFile>
 #include <QtEndian>
 #include <cstring>
@@ -134,6 +137,7 @@ bool LibretroHost::initialize(QString& error) {
     QCryptographicHash coreHash(QCryptographicHash::Sha256);
     if (!coreHash.addData(&binary)) { error = QStringLiteral("Не удалось прочитать ядро."); return false; }
     coreHash_ = coreHash.result();
+    exactCoreHash_ = coreHash_;
     if (!library_.load()) { error = library_.errorString(); return false; }
 #define RESOLVE(name) api_->name = reinterpret_cast<decltype(api_->name)>(library_.resolve("retro_" #name)); \
     if (!api_->name) { error = QStringLiteral("Ядро не поддерживает retro_" #name); return false; }
@@ -511,7 +515,7 @@ void LibretroHost::unload() {
     controllerDevices_.fill(~0u);
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
-    batterySave_.clear(); cheats_.clear(); activeCheatCodes_.clear();
+    batterySave_.clear(); cheats_.clear(); movieCheats_.clear(); movieCheatsActive_ = false; activeCheatCodes_.clear();
 }
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
@@ -606,7 +610,7 @@ void LibretroHost::loadCheats() {
 void LibretroHost::applyCheats() {
     if (!cheatsSupported()) return;
     QList<QByteArray> codes;
-    for (const auto& entry : cheats_.entries()) if (entry.enabled) codes.append(entry.code.toLatin1());
+    for (const auto& entry : cheats()) if (entry.enabled) codes.append(entry.code.toLatin1());
     if (codes == activeCheatCodes_) return;
     clearCoreCheats();
     for (qsizetype i = 0; i < codes.size(); ++i) api_->cheat_set(unsigned(i),true,codes[i].constData());
@@ -620,6 +624,7 @@ bool LibretroHost::setCheats(const CheatList& entries, QString& error, bool* act
     if (activeChanged) *activeChanged = false;
     if (!cheatsSupported()) { error = cheatSupportText(); return false; }
     if (!cheats_.set(entries,error)) return false;
+    movieCheatsActive_ = false; movieCheats_.clear();
     const auto previous = activeCheatCodes_;
     applyCheats();
     if (activeChanged) *activeChanged = previous != activeCheatCodes_;
@@ -872,6 +877,355 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
     audio_.clear();
     return true;
 }
+QByteArray LibretroHost::captureMovieState(bool checksum) const {
+    const auto core = serialize();
+    if (core.isEmpty() || exactCoreHash_.size() != 32 || romHash_.size() != 32) return {};
+    std::array<const void*,4> memory{};
+    std::array<size_t,5> sizes{size_t(core.size()),saveMemorySizes_[0],saveMemorySizes_[1],0,0};
+    memory[0] = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    memory[1] = api_->get_memory_data(RETRO_MEMORY_RTC);
+    if ((sizes[1] && !memory[0]) || (sizes[2] && !memory[1])) return {};
+    quint32 bramMask = 0;
+    for (unsigned index = 0; index < 2; ++index) {
+        if (!api_->get_bram) break;
+        const void* data = nullptr; size_t size = 0; const char* path = nullptr;
+        if (!api_->get_bram(index,&data,&size,&path)) continue;
+        if (!data || !size || size > 1024 * 1024) return {};
+        memory[index+2] = data; sizes[index+3] = size; bramMask |= 1u << index;
+    }
+    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    if (cd && !(bramMask & 1u)) return {};
+    quint64 total = 128;
+    for (size_t size : sizes) total += size;
+    constexpr quint64 maxMovieStateSize = 128ull * 1024 * 1024;
+    if (total > maxMovieStateSize) return {};
+    QByteArray bytes("KRMOV001",8);
+    bytes += romHash_;
+    bytes += exactCoreHash_;
+    for (size_t size : sizes) {
+        const quint32 encoded = qToBigEndian(quint32(size));
+        bytes.append(reinterpret_cast<const char*>(&encoded),4);
+    }
+    const quint32 encodedMask = qToBigEndian(bramMask);
+    bytes.append(reinterpret_cast<const char*>(&encodedMask),4);
+    bytes.append(32,'\0'); // Filled after the payload is complete.
+    bytes += core;
+    for (unsigned index = 0; index < 4; ++index)
+        if (sizes[index+1]) bytes.append(static_cast<const char*>(memory[index]),qsizetype(sizes[index+1]));
+    if (checksum) {
+        QCryptographicHash payloadHash(QCryptographicHash::Sha256);
+        payloadHash.addData(QByteArrayView(bytes.constData()+128,bytes.size()-128));
+        bytes.replace(96,32,payloadHash.result());
+    }
+    return bytes;
+}
+bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bool trusted) {
+    error.clear();
+    constexpr quint64 maxMovieStateSize = 128ull * 1024 * 1024;
+    if (!loaded_ || state.size() < 128 || quint64(state.size()) > maxMovieStateSize ||
+        state.left(8) != "KRMOV001" || state.mid(8,32) != romHash_ ||
+        state.mid(40,32) != exactCoreHash_) {
+        error = QStringLiteral("Состояние фильма относится к другой игре или сборке ядра."); return false;
+    }
+    std::array<quint32,5> sizes{};
+    quint64 total = 128;
+    for (unsigned i = 0; i < sizes.size(); ++i) {
+        sizes[i] = qFromBigEndian<quint32>(state.constData()+72+4*i);
+        total += sizes[i];
+    }
+    const quint32 bramMask = qFromBigEndian<quint32>(state.constData()+92);
+    const bool hashValid = trusted
+        ? std::all_of(state.constData()+96,state.constData()+128,[](char byte) { return byte == 0; })
+        : [&state] {
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            hash.addData(QByteArrayView(state.constData()+128,state.size()-128));
+            return state.mid(96,32) == hash.result();
+        }();
+    if (total != quint64(state.size()) || bramMask > 3 ||
+        sizes[0] != api_->serialize_size() || sizes[1] != saveMemorySizes_[0] ||
+        sizes[2] != saveMemorySizes_[1] ||
+        (bool(bramMask & 1u) != bool(sizes[3])) ||
+        (bool(bramMask & 2u) != bool(sizes[4])) || !hashValid) {
+        error = QStringLiteral("Состояние фильма повреждено или несовместимо."); return false;
+    }
+    std::array<void*,4> memory{};
+    memory[0] = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    memory[1] = api_->get_memory_data(RETRO_MEMORY_RTC);
+    if ((sizes[1] && !memory[0]) || (sizes[2] && !memory[1])) {
+        error = QStringLiteral("Память сохранения фильма недоступна."); return false;
+    }
+    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    if (cd && !(bramMask & 1u)) {
+        error = QStringLiteral("В состоянии фильма отсутствует BRAM Sega CD."); return false;
+    }
+    for (unsigned index = 0; index < 2; ++index) {
+        const void* data = nullptr; size_t size = 0; const char* path = nullptr;
+        const bool present = api_->get_bram && api_->get_bram(index,&data,&size,&path);
+        if (present != bool(bramMask & (1u << index)) ||
+            (present && (!data || size != sizes[index+3]))) {
+            error = QStringLiteral("BRAM фильма несовместима с текущим ядром."); return false;
+        }
+        memory[index+2] = const_cast<void*>(data);
+    }
+    const auto previous = serialize();
+    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой фильма."); return false; }
+    if (!api_->unserialize(state.constData()+128,size_t(sizes[0]))) {
+        if (!unserialize(previous)) error = QStringLiteral("Ядро отклонило состояние фильма; восстановить прежнее состояние не удалось.");
+        else error = QStringLiteral("Ядро отклонило состояние фильма.");
+        return false;
+    }
+    applyControllerPorts();
+    // Native deserialization may rebuild memory regions; never use pointers
+    // obtained before it. A failed postcheck leaves battery bytes untouched.
+    memory[0] = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    memory[1] = api_->get_memory_data(RETRO_MEMORY_RTC);
+    bool memoryValid = (!sizes[1] || memory[0]) && (!sizes[2] || memory[1]);
+    for (unsigned index = 0; index < 2; ++index) {
+        const void* data = nullptr; size_t size = 0; const char* path = nullptr;
+        const bool present = api_->get_bram && api_->get_bram(index,&data,&size,&path);
+        memoryValid &= present == bool(bramMask & (1u << index)) &&
+            (!present || (data && size == sizes[index+3]));
+        memory[index+2] = const_cast<void*>(data);
+    }
+    if (!memoryValid) {
+        if (!unserialize(previous)) error = QStringLiteral("Память фильма изменилась; восстановить прежнее состояние не удалось.");
+        else error = QStringLiteral("Память фильма изменилась при загрузке состояния.");
+        return false;
+    }
+    qsizetype offset = 128 + sizes[0];
+    for (unsigned index = 0; index < 4; ++index) {
+        if (sizes[index+1]) std::memcpy(memory[index],state.constData()+offset,sizes[index+1]);
+        offset += sizes[index+1];
+    }
+    audio_.clear();
+    return true;
+}
+QByteArray LibretroHost::movieCoreIdentity() const { return loaded_ ? exactCoreHash_ : QByteArray(); }
+QByteArray LibretroHost::movieGameIdentity() const {
+    if (!loaded_) return {};
+    if (discs_.isEmpty()) return digest(QByteArrayLiteral("KRMOV-CART1") + content_);
+    // CD identity samples each source file at both ends. This is bounded even
+    // for multi-gigabyte CHDs; it is not a whole-disc cryptographic guarantee.
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    hash.addData(QByteArrayView("KRMOV-CD1", 9));
+    auto addNumber = [&hash](quint64 number) {
+        const quint64 encoded = qToBigEndian(number);
+        hash.addData(QByteArrayView(reinterpret_cast<const char*>(&encoded), sizeof(encoded)));
+    };
+    addNumber(quint64(discs_.size()));
+    for (const auto& disc : discs_) {
+        addNumber(quint64(disc.files.size()));
+        for (const auto& file : disc.files) {
+            QFile source(file.path);
+            if (!source.open(QIODevice::ReadOnly) || source.size() <= 0) return {};
+            const auto size = source.size();
+            addNumber(quint64(size));
+            constexpr qint64 sample = 64 * 1024;
+            const QByteArray first = source.read(std::min(size, sample));
+            if (first.size() != std::min(size, sample)) return {};
+            hash.addData(first);
+            if (size > sample) {
+                if (!source.seek(std::max(qint64(0), size - sample))) return {};
+                const QByteArray last = source.read(sample);
+                if (last.size() != sample) return {};
+                hash.addData(last);
+            }
+        }
+    }
+    return hash.result();
+}
+QJsonObject LibretroHost::movieBiosFingerprints() const {
+    QJsonObject result;
+    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    const bool x32 = api_->features && (api_->features() & 2u);
+    const auto fingerprint = [this,&result](const char* name, qint64 expectedSize) {
+        QFile source(dataPath_ + "/bios/" + QString::fromLatin1(name));
+        if (!source.open(QIODevice::ReadOnly)) {
+            result.insert(QLatin1String(name), QStringLiteral("missing")); return;
+        }
+        if (source.size() != expectedSize) {
+            result.insert(QLatin1String(name), QStringLiteral("invalid")); return;
+        }
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        if (!hash.addData(&source)) {
+            result.insert(QLatin1String(name), QStringLiteral("unreadable")); return;
+        }
+        result.insert(QLatin1String(name), QString::fromLatin1(hash.result().toHex()));
+    };
+    if (cd) for (const auto* name : {"bios_CD_J.bin", "bios_CD_U.bin", "bios_CD_E.bin"})
+        fingerprint(name, 131072);
+    if (x32) {
+        fingerprint("32X_G_BIOS.BIN", 256);
+        fingerprint("32X_M_BIOS.BIN", 2048);
+        fingerprint("32X_S_BIOS.BIN", 1024);
+    }
+    return result;
+}
+QJsonObject LibretroHost::movieConfiguration() const {
+    if (!loaded_) return {};
+    const auto game = movieGameIdentity();
+    if (game.size() != 32 || exactCoreHash_.size() != 32) return {};
+    QJsonObject options;
+    for (const auto& [key,value] : variables_)
+        options.insert(QString::fromUtf8(key), QString::fromUtf8(value));
+    QJsonArray controllers;
+    for (size_t i = 0; i < controllerKinds_.size(); ++i)
+        controllers.append(QJsonObject{{QStringLiteral("connected"), controllerConnected_[i]},
+            {QStringLiteral("sixButton"), controllerSixButton_[i]},
+            {QStringLiteral("kind"), int(controllerKinds_[i])}});
+    QJsonArray cheatsJson;
+    for (const auto& entry : cheats())
+        cheatsJson.append(QJsonObject{{QStringLiteral("code"),entry.code},
+            {QStringLiteral("description"),entry.description},{QStringLiteral("enabled"),entry.enabled}});
+    return QJsonObject{{QStringLiteral("version"),1},
+        {QStringLiteral("gameIdentity"),QString::fromLatin1(game.toHex())},
+        {QStringLiteral("coreIdentity"),QString::fromLatin1(exactCoreHash_.toHex())},
+        {QStringLiteral("options"),options},
+        {QStringLiteral("autoFixChecksum"),autoFixChecksum_},
+        {QStringLiteral("discIndex"),discIndex_},
+        {QStringLiteral("controllers"),controllers},
+        {QStringLiteral("cheats"),cheatsJson},
+        {QStringLiteral("bios"),movieBiosFingerprints()}};
+}
+bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error) {
+    error.clear();
+    if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
+    if (configuration.value(QStringLiteral("version")).toInt(-1) != 1 ||
+        !configuration.value(QStringLiteral("gameIdentity")).isString() ||
+        !configuration.value(QStringLiteral("coreIdentity")).isString() ||
+        !configuration.value(QStringLiteral("options")).isObject() ||
+        !configuration.value(QStringLiteral("autoFixChecksum")).isBool() ||
+        !configuration.value(QStringLiteral("discIndex")).isDouble() ||
+        !configuration.value(QStringLiteral("controllers")).isArray() ||
+        !configuration.value(QStringLiteral("cheats")).isArray() ||
+        !configuration.value(QStringLiteral("bios")).isObject()) {
+        error = QStringLiteral("Неверная конфигурация фильма."); return false;
+    }
+    const auto game = movieGameIdentity();
+    if (game.isEmpty() || configuration.value(QStringLiteral("gameIdentity")).toString() != QString::fromLatin1(game.toHex())) {
+        error = QStringLiteral("Фильм относится к другой игре или изменённому образу диска."); return false;
+    }
+    if (configuration.value(QStringLiteral("coreIdentity")).toString() != QString::fromLatin1(exactCoreHash_.toHex())) {
+        error = QStringLiteral("Фильм создан другой сборкой ядра."); return false;
+    }
+    if (configuration.value(QStringLiteral("bios")).toObject() != movieBiosFingerprints()) {
+        error = QStringLiteral("BIOS фильма отличаются от установленных."); return false;
+    }
+    const int recordedDisc = configuration.value(QStringLiteral("discIndex")).toInt(-1);
+    if (recordedDisc < 0 || (discs_.isEmpty() ? recordedDisc != 0 : recordedDisc >= discs_.size())) {
+        error = QStringLiteral("Номер диска фильма не совпадает с плейлистом."); return false;
+    }
+    if (!discs_.isEmpty()) {
+        if (!DiscMedia::unchanged(discs_[recordedDisc],error)) return false;
+        if (discs_[recordedDisc].needs32x && (!api_->features || !(api_->features() & 2u))) {
+            error = QStringLiteral("Для выбранного диска фильма требуется ядро CD32X."); return false;
+        }
+    }
+    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    if (cd && !api_->get_bram) {
+        error = QStringLiteral("Для фильма Sega CD требуется ядро с доступом к BRAM."); return false;
+    }
+    const auto options = configuration.value(QStringLiteral("options")).toObject();
+    if (options.size() != qsizetype(variables_.size())) {
+        error = QStringLiteral("Набор параметров ядра фильма не совпадает."); return false;
+    }
+    std::map<QByteArray,QByteArray> newOptions;
+    for (const auto& [key,current] : variables_) {
+        const QJsonValue entry = options.value(QString::fromUtf8(key));
+        const auto choices = variableValues_.find(key);
+        if (!entry.isString() || choices == variableValues_.end() ||
+            !choices->second.contains(entry.toString().toUtf8())) {
+            error = QStringLiteral("Параметр ядра фильма не поддерживается: %1.").arg(QString::fromUtf8(key)); return false;
+        }
+        newOptions.emplace(key, entry.toString().toUtf8());
+    }
+    const auto controllers = configuration.value(QStringLiteral("controllers")).toArray();
+    if (controllers.size() != 3) { error = QStringLiteral("Неверная конфигурация контроллеров фильма."); return false; }
+    std::array<bool,3> connected{}, sixButton{};
+    std::array<ControllerType,3> kinds{};
+    for (int i = 0; i < 3; ++i) {
+        const auto value = controllers[i];
+        const auto object = value.toObject();
+        const auto kindValue = object.value(QStringLiteral("kind"));
+        if (!value.isObject() || !object.value(QStringLiteral("connected")).isBool() ||
+            !object.value(QStringLiteral("sixButton")).isBool() || !kindValue.isDouble() ||
+            kindValue.toInt(-1) < 0 || kindValue.toInt(-1) > int(ControllerType::Justifier) ||
+            (i == 0 && kindValue.toInt() >= int(ControllerType::Menacer)) ||
+            (i == 2 && kindValue.toInt() != int(ControllerType::Pad) &&
+             kindValue.toInt() != int(ControllerType::Justifier))) {
+            error = QStringLiteral("Неверная конфигурация контроллеров фильма."); return false;
+        }
+        connected[size_t(i)] = object.value(QStringLiteral("connected")).toBool();
+        sixButton[size_t(i)] = object.value(QStringLiteral("sixButton")).toBool();
+        kinds[size_t(i)] = ControllerType(kindValue.toInt());
+    }
+    const auto cheatArray = configuration.value(QStringLiteral("cheats")).toArray();
+    if (cheatArray.size() > Cheats::MaxCodes) { error = QStringLiteral("Слишком много читов в фильме."); return false; }
+    CheatList decoded, normalized;
+    for (const auto& value : cheatArray) {
+        const auto object = value.toObject();
+        if (!value.isObject() || !object.value(QStringLiteral("code")).isString() ||
+            !object.value(QStringLiteral("description")).isString() ||
+            !object.value(QStringLiteral("enabled")).isBool()) {
+            error = QStringLiteral("Неверные читы фильма."); return false;
+        }
+        decoded.append({object.value(QStringLiteral("code")).toString(),
+            object.value(QStringLiteral("description")).toString(),
+            object.value(QStringLiteral("enabled")).toBool()});
+    }
+    if (!Cheats::normalize(decoded, cheatPlatform(), normalized, error)) return false;
+    if (normalized != decoded || (!cheatsSupported() &&
+        std::any_of(normalized.begin(),normalized.end(),[](const CheatEntry& entry) { return entry.enabled; }))) {
+        error = QStringLiteral("Читы фильма несовместимы с ядром."); return false;
+    }
+    // Every validation above precedes changes to live emulation. Keep movie
+    // cheats in memory so replay never rewrites the user's cheat file.
+    if (!movieConfigurationActive_) {
+        preMovieVariables_ = variables_;
+        preMovieOptionOverrides_ = optionOverrides_;
+        preMovieAutoFixChecksum_ = autoFixChecksum_;
+        preMovieControllerConnected_ = controllerConnected_;
+        preMovieControllerSixButton_ = controllerSixButton_;
+        preMovieControllerKinds_ = controllerKinds_;
+        movieConfigurationActive_ = true;
+    }
+    optionOverrides_ = newOptions;
+    for (const auto& [key,value] : newOptions) if (variables_[key] != value) {
+        variables_[key] = value; variablesUpdated_ = true;
+    }
+    autoFixChecksum_ = configuration.value(QStringLiteral("autoFixChecksum")).toBool();
+    controllerConnected_ = connected; controllerSixButton_ = sixButton; controllerKinds_ = kinds;
+    movieCheats_ = std::move(normalized); movieCheatsActive_ = true;
+    buttons_.fill(0); gunAim_.fill(GunAim{});
+    const int previousDisc = discIndex_;
+    if (recordedDisc != discIndex_) { discIndex_ = recordedDisc; setDiscIdentity(); }
+    if (hardReset(error)) return true;
+    // Preflight failures leave the original core running; undo the pending
+    // playlist selection so a caller can restore its previous movie state.
+    if (loaded_ && previousDisc != discIndex_) { discIndex_ = previousDisc; setDiscIdentity(); }
+    return false;
+}
+bool LibretroHost::restoreMovieConfiguration(QString& error) {
+    error.clear();
+    if (!movieConfigurationActive_) return true;
+    const bool optionChanged = variables_ != preMovieVariables_;
+    variables_ = std::move(preMovieVariables_);
+    optionOverrides_ = std::move(preMovieOptionOverrides_);
+    variablesUpdated_ |= optionChanged;
+    autoFixChecksum_ = preMovieAutoFixChecksum_;
+    controllerConnected_ = preMovieControllerConnected_;
+    controllerSixButton_ = preMovieControllerSixButton_;
+    controllerKinds_ = preMovieControllerKinds_;
+    movieCheats_.clear(); movieCheatsActive_ = false;
+    movieConfigurationActive_ = false;
+    buttons_.fill(0); gunAim_.fill(GunAim{});
+    if (loaded_) {
+        applyControllerPorts();
+        applyCheats();
+        if (!discs_.isEmpty()) setDiscIdentity();
+    }
+    return true;
+}
 QByteArray LibretroHost::stateCoreIdentity() const {
     // Ordinary MD/CD retain their stable GPX state identity. The attachment
     // has its own versioned state contract, independent of executable hashes.
@@ -931,10 +1285,11 @@ bool LibretroHost::pollSaveRam(qint64 nowMs, QString& error) {
 }
 bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
     error.clear();
-    if (!loaded_ || !saveRamWritable_) return true;
-    if (isCd()) {
-        if (!api_->get_bram) return true; // Unmodified cores retain their unload writer.
-        for (unsigned index = 0; index < 2; ++index) {
+    if (!loaded_ || !saveRamWritable_ || moviePlayback_) return true;
+    if (isCd() || (api_->paprium_cd_active && api_->paprium_cd_active())) {
+        // An unmodified CD core retains its own unload writer. Paprium is a
+        // cartridge and may also expose ordinary SRAM below.
+        if (api_->get_bram) for (unsigned index = 0; index < 2; ++index) {
             const void* data = nullptr; size_t size = 0; const char* rawPath = nullptr;
             if (!api_->get_bram(index, &data, &size, &rawPath)) continue;
             const QString path = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(rawPath)));
@@ -947,7 +1302,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
             if (!batterySave_.update(path, data, qsizetype(size), nowMs, force, false, error))
                 return false;
         }
-        return true;
+        if (isCd()) return true;
     }
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];

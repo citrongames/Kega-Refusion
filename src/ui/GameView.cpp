@@ -226,6 +226,7 @@ void GameView::clearGame() {
     setLightgunInputEnabled(false);
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
     notices_.clear(); stateSlots_.expiresAt = 0; osdTimer_.stop();
+    movieMode_ = 0; movieFrame_ = movieLength_ = 0;
     setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
     setFrame({}, 4.0 / 3.0);
     frameCount_ = 0;
@@ -320,6 +321,14 @@ void GameView::setRewindStatus(bool enabled) {
     repaintView();
 }
 
+void GameView::setMovieStatus(int mode, quint64 frame, quint64 length) {
+    if (movieMode_ == mode && movieFrame_ == frame && movieLength_ == length) return;
+    movieMode_ = mode;
+    movieFrame_ = frame;
+    movieLength_ = length;
+    if (osdEnabled_) repaintView();
+}
+
 void GameView::setRewindProgress(qint64 remainingMs, qint64 totalMs) {
     auto time = [](qint64 ms) {
         const qint64 tenths = qMax<qint64>(0, ms) / 100;
@@ -350,7 +359,8 @@ void GameView::expireOsd() {
 
 void GameView::paintOsd(QPainter& painter) {
     if (capturingGame_ || !osdEnabled_ || (notices_.isEmpty() && !stateSlots_.expiresAt &&
-                         !paused_ && !fastForward_ && !rewinding_ && !muted_)) return;
+                         !paused_ && !fastForward_ && !rewinding_ && !muted_ &&
+                         movieMode_ != 1 && movieMode_ != 2)) return;
     QFont osd(osdFamily_);
     osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);
     osd.setStyleStrategy(QFont::NoAntialias);
@@ -383,6 +393,13 @@ void GameView::paintOsd(QPainter& painter) {
     };
 
     int y = margin;
+    if (movieMode_ == 1)
+        y += drawPanel({QStringLiteral("ЗАПИСЬ МУВИКА"),
+                        QStringLiteral("КАДР %1").arg(movieFrame_)}, margin, y, true) + 4;
+    else if (movieMode_ == 2)
+        y += drawPanel({QStringLiteral("ВОСПРОИЗВЕДЕНИЕ МУВИКА"),
+                        QStringLiteral("КАДР %1 / %2").arg(movieFrame_).arg(movieLength_)},
+                       margin, y, true) + 4;
     if (paused_)
         y += drawPanel({QStringLiteral("ПАУЗА")}, margin, y, true) + 4;
     if (fastForward_)

@@ -1,5 +1,6 @@
 #pragma once
 #include "ControllerType.h"
+#include <QByteArray>
 #include <QObject>
 #include <QMap>
 #include <QSet>
@@ -51,6 +52,7 @@ public:
     static QString targetName(ConsoleProfile profile, int target,
                               ControllerType type = ControllerType::Pad);
     void setProfile(ConsoleProfile profile);
+    void setMovieControllers(const QByteArray& controllersJson);
     ConsoleProfile profile() const;
     bool isConnected(unsigned player) const;
     bool sixButton(unsigned player) const;

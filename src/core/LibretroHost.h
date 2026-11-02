@@ -1,6 +1,7 @@
 #pragma once
 #include <QByteArray>
 #include <QImage>
+#include <QJsonObject>
 #include <QLibrary>
 #include <QString>
 #include <QList>
@@ -43,7 +44,7 @@ public:
     bool setRemoveSpriteLimit(bool enabled, QString& error);
     // Applies to the core's ROM copy at load/power cycle, never to source bytes.
     bool setAutoFixChecksum(bool enabled, QString& error);
-    const CheatList& cheats() const { return cheats_.entries(); }
+    const CheatList& cheats() const { return movieCheatsActive_ ? movieCheats_ : cheats_.entries(); }
     Cheats::Platform cheatPlatform() const;
     bool cheatsSupported() const;
     QString cheatSupportText() const;
@@ -57,6 +58,16 @@ public:
     unsigned occupiedStateSlots() const;
     QByteArray captureRewindState() const;
     bool restoreRewindState(const QByteArray& state);
+    // Movie snapshots are independent of quick states and include every battery region.
+    QByteArray captureMovieState(bool checksum = true) const;
+    // trusted is only for snapshots retained inside RewindBuffer, never files.
+    bool restoreMovieState(const QByteArray& state, QString& error, bool trusted = false);
+    QJsonObject movieConfiguration() const;
+    bool prepareMovie(const QJsonObject& configuration, QString& error);
+    bool restoreMovieConfiguration(QString& error);
+    QByteArray movieGameIdentity() const;
+    QByteArray movieCoreIdentity() const;
+    void setMoviePlayback(bool playback) { moviePlayback_ = playback; }
     bool flushSaveRam(QString& error);
     bool pollSaveRam(qint64 nowMs, QString& error);
     void setButtons(unsigned port, unsigned mask);
@@ -67,6 +78,7 @@ public:
     bool setControllerSixButton(unsigned port, bool sixButton);
     bool controllerSixButton(unsigned port) const;
     bool setControllerKind(unsigned player, ControllerType type);
+    ControllerType controllerKind(unsigned player) const { return player < controllerKinds_.size() ? controllerKinds_[player] : ControllerType::Pad; }
     void setGunAim(unsigned player, int x, int y, bool offscreen);
     bool loaded() const { return loaded_; }
     double fps() const { return av_.timing.fps; }
@@ -80,6 +92,7 @@ public:
     std::function<void(const QString&)> message;
 private:
     QByteArray stateCoreIdentity() const;
+    QJsonObject movieBiosFingerprints() const;
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
@@ -109,7 +122,7 @@ private:
     QLibrary library_;
     std::unique_ptr<Api> api_;
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
-    QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_;
+    QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_, exactCoreHash_;
     QByteArray contentDirectory_, contentBaseName_, contentExtension_, archiveMember_;
     retro_game_info_ext contentInfo_{};
     retro_disk_control_callback disk_{};
@@ -132,6 +145,12 @@ private:
     BatterySave batterySave_;
     PapriumMusic papriumMusic_;
     Cheats::Store cheats_;
+    CheatList movieCheats_;
+    bool movieCheatsActive_ = false, moviePlayback_ = false, movieConfigurationActive_ = false;
+    std::map<QByteArray,QByteArray> preMovieVariables_, preMovieOptionOverrides_;
+    bool preMovieAutoFixChecksum_ = false;
+    std::array<bool,3> preMovieControllerConnected_{}, preMovieControllerSixButton_{};
+    std::array<ControllerType,3> preMovieControllerKinds_{};
     QList<QByteArray> activeCheatCodes_;
     retro_system_av_info av_{};
     retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;

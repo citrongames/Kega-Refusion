@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.9.2 LANGUAGES CXX)
+project(KegaRefusion VERSION 0.10.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -28,6 +28,8 @@ add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h
     src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
     src/core/Sega32xBios.cpp src/core/Sega32xBios.h
     src/core/RewindBuffer.cpp src/core/RewindBuffer.h
+    src/core/MovieTape.cpp src/core/MovieTape.h
+    src/core/MovieSession.cpp src/core/MovieSession.h
     src/core/FramePacer.cpp src/core/FramePacer.h
     src/core/BatterySave.cpp src/core/BatterySave.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
@@ -73,6 +75,11 @@ if(BUILD_TESTING)
     add_executable(archive_tests tests/archive_tests.cpp)
     target_link_libraries(archive_tests PRIVATE rom_archive kega_archive)
     add_test(NAME archive_tests COMMAND archive_tests)
+    add_executable(movie_integration_tests tests/movie_integration_tests.cpp)
+    target_link_libraries(movie_integration_tests PRIVATE core_host)
+    add_executable(movie_tape_tests tests/movie_tape_tests.cpp)
+    target_link_libraries(movie_tape_tests PRIVATE core_host)
+    add_test(NAME movie_tape_tests COMMAND movie_tape_tests)
     add_executable(input_tests tests/input_tests.cpp)
     target_link_libraries(input_tests PRIVATE input_backend)
     add_test(NAME input_tests COMMAND input_tests)
@@ -124,6 +131,7 @@ if(BUILD_TESTING)
     target_link_libraries(session_tests PRIVATE core_host Qt6::Core)
     set(KEGA_TEST_CORE "" CACHE FILEPATH "Genesis Plus GX libretro binary for integration tests")
     if(KEGA_TEST_CORE)
+        add_test(NAME movie_integration COMMAND movie_integration_tests "${KEGA_TEST_CORE}")
         add_test(NAME core_integration COMMAND core_integration_tests "${KEGA_TEST_CORE}")
         add_test(NAME session_tests COMMAND session_tests "${KEGA_TEST_CORE}")
     endif()
