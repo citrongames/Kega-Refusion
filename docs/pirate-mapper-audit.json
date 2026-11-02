@@ -252,6 +252,12 @@
         "core_preserves_checksum": true,
         "header_after": "0C44",
         "loses_exact_database_match": false
+      },
+      "hardware_identification_0_14_5": {
+        "rule": "protected_jiuji_last_register_f000",
+        "report": "pirate-identification-fixes.txt",
+        "boot_menu_300_frames": true,
+        "full_gameplay_verified": false
       }
     },
     {
@@ -4084,6 +4090,12 @@
         "core_preserves_checksum": false,
         "header_after": "6F41",
         "loses_exact_database_match": false
+      },
+      "hardware_identification_0_14_5": {
+        "rule": "verified_four_copy_poker_uses_existing_mapper",
+        "report": "pirate-identification-fixes.txt",
+        "boot_menu_300_frames": true,
+        "full_gameplay_verified": false
       }
     },
     {
@@ -4712,6 +4724,12 @@
         "core_preserves_checksum": true,
         "header_after": "0C44",
         "loses_exact_database_match": false
+      },
+      "hardware_identification_0_14_5": {
+        "rule": "patched_jiuji_last_register_0000_unchanged",
+        "report": "pirate-identification-fixes.txt",
+        "boot_menu_300_frames": false,
+        "full_gameplay_verified": false
       }
     },
     {

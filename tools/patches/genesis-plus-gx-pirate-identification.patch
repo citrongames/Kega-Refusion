@@ -1,0 +1,77 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -284,6 +284,32 @@
+   out[j] = 0;
+ }
+ 
++/* Recognize the verified four-copy Super Poker dump without trimming ROM or
++ * duplicating its hardware entry. Compare repeats in either byte order; only
++ * the small canonical fingerprint needs conversion on little-endian hosts. */
++static uint32 md_cart_prefix_crc(const uint8 *rom, int native_order)
++{
++  uint8 block[1024];
++  uint32 crc = 0;
++  unsigned int offset, i;
++  for (offset = 0; offset < 0x10000; offset += sizeof(block))
++  {
++    for (i = 0; i < sizeof(block); i++)
++      block[i] = native_order ? READ_BYTE(rom, offset + i) : rom[offset + i];
++    crc = crc32(crc, block, sizeof(block));
++  }
++  return crc;
++}
++
++static int md_cart_poker_overdump(const uint8 *rom, size_t size, int native_order)
++{
++  if ((size != 0x400000) || (md_cart_prefix_crc(rom, native_order) != 0xdd02797c))
++    return 0;
++  return !memcmp(rom, rom + 0x100000, 0x100000) &&
++         !memcmp(rom, rom + 0x200000, 0x100000) &&
++         !memcmp(rom, rom + 0x300000, 0x100000);
++}
++
+ int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum)
+ {
+   unsigned int i;
+@@ -295,6 +321,8 @@
+   header = (rom[0x18e] << 8) | rom[0x18f];
+   real = calculated_checksum & 0xffff;
+   if (header == real) return 1;
++  if ((header == 0xffff) && (real == 0x6f41) &&
++      md_cart_poker_overdump(rom, size, 0)) return 1;
+ 
+   /* This is the same table md_cart_init() searches, with the original key. */
+   for (i=0; i<(sizeof(rom_database)/sizeof(md_entry_t)); i++)
+@@ -590,17 +618,31 @@
+     cart.hw.regs[0] = (0x200000 & cart.mask) >> 16;
+   }
+ 
++  /* A verified repeated dump uses the existing one-copy hardware entry. */
++  uint16 hardware_checksum = rominfo.realchecksum;
++  if ((rominfo.checksum == 0xffff) && (hardware_checksum == 0x6f41) &&
++      md_cart_poker_overdump(cart.rom, cart.romsize, 1))
++    hardware_checksum = 0xd7b0;
++
+   /* search for game into database */
+   for (i=0; i<(sizeof(rom_database)/sizeof(md_entry_t)); i++)
+   {
+     /* known cart found ! */
+     if ((rominfo.checksum == rom_database[i].chk_1) &&
+-        (rominfo.realchecksum == rom_database[i].chk_2))
++        (hardware_checksum == rom_database[i].chk_2))
+     {
+       int j = rom_database[i].bank_start;
+ 
+       /* retrieve hardware information */
+       memcpy(&cart.hw, &(rom_database[i].cart_hw), sizeof(cart.hw));
++
++      /* Jiuji Mahjong II protected/unprotected dumps share both checksums.
++       * Only the verified original expects F000 from the last register;
++       * keep the existing zero response for the patched image. */
++      if ((rominfo.checksum == 0x0c44) && (hardware_checksum == 0xba81) &&
++          (cart.romsize == 0x100000) &&
++          (md_cart_prefix_crc(cart.rom, 1) == 0x12f4d88d))
++        cart.hw.regs[3] = 0xf0;
+ 
+       /* initialize memory handlers for $400000-$7FFFFF region */
+       while (j <= rom_database[i].bank_end)

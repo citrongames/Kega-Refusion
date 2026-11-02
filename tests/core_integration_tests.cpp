@@ -679,6 +679,29 @@ void testCoreOptionsAndReset(const QString& corePath) {
     require(readFile(save) == oversized, "hard reset overwrote rejected user SRAM");
 }
 
+void setPrefixCrc(QByteArray& rom, quint32 target) {
+    const auto crc=[&](){return quint32(crc32(0,reinterpret_cast<const Bytef*>(rom.constData()),0x10000));};
+    constexpr int fix=0xfffc;
+    for(int i=0;i<4;++i)rom[fix+i]=0;
+    const quint32 base=crc();quint32 basis[32]{}, combinations[32]{};
+    for(unsigned bit=0;bit<32;++bit){
+        rom[fix+int(bit/8)]=char(1u<<(bit%8));
+        quint32 value=crc()^base, combination=quint32(1)<<bit;
+        rom[fix+int(bit/8)]=0;
+        for(int pivot=31;pivot>=0;--pivot)if(value&(quint32(1)<<pivot)){
+            if(basis[pivot]){value^=basis[pivot];combination^=combinations[pivot];}
+            else{basis[pivot]=value;combinations[pivot]=combination;break;}
+        }
+    }
+    quint32 delta=target^base, solution=0;
+    for(int pivot=31;pivot>=0;--pivot)if(delta&(quint32(1)<<pivot)){
+        require(basis[pivot]!=0,"CRC fixup matrix is singular");
+        delta^=basis[pivot];solution^=combinations[pivot];
+    }
+    for(int i=0;i<4;++i)rom[fix+i]=char(solution>>(8*i));
+    require(crc()==target,"generated compatibility fingerprint is wrong");
+}
+
 // Original diagnostic ROM; a four-byte CRC fixup selects the same compatibility
 // rule as an identified cartridge without embedding any game code or data.
 QByteArray makeVmvBusRom(bool identified) {
@@ -700,26 +723,7 @@ QByteArray makeVmvBusRom(bool identified) {
     word(0x1039);word(0xa0);word(0x1000); // MOVE.B ZRAM,D0.
     word(0x13c0);word(0xff);word(0); // Store observed bus byte in work RAM.
     word(quint16(0x6000|((loop-(pc+2))&0xff)));
-    const auto crc=[&](){return quint32(crc32(0,reinterpret_cast<const Bytef*>(rom.constData()),0x10000));};
-    constexpr int fix=0xfffc;
-    for(int i=0;i<4;++i)rom[fix+i]=0;
-    const quint32 base=crc();quint32 basis[32]{}, combinations[32]{};
-    for(unsigned bit=0;bit<32;++bit){
-        rom[fix+int(bit/8)]=char(1u<<(bit%8));
-        quint32 value=crc()^base, combination=quint32(1)<<bit;
-        rom[fix+int(bit/8)]=0;
-        for(int pivot=31;pivot>=0;--pivot)if(value&(quint32(1)<<pivot)){
-            if(basis[pivot]){value^=basis[pivot];combination^=combinations[pivot];}
-            else{basis[pivot]=value;combinations[pivot]=combination;break;}
-        }
-    }
-    quint32 delta=0xe302585a^base, solution=0;
-    for(int pivot=31;pivot>=0;--pivot)if(delta&(quint32(1)<<pivot)){
-        require(basis[pivot]!=0,"CRC fixup matrix is singular");
-        delta^=basis[pivot];solution^=combinations[pivot];
-    }
-    for(int i=0;i<4;++i)rom[fix+i]=char(solution>>(8*i));
-    require(crc()==0xe302585a,"generated compatibility fingerprint is wrong");
+    setPrefixCrc(rom, 0xe302585a);
     if(!identified)rom[0xfff0]=char(quint8(rom[0xfff0])^1); // Same program, ordinary bus policy.
     return rom;
 }
@@ -747,6 +751,107 @@ void testVmvBusCompatibility(const QString& corePath) {
         host.runFrame();require(host.unserialize(state),"VMV state restore failed");check();
         host.reset();check();require(host.hardReset(error),"VMV power reset failed");check();
         require(readFile(path)==rom,"VMV fixture source was modified");
+    }
+}
+
+// Generated four-copy cartridge exercises the same detection gates and existing
+// protection handlers as Super Poker, without embedding game bytes.
+QByteArray makePokerRom(int variant) {
+    auto rom = makeTestRom(); rom.append(QByteArray(0x100000-rom.size(), char(0)));
+    putLong(rom,0x1a4,0x3fffff);
+    rom[0x18e]=rom[0x18f]=char(0xff);
+    int pc=0x200;
+    const auto word=[&](quint16 v){rom[pc++]=char(v>>8);rom[pc++]=char(v);};
+    for(int i=0;i<4;++i){
+        word(0x1039);word(0x40);word(quint16(i*2)); // MOVE.B protection,D0
+        word(0x13c0);word(0xff);word(quint16(i)); // MOVE.B D0,work RAM
+    }
+    word(0x60fe);
+    const auto sum=[&](int begin,int end){
+        quint32 result=0;
+        for(int i=begin;i<end;i+=2)result+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        return quint16(result);
+    };
+    const auto adjust=[&](int offset,quint16 delta){
+        const quint16 value=quint16((quint8(rom[offset])<<8)|quint8(rom[offset+1]))+delta;
+        rom[offset]=char(value>>8);rom[offset+1]=char(value);
+    };
+    // Full repeated checksum is 4 * body + 3 * header (mod 65536).
+    constexpr quint16 headerSum=quint16((0x6f41u-4u*0xd7b0u)*0xaaabu);
+    adjust(0x1f0,quint16(headerSum-sum(0,0x200)));
+    setPrefixCrc(rom,0xdd02797c);
+    adjust(0xffffe,quint16(0xd7b0-sum(0x200,rom.size())));
+    if(variant==2){ // Same sum and repeats, wrong prefix fingerprint.
+        adjust(0x8000,1);adjust(0x8002,quint16(-1));
+    }
+    const auto quarter=rom;rom+=quarter;rom+=quarter;rom+=quarter;
+    if(variant==1){ // Same checksum/prefix, but not identical repeated banks.
+        adjust(0x180000,1);adjust(0x180002,quint16(-1));
+    }
+    require(sum(0x200,rom.size())==0x6f41,"Poker diagnostic checksum mismatch");
+    return rom;
+}
+
+void testPokerOverdump(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"Poker temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"Poker core inspection failed");
+    using Memory=void* (*)(unsigned);
+    using Preserve=int (*)(const unsigned char*,size_t,unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    const auto preserve=reinterpret_cast<Preserve>(inspect.resolve("retro_kegarefusion_preserve_header_checksum"));
+    require(memory && preserve,"Poker core APIs missing");
+    for(int variant:{0,1,2}){
+        const auto rom=makePokerRom(variant);
+        require(bool(preserve(reinterpret_cast<const unsigned char*>(rom.constData()),size_t(rom.size()),0x6f41))==(variant==0),"Poker checksum guard scope mismatch");
+        const QString path=temp.path()+"/poker.md";writeFile(path,rom);
+        for(bool autofix:{false,true}){
+            require(host.setAutoFixChecksum(autofix,error) && host.load(path,error),"Poker load failed");
+            const auto check=[&](){
+                for(int i=0;i<2;++i)host.runFrame();
+                const auto* ram=static_cast<const unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+                require(ram,"Poker RAM missing");
+                const unsigned expected[4]={0x55,0x0f,0xaa,0xf0};bool match=true;
+                for(unsigned i=0;i<4;++i)match &= ram[i^(QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0)]==expected[i];
+                require(match==(variant==0),"Poker original protection missing or leaked");
+            };
+            check();
+            if(variant==0){
+                const auto state=host.serialize();require(!state.isEmpty() && host.unserialize(state),"Poker state restore failed");check();
+                host.reset();check();require(host.hardReset(error),"Poker power reset failed");check();
+            }
+            host.unload();
+        }
+        require(readFile(path)==rom,"Poker ROM modified");
+    }
+}
+
+void testJiujiProtection(const QString& corePath) {
+    QTemporaryDir temp;require(temp.isValid(),"Jiuji temp failed");
+    LibretroHost host(corePath,temp.path()+"/data");QString error;
+    QLibrary inspect(corePath);require(inspect.load(),"Jiuji core inspection failed");
+    using Memory=void* (*)(unsigned);
+    const auto memory=reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory,"Jiuji memory API missing");
+    for(bool original:{true,false}){
+        auto rom=makeTestRom();rom.append(QByteArray(0x100000-rom.size(),char(0)));
+        putLong(rom,0x1a4,quint32(rom.size()-1));
+        rom[0x18e]=0x0c;rom[0x18f]=0x44;
+        const auto program=QByteArray::fromHex("30390040000633c000ff000060fe");
+        std::memcpy(rom.data()+0x200,program.constData(),size_t(program.size()));
+        setPrefixCrc(rom,original?0x12f4d88d:0xd27b6ce1);
+        quint32 sum=0;
+        for(int i=0x200;i<rom.size();i+=2)sum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
+        const quint16 correction=quint16(0xba81-sum);
+        rom[0xffffe]=char(correction>>8);rom[0xfffff]=char(correction);
+        const QString path=temp.path()+"/jiuji.md";writeFile(path,rom);
+        require(host.setAutoFixChecksum(true,error) && host.load(path,error),"Jiuji load failed");
+        for(int i=0;i<2;++i)host.runFrame();
+        const auto* ram=static_cast<const unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+        require(ram,"Jiuji RAM missing");
+        const int hi=QSysInfo::ByteOrder==QSysInfo::LittleEndian?1:0;
+        require(ram[hi]==(original?0xf0:0) && ram[hi^1]==0,"Jiuji protection revisions confused");
+        host.unload();
     }
 }
 
@@ -1113,9 +1218,9 @@ int main(int argc, char** argv) {
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
-                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio"))) &&
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -1123,6 +1228,11 @@ int main(int argc, char** argv) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));
             std::puts("network OPLL snapshot process passed"); return 0;
+        }
+        if (mode == QLatin1String("--pirate-mappers")) {
+            testPokerOverdump(QString::fromLocal8Bit(argv[1]));
+            testJiujiProtection(QString::fromLocal8Bit(argv[1]));
+            std::puts("Poker recognition/negative controls/reset/state and Jiuji protected/patched distinction passed"); return 0;
         }
         if (mode == QLatin1String("--vmv-audio")) {
             testVmvBusCompatibility(QString::fromLocal8Bit(argv[1]));
@@ -1159,6 +1269,8 @@ int main(int argc, char** argv) {
         testArchiveCore(QString::fromLocal8Bit(argv[1]));
         testCoreOptionsAndReset(QString::fromLocal8Bit(argv[1]));
         testChecksumFix(QString::fromLocal8Bit(argv[1]));
+        testPokerOverdump(QString::fromLocal8Bit(argv[1]));
+        testJiujiProtection(QString::fromLocal8Bit(argv[1]));
         testVmvBusCompatibility(QString::fromLocal8Bit(argv[1]));
         testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
         std::puts("core integration tests passed");
