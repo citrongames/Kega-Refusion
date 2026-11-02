@@ -1,0 +1,110 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3657,7 +3657,12 @@
+ static bool kegarefusion_load_32x(const char *dir, const char *extension)
+ {
+    uint8_t g[256], m[2048], s[1024];
+-   if (memcmp(rominfo.consoletype, "SEGA 32X", 8) != 0 && strcasecmp(extension, "32x") != 0)
++   struct retro_variable attachment = { "genesis_plus_gx_32x_add_on", NULL };
++   bool forced;
++   environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &attachment);
++   forced = attachment.value && !strcmp(attachment.value, "connected") &&
++      ((system_hw == SYSTEM_MD) || (system_hw == SYSTEM_MCD));
++   if (!forced && memcmp(rominfo.consoletype, "SEGA 32X", 8) != 0 && strcasecmp(extension, "32x") != 0)
+       return true;
+    if (!kegarefusion_read_32x_bios(dir, "32X_G_BIOS.BIN", g, sizeof(g)) ||
+        !kegarefusion_read_32x_bios(dir, "32X_M_BIOS.BIN", m, sizeof(m)) ||
+@@ -4143,8 +4148,17 @@
+ 
+ extern void sound_update_fm_function_pointers(void);
+ 
+-void retro_run(void) 
+-{
++/* Diagnostic flag observes actual emulated port reads, never frontend polling.
++ * It is not machine state and has no effect on input recordings. */
++extern unsigned int kegarefusion_input_polled;
++RETRO_API bool retro_kegarefusion_input_polled(void)
++{
++   return kegarefusion_input_polled != 0;
++}
++
++void retro_run(void)
++{
++   kegarefusion_input_polled = 0;
+    bool okay = false;
+    int result = -1;
+    int do_skip = 0;
+--- a/core/io_ctrl.c
++++ b/core/io_ctrl.c
+@@ -448,8 +448,15 @@
+   }
+ }
+ 
++#ifdef KEGAREFUSION_32X
++unsigned int kegarefusion_input_polled;
++#endif
++
+ unsigned int io_68k_read(unsigned int offset)
+ {
++#ifdef KEGAREFUSION_32X
++  if (offset == 1 || offset == 2) kegarefusion_input_polled = 1;
++#endif
+   switch(offset)
+   {
+     case 0x01:  /* Port A Data */
+@@ -536,6 +543,9 @@
+ 
+ unsigned int io_z80_read(unsigned int offset)
+ {
++#ifdef KEGAREFUSION_32X
++  kegarefusion_input_polled = 1;
++#endif
+   /* Read port A & port B input data */
+   unsigned int data = (port[0].data_r()) | (port[1].data_r() << 8);
+ 
+@@ -648,6 +658,9 @@
+ 
+ unsigned int io_gg_read(unsigned int offset)
+ {
++#ifdef KEGAREFUSION_32X
++  if (offset == 0) kegarefusion_input_polled = 1;
++#endif
+   switch (offset)
+   {
+     case 0: /* Mode Register */
+--- a/libretro/libretro_core_options.h
++++ b/libretro/libretro_core_options.h
+@@ -207,6 +207,20 @@
+          { NULL, NULL },
+       },
+       "4meg"
++   },
++   {
++      "genesis_plus_gx_32x_add_on",
++      "32X attachment",
++      NULL,
++      "Attach 32X to ordinary Mega Drive/CD games. Required 32X software attaches automatically.",
++      NULL,
++      "system",
++      {
++         { "auto", "Automatic" },
++         { "connected", "Connected" },
++         { NULL, NULL },
++      },
++      "auto"
+    },
+    {
+       "genesis_plus_gx_add_on",
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -798,6 +798,10 @@
+       {
+         /* unmount any loaded CD image */
+         cdd_unload();
++#ifdef KEGAREFUSION_32X
++        /* Explicit attachment must not silently start with missing hardware. */
++        if (config.add_on == HW_ADDON_MEGACD) return 0;
++#endif
+       }
+     }
+ 

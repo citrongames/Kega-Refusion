@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "LibretroHost.h"
 #include <QSysInfo>
 #include <rc_hash.h>
@@ -39,6 +40,7 @@ struct LibretroHost::Api {
     const char* (*recording_abi)() = nullptr;
     unsigned (*features)() = nullptr;
     unsigned (*system_hw)() = nullptr;
+    bool (*input_polled)() = nullptr;
     bool (*get_cd_header)(void*, size_t) = nullptr;
     void (*invalidate_code)() = nullptr;
     using PapriumMusicCallback = std::uint64_t (*)(void*, unsigned, std::uint64_t,
@@ -97,7 +99,7 @@ QString readableSaveStem(QString fileName) {
 bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        error = QStringLiteral("Не удалось сохранить %1: %2").arg(path, file.errorString());
+        error = Localization::text(QStringLiteral("Не удалось сохранить %1: %2")).arg(path, file.errorString());
         return false;
     }
     return true;
@@ -131,19 +133,19 @@ std::uint64_t LibretroHost::papriumMusicRead(void* user, unsigned track,
 bool LibretroHost::initialize(QString& error) {
     if (initialized_) return true;
     if (active_ && active_ != this) {
-        error = QStringLiteral("В одном потоке может работать только одно ядро."); return false;
+        error = Localization::text(QStringLiteral("В одном потоке может работать только одно ядро.")); return false;
     }
     for (const auto& name : {"bios", "saves", "states"}) {
         if (!QDir().mkpath(dataPath_ + '/' + name)) {
-            error = QStringLiteral("Нет доступа для записи в каталог данных: %1").arg(dataPath_); return false;
+            error = Localization::text(QStringLiteral("Нет доступа для записи в каталог данных: %1")).arg(dataPath_); return false;
         }
     }
     QFile binary(library_.fileName());
     if (!binary.open(QIODevice::ReadOnly)) {
-        error = QStringLiteral("Не найдено ядро: %1").arg(library_.fileName()); return false;
+        error = Localization::text(QStringLiteral("Не найдено ядро: %1")).arg(library_.fileName()); return false;
     }
     QCryptographicHash coreHash(QCryptographicHash::Sha256);
-    if (!coreHash.addData(&binary)) { error = QStringLiteral("Не удалось прочитать ядро."); return false; }
+    if (!coreHash.addData(&binary)) { error = Localization::text(QStringLiteral("Не удалось прочитать ядро.")); return false; }
     coreHash_ = coreHash.result();
     exactCoreHash_ = coreHash_;
     if (!library_.load()) { error = library_.errorString(); return false; }
@@ -156,6 +158,7 @@ bool LibretroHost::initialize(QString& error) {
     RESOLVE(unserialize); RESOLVE(get_memory_data); RESOLVE(get_memory_size);
 #undef RESOLVE
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
+    api_->input_polled = reinterpret_cast<decltype(api_->input_polled)>(library_.resolve("retro_kegarefusion_input_polled"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
     api_->get_cd_header = reinterpret_cast<decltype(api_->get_cd_header)>(library_.resolve("retro_kegarefusion_cd_header"));
     api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
@@ -191,10 +194,10 @@ bool LibretroHost::initialize(QString& error) {
         api_->get_bram = nullptr;
         api_->manage_bram = nullptr;
     }
-    if (api_->api_version() != RETRO_API_VERSION) { error = QStringLiteral("Несовместимая версия API ядра."); return false; }
+    if (api_->api_version() != RETRO_API_VERSION) { error = Localization::text(QStringLiteral("Несовместимая версия API ядра.")); return false; }
     LibretroHost* expected = nullptr;
     if (!coreOwner.compare_exchange_strong(expected, this)) {
-        error = QStringLiteral("В приложении уже работает экземпляр ядра."); return false;
+        error = Localization::text(QStringLiteral("В приложении уже работает экземпляр ядра.")); return false;
     }
     active_ = this;
     systemPath_ = QDir::toNativeSeparators(dataPath_ + "/bios").toUtf8();
@@ -231,7 +234,7 @@ bool LibretroHost::checkDiscBios(const DiscImage& image, QString& error) const {
     // CHD's compressed header is decoded by the core. At least one installed
     // BIOS is needed; a failed core load reports the available region statuses.
     for (int candidate : {1,2,3}) if (SegaCdBios::validate(dataPath_,candidate,error)) { error.clear(); return true; }
-    error = QStringLiteral("Не найден BIOS Sega CD. Импортируйте BIOS через Настройки → Настройки эмулятора… → BIOS → Sega CD.");
+    error = Localization::text(QStringLiteral("Не найден BIOS Sega CD. Импортируйте BIOS через Настройки → Настройки эмулятора… → BIOS → Sega CD."));
     return false;
 }
 void LibretroHost::setDiscIdentity() {
@@ -269,13 +272,13 @@ bool LibretroHost::registerDiscs(QString& error) {
     if (!disk_.get_num_images || !disk_.set_eject_state || !disk_.get_eject_state ||
         !disk_.set_image_index || !disk_.replace_image_index || !disk_.add_image_index ||
         !disk_.get_num_images()) {
-        error = QStringLiteral("Ядро не распознало образ Sega CD."); return false;
+        error = Localization::text(QStringLiteral("Ядро не распознало образ Sega CD.")); return false;
     }
     CoreFileSystem::clearError();
-    if (!disk_.set_eject_state(true)) { error = QStringLiteral("Не удалось открыть привод."); return false; }
+    if (!disk_.set_eject_state(true)) { error = Localization::text(QStringLiteral("Не удалось открыть привод.")); return false; }
     for (int i = 0; i < discs_.size(); ++i) {
         if (unsigned(i) >= disk_.get_num_images() && !disk_.add_image_index()) {
-            error = QStringLiteral("Не удалось добавить диск."); return false;
+            error = Localization::text(QStringLiteral("Не удалось добавить диск.")); return false;
         }
         // A freshly loaded disc 0 is already mounted. Replacing/selecting it
         // again would reopen every audio track and repeat MP3 indexing.
@@ -283,11 +286,11 @@ bool LibretroHost::registerDiscs(QString& error) {
         const auto path = QDir::toNativeSeparators(discs_[i].runtimePath).toUtf8();
         retro_game_info game{}; game.path = path.constData();
         if (!disk_.replace_image_index(unsigned(i),&game)) {
-            error = QStringLiteral("Не удалось подключить диск: %1").arg(discs_[i].path); return false;
+            error = Localization::text(QStringLiteral("Не удалось подключить диск: %1")).arg(discs_[i].path); return false;
         }
     }
     if ((discIndex_ != 0 && !disk_.set_image_index(unsigned(discIndex_))) || !disk_.set_eject_state(false)) {
-        error = QStringLiteral("Не удалось закрыть привод Sega CD."); return false;
+        error = Localization::text(QStringLiteral("Не удалось закрыть привод Sega CD.")); return false;
     }
     if (!CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); return false; }
     return true;
@@ -297,13 +300,13 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (!DiscMedia::read(path,images,error) || !checkDiscBios(images.first(),error)) return false;
     if (!initialize(error)) return false;
     const bool needs32x = images.first().needs32x;
-    if (needs32x) {
+    if (needs32x || attach32x_) {
         if (!api_->features || !(api_->features() & 1u)) {
-            error = QStringLiteral("Этот диск требует CD32X, но загруженное ядро не поддерживает 32X.");
+            error = Localization::text(QStringLiteral("Этот диск требует CD32X, но загруженное ядро не поддерживает 32X."));
             return false;
         }
         if (!Sega32xBios::validate(dataPath_, error)) {
-            error.prepend(QStringLiteral("Для этого диска CD32X нужны три BIOS 32X.\n"));
+            error.prepend(Localization::text(QStringLiteral("Для этого диска CD32X нужны три BIOS 32X.\n")));
             return false;
         }
     }
@@ -315,10 +318,11 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     setDiscIdentity();
     retro_game_info game{}; game.path = encodedGamePath_.constData();
     contentInfoActive_ = true;
+    if (!applyExpansionDevices(error)) { contentInfoActive_ = false; return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) {
-        error = QStringLiteral("Не удалось загрузить Sega CD. Проверьте образ, дорожки и BIOS региона.\n%1\n%2\n%3")
+        error = Localization::text(QStringLiteral("Не удалось загрузить Sega CD. Проверьте образ, дорожки и BIOS региона.\n%1\n%2\n%3"))
             .arg(SegaCdBios::status(dataPath_,1),SegaCdBios::status(dataPath_,2),SegaCdBios::status(dataPath_,3));
         if (needs32x) error += QLatin1Char('\n') + Sega32xBios::status(dataPath_);
         unload(); return false;
@@ -328,7 +332,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     gamePath_ = QFileInfo(path).absoluteFilePath(); contentName_ = QFileInfo(path).fileName();
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_) || !registerDiscs(error)) {
-        if (error.isEmpty()) error = QStringLiteral("Некорректные параметры Sega CD.");
+        if (error.isEmpty()) error = Localization::text(QStringLiteral("Некорректные параметры Sega CD."));
         unload(); return false;
     }
     applyControllerPorts(true);
@@ -341,17 +345,17 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
 bool LibretroHost::setDiscEjected(bool ejected, QString& error) {
     error.clear();
     if (!isCd() || !disk_.set_eject_state || !disk_.set_eject_state(ejected)) {
-        error = QStringLiteral("Не удалось изменить состояние привода Sega CD."); return false;
+        error = Localization::text(QStringLiteral("Не удалось изменить состояние привода Sega CD.")); return false;
     }
     audio_.clear(); return true;
 }
 bool LibretroHost::selectDisc(int index, QString& error) {
     error.clear();
     if (!isCd() || index < 0 || index >= discs_.size()) {
-        error = QStringLiteral("Неверный номер диска."); return false;
+        error = Localization::text(QStringLiteral("Неверный номер диска.")); return false;
     }
     if (discs_[index].needs32x && (!api_->features || !(api_->features() & 2u))) {
-        error = QStringLiteral("Для CD32X откройте образ через «Открыть игру»."); return false;
+        error = Localization::text(QStringLiteral("Для CD32X откройте образ через «Открыть игру».")); return false;
     }
     if (!DiscMedia::unchanged(discs_[index],error)) return false;
     CoreFileSystem::clearError();
@@ -362,7 +366,7 @@ bool LibretroHost::selectDisc(int index, QString& error) {
         disk_.set_image_index(unsigned(discIndex_));
         if (!state.isEmpty()) unserialize(state);
         disk_.set_eject_state(wasEjected);
-        error = QStringLiteral("Ядро не смогло прочитать выбранный диск."); return false;
+        error = Localization::text(QStringLiteral("Ядро не смогло прочитать выбранный диск.")); return false;
     }
     discIndex_ = index; setDiscIdentity();
     achievementHashCache_.clear();
@@ -371,11 +375,11 @@ bool LibretroHost::selectDisc(int index, QString& error) {
 }
 bool LibretroHost::changeDisc(const QString& path, QString& error) {
     error.clear();
-    if (!isCd()) { error = QStringLiteral("Игра Sega CD не запущена."); return false; }
+    if (!isCd()) { error = Localization::text(QStringLiteral("Игра Sega CD не запущена.")); return false; }
     DiscImage image;
     if (!DiscMedia::inspect(path,image,error)) return false;
     if (image.needs32x && (!api_->features || !(api_->features() & 2u))) {
-        error = QStringLiteral("Для CD32X откройте образ через «Открыть игру»."); return false;
+        error = Localization::text(QStringLiteral("Для CD32X откройте образ через «Открыть игру».")); return false;
     }
     if (!DiscMedia::prepare(image,dataPath_,error)) return false;
     CoreFileSystem::clearError();
@@ -391,7 +395,7 @@ bool LibretroHost::changeDisc(const QString& path, QString& error) {
         if (restored && !state.isEmpty()) unserialize(state);
         disk_.set_eject_state(restored ? wasEjected : true);
         QString ignored; refreshDiscFiles(ignored);
-        error = QStringLiteral("Не удалось вставить диск. %1").arg(restored ? QStringLiteral("Предыдущий диск восстановлен.") : QStringLiteral("Привод оставлен открытым."));
+        error = Localization::text(QStringLiteral("Не удалось вставить диск. %1")).arg(restored ? Localization::text(QStringLiteral("Предыдущий диск восстановлен.")) : Localization::text(QStringLiteral("Привод оставлен открытым.")));
         return false;
     }
     discs_[discIndex_] = image;
@@ -422,8 +426,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
             });
             if (archiveIndex < 0 && entries.size() == 1) found = entries.begin();
             if (found == entries.end()) {
-                error = entries.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") :
-                    QStringLiteral("Выберите игру внутри архива.");
+                error = entries.isEmpty() ? Localization::text(QStringLiteral("В архиве нет поддерживаемых игр.")) :
+                    Localization::text(QStringLiteral("Выберите игру внутри архива."));
                 return false;
             }
             selected = *found;
@@ -433,17 +437,17 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         if (!error.isEmpty()) return false;
     } else {
         QFile file(info.absoluteFilePath());
-        if (!file.open(QIODevice::ReadOnly)) { error = QStringLiteral("Не удалось открыть игру: %1").arg(file.errorString()); return false; }
+        if (!file.open(QIODevice::ReadOnly)) { error = Localization::text(QStringLiteral("Не удалось открыть игру: %1")).arg(file.errorString()); return false; }
         if (file.size() < 512 || file.size() > 32 * 1024 * 1024) {
-            error = QStringLiteral("Некорректный размер ROM (ожидается от 512 байт до 32 МиБ)."); return false;
+            error = Localization::text(QStringLiteral("Некорректный размер ROM (ожидается от 512 байт до 32 МиБ).")); return false;
         }
         content = file.readAll();
-        if (content.size() != file.size()) { error = QStringLiteral("ROM прочитан не полностью."); return false; }
+        if (content.size() != file.size()) { error = Localization::text(QStringLiteral("ROM прочитан не полностью.")); return false; }
     }
     const auto ext = QFileInfo(name).suffix().toLower();
     const QStringList supported{"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k", "32x"};
     if (!supported.contains(ext) || content.size() < 512 || content.size() > 32 * 1024 * 1024) {
-        error = QStringLiteral("Неподдерживаемый картридж или неверный размер ROM."); return false;
+        error = Localization::text(QStringLiteral("Неподдерживаемый картридж или неверный размер ROM.")); return false;
     }
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
     if (!initialize(error)) return false;
@@ -462,17 +466,24 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     const bool smdLayout = content.size() >= 512 + 0x4000 &&
         ((content.size() / 512) & 1) && !(content.size() % 512) && !((content.size() - 512) % 0x4000);
     const bool needs32x = ext == "32x" || header32x(0) || header32x(1) || (smdLayout && header32x(2));
-    if (needs32x) {
+    const bool mdCartridge = ext != "sms" && ext != "gg" && ext != "sg";
+    if (needs32x || (attach32x_ && mdCartridge)) {
         if (!api_->features || !(api_->features() & 1u)) {
-            error = QStringLiteral("Это ядро ещё не поддерживает 32X.");
+            error = Localization::text(QStringLiteral("Это ядро ещё не поддерживает 32X."));
             return false;
         }
         if (!Sega32xBios::validate(dataPath_, error)) return false;
     }
+    if (attachCd_ && mdCartridge && content.size() > 8 * 1024 * 1024) {
+        error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
+        return false;
+    }
+    if (attachCd_ && mdCartridge && !checkDiscBios(DiscImage{}, error)) return false;
     // Preserve the previous game's battery saves before switching content.
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
     content_ = std::move(content);
+    contentNeeds32x_ = needs32x;
     encodedGamePath_ = encodedPath;
     contentDirectory_ = QDir::toNativeSeparators(info.absolutePath()).toUtf8();
     contentBaseName_ = QFileInfo(name).completeBaseName().toUtf8();
@@ -496,9 +507,10 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
+    if (!applyExpansionDevices(error)) { contentInfoActive_ = false; return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
-    if (!accepted) { error = QStringLiteral("Genesis Plus GX не смог загрузить ROM."); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
+    if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
     gamePath_ = info.absoluteFilePath();
     if (api_->set_paprium_music && api_->paprium_active && api_->paprium_active())
@@ -509,14 +521,14 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     gameKey_ = readableSaveStem(name);
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_)) {
-        error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука."); unload(); return false;
+        error = Localization::text(QStringLiteral("Ядро вернуло некорректные параметры видео/звука.")); unload(); return false;
     }
     applyControllerPorts(true);
     saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
     saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
-    if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
+    if (!saveRamWritable_ && message) message(saveError + Localization::text(QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл.")));
     loadCheats();
     return true;
 }
@@ -534,6 +546,7 @@ void LibretroHost::unload() {
     }
     papriumMusic_.clear();
     loaded_ = false;
+    contentNeeds32x_ = false;
     CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0;
     contentInfo_ = {}; contentInfoActive_ = false;
@@ -543,6 +556,28 @@ void LibretroHost::unload() {
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
     batterySave_.clear(); cheats_.clear(); movieCheats_.clear(); movieCheatsActive_ = false; activeCheatCodes_.clear();
+}
+bool LibretroHost::frameInputPolled() const {
+    return loaded_ && api_->input_polled && api_->input_polled();
+}
+bool LibretroHost::supportsInputPollMetrics() const { return api_->input_polled != nullptr; }
+bool LibretroHost::hasCdHardware() const {
+    return loaded_ && (isCd() || (api_->system_hw && api_->system_hw() == 0x84) ||
+                      (api_->paprium_cd_active && api_->paprium_cd_active()));
+}
+void LibretroHost::setExpansionDevices(bool cd, bool x32) {
+    // Settings are pending until the next load or power cycle.
+    attachCd_ = cd; attach32x_ = x32;
+}
+bool LibretroHost::applyExpansionDevices(QString& error) {
+    // A recording carries its own exact hardware configuration.
+    if (movieConfigurationActive_) return true;
+    if (!setCoreOption("genesis_plus_gx_add_on", attachCd_ ? "sega/mega cd" : "auto", error)) return false;
+    if (variableValues_.count("genesis_plus_gx_32x_add_on"))
+        return setCoreOption("genesis_plus_gx_32x_add_on", attach32x_ ? "connected" : "auto", error);
+    if (!attach32x_) return true;
+    error = Localization::text(QStringLiteral("Это ядро не поддерживает подключение 32X к обычным играм."));
+    return false;
 }
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
@@ -557,12 +592,30 @@ void LibretroHost::reset() {
 }
 bool LibretroHost::hardReset(QString& error) {
     error.clear();
-    if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
+    if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
     achievementHashCache_.clear();
+    achievementConsoleCache_ = 0;
     if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
     // The active attachment also covers CHD, whose 32X header is core-detected.
     // Recheck user BIOS before unloading a working game for its power cycle.
-    if (api_->features && (api_->features() & 2u) && !Sega32xBios::validate(dataPath_,error)) return false;
+    const bool mdHardware = api_->system_hw ? ((api_->system_hw() & 0x80u) != 0)
+        : (contentExtension_ != "sms" && contentExtension_ != "gg" && contentExtension_ != "sg");
+    const auto wantedOption = [this](const char* key, bool preference) {
+        if (!movieConfigurationActive_) return preference;
+        const auto value = variables_.find(key);
+        return value != variables_.end() && (value->second == "connected" || value->second == "sega/mega cd");
+    };
+    const bool target32x = wantedOption("genesis_plus_gx_32x_add_on", attach32x_);
+    const bool targetCd = wantedOption("genesis_plus_gx_add_on", attachCd_);
+    if (((api_->features && (api_->features() & 2u)) || (target32x && mdHardware)) &&
+        !Sega32xBios::validate(dataPath_,error)) return false;
+    if (targetCd && mdHardware && !isCd()) {
+        if (content_.size() > 8 * 1024 * 1024) {
+            error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
+            return false;
+        }
+        if (!checkDiscBios(DiscImage{}, error)) return false;
+    }
     // Reuse the selected content already in memory: archives need no second
     // selection and moved/deleted ROM files do not affect a power cycle.
     if (!flushSaveRam(error)) return false;
@@ -583,10 +636,11 @@ bool LibretroHost::hardReset(QString& error) {
     game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
+    if (!applyExpansionDevices(error)) { contentInfoActive_ = false; return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) {
-        error = QStringLiteral("Genesis Plus GX не смог перезапустить ROM.");
+        error = Localization::text(QStringLiteral("Genesis Plus GX не смог перезапустить ROM."));
         unload(); return false;
     }
     loaded_ = true;
@@ -595,7 +649,7 @@ bool LibretroHost::hardReset(QString& error) {
     saveRamWritable_ = false;
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_)) {
-        error = QStringLiteral("Ядро вернуло некорректные параметры видео/звука.");
+        error = Localization::text(QStringLiteral("Ядро вернуло некорректные параметры видео/звука."));
         unload(); return false;
     }
     applyControllerPorts(true);
@@ -603,7 +657,7 @@ bool LibretroHost::hardReset(QString& error) {
     saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
-    if (!saveRamWritable_ && message) message(saveError + QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл."));
+    if (!saveRamWritable_ && message) message(saveError + Localization::text(QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл.")));
     applyCheats();
     return true;
 }
@@ -619,8 +673,8 @@ bool LibretroHost::cheatsSupported() const {
         (!(api_->features && (api_->features() & 2u)) || api_->invalidate_code);
 }
 QString LibretroHost::cheatSupportText() const {
-    if (!loaded_) return QStringLiteral("Сначала откройте игру.");
-    if (!cheatsSupported()) return QStringLiteral("Для читов требуется обновлённое ядро эмуляции.");
+    if (!loaded_) return Localization::text(QStringLiteral("Сначала откройте игру."));
+    if (!cheatsSupported()) return Localization::text(QStringLiteral("Для читов требуется обновлённое ядро эмуляции."));
     return Cheats::supportText(cheatPlatform());
 }
 void LibretroHost::clearCoreCheats() {
@@ -712,7 +766,7 @@ bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value,
     if (initialized_) {
         const auto choices = variableValues_.find(key);
         if (choices == variableValues_.end() || !choices->second.contains(value)) {
-            error = QStringLiteral("Ядро не поддерживает выбранный параметр: %1").arg(QString::fromUtf8(key));
+            error = Localization::text(QStringLiteral("Ядро не поддерживает выбранный параметр: %1")).arg(QString::fromUtf8(key));
             return false;
         }
     }
@@ -730,7 +784,7 @@ bool LibretroHost::setRegion(int region, QString& error) {
     }
     static const std::array<QByteArray,4> values{"auto", "ntsc-j", "ntsc-u", "pal"};
     if (region < 0 || region >= int(values.size())) {
-        error = QStringLiteral("Неверный регион."); return false;
+        error = Localization::text(QStringLiteral("Неверный регион.")); return false;
     }
     return setCoreOption("genesis_plus_gx_region_detect", values[size_t(region)], error);
 }
@@ -745,7 +799,7 @@ bool LibretroHost::setFastCdLoading(bool enabled, QString& error) {
 bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     static const std::array<QByteArray,5> values{"disabled", "monochrome", "composite", "svideo", "rgb"};
     if (filter < 0 || filter >= int(values.size())) {
-        error = QStringLiteral("Неверный фильтр Blargg."); return false;
+        error = Localization::text(QStringLiteral("Неверный фильтр Blargg.")); return false;
     }
     return setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error);
 }
@@ -923,7 +977,7 @@ QByteArray LibretroHost::captureMovieState(bool checksum) const {
         if (!data || !size || size > 1024 * 1024) return {};
         memory[index+2] = data; sizes[index+3] = size; bramMask |= 1u << index;
     }
-    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    const bool cd = hasCdHardware();
     if (cd && !(bramMask & 1u)) return {};
     quint64 total = 128;
     for (size_t size : sizes) total += size;
@@ -955,7 +1009,7 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     const bool legacy = state.startsWith("KRMOV001");
     if (!loaded_ || state.size() < 128 || quint64(state.size()) > maxMovieStateSize ||
         (!legacy && !state.startsWith("KRMOV002")) || state.mid(8,32) != romHash_) {
-        error = QStringLiteral("Состояние записи относится к другой игре или имеет неизвестный формат."); return false;
+        error = Localization::text(QStringLiteral("Состояние записи относится к другой игре или имеет неизвестный формат.")); return false;
     }
     std::array<quint32,5> sizes{};
     quint64 total = 128;
@@ -976,32 +1030,32 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
         sizes[2] != saveMemorySizes_[1] ||
         (bool(bramMask & 1u) != bool(sizes[3])) ||
         (bool(bramMask & 2u) != bool(sizes[4])) || !hashValid) {
-        error = QStringLiteral("Состояние записи повреждено или несовместимо."); return false;
+        error = Localization::text(QStringLiteral("Состояние записи повреждено или несовместимо.")); return false;
     }
     std::array<void*,4> memory{};
     memory[0] = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
     memory[1] = api_->get_memory_data(RETRO_MEMORY_RTC);
     if ((sizes[1] && !memory[0]) || (sizes[2] && !memory[1])) {
-        error = QStringLiteral("Память сохранения записи недоступна."); return false;
+        error = Localization::text(QStringLiteral("Память сохранения записи недоступна.")); return false;
     }
-    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    const bool cd = hasCdHardware();
     if (cd && !(bramMask & 1u)) {
-        error = QStringLiteral("В состоянии записи отсутствует BRAM Sega CD."); return false;
+        error = Localization::text(QStringLiteral("В состоянии записи отсутствует BRAM Sega CD.")); return false;
     }
     for (unsigned index = 0; index < 2; ++index) {
         const void* data = nullptr; size_t size = 0; const char* path = nullptr;
         const bool present = api_->get_bram && api_->get_bram(index,&data,&size,&path);
         if (present != bool(bramMask & (1u << index)) ||
             (present && (!data || size != sizes[index+3]))) {
-            error = QStringLiteral("BRAM записи несовместима с текущим ядром."); return false;
+            error = Localization::text(QStringLiteral("BRAM записи несовместима с текущим ядром.")); return false;
         }
         memory[index+2] = const_cast<void*>(data);
     }
     const auto previous = serialize();
-    if (previous.isEmpty()) { error = QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи."); return false; }
+    if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи.")); return false; }
     if (!api_->unserialize(state.constData()+128,size_t(sizes[0]))) {
-        if (!unserialize(previous)) error = QStringLiteral("Ядро отклонило состояние записи; восстановить прежнее состояние не удалось.");
-        else error = QStringLiteral("Ядро отклонило состояние записи.");
+        if (!unserialize(previous)) error = Localization::text(QStringLiteral("Ядро отклонило состояние записи; восстановить прежнее состояние не удалось."));
+        else error = Localization::text(QStringLiteral("Ядро отклонило состояние записи."));
         return false;
     }
     applyControllerPorts();
@@ -1018,8 +1072,8 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
         memory[index+2] = const_cast<void*>(data);
     }
     if (!memoryValid) {
-        if (!unserialize(previous)) error = QStringLiteral("Память записи изменилась; восстановить прежнее состояние не удалось.");
-        else error = QStringLiteral("Память записи изменилась при загрузке состояния.");
+        if (!unserialize(previous)) error = Localization::text(QStringLiteral("Память записи изменилась; восстановить прежнее состояние не удалось."));
+        else error = Localization::text(QStringLiteral("Память записи изменилась при загрузке состояния."));
         return false;
     }
     qsizetype offset = 128 + sizes[0];
@@ -1054,14 +1108,14 @@ unsigned LibretroHost::achievementConsoleId() const {
     if (achievementConsoleCache_) return achievementConsoleCache_;
     unsigned id = 0;
     if (isCd()) id = RC_CONSOLE_SEGA_CD;
-    else if (api_->features && (api_->features() & 2u)) id = RC_CONSOLE_SEGA_32X;
+    else if (contentNeeds32x_) id = RC_CONSOLE_SEGA_32X;
     else if (api_->system_hw) {
         switch (api_->system_hw()) {
         case 0x01: case 0x02: case 0x03: id = RC_CONSOLE_SG1000; break;
         case 0x10: case 0x20: case 0x21: id = RC_CONSOLE_MASTER_SYSTEM; break;
         case 0x40: case 0x41: id = RC_CONSOLE_GAME_GEAR; break;
         case 0x80: case 0x81: case 0x82: id = RC_CONSOLE_MEGA_DRIVE; break;
-        case 0x84: id = RC_CONSOLE_SEGA_CD; break;
+        case 0x84: id = content_.isEmpty() ? RC_CONSOLE_SEGA_CD : RC_CONSOLE_MEGA_DRIVE; break;
         default: break;
         }
     } else if (contentExtension_ == "sms") id = RC_CONSOLE_MASTER_SYSTEM;
@@ -1085,10 +1139,10 @@ void LibretroHost::achievementCdCloseTrack(void*) {}
 uint32_t LibretroHost::achievementCdFirstSector(void*) { return 0; }
 QString LibretroHost::achievementHash(QString& error) const {
     error.clear();
-    if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return {}; }
+    if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return {}; }
     if (!achievementHashCache_.isEmpty()) return achievementHashCache_;
     const unsigned console = achievementConsoleId();
-    if (!console) { error = QStringLiteral("Не удалось определить систему для достижений."); return {}; }
+    if (!console) { error = Localization::text(QStringLiteral("Не удалось определить систему для достижений.")); return {}; }
     const QByteArray path = isCd() ? QDir::toNativeSeparators(discs_[discIndex_].path).toUtf8()
         : (archiveMember_.isEmpty() ? contentName_.toUtf8() : archiveMember_);
     rc_hash_iterator_t iterator{};
@@ -1100,7 +1154,7 @@ QString LibretroHost::achievementHash(QString& error) const {
         if (!api_->get_cd_header(achievementCdHeader_.data(), 512)) {
             achievementCdHeader_.clear();
             rc_hash_destroy_iterator(&iterator);
-            error = QStringLiteral("Ядро не предоставило заголовок текущего диска.");
+            error = Localization::text(QStringLiteral("Ядро не предоставило заголовок текущего диска."));
             return {};
         }
         iterator.callbacks.cdreader.open_track_iterator = nullptr;
@@ -1110,7 +1164,7 @@ QString LibretroHost::achievementHash(QString& error) const {
         iterator.callbacks.cdreader.first_track_sector = achievementCdFirstSector;
     } else if (isCd() && QFileInfo(discs_[discIndex_].path).suffix().compare("chd", Qt::CaseInsensitive) == 0) {
         rc_hash_destroy_iterator(&iterator);
-        error = QStringLiteral("Для достижений CHD требуется ядро с доступом к заголовку диска.");
+        error = Localization::text(QStringLiteral("Для достижений CHD требуется ядро с доступом к заголовку диска."));
         return {};
     }
     char hash[33]{};
@@ -1118,7 +1172,7 @@ QString LibretroHost::achievementHash(QString& error) const {
     rc_hash_destroy_iterator(&iterator);
     achievementCdHeader_.clear();
     if (!success) {
-        error = QStringLiteral("Не удалось вычислить хеш RetroAchievements для этой игры.");
+        error = Localization::text(QStringLiteral("Не удалось вычислить хеш RetroAchievements для этой игры."));
         return {};
     }
     achievementHashCache_ = QString::fromLatin1(hash);
@@ -1140,21 +1194,21 @@ uint32_t LibretroHost::readAchievementMemory(uint32_t address, uint8_t* buffer, 
     return rc_libretro_memory_read(&achievementMemory_, address, buffer, count);
 }
 QString LibretroHost::achievementHardcoreBlockReason() const {
-    if (!loaded_) return QStringLiteral("Сначала откройте игру.");
+    if (!loaded_) return Localization::text(QStringLiteral("Сначала откройте игру."));
     if (!activeCheatCodes_.isEmpty())
-        return QStringLiteral("Отключите активные читы для хардкорных достижений.");
+        return Localization::text(QStringLiteral("Отключите активные читы для хардкорных достижений."));
     if (discs_.isEmpty() && coreContent_ != content_)
-        return QStringLiteral("Отключите исправление контрольной суммы ROM для хардкорных достижений.");
+        return Localization::text(QStringLiteral("Отключите исправление контрольной суммы ROM для хардкорных достижений."));
     const auto fastCd = variables_.find("genesis_plus_gx_cd_latency");
     if (isCd() && fastCd != variables_.end() && fastCd->second == "disabled")
-        return QStringLiteral("Отключите быструю загрузку CD для хардкорных достижений.");
+        return Localization::text(QStringLiteral("Отключите быструю загрузку CD для хардкорных достижений."));
     const auto spriteLimit = variables_.find("genesis_plus_gx_no_sprite_limit");
     if (spriteLimit != variables_.end() && spriteLimit->second == "enabled")
-        return QStringLiteral("Включите ограничение спрайтов для хардкорных достижений.");
+        return Localization::text(QStringLiteral("Включите ограничение спрайтов для хардкорных достижений."));
     const auto* disallowed = rc_libretro_get_disallowed_settings("Genesis Plus GX");
     for (const auto& [key,value] : variables_) {
         if (disallowed && !rc_libretro_is_setting_allowed(disallowed, key.constData(), value.constData()))
-            return QStringLiteral("Параметр ядра %1 = %2 несовместим с хардкорными достижениями.")
+            return Localization::text(QStringLiteral("Параметр ядра %1 = %2 несовместим с хардкорными достижениями."))
                 .arg(QString::fromUtf8(key), QString::fromUtf8(value));
     }
     return {};
@@ -1208,7 +1262,7 @@ QByteArray LibretroHost::movieGameIdentity() const {
 }
 QJsonObject LibretroHost::movieBiosFingerprints() const {
     QJsonObject result;
-    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    const bool cd = hasCdHardware();
     const bool x32 = api_->features && (api_->features() & 2u);
     const auto fingerprint = [this,&result](const char* name, qint64 expectedSize) {
         QFile source(dataPath_ + "/bios/" + QString::fromLatin1(name));
@@ -1266,7 +1320,7 @@ QJsonObject LibretroHost::movieConfiguration() const {
 bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error) {
     error.clear();
     movieCompatibilityWarning_.clear();
-    if (!loaded_) { error = QStringLiteral("Нет загруженной игры."); return false; }
+    if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
     const int version = configuration.value(QStringLiteral("version")).toInt(-1);
     if ((version != 1 && version != 2) ||
         !configuration.value(QStringLiteral("gameIdentity")).isString() ||
@@ -1277,58 +1331,80 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         !configuration.value(QStringLiteral("controllers")).isArray() ||
         !configuration.value(QStringLiteral("cheats")).isArray() ||
         !configuration.value(QStringLiteral("bios")).isObject()) {
-        error = QStringLiteral("Неверная конфигурация записи."); return false;
+        error = Localization::text(QStringLiteral("Неверная конфигурация записи.")); return false;
     }
     if (configuration.contains(QStringLiteral("frameRate"))) {
         const auto rate = configuration.value(QStringLiteral("frameRate"));
         if (!rate.isDouble() || !std::isfinite(rate.toDouble()) || rate.toDouble() < 1 || rate.toDouble() > 240) {
-            error = QStringLiteral("Неверная частота кадров записи."); return false;
+            error = Localization::text(QStringLiteral("Неверная частота кадров записи.")); return false;
         }
     }
     const auto game = movieGameIdentity();
     if (game.isEmpty() || configuration.value(QStringLiteral("gameIdentity")).toString() != QString::fromLatin1(game.toHex())) {
-        error = QStringLiteral("Запись относится к другой игре или изменённому образу диска."); return false;
+        error = Localization::text(QStringLiteral("Запись относится к другой игре или изменённому образу диска.")); return false;
     }
     const auto identityText = configuration.value(QStringLiteral("coreIdentity")).toString().toLatin1();
     const auto identity = QByteArray::fromHex(identityText);
     if (identity.size() != 32 || identity.toHex() != identityText) {
-        error = QStringLiteral("Повреждено описание версии ядра в записи."); return false;
+        error = Localization::text(QStringLiteral("Повреждено описание версии ядра в записи.")); return false;
     }
     if (version == 1 ? !acceptsLegacyMovieCore(identity) : identity != recordingCoreHash_) {
         const auto requiredVersion = configuration.value(QStringLiteral("coreVersion")).toString(
-            version == 1 ? QStringLiteral("0.10.0") : QStringLiteral("неизвестной версии"));
+            version == 1 ? QStringLiteral("0.10.0") : Localization::text(QStringLiteral("неизвестной версии")));
         const auto requiredBuild = configuration.value(QStringLiteral("coreBuild")).toString(
             QString::fromLatin1(identityText));
-        movieCompatibilityWarning_ = QStringLiteral(
-            "Запись: %1 / ядро %2\nСейчас: %3 / ядро %4\nВозможна рассинхронизация")
+        movieCompatibilityWarning_ = Localization::text(QStringLiteral(
+            "Запись: %1 / ядро %2\nСейчас: %3 / ядро %4\nВозможна рассинхронизация"))
             .arg(requiredVersion.left(40), requiredBuild.left(12),
                  QStringLiteral(KEGA_VERSION), QString::fromLatin1(exactCoreHash_.toHex().left(12)));
         // A compatibility mismatch is advisory. File bounds, game identity and
         // the core's own state decoder still determine whether loading is possible.
     }
-    if (configuration.value(QStringLiteral("bios")).toObject() != movieBiosFingerprints()) {
-        error = QStringLiteral("BIOS записи отличаются от установленных."); return false;
+    const auto recordedBios = configuration.value(QStringLiteral("bios")).toObject();
+    QJsonObject installedBios;
+    for (auto it = recordedBios.begin(); it != recordedBios.end(); ++it) {
+        static const QStringList names{QStringLiteral("bios_CD_J.bin"), QStringLiteral("bios_CD_U.bin"),
+            QStringLiteral("bios_CD_E.bin"), QStringLiteral("32X_G_BIOS.BIN"),
+            QStringLiteral("32X_M_BIOS.BIN"), QStringLiteral("32X_S_BIOS.BIN")};
+        if (!names.contains(it.key())) continue;
+        QFile file(dataPath_ + QStringLiteral("/bios/") + it.key());
+        QString value = QStringLiteral("missing");
+        if (file.open(QIODevice::ReadOnly)) {
+            const qint64 expected = it.key().startsWith(QStringLiteral("bios_CD_")) ? 131072
+                : it.key() == QLatin1String("32X_G_BIOS.BIN") ? 256
+                : it.key() == QLatin1String("32X_M_BIOS.BIN") ? 2048 : 1024;
+            if (file.size() != expected) value = QStringLiteral("invalid");
+            else { QCryptographicHash hash(QCryptographicHash::Sha256);
+                value = hash.addData(&file) ? QString::fromLatin1(hash.result().toHex()) : QStringLiteral("unreadable"); }
+        }
+        installedBios.insert(it.key(), value);
+    }
+    if (recordedBios != installedBios) {
+        error = Localization::text(QStringLiteral("BIOS записи отличаются от установленных.")); return false;
     }
     const int recordedDisc = configuration.value(QStringLiteral("discIndex")).toInt(-1);
     if (recordedDisc < 0 || (discs_.isEmpty() ? recordedDisc != 0 : recordedDisc >= discs_.size())) {
-        error = QStringLiteral("Номер диска записи не совпадает с плейлистом."); return false;
+        error = Localization::text(QStringLiteral("Номер диска записи не совпадает с плейлистом.")); return false;
     }
     if (!discs_.isEmpty()) {
         if (!DiscMedia::unchanged(discs_[recordedDisc],error)) return false;
         if (discs_[recordedDisc].needs32x && (!api_->features || !(api_->features() & 2u))) {
-            error = QStringLiteral("Для выбранного диска записи требуется ядро CD32X."); return false;
+            error = Localization::text(QStringLiteral("Для выбранного диска записи требуется ядро CD32X.")); return false;
         }
     }
-    const bool cd = isCd() || (api_->paprium_cd_active && api_->paprium_cd_active());
+    const bool cd = hasCdHardware();
     if (cd && !api_->get_bram) {
-        error = QStringLiteral("Для записи Sega CD требуется ядро с доступом к BRAM."); return false;
+        error = Localization::text(QStringLiteral("Для записи Sega CD требуется ядро с доступом к BRAM.")); return false;
     }
     const auto options = configuration.value(QStringLiteral("options")).toObject();
     auto newOptions = variables_;
+    if (!options.contains(QStringLiteral("genesis_plus_gx_32x_add_on")) &&
+        newOptions.count("genesis_plus_gx_32x_add_on"))
+        newOptions["genesis_plus_gx_32x_add_on"] = "auto";
     bool changedOptions = options.size() != qsizetype(variables_.size());
     for (auto entry = options.begin(); entry != options.end(); ++entry) {
         if (!entry.value().isString()) {
-            error = QStringLiteral("Повреждено описание параметров ядра записи."); return false;
+            error = Localization::text(QStringLiteral("Повреждено описание параметров ядра записи.")); return false;
         }
         const auto key = entry.key().toUtf8();
         const auto choices = variableValues_.find(key);
@@ -1342,11 +1418,11 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     }
     if (changedOptions) {
         if (!movieCompatibilityWarning_.isEmpty()) movieCompatibilityWarning_ += QLatin1Char('\n');
-        movieCompatibilityWarning_ += QStringLiteral(
-            "Набор параметров ядра изменился: недоступные параметры записи пропущены. Возможна рассинхронизация.");
+        movieCompatibilityWarning_ += Localization::text(QStringLiteral(
+            "Набор параметров ядра изменился: недоступные параметры записи пропущены. Возможна рассинхронизация."));
     }
     const auto controllers = configuration.value(QStringLiteral("controllers")).toArray();
-    if (controllers.size() != 3) { error = QStringLiteral("Неверная конфигурация контроллеров записи."); return false; }
+    if (controllers.size() != 3) { error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи.")); return false; }
     std::array<bool,3> connected{}, sixButton{};
     std::array<ControllerType,3> kinds{};
     for (int i = 0; i < 3; ++i) {
@@ -1359,21 +1435,21 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
             (i == 0 && kindValue.toInt() >= int(ControllerType::Menacer)) ||
             (i == 2 && kindValue.toInt() != int(ControllerType::Pad) &&
              kindValue.toInt() != int(ControllerType::Justifier))) {
-            error = QStringLiteral("Неверная конфигурация контроллеров записи."); return false;
+            error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи.")); return false;
         }
         connected[size_t(i)] = object.value(QStringLiteral("connected")).toBool();
         sixButton[size_t(i)] = object.value(QStringLiteral("sixButton")).toBool();
         kinds[size_t(i)] = ControllerType(kindValue.toInt());
     }
     const auto cheatArray = configuration.value(QStringLiteral("cheats")).toArray();
-    if (cheatArray.size() > Cheats::MaxCodes) { error = QStringLiteral("Слишком много читов в записи."); return false; }
+    if (cheatArray.size() > Cheats::MaxCodes) { error = Localization::text(QStringLiteral("Слишком много читов в записи.")); return false; }
     CheatList decoded, normalized;
     for (const auto& value : cheatArray) {
         const auto object = value.toObject();
         if (!value.isObject() || !object.value(QStringLiteral("code")).isString() ||
             !object.value(QStringLiteral("description")).isString() ||
             !object.value(QStringLiteral("enabled")).isBool()) {
-            error = QStringLiteral("Неверные читы записи."); return false;
+            error = Localization::text(QStringLiteral("Неверные читы записи.")); return false;
         }
         decoded.append({object.value(QStringLiteral("code")).toString(),
             object.value(QStringLiteral("description")).toString(),
@@ -1382,7 +1458,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     if (!Cheats::normalize(decoded, cheatPlatform(), normalized, error)) return false;
     if (normalized != decoded || (!cheatsSupported() &&
         std::any_of(normalized.begin(),normalized.end(),[](const CheatEntry& entry) { return entry.enabled; }))) {
-        error = QStringLiteral("Читы записи несовместимы с ядром."); return false;
+        error = Localization::text(QStringLiteral("Читы записи несовместимы с ядром.")); return false;
     }
     // Every validation above precedes changes to live emulation. Keep movie
     // cheats in memory so replay never rewrites the user's cheat file.
@@ -1439,19 +1515,23 @@ QByteArray LibretroHost::stateCoreIdentity() const {
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-cd-v1"));
     if (api_->paprium_active && api_->paprium_active())
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-v1"));
+    if (!isCd() && hasCdHardware()) {
+        const bool x32 = api_->features && (api_->features() & 2u);
+        return digest(coreHash_ + QByteArrayLiteral("kegarefusion-cd-mode1-state-v1") + (x32 ? "32x" : "md"));
+    }
     if (api_->features && (api_->features() & 2u))
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-32x-state-v1"));
     return coreHash_;
 }
 bool LibretroHost::saveState(int slot, QString& error) {
-    if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
-    if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед сохранением состояния."); return false; }
+    if (!loaded_ || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет игры или неверный слот сохранения.")); return false; }
+    if (isCd() && discEjected()) { error = Localization::text(QStringLiteral("Закройте привод перед сохранением состояния.")); return false; }
     QByteArray payload = serialize();
-    if (payload.isEmpty()) { error = QStringLiteral("Ядро не смогло сохранить состояние."); return false; }
+    if (payload.isEmpty()) { error = Localization::text(QStringLiteral("Ядро не смогло сохранить состояние.")); return false; }
     const QByteArray progress = captureAchievementProgress ? captureAchievementProgress() : QByteArray();
     if (progress.size() > maxAchievementProgressSize ||
         (!progress.isEmpty() && payload.size() > maxStateSize - 16 - progress.size())) {
-        error = QStringLiteral("Прогресс достижений слишком велик для сохранения."); return false;
+        error = Localization::text(QStringLiteral("Прогресс достижений слишком велик для сохранения.")); return false;
     }
     if (!progress.isEmpty()) {
         QByteArray wrapped;
@@ -1473,40 +1553,40 @@ bool LibretroHost::saveState(int slot, QString& error) {
 }
 bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) {
     if (failure) *failure = StateLoadError::Failed;
-    if (!loaded_ || slot < 0 || slot > 9) { error = QStringLiteral("Нет игры или неверный слот сохранения."); return false; }
-    if (isCd() && discEjected()) { error = QStringLiteral("Закройте привод перед загрузкой состояния."); return false; }
+    if (!loaded_ || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет игры или неверный слот сохранения.")); return false; }
+    if (isCd() && discEjected()) { error = Localization::text(QStringLiteral("Закройте привод перед загрузкой состояния.")); return false; }
     QFile file(saveReadPath(QStringLiteral("states"), QStringLiteral(".slot%1.krs").arg(slot)));
     if (!file.open(QIODevice::ReadOnly)) {
         if (!QFileInfo::exists(file.fileName())) {
             if (failure) *failure = StateLoadError::Missing;
-            error = QStringLiteral("Сохранение в слоте %1 не найдено").arg(slot);
+            error = Localization::text(QStringLiteral("Сохранение в слоте %1 не найдено")).arg(slot);
         } else {
-            error = QStringLiteral("Не удалось прочитать сохранение в слоте %1: %2").arg(slot).arg(file.errorString());
+            error = Localization::text(QStringLiteral("Не удалось прочитать сохранение в слоте %1: %2")).arg(slot).arg(file.errorString());
         }
         return false;
     }
-    if (file.size() < stateHeaderSize || file.size() > stateHeaderSize + maxStateSize) { error = QStringLiteral("Неверный размер сохранения."); return false; }
+    if (file.size() < stateHeaderSize || file.size() > stateHeaderSize + maxStateSize) { error = Localization::text(QStringLiteral("Неверный размер сохранения.")); return false; }
     const auto bytes = file.readAll();
     if (bytes.size() < stateHeaderSize || bytes.left(8) != stateMagic || bytes.mid(8,32) != romHash_ || bytes.mid(40,32) != stateCoreIdentity()) {
-        error = QStringLiteral("Сохранение относится к другой игре или сборке ядра."); return false;
+        error = Localization::text(QStringLiteral("Сохранение относится к другой игре или сборке ядра.")); return false;
     }
     const quint32 size = qFromBigEndian<quint32>(bytes.constData() + 104);
     const auto payload = bytes.mid(stateHeaderSize);
-    if (size != quint32(payload.size()) || bytes.mid(72,32) != digest(payload)) { error = QStringLiteral("Сохранение повреждено."); return false; }
+    if (size != quint32(payload.size()) || bytes.mid(72,32) != digest(payload)) { error = Localization::text(QStringLiteral("Сохранение повреждено.")); return false; }
     QByteArray native = payload;
     QByteArray progress;
     if (payload.startsWith(achievementStateMagic)) {
-        if (payload.size() < 16) { error = QStringLiteral("Повреждён прогресс достижений в сохранении."); return false; }
+        if (payload.size() < 16) { error = Localization::text(QStringLiteral("Повреждён прогресс достижений в сохранении.")); return false; }
         const quint32 nativeSize = qFromBigEndian<quint32>(payload.constData() + 8);
         const quint32 progressSize = qFromBigEndian<quint32>(payload.constData() + 12);
         if (!nativeSize || nativeSize > maxStateSize || progressSize > maxAchievementProgressSize ||
             quint64(nativeSize) + quint64(progressSize) + 16 != quint64(payload.size())) {
-            error = QStringLiteral("Повреждён прогресс достижений в сохранении."); return false;
+            error = Localization::text(QStringLiteral("Повреждён прогресс достижений в сохранении.")); return false;
         }
         native = payload.mid(16, nativeSize);
         progress = payload.mid(16 + nativeSize, progressSize);
     }
-    if (!unserialize(native)) { error = QStringLiteral("Ядро отклонило сохранение."); return false; }
+    if (!unserialize(native)) { error = Localization::text(QStringLiteral("Ядро отклонило сохранение.")); return false; }
     if (restoreAchievementProgress) restoreAchievementProgress(progress);
     if (failure) *failure = StateLoadError::None;
     audio_.clear();
@@ -1523,7 +1603,7 @@ bool LibretroHost::pollSaveRam(qint64 nowMs, QString& error) {
 bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
     error.clear();
     if (!loaded_ || !saveRamWritable_ || moviePlayback_) return true;
-    if (isCd() || (api_->paprium_cd_active && api_->paprium_cd_active())) {
+    if (hasCdHardware()) {
         // An unmodified CD core retains its own unload writer. Paprium is a
         // cartridge and may also expose ordinary SRAM below.
         if (api_->get_bram) for (unsigned index = 0; index < 2; ++index) {
@@ -1533,7 +1613,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
             const QString saveRoot = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(savePath_))) + '/';
             if (!path.startsWith(saveRoot) || !path.endsWith(QLatin1String(".brm")) ||
                 size > 64 * 1024 * 1024) {
-                error = QStringLiteral("Ядро вернуло некорректный путь или размер BRAM.");
+                error = Localization::text(QStringLiteral("Ядро вернуло некорректный путь или размер BRAM."));
                 return false;
             }
             if (!batterySave_.update(path, data, qsizetype(size), nowMs, force, false, error))
@@ -1547,7 +1627,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
         if (!size || !data) continue;
         const auto path = dataPath_ + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
         if (size > size_t(maxStateSize)) {
-            error = QStringLiteral("Ядро вернуло неверный размер памяти сохранения."); return false;
+            error = Localization::text(QStringLiteral("Ядро вернуло неверный размер памяти сохранения.")); return false;
         }
         if (!batterySave_.update(path, data, qsizetype(size), nowMs, force,
                                  id == RETRO_MEMORY_SAVE_RAM, error)) return false;
@@ -1564,10 +1644,10 @@ bool LibretroHost::restoreSaveRam(QString& error) {
         if (!file.exists()) continue;
         if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > qint64(size) ||
             (id == RETRO_MEMORY_RTC && file.size() != qint64(size))) {
-            error = QStringLiteral("Память сохранения имеет неверный размер или недоступна; файл не загружен."); return false;
+            error = Localization::text(QStringLiteral("Память сохранения имеет неверный размер или недоступна; файл не загружен.")); return false;
         }
         const auto bytes = file.readAll();
-        if (bytes.size() != file.size()) { error = QStringLiteral("Ошибка чтения памяти сохранения."); return false; }
+        if (bytes.size() != file.size()) { error = Localization::text(QStringLiteral("Ошибка чтения памяти сохранения.")); return false; }
         // Genesis Plus GX reports trimmed SRAM after retro_run, but full capacity before it.
         // Accept old trimmed saves and normalize future writes to the captured load-time capacity.
         if (id == RETRO_MEMORY_SAVE_RAM) std::memset(data, 0xff, size);

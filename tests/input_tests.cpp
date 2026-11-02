@@ -726,11 +726,61 @@ void testUnknownRawJoystick() {
     manager.poll();
     require(mask == 0, "raw joystick release left game buttons held");
 }
+
+void testBackgroundGamepad() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create background gamepad settings directory");
+    const QString path = temp.filePath("settings.ini");
+    InputManager manager(path);
+    require(!manager.backgroundGamepadEnabled(), "background gamepad was not off by default");
+    VirtualPad pad(SDL_JOYSTICK_TYPE_UNKNOWN);
+    manager.poll();
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mapping.deviceKey = keyForId(manager.devices(), pad.id);
+    mapping.pad[0] = {PadBinding::Button, 0, 0};
+    mapping.pad[PauseCommand] = {PadBinding::Button, 1, 0};
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    unsigned mask = 0;
+    int commandPresses = 0;
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned value) { if (player == 0) mask = value; });
+    QObject::connect(&manager, &InputManager::commandChanged, &manager,
+                     [&](int command, bool pressed) {
+                         if (command == PauseCommand && pressed) ++commandPresses;
+                     });
+    manager.setEnabled(false);
+    pad.button(0, true);
+    pad.button(1, true);
+    manager.poll();
+    manager.setBackgroundGamepadActive(true);
+    require(mask == 0, "background pad activated without its preference");
+    manager.setBackgroundGamepadEnabled(true);
+    manager.setBackgroundGamepadActive(true);
+    manager.poll();
+    require(mask & 1u, "background pad did not drive gameplay");
+    require(commandPresses == 0, "background pad triggered an emulator command");
+    const unsigned padOnlyMask = mask;
+    require(manager.keyEvent(Qt::Key_X, true) && mask == padOnlyMask,
+            "background keyboard changed the game mask");
+    manager.setBackgroundGamepadActive(false);
+    require(mask == 0, "modal gate did not release background pad");
+    manager.setBackgroundGamepadActive(true);
+    require(mask & 1u, "background pad did not resume after modal gate");
+    manager.setBackgroundGamepadEnabled(false);
+    require(mask == 0, "turning off background pad left a game button held");
+    InputManager reopened(path);
+    require(!reopened.backgroundGamepadEnabled(), "background pad preference did not persist");
+}
 }
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--background")) {
+            testBackgroundGamepad();
+            std::puts("background gamepad tests passed");
+            return 0;
+        }
         testConnectedPorts();
         if (argc==2 && QString::fromLocal8Bit(argv[1])==QLatin1String("--connections")) {
             std::puts("input port defaults, migration, persistence and keyboard separation passed");return 0;
@@ -742,6 +792,7 @@ int main(int argc, char** argv) {
         testReservedRewindKey();
         testLegacyKeyboardSettings();
         testUnknownRawJoystick();
+        testBackgroundGamepad();
         testPhysicalKeyboard();
         testKeyboardSettingsMigration();
         std::puts("input tests passed");

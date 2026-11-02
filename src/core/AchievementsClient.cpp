@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "AchievementsClient.h"
 
 #include <rc_client.h>
@@ -87,10 +88,10 @@ struct AchievementsClient::Impl {
 
     Impl(QString path, Hooks supplied) : dataPath(std::move(path)), hooks(std::move(supplied)) {
         state.enabled = false;
-        state.status = QStringLiteral("Достижения выключены");
+        state.status = Localization::text(QStringLiteral("Достижения выключены"));
         client = rc_client_create(&readMemory, &serverCall);
         if (!client) {
-            state.status = QStringLiteral("Не удалось создать клиент достижений");
+            state.status = Localization::text(QStringLiteral("Не удалось создать клиент достижений"));
             return;
         }
         rc_client_set_userdata(client, this);
@@ -139,7 +140,7 @@ struct AchievementsClient::Impl {
         outgoing.url = fromUtf8(request->url);
         if (!validRaUrl(outgoing.url)) {
             callback(&failed, userdata);
-            impl->state.status = QStringLiteral("Недопустимый адрес сервера достижений");
+            impl->state.status = Localization::text(QStringLiteral("Недопустимый адрес сервера достижений"));
             impl->publish();
             return;
         }
@@ -170,7 +171,7 @@ struct AchievementsClient::Impl {
         if (result != RC_OK) {
             impl->state.loggedIn = false;
             impl->state.loading = false;
-            impl->state.status = QStringLiteral("Вход в RetroAchievements не выполнен: %1")
+            impl->state.status = Localization::text(QStringLiteral("Вход в RetroAchievements не выполнен: %1"))
                                      .arg(fromUtf8(error));
             if (impl->loginWithToken && (result == RC_INVALID_CREDENTIALS || result == RC_EXPIRED_TOKEN))
                 impl->removeCredentials();
@@ -181,10 +182,10 @@ struct AchievementsClient::Impl {
         impl->state.loggedIn = user != nullptr;
         impl->state.username = user ? fromUtf8(user->username) : QString();
         impl->userDigest = digest(impl->state.username.toUtf8());
-        impl->state.status = QStringLiteral("RetroAchievements: вход выполнен");
+        impl->state.status = Localization::text(QStringLiteral("RetroAchievements: вход выполнен"));
         if (user && user->username && user->token && *user->token &&
             !impl->saveCredentials(QByteArray(user->username), QByteArray(user->token))) {
-            impl->state.status = QStringLiteral("Вход выполнен, но токен не сохранён");
+            impl->state.status = Localization::text(QStringLiteral("Вход выполнен, но токен не сохранён"));
         }
         impl->publish();
         if (!impl->wantedHash.isEmpty()) impl->startGameLoad();
@@ -196,7 +197,7 @@ struct AchievementsClient::Impl {
         impl->loadHandle = nullptr;
         impl->state.loading = false;
         if (result != RC_OK) {
-            impl->state.status = QStringLiteral("Достижения для игры недоступны: %1").arg(fromUtf8(error));
+            impl->state.status = Localization::text(QStringLiteral("Достижения для игры недоступны: %1")).arg(fromUtf8(error));
             impl->gameHash.clear();
             impl->gameDigest.clear();
             impl->publish();
@@ -207,19 +208,19 @@ struct AchievementsClient::Impl {
             rc_client_unload_game(client);
             impl->gameHash.clear();
             impl->gameDigest.clear();
-            impl->state.status = QStringLiteral("Игра RetroAchievements не совпадает с запущенной системой");
+            impl->state.status = Localization::text(QStringLiteral("Игра RetroAchievements не совпадает с запущенной системой"));
             impl->publish();
             return;
         }
         impl->gameHash = impl->wantedHash;
         impl->gameDigest = digest(impl->gameHash);
-        impl->state.status = QStringLiteral("Достижения загружены");
+        impl->state.status = Localization::text(QStringLiteral("Достижения загружены"));
         impl->rebuild();
         AchievementNotice notice;
         notice.kind = AchievementNotice::GameReady;
         notice.title = impl->state.gameTitle;
         notice.badgeUrl = fromUtf8(game->badge_url);
-        notice.description = QStringLiteral("Открыто %1 из %2").arg(impl->state.unlocked).arg(impl->state.total);
+        notice.description = Localization::text(QStringLiteral("Открыто %1 из %2")).arg(impl->state.unlocked).arg(impl->state.total);
         impl->sendNotice(notice);
     }
 
@@ -233,8 +234,8 @@ struct AchievementsClient::Impl {
             impl->gameDigest = digest(impl->gameHash);
             impl->wantedHash = impl->gameHash;
             impl->state.status = result == RC_OK
-                                     ? QStringLiteral("Диск проверен RetroAchievements")
-                                     : QStringLiteral("RetroAchievements отключил Hardcore для этого диска");
+                                     ? Localization::text(QStringLiteral("Диск проверен RetroAchievements"))
+                                     : Localization::text(QStringLiteral("RetroAchievements отключил Hardcore для этого диска"));
         } else {
             // The core has already switched media. Evaluating the old game's conditions
             // against an unverified disc could award the wrong achievement.
@@ -245,7 +246,7 @@ struct AchievementsClient::Impl {
             impl->state.gameId = impl->state.total = impl->state.unlocked = impl->state.points = 0;
             impl->state.gameTitle.clear();
             impl->state.entries.clear();
-            impl->state.status = QStringLiteral("Достижения отключены после смены диска: %1")
+            impl->state.status = Localization::text(QStringLiteral("Достижения отключены после смены диска: %1"))
                                      .arg(fromUtf8(error));
         }
         impl->mediaHash.clear();
@@ -276,8 +277,8 @@ struct AchievementsClient::Impl {
             if (const auto* game = rc_client_get_game_info(client))
                 notice.badgeUrl = fromUtf8(game->badge_url);
             notice.title = impl->state.gameTitle;
-            notice.description = impl->hardcore() ? QStringLiteral("Мастерство достигнуто")
-                                                  : QStringLiteral("Все достижения открыты");
+            notice.description = impl->hardcore() ? Localization::text(QStringLiteral("Мастерство достигнуто"))
+                                                  : Localization::text(QStringLiteral("Все достижения открыты"));
             notice.hardcore = impl->hardcore();
             impl->sendNotice(notice);
             impl->rebuild();
@@ -285,16 +286,16 @@ struct AchievementsClient::Impl {
         }
         case RC_CLIENT_EVENT_DISCONNECTED:
             impl->state.disconnected = true;
-            impl->state.status = QStringLiteral("Нет соединения с RetroAchievements; отправка ожидает повтора");
+            impl->state.status = Localization::text(QStringLiteral("Нет соединения с RetroAchievements; отправка ожидает повтора"));
             impl->publish();
             break;
         case RC_CLIENT_EVENT_RECONNECTED:
             impl->state.disconnected = false;
-            impl->state.status = QStringLiteral("Соединение с RetroAchievements восстановлено");
+            impl->state.status = Localization::text(QStringLiteral("Соединение с RetroAchievements восстановлено"));
             impl->publish();
             break;
         case RC_CLIENT_EVENT_SERVER_ERROR:
-            impl->state.status = QStringLiteral("Ошибка RetroAchievements: %1")
+            impl->state.status = Localization::text(QStringLiteral("Ошибка RetroAchievements: %1"))
                                      .arg(event->server_error ? fromUtf8(event->server_error->error_message) : QString());
             impl->publish();
             break;
@@ -391,7 +392,7 @@ struct AchievementsClient::Impl {
         wantedHash.clear();
         mediaHash.clear();
         state.loading = false;
-        state.status = QStringLiteral("Время ожидания RetroAchievements истекло");
+        state.status = Localization::text(QStringLiteral("Время ожидания RetroAchievements истекло"));
         shuttingDown = false;
         publish();
     }
@@ -400,7 +401,7 @@ struct AchievementsClient::Impl {
         if (!client || !state.enabled || !state.loggedIn || wantedHash.isEmpty()) return;
         state.loading = true;
         loadTimer.start();
-        state.status = QStringLiteral("Загрузка достижений…");
+        state.status = Localization::text(QStringLiteral("Загрузка достижений…"));
         publish();
         loadHandle = rc_client_begin_load_game(client, wantedHash.constData(), &gameComplete, this);
     }
@@ -478,7 +479,7 @@ void AchievementsClient::configure(bool enabled, bool hardcore) {
         p.userDigest.clear();
         p.state = AchievementsState{};
         p.state.enabled = false;
-        p.state.status = QStringLiteral("Достижения выключены");
+        p.state.status = Localization::text(QStringLiteral("Достижения выключены"));
         p.shuttingDown = false;
         p.publish();
         return;
@@ -487,13 +488,13 @@ void AchievementsClient::configure(bool enabled, bool hardcore) {
     if (!enabled) { p.publish(); return; }
     if (!wasEnabled) {
         rc_client_set_hardcore_enabled(p.client, hardcore ? 1 : 0);
-        p.state.status = QStringLiteral("Войдите в RetroAchievements");
+        p.state.status = Localization::text(QStringLiteral("Войдите в RetroAchievements"));
         p.publish();
         QByteArray user, token;
         if (p.readCredentials(user, token)) {
             p.loginWithToken = true;
             p.loadTimer.start();
-            p.state.status = QStringLiteral("Вход в RetroAchievements…");
+            p.state.status = Localization::text(QStringLiteral("Вход в RetroAchievements…"));
             p.publish();
             p.loginHandle = rc_client_begin_login_with_token(p.client, user.constData(), token.constData(),
                                                               &Impl::loginComplete, &p);
@@ -534,7 +535,7 @@ void AchievementsClient::login(QString user, QString password) {
     p.removeCredentials();
     p.loginWithToken = false;
     p.loadTimer.start();
-    p.state.status = QStringLiteral("Вход в RetroAchievements…");
+    p.state.status = Localization::text(QStringLiteral("Вход в RetroAchievements…"));
     p.publish();
     const QByteArray u = user.toUtf8(), secret = password.toUtf8();
     p.loginHandle = rc_client_begin_login_with_password(p.client, u.constData(), secret.constData(),
@@ -561,7 +562,7 @@ void AchievementsClient::logout() {
     p.userDigest.clear();
     p.state = AchievementsState{};
     p.state.enabled = wasEnabled;
-    p.state.status = QStringLiteral("Выход из RetroAchievements выполнен");
+    p.state.status = Localization::text(QStringLiteral("Выход из RetroAchievements выполнен"));
     p.shuttingDown = false;
     p.publish();
 }
@@ -572,7 +573,7 @@ void AchievementsClient::loadGame(QString hash, unsigned consoleId) {
     QByteArray bytes = hash.toLatin1();
     if (!isHash(bytes)) {
         unloadGame();
-        p.state.status = QStringLiteral("Неверный хеш игры RetroAchievements");
+        p.state.status = Localization::text(QStringLiteral("Неверный хеш игры RetroAchievements"));
         p.publish();
         return;
     }
@@ -592,8 +593,8 @@ void AchievementsClient::loadGame(QString hash, unsigned consoleId) {
     if (p.state.loggedIn) p.startGameLoad();
     else {
         p.state.loading = p.loginHandle != nullptr;
-        p.state.status = p.state.loading ? QStringLiteral("Ожидание входа в RetroAchievements…")
-                                         : QStringLiteral("Для достижений нужен вход в RetroAchievements");
+        p.state.status = p.state.loading ? Localization::text(QStringLiteral("Ожидание входа в RetroAchievements…"))
+                                         : Localization::text(QStringLiteral("Для достижений нужен вход в RetroAchievements"));
         p.publish();
     }
 }
@@ -605,19 +606,19 @@ void AchievementsClient::changeMedia(QString hash, unsigned consoleId) {
     const rc_client_game_t* game = rc_client_get_game_info(p.client);
     if (!isHash(bytes) || !game || !game->id || (consoleId && game->console_id != consoleId)) {
         unloadGame();
-        p.state.status = QStringLiteral("Невозможно проверить новый диск RetroAchievements");
+        p.state.status = Localization::text(QStringLiteral("Невозможно проверить новый диск RetroAchievements"));
         p.publish();
         return;
     }
     if (p.loadHandle) {
-        p.state.status = QStringLiteral("Дождитесь загрузки достижений перед сменой диска");
+        p.state.status = Localization::text(QStringLiteral("Дождитесь загрузки достижений перед сменой диска"));
         p.publish();
         return;
     }
     if (p.mediaHandle) rc_client_abort_async(p.client, p.mediaHandle);
     p.mediaHash = bytes;
     p.state.loading = true;
-    p.state.status = QStringLiteral("Проверка нового диска…");
+    p.state.status = Localization::text(QStringLiteral("Проверка нового диска…"));
     p.loadTimer.start();
     p.publish();
     p.mediaHandle = rc_client_begin_change_media(p.client, bytes.constData(), &Impl::mediaComplete, &p);
@@ -733,12 +734,12 @@ void AchievementsClient::restoreProgress(QByteArray bytes, bool trusted) {
     }
     if (!valid) {
         rc_client_deserialize_progress(p.client, nullptr);
-        p.state.status = QStringLiteral("Прогресс условий достижений сброшен: состояние не совпадает");
+        p.state.status = Localization::text(QStringLiteral("Прогресс условий достижений сброшен: состояние не совпадает"));
         p.publish();
     } else {
         const auto* raw = reinterpret_cast<const uint8_t*>(bytes.constData() + kProgressHeader);
         if (rc_client_deserialize_progress_sized(p.client, raw, length) != RC_OK) {
-            p.state.status = QStringLiteral("Не удалось восстановить прогресс условий достижений");
+            p.state.status = Localization::text(QStringLiteral("Не удалось восстановить прогресс условий достижений"));
             p.publish();
         }
     }

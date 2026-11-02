@@ -59,7 +59,10 @@ public:
     ControllerType controllerType(unsigned player) const;
     bool aimWithMouse(unsigned player) const;
     unsigned mouseButtonMask(unsigned player, unsigned qtButtons) const;
-    void setEnabled(bool enabled); // release all outputs when unfocused or in modal dialogs
+    void setEnabled(bool enabled); // foreground keyboard, pad commands, and mouse input
+    bool backgroundGamepadEnabled() const;
+    void setBackgroundGamepadEnabled(bool enabled); // persistent preference
+    void setBackgroundGamepadActive(bool active); // MainWindow's game/modal focus gate
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native);
     static bool reservedKeyboardKey(int key);
@@ -76,6 +79,7 @@ signals:
     void controllerTypeChanged(unsigned player, bool sixButton);
     void deviceTypeChanged(unsigned player, int type);
     void configurationChanged();
+    void backgroundGamepadChanged(bool enabled);
     void aimMoved(unsigned player, double dx, double dy); // screen fractions, includes elapsed time
     void commandChanged(int command, bool pressed);
     void captureReady(); // all inputs released; waiting for the new binding

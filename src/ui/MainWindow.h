@@ -117,6 +117,8 @@ private:
     QAction* saveAction_ = nullptr;
     QAction* loadAction_ = nullptr;
     QAction* osdAction_ = nullptr;
+    QAction* fpsAction_ = nullptr;
+    QAction* gameFpsAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
     QStringList recentPaths_;
@@ -133,6 +135,7 @@ private:
     int region_ = 0, blarggFilter_ = 0;
     unsigned occupiedSlots_ = 0;
     bool pauseOnFocusLoss_ = true;
+    bool menuPauseActive_ = false;
     bool rewindHeld_ = false, rewindPadHeld_ = false;
     bool frameAdvanceHeld_ = false, frameAdvancePadHeld_ = false;
     bool fastForwardHeld_ = false;

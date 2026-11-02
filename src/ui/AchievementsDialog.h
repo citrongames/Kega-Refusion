@@ -18,6 +18,7 @@ public:
     explicit AchievementsDialog(QWidget* parent = nullptr);
     void setState(const AchievementsState& state);
     void setBadge(const QString& url, const QImage& image);
+    void clearBadgeImages();
 
 signals:
     void badgeRequested(const QString& url);
@@ -37,4 +38,5 @@ private:
     QSet<QString> requestedBadges_;
     quint32 displayedGameId_ = 0;
     bool visibleScanPending_ = false;
+    bool badgeRequestsPaused_ = false;
 };

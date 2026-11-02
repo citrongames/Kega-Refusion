@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "BatterySave.h"
 #include <QFile>
 #include <QFileInfo>
@@ -11,12 +12,12 @@ bool readExisting(const QString& path, qsizetype limit, QByteArray& bytes,
     if (!exists) { bytes.clear(); return true; }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > limit) {
-        error = QStringLiteral("Не удалось прочитать память сохранения: %1").arg(path);
+        error = Localization::text(QStringLiteral("Не удалось прочитать память сохранения: %1")).arg(path);
         return false;
     }
     bytes = file.readAll();
     if (bytes.size() != file.size()) {
-        error = QStringLiteral("Ошибка чтения памяти сохранения: %1").arg(path);
+        error = Localization::text(QStringLiteral("Ошибка чтения памяти сохранения: %1")).arg(path);
         return false;
     }
     return true;
@@ -24,7 +25,7 @@ bool readExisting(const QString& path, qsizetype limit, QByteArray& bytes,
 bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        error = QStringLiteral("Не удалось сохранить %1: %2").arg(path, file.errorString());
+        error = Localization::text(QStringLiteral("Не удалось сохранить %1: %2")).arg(path, file.errorString());
         return false;
     }
     return true;
@@ -35,7 +36,7 @@ bool BatterySave::update(const QString& path, const void* data, qsizetype size,
                          qint64 now, bool force, bool skipBlank, QString& error) {
     error.clear();
     if (!data || size <= 0 || size > 64 * 1024 * 1024) {
-        error = QStringLiteral("Некорректный размер памяти сохранения.");
+        error = Localization::text(QStringLiteral("Некорректный размер памяти сохранения."));
         return false;
     }
     auto& entry = entries_[path];
@@ -51,7 +52,7 @@ bool BatterySave::update(const QString& path, const void* data, qsizetype size,
             (entry.persisted.size() != size ||
              (path.endsWith(QLatin1String(".brm")) && entry.persisted.right(32) != current.right(32)))) {
             entry.lastAttempt = now;
-            error = QStringLiteral("Повреждённая память сохранения оставлена без изменений: %1").arg(path);
+            error = Localization::text(QStringLiteral("Повреждённая память сохранения оставлена без изменений: %1")).arg(path);
             return false;
         }
         // Unused cartridge SRAM must not create empty save/backup pairs.

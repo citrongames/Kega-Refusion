@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "GameView.h"
 #include "../core/VideoFrameGeometry.h"
 
@@ -241,6 +242,8 @@ void GameView::clearGame() {
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
     notices_.clear(); stateSlots_.expiresAt = 0; clearAchievementNotices(); osdTimer_.stop();
     movieMode_ = 0; movieFrame_ = movieLength_ = 0;
+    metricsReady_ = gameFpsAvailable_ = false;
+    rebuildPerformanceMetrics();
     setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
     setFrame({}, 4.0 / 3.0);
     frameCount_ = 0;
@@ -450,6 +453,50 @@ void GameView::setOsdEnabled(bool enabled) {
     repaintView();
 }
 
+void GameView::setPerformanceMetricsEnabled(bool enabled) {
+    if (performanceMetricsEnabled_ == enabled) return;
+    performanceMetricsEnabled_ = enabled;
+    if (enabled) metricsReady_ = false;
+    rebuildPerformanceMetrics();
+    repaintView();
+}
+
+void GameView::setGameFpsEnabled(bool enabled) {
+    if (gameFpsEnabled_ == enabled) return;
+    gameFpsEnabled_ = enabled;
+    if (enabled) gameFpsAvailable_ = false;
+    rebuildPerformanceMetrics();
+    repaintView();
+}
+
+void GameView::setPerformanceMetrics(double emulatedFps, double speedPercent,
+                                     double gameFps, bool gameFpsAvailable) {
+    emulatedFps_ = emulatedFps;
+    speedPercent_ = speedPercent;
+    gameFps_ = gameFps;
+    gameFpsAvailable_ = gameFpsAvailable;
+    metricsReady_ = true;
+    if (performanceMetricsEnabled_ || gameFpsEnabled_) {
+        rebuildPerformanceMetrics();
+        repaintView();
+    }
+}
+
+void GameView::rebuildPerformanceMetrics() {
+    metricsLines_.clear();
+    if (performanceMetricsEnabled_) {
+        metricsLines_.append(metricsReady_
+            ? Localization::text(QStringLiteral("ЭМУ %1 FPS · %2%")).arg(emulatedFps_, 0, 'f', 1)
+                                     .arg(speedPercent_, 0, 'f', 0)
+            : Localization::text(QStringLiteral("ЭМУ —")));
+    }
+    if (gameFpsEnabled_) {
+        metricsLines_.append(gameFpsAvailable_
+            ? Localization::text(QStringLiteral("ИГРА (ОПРОС) ~%1 FPS")).arg(gameFps_, 0, 'f', 1)
+            : Localization::text(QStringLiteral("ИГРА (ОПРОС) —")));
+    }
+}
+
 void GameView::setMutedStatus(bool muted) {
     if (muted_ == muted) return;
     muted_ = muted;
@@ -539,11 +586,12 @@ void GameView::expireOsd() {
 }
 
 void GameView::paintOsd(QPainter& painter) {
-    if (capturingGame_ || !osdEnabled_) return;
-    const QRect achievementRect = achievementPopupRect();
-    const bool ordinaryOsd = !notices_.isEmpty() || stateSlots_.expiresAt ||
-        paused_ || fastForward_ || rewinding_ || muted_ || movieMode_ == 1 || movieMode_ == 2;
-    if (!ordinaryOsd) {
+    if (capturingGame_) return;
+    const QRect achievementRect = osdEnabled_ ? achievementPopupRect() : QRect();
+    const bool ordinaryOsd = osdEnabled_ && (!notices_.isEmpty() || stateSlots_.expiresAt ||
+        paused_ || fastForward_ || rewinding_ || muted_ || movieMode_ == 1 || movieMode_ == 2);
+    const bool metricsOsd = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
+    if (!ordinaryOsd && !metricsOsd) {
         if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
             painter.drawPixmap(achievementRect.topLeft(), achievementPixmap_);
         return;
@@ -579,27 +627,35 @@ void GameView::paintOsd(QPainter& painter) {
         return panelHeight;
     };
 
+    if (metricsOsd) {
+        int textWidth = 0;
+        for (const QString& line : metricsLines_) textWidth = qMax(textWidth, fm.horizontalAdvance(line));
+        const int panelWidth = qMin(width() - 2 * margin, textWidth + 2 * pad);
+        drawPanel(metricsLines_, qMax(margin, width() - margin - panelWidth), margin, true);
+    }
+    if (!osdEnabled_) return;
+
     int y = margin;
     const auto counter = [this](quint64 frame) {
         return movieCounterAsTime_ ? movieTime(frame, movieFps_) : QString::number(frame);
     };
-    const QString unit = movieCounterAsTime_ ? QStringLiteral("ВРЕМЯ") : QStringLiteral("КАДР");
+    const QString unit = movieCounterAsTime_ ? Localization::text(QStringLiteral("ВРЕМЯ")) : Localization::text(QStringLiteral("КАДР"));
     if (movieMode_ == 1)
-        y += drawPanel({QStringLiteral("ЗАПИСЬ"),
+        y += drawPanel({Localization::text(QStringLiteral("ЗАПИСЬ")),
                         QStringLiteral("%1 %2").arg(unit, counter(movieFrame_))}, margin, y, true) + 4;
     else if (movieMode_ == 2)
-        y += drawPanel({QStringLiteral("ВОСПРОИЗВЕДЕНИЕ"),
+        y += drawPanel({Localization::text(QStringLiteral("ВОСПРОИЗВЕДЕНИЕ")),
                         QStringLiteral("%1 %2 / %3").arg(unit, counter(movieFrame_), counter(movieLength_))},
                        margin, y, true) + 4;
     if (paused_)
-        y += drawPanel({QStringLiteral("ПАУЗА")}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("ПАУЗА"))}, margin, y, true) + 4;
     if (fastForward_)
-        y += drawPanel({fastForwardFactor_ ? QStringLiteral("УСКОРЕНИЕ ×%1").arg(fastForwardFactor_) : QStringLiteral("УСКОРЕНИЕ МАКС.")},
+        y += drawPanel({fastForwardFactor_ ? Localization::text(QStringLiteral("УСКОРЕНИЕ ×%1")).arg(fastForwardFactor_) : Localization::text(QStringLiteral("УСКОРЕНИЕ МАКС."))},
                        margin, y, true) + 4;
     if (rewinding_)
-        y += drawPanel({QStringLiteral("ПЕРЕМОТКА НАЗАД"), rewindTime_}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("ПЕРЕМОТКА НАЗАД")), rewindTime_}, margin, y, true) + 4;
     if (muted_)
-        y += drawPanel({QStringLiteral("ЗВУК ВЫКЛЮЧЕН")}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("ЗВУК ВЫКЛЮЧЕН"))}, margin, y, true) + 4;
     if (stateSlots_.expiresAt) {
         // Ten compact cells, as in FCEUX: filled occupied slots and a selected outline.
         // Keep the row inside narrow windows even when their height requests a large font.
@@ -617,10 +673,10 @@ void GameView::paintOsd(QPainter& painter) {
         const int cellHeight = slotFm.height() + 2 * pad;
         const int labelHeight = slotFm.height() + 2;
         const int rowWidth = 10 * cellWidth + 9 * gap;
-        const QString label = QStringLiteral("СЛОТ %1 · %2")
+        const QString label = Localization::text(QStringLiteral("СЛОТ %1 · %2"))
                                   .arg(stateSlots_.selected)
                                   .arg(stateSlots_.occupiedMask & (1U << stateSlots_.selected)
-                                           ? QStringLiteral("ЗАНЯТ") : QStringLiteral("ПУСТ"));
+                                           ? Localization::text(QStringLiteral("ЗАНЯТ")) : Localization::text(QStringLiteral("ПУСТ")));
         const int panelWidth = qMax(rowWidth, slotFm.horizontalAdvance(label)) + 2 * pad;
         const int panelHeight = labelHeight + cellHeight + 3 * pad;
         if (y + panelHeight <= height() - margin) {
@@ -687,7 +743,7 @@ void GameView::paintLoading(QPainter& painter) {
     painter.setRenderHint(QPainter::TextAntialiasing, true);
     painter.setPen(QColor(244, 249, 250));
     painter.drawText(panel.adjusted(18, 16, -18, -16), Qt::AlignHCenter | Qt::AlignTop,
-                     QStringLiteral("Загрузка…"));
+                     Localization::text(QStringLiteral("Загрузка…")));
     if (!loadingFileName_.isEmpty()) {
         QFont detail = font();
         detail.setPixelSize(14);
@@ -903,10 +959,10 @@ void GameView::paintRaster(QPainter& painter) {
         painter.setFont(detail);
         painter.drawText(QRect(24, center.y() + 24, width() - 48, 26),
                          Qt::AlignCenter,
-                         QStringLiteral("Нажмите + или Ctrl+O · перетащите игру сюда"));
+                         Localization::text(QStringLiteral("Нажмите + или Ctrl+O · перетащите игру сюда")));
         painter.drawText(QRect(24, center.y() + 51, width() - 48, 26),
                          Qt::AlignCenter,
-                         QStringLiteral("Поддержка: MD, GEN, BIN, SMD, SMS, GG, SG, 68K, CUE, ISO, CHD, M3U"));
+                         Localization::text(QStringLiteral("Поддержка: MD, GEN, BIN, SMD, SMS, GG, SG, 68K, CUE, ISO, CHD, M3U")));
     } else {
         const QRectF target = gameRect();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);

@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "CheatsDialog.h"
 #include <QAbstractItemView>
 #include <QDialogButtonBox>
@@ -24,13 +25,13 @@ public:
 }
 CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, const QString& gameName, QWidget* parent)
     : QDialog(parent), platform_(platform), result_(entries) {
-    setWindowTitle(QStringLiteral("Читы — %1").arg(gameName));
+    setWindowTitle(Localization::text(QStringLiteral("Читы — %1")).arg(gameName));
     resize(640,380); setMinimumSize(500,300); setSizeGripEnabled(true);
     auto* layout = new QVBoxLayout(this);
     auto* formats = new QLabel(Cheats::supportText(platform),this);
     formats->setWordWrap(true); layout->addWidget(formats);
     table_ = new QTableWidget(0,3,this);
-    table_->setHorizontalHeaderLabels({QStringLiteral("Вкл."),QStringLiteral("Код"),QStringLiteral("Описание")});
+    table_->setHorizontalHeaderLabels({Localization::text(QStringLiteral("Вкл.")),Localization::text(QStringLiteral("Код")),Localization::text(QStringLiteral("Описание"))});
     table_->verticalHeader()->hide(); table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     table_->horizontalHeader()->setSectionResizeMode(0,QHeaderView::ResizeToContents);
@@ -41,15 +42,15 @@ CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, 
     table_->setItemDelegateForColumn(2,new CheatDelegate(table_));
     layout->addWidget(table_,1);
     auto* actions = new QHBoxLayout;
-    add_ = new QPushButton(QStringLiteral("Добавить"),this);
-    remove_ = new QPushButton(QStringLiteral("Удалить"),this);
+    add_ = new QPushButton(Localization::text(QStringLiteral("Добавить")),this);
+    remove_ = new QPushButton(Localization::text(QStringLiteral("Удалить")),this);
     actions->addWidget(add_); actions->addWidget(remove_); actions->addStretch();
-    actions->addWidget(new QLabel(QStringLiteral("До %1 кодов").arg(Cheats::MaxCodes),this));
+    actions->addWidget(new QLabel(Localization::text(QStringLiteral("До %1 кодов")).arg(Cheats::MaxCodes),this));
     layout->addLayout(actions);
     feedback_ = new QLabel(this); feedback_->setWordWrap(true); layout->addWidget(feedback_);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,this);
-    buttons->button(QDialogButtonBox::Save)->setText(QStringLiteral("Применить"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
+    buttons->button(QDialogButtonBox::Save)->setText(Localization::text(QStringLiteral("Применить")));
+    buttons->button(QDialogButtonBox::Cancel)->setText(Localization::text(QStringLiteral("Отмена")));
     layout->addWidget(buttons);
     for (const auto& entry : entries) addRow(entry);
     connect(add_,&QPushButton::clicked,this,[this] {

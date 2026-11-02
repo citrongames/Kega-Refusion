@@ -61,6 +61,24 @@ void waitMs(int duration) {
     loop.exec();
 }
 
+void testFpsOverlays() {
+    GameView view;
+    prepare(view);
+    view.setOsdEnabled(false);
+    const auto baseline = render(view);
+    const auto clean = view.captureGameImage();
+    view.setPerformanceMetricsEnabled(true);
+    view.setGameFpsEnabled(true);
+    view.setPerformanceMetrics(59.9, 100.0, 29.95, true);
+    const auto bounds = changedBounds(baseline, render(view));
+    require(!bounds.isEmpty() && bounds.left() > view.width()/2 && bounds.bottom() < view.height()/2,
+            "FPS should be visible top-right while action OSD is disabled");
+    require(view.captureGameImage() == clean, "FPS leaked into clean screenshot");
+    view.setPerformanceMetricsEnabled(false);
+    view.setGameFpsEnabled(false);
+    require(render(view) == baseline, "FPS did not disappear after disabling both counters");
+}
+
 void testGameBorders() {
     GameView view;
     view.resize(920, 620);
@@ -586,6 +604,10 @@ void testAchievementPopup(bool positionsOnly = false) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--fps-only"))) {
+            testFpsOverlays();
+            std::puts("FPS overlay independence and clean capture passed"); return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--achievement-positions-only"))) {
             testAchievementPopup(true);
             std::puts("achievement positions passed"); return 0;
@@ -623,6 +645,7 @@ int main(int argc, char** argv) {
             testFilteredSquarePixels();
             std::puts("filtered square-pixel geometry passed"); return 0;
         }
+        testFpsOverlays();
         testGameBorders();
         testCleanScreenshot();
         testFilteredSquarePixels();

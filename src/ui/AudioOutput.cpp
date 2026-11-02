@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "AudioOutput.h"
 
 #include <QAudioDevice>
@@ -230,7 +231,7 @@ bool AudioOutput::configure(int sampleRate) {
     releaseSink();
     const QAudioDevice device = outputDevice_;
     if (device.isNull()) {
-        fail(QStringLiteral("Звук недоступен: устройство вывода не найдено"));
+        fail(Localization::text(QStringLiteral("Звук недоступен: устройство вывода не найдено")));
         return false;
     }
 
@@ -239,7 +240,7 @@ bool AudioOutput::configure(int sampleRate) {
     format.setChannelCount(2);
     format.setSampleFormat(QAudioFormat::Int16);
     if (!device.isFormatSupported(format)) {
-        fail(QStringLiteral("Звук недоступен: формат ядра не поддерживается устройством"));
+        fail(Localization::text(QStringLiteral("Звук недоступен: формат ядра не поддерживается устройством")));
         return false;
     }
 
@@ -252,11 +253,11 @@ bool AudioOutput::configure(int sampleRate) {
     connect(sink_, &QAudioSink::stateChanged, this, [this, sinkGeneration](SinkState state) {
         if (!sink_ || sinkGeneration != sinkGeneration_) return;
         if (state == SinkState::StoppedState && sink_->error() != SinkError::NoError)
-            fail(QStringLiteral("Устройство звука отключено; повторное подключение…"));
+            fail(Localization::text(QStringLiteral("Устройство звука отключено; повторное подключение…")));
     }, Qt::QueuedConnection);
     stream_ = sink_->start();
     if (!stream_ || sink_->error() != SinkError::NoError) {
-        fail(QStringLiteral("Не удалось запустить вывод звука; повторная попытка…"));
+        fail(Localization::text(QStringLiteral("Не удалось запустить вывод звука; повторная попытка…")));
         return false;
     }
     sampleRate_ = sampleRate;
@@ -309,7 +310,7 @@ void AudioOutput::pump() {
     }
     if (sampleRate_ != rate) return;
     if (sink_->state() == SinkState::StoppedState || sink_->state() == SinkState::SuspendedState) {
-        fail(QStringLiteral("Вывод звука остановлен; повторная попытка…"));
+        fail(Localization::text(QStringLiteral("Вывод звука остановлен; повторная попытка…")));
         return;
     }
 
@@ -339,7 +340,7 @@ void AudioOutput::pump() {
             [this](const char* data, qint64 size) { return stream_->write(data, size); });
     }
     if (result.failed) {
-        fail(QStringLiteral("Ошибка передачи звука; повторная попытка…"));
+        fail(Localization::text(QStringLiteral("Ошибка передачи звука; повторная попытка…")));
         return;
     }
     wroteSamples_ = wroteSamples_ || result.accepted > 0;

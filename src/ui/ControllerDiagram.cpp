@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "ControllerDiagram.h"
 
 #include <QLineF>
@@ -369,7 +370,7 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
     switch (controllerType_) {
     case ControllerType::Pad:
         if (profile_ == ConsoleProfile::MegaDrive)
-            name += sixButton_ ? QStringLiteral(" · 6 кнопок") : QStringLiteral(" · 3 кнопки");
+            name += sixButton_ ? Localization::text(QStringLiteral(" · 6 кнопок")) : Localization::text(QStringLiteral(" · 3 кнопки"));
         break;
     case ControllerType::LightPhaser: name += QStringLiteral(" · Light Phaser"); break;
     case ControllerType::Menacer: name += QStringLiteral(" · Menacer"); break;
@@ -379,7 +380,7 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
 
     if (illustration_.isNull()) {
         painter.drawText(illustrationArea(), Qt::AlignCenter,
-                         QStringLiteral("Изображение недоступно"));
+                         Localization::text(QStringLiteral("Изображение недоступно")));
     } else {
         painter.save();
         painter.setTransform(drawingTransform());
@@ -415,7 +416,7 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
         painter.setFont(font);
         painter.setPen(palette().color(QPalette::Text));
         painter.drawText(QRectF(panel.left() + 9, panel.top(), 100, panel.height()),
-                         Qt::AlignVCenter, QStringLiteral("Пауза консоли"));
+                         Qt::AlignVCenter, Localization::text(QStringLiteral("Пауза консоли")));
         painter.setBrush(palette().color(QPalette::Button));
         painter.setPen(QPen(palette().color(QPalette::Mid), 1));
         painter.drawRoundedRect(button, 5, 5);
@@ -436,7 +437,7 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
         painter.setFont(font);
         painter.setPen(palette().color(QPalette::Text));
         painter.drawText(QRectF(panel.left(), panel.top() - 22, panel.width(), 18),
-                         Qt::AlignCenter, QStringLiteral("Остальные кнопки"));
+                         Qt::AlignCenter, Localization::text(QStringLiteral("Остальные кнопки")));
         painter.setPen(QPen(palette().color(QPalette::Mid), 1));
         painter.setBrush(palette().color(QPalette::AlternateBase));
         painter.drawRoundedRect(panel, 6, 6);
@@ -483,8 +484,8 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
     painter.setFont(hint);
     painter.drawText(QRect(8, height() - 24, width() - 16, 18), Qt::AlignCenter,
                      controllerType_ == ControllerType::Pad || !areas_.isEmpty()
-                         ? QStringLiteral("Нажмите кнопку на рисунке для выбора")
-                         : QStringLiteral("Выберите кнопку в таблице"));
+                         ? Localization::text(QStringLiteral("Нажмите кнопку на рисунке для выбора"))
+                         : Localization::text(QStringLiteral("Выберите кнопку в таблице")));
 }
 
 void ControllerDiagram::mousePressEvent(QMouseEvent* event) {

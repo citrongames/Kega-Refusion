@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "RomArchive.h"
 #include <QFile>
 #include <QFileInfo>
@@ -16,8 +17,8 @@ void fail(QString* error, const QString& message) {
 
 QString archiveError(archive* reader) {
     const char* detail = archive_error_string(reader);
-    return QStringLiteral("Не удалось прочитать архив (шифрование, повреждение или неподдерживаемое сжатие): %1")
-        .arg(detail ? QString::fromUtf8(detail) : QStringLiteral("неверный формат архива"));
+    return Localization::text(QStringLiteral("Не удалось прочитать архив (шифрование, повреждение или неподдерживаемое сжатие): %1"))
+        .arg(detail ? QString::fromUtf8(detail) : Localization::text(QStringLiteral("неверный формат архива")));
 }
 
 struct Reader {
@@ -49,15 +50,15 @@ struct Reader {
     }
     bool open(QString* error) {
         if (!file.open(QIODevice::ReadOnly)) {
-            fail(error, QStringLiteral("Не удалось открыть архив: %1").arg(file.errorString()));
+            fail(error, Localization::text(QStringLiteral("Не удалось открыть архив: %1")).arg(file.errorString()));
             return false;
         }
         if (file.size() > RomArchive::MaxArchiveSize) {
-            fail(error, QStringLiteral("Архив превышает допустимый размер 512 МиБ."));
+            fail(error, Localization::text(QStringLiteral("Архив превышает допустимый размер 512 МиБ.")));
             return false;
         }
         if (!handle) {
-            fail(error, QStringLiteral("Недостаточно памяти для чтения архива."));
+            fail(error, Localization::text(QStringLiteral("Недостаточно памяти для чтения архива.")));
             return false;
         }
         archive_read_support_filter_none(handle.get());
@@ -86,7 +87,7 @@ bool scan(const QString& path, QVector<RomArchive::Entry>* members,
           const RomArchive::Entry* selected, QByteArray* output, QString* error) {
     if (error) error->clear();
     if (!RomArchive::isArchive(path)) {
-        fail(error, QStringLiteral("Поддерживаются только архивы ZIP и 7z."));
+        fail(error, Localization::text(QStringLiteral("Поддерживаются только архивы ZIP и 7z.")));
         return false;
     }
     Reader reader(path);
@@ -105,39 +106,39 @@ bool scan(const QString& path, QVector<RomArchive::Entry>* members,
             return false;
         }
         if (index >= RomArchive::MaxEntries) {
-            fail(error, QStringLiteral("Архив содержит более 4096 файлов."));
+            fail(error, Localization::text(QStringLiteral("Архив содержит более 4096 файлов.")));
             return false;
         }
         if (archive_entry_is_encrypted(header) > 0 ||
             archive_read_has_encrypted_entries(a) > 0) {
-            fail(error, QStringLiteral("Зашифрованные архивы не поддерживаются."));
+            fail(error, Localization::text(QStringLiteral("Зашифрованные архивы не поддерживаются.")));
             return false;
         }
         const char* name = archive_entry_pathname_utf8(header);
         if (!name) name = archive_entry_pathname(header);
         const QString entryName = name ? QString::fromUtf8(name) : QString();
         if (entryName.isEmpty() || entryName.size() > 4096) {
-            fail(error, QStringLiteral("Архив содержит неверное или слишком длинное имя файла."));
+            fail(error, Localization::text(QStringLiteral("Архив содержит неверное или слишком длинное имя файла.")));
             return false;
         }
         const qint64 expected = archive_entry_size_is_set(header) ? archive_entry_size(header) : -1;
         if (expected < 0 || expected > RomArchive::MaxMemberSize) {
-            fail(error, QStringLiteral("Файл в архиве превышает 32 МиБ или имеет неверный размер."));
+            fail(error, Localization::text(QStringLiteral("Файл в архиве превышает 32 МиБ или имеет неверный размер.")));
             return false;
         }
         if (expected > RomArchive::MaxDecodedSize - total) {
-            fail(error, QStringLiteral("Общий размер распакованных данных превышает 128 МиБ."));
+            fail(error, Localization::text(QStringLiteral("Общий размер распакованных данных превышает 128 МиБ.")));
             return false;
         }
         const bool isCartridge = archive_entry_filetype(header) == AE_IFREG &&
             !archive_entry_symlink(header) && !archive_entry_hardlink(header) && cartridge(entryName);
         const bool wanted = selected && selected->index == index;
         if (wanted && (!isCartridge || selected->name != entryName || selected->size != expected)) {
-            fail(error, QStringLiteral("Выбранный файл в архиве изменился. Откройте архив заново."));
+            fail(error, Localization::text(QStringLiteral("Выбранный файл в архиве изменился. Откройте архив заново.")));
             return false;
         }
         if (isCartridge && expected < 512) {
-            fail(error, QStringLiteral("Размер ROM в архиве меньше 512 байт."));
+            fail(error, Localization::text(QStringLiteral("Размер ROM в архиве меньше 512 байт.")));
             return false;
         }
         if (wanted) output->reserve(qsizetype(expected));
@@ -151,7 +152,7 @@ bool scan(const QString& path, QVector<RomArchive::Entry>* members,
             if (count == 0) break;
             if (count > RomArchive::MaxMemberSize - decoded ||
                 count > RomArchive::MaxDecodedSize - total) {
-                fail(error, QStringLiteral("Архив превышает допустимый размер распакованных данных."));
+                fail(error, Localization::text(QStringLiteral("Архив превышает допустимый размер распакованных данных.")));
                 return false;
             }
             decoded += count;
@@ -159,7 +160,7 @@ bool scan(const QString& path, QVector<RomArchive::Entry>* members,
             if (wanted) output->append(block.data(), qsizetype(count));
         }
         if (archive_entry_filetype(header) == AE_IFREG && decoded != expected) {
-            fail(error, QStringLiteral("Файл в архиве обрезан или имеет неверный распакованный размер."));
+            fail(error, Localization::text(QStringLiteral("Файл в архиве обрезан или имеет неверный распакованный размер.")));
             return false;
         }
         if (isCartridge && members) members->append({entryName, index, expected});
@@ -167,11 +168,11 @@ bool scan(const QString& path, QVector<RomArchive::Entry>* members,
         ++index;
     }
     if (selected && !found) {
-        fail(error, QStringLiteral("Выбранный ROM не найден в архиве."));
+        fail(error, Localization::text(QStringLiteral("Выбранный ROM не найден в архиве.")));
         return false;
     }
     if (members && members->isEmpty()) {
-        fail(error, QStringLiteral("В архиве нет поддерживаемых файлов ROM."));
+        fail(error, Localization::text(QStringLiteral("В архиве нет поддерживаемых файлов ROM.")));
         return false;
     }
     return true;

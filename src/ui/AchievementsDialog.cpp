@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "AchievementsDialog.h"
 
 #include <QAbstractTableModel>
@@ -26,11 +27,11 @@ bool sameEntry(const AchievementEntry& a, const AchievementEntry& b) {
            a.unsupported == b.unsupported && a.type == b.type;
 }
 QString achievementType(const AchievementEntry& entry) {
-    if (entry.unsupported) return QStringLiteral("Недоступно");
+    if (entry.unsupported) return Localization::text(QStringLiteral("Недоступно"));
     switch (entry.type) {
-    case 1: return QStringLiteral("Пропускаемое");
-    case 2: return QStringLiteral("Прогресс");
-    case 3: return QStringLiteral("Победа");
+    case 1: return Localization::text(QStringLiteral("Пропускаемое"));
+    case 2: return Localization::text(QStringLiteral("Прогресс"));
+    case 3: return Localization::text(QStringLiteral("Победа"));
     default: return QStringLiteral("—");
     }
 }
@@ -49,10 +50,10 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override {
         if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return {};
         static const QStringList headers{
-            QString(), QStringLiteral("Достижение"), QStringLiteral("Очки"),
+            QString(), Localization::text(QStringLiteral("Достижение")), Localization::text(QStringLiteral("Очки")),
             QStringLiteral("Softcore"), QStringLiteral("Hardcore"),
-            QStringLiteral("Открыли %"), QStringLiteral("Hard %"),
-            QStringLiteral("Тип")};
+            Localization::text(QStringLiteral("Открыли %")), QStringLiteral("Hard %"),
+            Localization::text(QStringLiteral("Тип"))};
         return section >= 0 && section < headers.size() ? headers[section] : QVariant();
     }
     QVariant data(const QModelIndex& index, int role) const override {
@@ -126,6 +127,12 @@ public:
                 !entry.lockedBadgeUrl.isEmpty()) ? entry.lockedBadgeUrl : entry.badgeUrl;
     }
     bool hasBadge(const QString& url) const { return icons_.contains(url); }
+    void clearBadgeImages() {
+        icons_.clear();
+        if (!state_.entries.isEmpty())
+            emit dataChanged(index(0, 0), index(state_.entries.size() - 1, 0),
+                             {Qt::DecorationRole});
+    }
     void setBadge(const QString& url, const QImage& image) {
         if (image.isNull()) return;
         auto* icon = new QPixmap(QPixmap::fromImage(image).scaled(48, 48, Qt::KeepAspectRatio,
@@ -163,7 +170,7 @@ protected:
 
 AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
     setObjectName(QStringLiteral("achievementsDialog"));
-    setWindowTitle(QStringLiteral("Достижения — Kega Refusion"));
+    setWindowTitle(Localization::text(QStringLiteral("Достижения — Kega Refusion")));
     setMinimumSize(780, 460);
     resize(1120, 670);
     setSizeGripEnabled(true);
@@ -207,7 +214,7 @@ AchievementsDialog::AchievementsDialog(QWidget* parent) : QDialog(parent) {
     table_->viewport()->installEventFilter(this);
     layout->addWidget(table_, 1);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
+    buttons->button(QDialogButtonBox::Close)->setText(Localization::text(QStringLiteral("Закрыть")));
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     layout->addWidget(buttons);
     connect(table_->verticalScrollBar(), &QScrollBar::valueChanged,
@@ -226,13 +233,19 @@ void AchievementsDialog::setState(const AchievementsState& state) {
     account_->setText(state.loggedIn
         ? QStringLiteral("RetroAchievements: %1%2").arg(state.username,
             state.hardcore ? QStringLiteral(" · Hardcore") : QStringLiteral(" · Softcore"))
-        : QStringLiteral("Войдите в RetroAchievements в настройках."));
+        : Localization::text(QStringLiteral("Войдите в RetroAchievements в настройках.")));
     game_->setText(state.gameId
-        ? QStringLiteral("%1 · открыто %2 из %3 · %4 очков")
+        ? Localization::text(QStringLiteral("%1 · открыто %2 из %3 · %4 очков"))
               .arg(state.gameTitle).arg(state.unlocked).arg(state.total).arg(state.points)
-        : QStringLiteral("Игра с достижениями не загружена."));
+        : Localization::text(QStringLiteral("Игра с достижениями не загружена.")));
     status_->setText(state.status);
     scheduleVisibleBadges();
+}
+
+void AchievementsDialog::clearBadgeImages() {
+    badgeRequestsPaused_ = true;
+    requestedBadges_.clear();
+    model_->clearBadgeImages();
 }
 
 void AchievementsDialog::setBadge(const QString& url, const QImage& image) {
@@ -256,7 +269,7 @@ void AchievementsDialog::scheduleVisibleBadges() {
 }
 
 void AchievementsDialog::requestVisibleBadges() {
-    if (!isVisible() || proxy_->rowCount() == 0) return;
+    if (badgeRequestsPaused_ || !isVisible() || proxy_->rowCount() == 0) return;
     const int first = qMax(0, table_->rowAt(0));
     int last = table_->rowAt(table_->viewport()->height() - 1);
     if (last < 0) last = proxy_->rowCount() - 1;

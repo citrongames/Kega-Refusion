@@ -3,6 +3,7 @@
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
@@ -13,6 +14,7 @@
 #include <QUrl>
 #include <climits>
 #include <memory>
+#include <utility>
 
 namespace {
 constexpr qint64 kApiLimit = 8 * 1024 * 1024;
@@ -38,7 +40,7 @@ bool safeUrl(const QUrl& url, bool badge) {
 }
 QNetworkRequest makeRequest(const QUrl& url) {
     QNetworkRequest request(url);
-    request.setRawHeader("User-Agent", "KegaRefusion/0.11.1 rcheevos/12.5.0");
+    request.setRawHeader("User-Agent", "KegaRefusion/0.12.0 rcheevos/12.5.0");
     request.setTransferTimeout(kTimeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::ManualRedirectPolicy);
@@ -77,6 +79,34 @@ QImage loadCachedBadge(const QString& path) {
 bool cachedBadgeFilePresent(const QString& path) {
     const QFileInfo info(path);
     return info.isFile() && info.size() > 0 && info.size() <= kBadgeLimit;
+}
+bool ownedBadgeName(const QString& name) {
+    if (name.size() != 68 || !name.endsWith(QLatin1String(".img"))) return false;
+    for (int i = 0; i < 64; ++i) {
+        const QChar c = name.at(i);
+        if ((c < QLatin1Char('0') || c > QLatin1Char('9')) &&
+            (c < QLatin1Char('a') || c > QLatin1Char('f')))
+            return false;
+    }
+    return true;
+}
+bool clearCachedBadges(const QString& directory) {
+    const QFileInfo directoryInfo(directory);
+    if (directoryInfo.isSymLink()) return false;
+    if (!directoryInfo.exists()) return true;
+    if (!directoryInfo.isDir()) return false;
+
+    bool success = true;
+    QDirIterator files(directory, QDir::Files | QDir::Hidden | QDir::System |
+                                   QDir::NoDotAndDotDot);
+    while (files.hasNext()) {
+        const QString path = files.next();
+        const QFileInfo info = files.fileInfo();
+        if (!ownedBadgeName(info.fileName()) ||
+            (!info.isFile() && !info.isSymLink())) continue;
+        if (!QFile::remove(path)) success = false;
+    }
+    return success;
 }
 void saveBadge(const QString& path, const QByteArray& body) {
     if (body.isEmpty() || body.size() > kBadgeLimit ||
@@ -142,6 +172,41 @@ void AchievementNetwork::perform(const AchievementHttpRequest& request) {
     });
 }
 
+void AchievementNetwork::clearBadgeCache() {
+    if (badgeClearPending_) {
+        ++badgeClearRequests_;
+        return;
+    }
+
+    badgeClearPending_ = true;
+    badgeClearRequests_ = 1;
+    badgeCacheGeneration_.fetch_add(1, std::memory_order_relaxed);
+    ++prefetchGeneration_;
+    images_.clear();
+    badgeQueue_.clear();
+    prefetchUrls_.clear();
+    prefetchCursor_ = 0;
+    prefetchSeen_.clear();
+    badgePending_.clear();
+    badgeWanted_.clear();
+    badgeFailed_.clear();
+    badgeInFlight_ = 0;
+
+    const auto replies = badgeReplies_.values();
+    for (QNetworkReply* reply : replies) reply->abort();
+
+    const QString directory = badgeDirectory_;
+    badgeIoPool_.start([this, directory] {
+        const bool success = clearCachedBadges(directory);
+        QMetaObject::invokeMethod(this, [this, success] {
+            badgeClearPending_ = false;
+            const int requests = std::exchange(badgeClearRequests_, 0);
+            for (int i = 0; i < requests; ++i) emit badgeCacheCleared(success);
+            scheduleStartBadges();
+        }, Qt::QueuedConnection);
+    });
+}
+
 void AchievementNetwork::requestBadge(const QString& urlText) {
     if (urlText.size() > 2048 || !safeUrl(QUrl(urlText), true)) return;
     if (const QImage* image = images_.object(urlText)) {
@@ -180,7 +245,9 @@ void AchievementNetwork::scheduleStartBadges() {
     });
 }
 
-void AchievementNetwork::finishBadge(const QString& url, const QImage& image) {
+void AchievementNetwork::finishBadge(const QString& url, const QImage& image,
+                                     quint64 cacheGeneration) {
+    if (cacheGeneration != badgeCacheGeneration_.load(std::memory_order_relaxed)) return;
     if (!image.isNull()) {
         images_.insert(url, new QImage(image),
                        int(qMin<qint64>(image.sizeInBytes(), INT_MAX)));
@@ -195,13 +262,20 @@ void AchievementNetwork::finishBadge(const QString& url, const QImage& image) {
     scheduleStartBadges();
 }
 
-void AchievementNetwork::startBadgeNetwork(const QString& url, quint64 generation) {
+void AchievementNetwork::startBadgeNetwork(const QString& url, quint64 generation,
+                                           quint64 cacheGeneration) {
     QNetworkReply* reply = manager_.get(makeRequest(QUrl(url)));
+    badgeReplies_.insert(reply);
     auto transfer = std::make_shared<Transfer>();
     connect(reply, &QIODevice::readyRead, this, [reply, transfer] {
         drain(reply, transfer, kBadgeLimit);
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, transfer, url, generation] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, transfer, url, generation, cacheGeneration] {
+        badgeReplies_.remove(reply);
+        if (cacheGeneration != badgeCacheGeneration_.load(std::memory_order_relaxed)) {
+            reply->deleteLater();
+            return;
+        }
         drain(reply, transfer, kBadgeLimit);
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool transportFailure = !transfer->tooLarge &&
@@ -213,24 +287,27 @@ void AchievementNetwork::startBadgeNetwork(const QString& url, quint64 generatio
             reply->error() == QNetworkReply::NoError && status == 200;
         reply->deleteLater();
         if (!validBody) {
-            finishBadge(url, {});
+            finishBadge(url, {}, cacheGeneration);
             return;
         }
         const QString path = badgePath(url);
         QByteArray body = std::move(transfer->body);
-        badgeIoPool_.start([this, url, path, body = std::move(body)]() mutable {
+        badgeIoPool_.start([this, url, path, cacheGeneration, body = std::move(body)]() mutable {
             QBuffer buffer(&body);
             buffer.open(QIODevice::ReadOnly);
             QImage image = decodeBadge(&buffer);
-            if (!image.isNull()) saveBadge(path, body);
-            QMetaObject::invokeMethod(this, [this, url, image = std::move(image)] {
-                finishBadge(url, image);
+            if (!image.isNull() &&
+                cacheGeneration == badgeCacheGeneration_.load(std::memory_order_relaxed))
+                saveBadge(path, body);
+            QMetaObject::invokeMethod(this, [this, url, cacheGeneration, image = std::move(image)] {
+                finishBadge(url, image, cacheGeneration);
             }, Qt::QueuedConnection);
         });
     });
 }
 
 void AchievementNetwork::startBadges() {
+    if (badgeClearPending_) return;
     int scanned = 0;
     while (badgeInFlight_ < 2 && scanned < kBadgeScanPerTurn &&
            (!badgeQueue_.isEmpty() || prefetchCursor_ < prefetchUrls_.size())) {
@@ -260,13 +337,16 @@ void AchievementNetwork::startBadges() {
         ++badgeInFlight_;
         const QString path = badgePath(urlText);
         const quint64 generation = prefetchGeneration_;
-        badgeIoPool_.start([this, urlText, path, urgent, generation] {
+        const quint64 cacheGeneration = badgeCacheGeneration_.load(std::memory_order_relaxed);
+        badgeIoPool_.start([this, urlText, path, urgent, generation, cacheGeneration] {
             const bool present = !urgent && cachedBadgeFilePresent(path);
             QImage cached = urgent ? loadCachedBadge(path) : QImage();
             QMetaObject::invokeMethod(this, [this, urlText, urgent, generation,
-                                             present, cached = std::move(cached)] {
+                                             cacheGeneration, present, cached = std::move(cached)] {
+                if (cacheGeneration != badgeCacheGeneration_.load(std::memory_order_relaxed))
+                    return;
                 if (!present && cached.isNull()) {
-                    startBadgeNetwork(urlText, generation);
+                    startBadgeNetwork(urlText, generation, cacheGeneration);
                     return;
                 }
                 if (urgent) {

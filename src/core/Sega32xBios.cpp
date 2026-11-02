@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "Sega32xBios.h"
 #include <QCryptographicHash>
 #include <QDir>
@@ -34,16 +35,16 @@ QString pathFor(const QString& dataPath,const Image& image) {
 bool readImage(const QString& path, qsizetype size, QByteArray& bytes, QString& error) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        error=QStringLiteral("Не удалось прочитать BIOS %1: %2").arg(path,file.errorString());
+        error=Localization::text(QStringLiteral("Не удалось прочитать BIOS %1: %2")).arg(path,file.errorString());
         return false;
     }
     if (file.size()!=size) {
-        error=QStringLiteral("Неверный размер BIOS %1: требуется %2 байт.").arg(path).arg(size);
+        error=Localization::text(QStringLiteral("Неверный размер BIOS %1: требуется %2 байт.")).arg(path).arg(size);
         return false;
     }
     bytes=file.read(size+1);
     if (bytes.size()!=size) {
-        error=QStringLiteral("Не удалось полностью прочитать BIOS: %1").arg(path);
+        error=Localization::text(QStringLiteral("Не удалось полностью прочитать BIOS: %1")).arg(path);
         return false;
     }
     return true;
@@ -66,11 +67,11 @@ QString Sega32xBios::fileName(Piece piece) {
 bool Sega32xBios::validateFile(const QString& path,Piece piece,QString& error) {
     error.clear();
     const auto* image=imageFor(piece);
-    if (!image) { error=QStringLiteral("Неизвестная часть BIOS 32X."); return false; }
+    if (!image) { error=Localization::text(QStringLiteral("Неизвестная часть BIOS 32X.")); return false; }
     QByteArray bytes;
     if (!readImage(path,image->size,bytes,error)) return false;
     if (identify(bytes)!=image) {
-        error=QStringLiteral("BIOS %1 не распознан: контрольная сумма не соответствует поддерживаемому образу %2.")
+        error=Localization::text(QStringLiteral("BIOS %1 не распознан: контрольная сумма не соответствует поддерживаемому образу %2."))
                   .arg(path,QString::fromLatin1(image->label));
         return false;
     }
@@ -87,14 +88,14 @@ bool Sega32xBios::validate(const QString& dataPath,QString& error) {
 QString Sega32xBios::status(const QString& dataPath) {
     QString error;
     if (!validate(dataPath,error)) return error;
-    return QStringLiteral("BIOS 32X установлены: 68000, Master SH2, Slave SH2.");
+    return Localization::text(QStringLiteral("BIOS 32X установлены: 68000, Master SH2, Slave SH2."));
 }
 QStringList Sega32xBios::importDirectory(const QString& sourceDirectory,const QString& dataPath,QString& error) {
     error.clear();
     QStringList imported;
     QDir source(sourceDirectory);
     if (!source.exists()) {
-        error=QStringLiteral("Каталог BIOS не найден: %1").arg(sourceDirectory);
+        error=Localization::text(QStringLiteral("Каталог BIOS не найден: %1")).arg(sourceDirectory);
         return imported;
     }
     std::array<QByteArray,3> candidates;
@@ -117,29 +118,29 @@ QStringList Sega32xBios::importDirectory(const QString& sourceDirectory,const QS
         if (existing.exists() || existing.isSymLink()) {
             QString detail;
             if (!validateFile(destination,image.piece,detail))
-                append(error,QStringLiteral("Существующий файл сохранён без замены. %1").arg(detail));
+                append(error,Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1")).arg(detail));
             continue;
         }
         if (!QDir().mkpath(QFileInfo(destination).absolutePath())) {
-            append(error,QStringLiteral("Не удалось создать каталог BIOS: %1").arg(destination));
+            append(error,Localization::text(QStringLiteral("Не удалось создать каталог BIOS: %1")).arg(destination));
             continue;
         }
         // NewOnly closes the existence-check race: user files are never replaced.
         QFile output(destination);
         if (!output.open(QIODevice::WriteOnly|QIODevice::NewOnly)) {
-            append(error,QStringLiteral("Не удалось создать BIOS %1: %2").arg(destination,output.errorString()));
+            append(error,Localization::text(QStringLiteral("Не удалось создать BIOS %1: %2")).arg(destination,output.errorString()));
             continue;
         }
         if (output.write(candidates[i])!=candidates[i].size() || !output.flush()) {
             const QString detail=output.errorString();
             output.close(); output.remove();
-            append(error,QStringLiteral("Не удалось записать BIOS %1: %2").arg(destination,detail));
+            append(error,Localization::text(QStringLiteral("Не удалось записать BIOS %1: %2")).arg(destination,detail));
             continue;
         }
         output.close();
         imported<<QString::fromLatin1(image.label);
     }
-    if (!found) append(error,QStringLiteral("В каталоге %1 не найдены поддерживаемые оригинальные BIOS 32X (256, 2048 и 1024 байта).")
+    if (!found) append(error,Localization::text(QStringLiteral("В каталоге %1 не найдены поддерживаемые оригинальные BIOS 32X (256, 2048 и 1024 байта)."))
                               .arg(source.absolutePath()));
     return imported;
 }

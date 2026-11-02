@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "Mp3Stream.h"
 #include <QFile>
 #include <QtEndian>
@@ -28,7 +29,7 @@ bool Mp3Stream::open(const QString& path, QString& error, int expectedRate) {
     auto& s = *state_;
     s.file.setFileName(path);
     if (!s.file.open(QIODevice::ReadOnly) || s.file.size() <= 0 || s.file.size() > 256LL*1024*1024) {
-        error = QStringLiteral("Не удалось открыть MP3-дорожку или она слишком велика: %1").arg(path); return false;
+        error = Localization::text(QStringLiteral("Не удалось открыть MP3-дорожку или она слишком велика: %1")).arg(path); return false;
     }
     s.io.read = [](void* out, size_t count, void* user) -> size_t {
         auto* file = static_cast<QFile*>(user);
@@ -46,8 +47,8 @@ bool Mp3Stream::open(const QString& path, QString& error, int expectedRate) {
         (expectedRate ? rate != expectedRate : (rate != 44100 && rate != 48000)) ||
         !s.decoder.samples || s.decoder.samples > 100ULL*60*uint64_t(rate)*2) {
         error = expectedRate == 0
-            ? QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 или 48 кГц, стерео, не длиннее 100 минут: %1").arg(path)
-            : QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 кГц, стерео, не длиннее 100 минут: %1").arg(path);
+            ? Localization::text(QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 или 48 кГц, стерео, не длиннее 100 минут: %1")).arg(path)
+            : Localization::text(QStringLiteral("MP3-дорожка должна быть корректной записью 44,1 кГц, стерео, не длиннее 100 минут: %1")).arg(path);
         return false;
     }
     s.totalBytes = qint64(s.decoder.samples)*2 + 44;

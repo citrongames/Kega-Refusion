@@ -33,8 +33,9 @@ x32_patch="$root/tools/patches/genesis-plus-gx-32x.patch"
 normal_patches=(
   "$root/tools/patches/genesis-plus-gx-32x-render-hooks.patch"
   "$root/tools/patches/genesis-plus-gx-32x-libretro.patch"
-  "$root/tools/patches/genesis-plus-gx-paprium.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-paprium.patch"
+  "$root/tools/patches/genesis-plus-gx-expansions-metrics.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -97,46 +98,90 @@ elif ! git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
 fi
 
 # BEGIN managed 32X patch update
-apply_managed_patch() {
-  local current_patch=$1 receipt=$2 temporary
-  if [[ -e "$receipt" || -L "$receipt" ]]; then
-    [[ -f "$receipt" && ! -L "$receipt" && -s "$receipt" ]] || {
-      echo "Invalid applied-patch receipt: $receipt. Leaving checkout untouched." >&2; return 1;
-    }
-  fi
-  if [[ -f "$receipt" ]] && ! cmp -s "$receipt" "$current_patch"; then
-    # Only remove the exact previous revision, and refuse conflicting edits.
-    if ! git -C "$checkout" apply --reverse --check "$receipt"; then
-      echo 'Experimental checkout conflicts with its recorded patch; no changes made.' >&2
-      return 1
-    fi
-    git -C "$checkout" apply --reverse "$receipt" || return 1
-    if ! git -C "$checkout" apply --check "$current_patch" ||
-       ! git -C "$checkout" apply "$current_patch"; then
-      if ! git -C "$checkout" apply "$receipt"; then
-        echo "Could not restore previous patch; retain receipt for manual recovery: $receipt" >&2
-        return 1
-      fi
-      echo 'New 32X patch does not apply; previous revision restored. No Git reset performed.' >&2
-      return 1
-    fi
-  elif git -C "$checkout" apply --check "$current_patch" >/dev/null 2>&1; then
-    git -C "$checkout" apply "$current_patch" || return 1
-  elif ! git -C "$checkout" apply --reverse --check "$current_patch" >/dev/null 2>&1; then
-    echo "32X patch does not match $checkout; unknown changes preserved without reset." >&2
-    return 1
-  fi
-  if ! cmp -s "$receipt" "$current_patch"; then
-    temporary="$receipt.tmp.$$"
-    cp "$current_patch" "$temporary" && mv -f "$temporary" "$receipt"
-  fi
-}
-apply_managed_patch "$x32_patch" "$checkout/.kegarefusion-32x-applied.patch"
+# Later patches may change lines introduced by earlier patches. Treat receipts
+# as an ordered stack: unchanged layers need no work, and an update unwinds only
+# the changed layer and those above it before replaying them in order.
+managed_patches=("$x32_patch")
+managed_receipts=("$checkout/.kegarefusion-32x-applied.patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   for i in "${!normal_patches[@]}"; do
-    apply_managed_patch "${normal_patches[$i]}" "$checkout/${normal_receipts[$i]}"
+    managed_patches+=("${normal_patches[$i]}")
+    managed_receipts+=("$checkout/${normal_receipts[$i]}")
   done
 fi
+apply_managed_stack() {
+  local count=${#managed_patches[@]} first=-1 i j layer temporary
+  local -a reversed=() applied=() staged=()
+
+  rollback_managed_stack() {
+    local j layer failed=0
+    for ((j=${#applied[@]}-1; j>=0; --j)); do
+      layer=${applied[$j]}
+      if ! git -C "$checkout" apply --reverse "${managed_patches[$layer]}"; then failed=1; fi
+    done
+    for ((j=${#reversed[@]}-1; j>=0; --j)); do
+      layer=${reversed[$j]}
+      if ! git -C "$checkout" apply "${managed_receipts[$layer]}"; then failed=1; fi
+    done
+    for temporary in "${staged[@]}"; do rm -f -- "$temporary"; done
+    if (( failed )); then
+      echo 'Could not restore previous managed patches; receipts retained for manual recovery.' >&2
+      return 1
+    fi
+  }
+
+  for ((i=0; i<count; ++i)); do
+    if [[ -e "${managed_receipts[$i]}" || -L "${managed_receipts[$i]}" ]]; then
+      [[ -f "${managed_receipts[$i]}" && ! -L "${managed_receipts[$i]}" &&
+         -s "${managed_receipts[$i]}" ]] || {
+        echo "Invalid applied-patch receipt: ${managed_receipts[$i]}. Leaving checkout untouched." >&2
+        return 1
+      }
+    fi
+    if (( first < 0 )) &&
+       { [[ ! -f "${managed_receipts[$i]}" ]] ||
+         ! cmp -s "${managed_receipts[$i]}" "${managed_patches[$i]}"; }; then
+      first=$i
+    fi
+  done
+  if (( first < 0 )); then return 0; fi
+
+  for ((i=count-1; i>=first; --i)); do
+    if [[ ! -f "${managed_receipts[$i]}" ]]; then continue; fi
+    if ! git -C "$checkout" apply --reverse --check "${managed_receipts[$i]}" ||
+       ! git -C "$checkout" apply --reverse "${managed_receipts[$i]}"; then
+      echo "Experimental checkout conflicts with recorded layer ${managed_receipts[$i]}." >&2
+      rollback_managed_stack
+      return 1
+    fi
+    reversed+=("$i")
+  done
+  for ((i=first; i<count; ++i)); do
+    if ! git -C "$checkout" apply --check "${managed_patches[$i]}" ||
+       ! git -C "$checkout" apply "${managed_patches[$i]}"; then
+      echo "New managed layer ${managed_patches[$i]} does not apply; restoring previous revisions." >&2
+      rollback_managed_stack
+      return 1
+    fi
+    applied+=("$i")
+  done
+
+  # Stage every new receipt before replacing any old one. Unchanged invocations
+  # never touch source files or receipt timestamps.
+  for ((i=first; i<count; ++i)); do
+    temporary="${managed_receipts[$i]}.tmp.$$"
+    if ! cp "${managed_patches[$i]}" "$temporary"; then
+      echo "Could not stage receipt $temporary; restoring previous revisions." >&2
+      rollback_managed_stack
+      return 1
+    fi
+    staged+=("$temporary")
+  done
+  for ((i=first; i<count; ++i)); do
+    mv -f -- "${staged[$((i-first))]}" "${managed_receipts[$i]}"
+  done
+}
+apply_managed_stack
 # END managed 32X patch update
 
 sources_changed=0

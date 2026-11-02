@@ -8,6 +8,7 @@
 #include <QPixmap>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVector>
 #include <QWidget>
@@ -45,6 +46,9 @@ public:
     void clearAchievementNotices();
     void setAchievementPosition(int position); // 0..5: top L/C/R, bottom L/C/R.
     void setOsdEnabled(bool enabled);
+    void setPerformanceMetricsEnabled(bool enabled);
+    void setGameFpsEnabled(bool enabled);
+    void setPerformanceMetrics(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
     void setPausedStatus(bool paused);
     void setMutedStatus(bool muted);
     void setFastForwardStatus(bool enabled);
@@ -121,6 +125,7 @@ private:
     void rebuildAchievementPixmap();
     QRect achievementPopupRect() const;
     void paintOsd(QPainter& painter);
+    void rebuildPerformanceMetrics();
     void paintLoading(QPainter& painter);
 
     QImage frame_;
@@ -128,6 +133,14 @@ private:
     AspectMode aspectMode_ = AspectMode::Console;
     bool integerScaling_ = false;
     bool osdEnabled_ = true;
+    bool performanceMetricsEnabled_ = false;
+    bool gameFpsEnabled_ = false;
+    bool metricsReady_ = false;
+    bool gameFpsAvailable_ = false;
+    double emulatedFps_ = 0.0;
+    double speedPercent_ = 0.0;
+    double gameFps_ = 0.0;
+    QStringList metricsLines_;
     bool capturingGame_ = false;
     bool capturingReticles_ = false;
     struct GunState {

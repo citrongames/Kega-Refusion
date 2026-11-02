@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "MovieTape.h"
 
 #include <QCryptographicHash>
@@ -81,7 +82,7 @@ bool inputValid(const MovieInput& input) {
 bool writeAtomic(const QString& path, const QByteArray& bytes, QString& error) {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        error = QStringLiteral("Не удалось сохранить запись %1: %2").arg(path, file.errorString());
+        error = Localization::text(QStringLiteral("Не удалось сохранить запись %1: %2")).arg(path, file.errorString());
         return false;
     }
     return true;
@@ -125,7 +126,7 @@ qsizetype MovieTape::bytesUsed() const {
 bool MovieTape::setResumeState(const QByteArray& state, quint64 cursor, QString& error) {
     error.clear();
     if (!isValid() || state.isEmpty() || state.size() > MaxInitialBytes || cursor > frameCount_) {
-        error = QStringLiteral("Недопустимое состояние для продолжения записи.");
+        error = Localization::text(QStringLiteral("Недопустимое состояние для продолжения записи."));
         return false;
     }
     resumeState_ = state;
@@ -138,7 +139,7 @@ bool MovieTape::create(const QJsonObject& metadata, const QByteArray& initialSta
     const QByteArray encoded = QJsonDocument(metadata).toJson(QJsonDocument::Compact);
     if (encoded.isEmpty() || encoded.size() > MaxMetadataBytes ||
         initialState.isEmpty() || initialState.size() > MaxInitialBytes) {
-        error = QStringLiteral("Недопустимый размер описания или начального состояния записи.");
+        error = Localization::text(QStringLiteral("Недопустимый размер описания или начального состояния записи."));
         return false;
     }
     clear();
@@ -153,7 +154,7 @@ bool MovieTape::create(const QJsonObject& metadata, const QByteArray& initialSta
 bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames,
                           std::deque<Run>& out, QString& error) {
     if (count > quint32(MaxRuns) || frames > MaxFrames || (count == 0) != (frames == 0)) {
-        error = QStringLiteral("Превышен предел длины записи.");
+        error = Localization::text(QStringLiteral("Превышен предел длины записи."));
         return false;
     }
     quint64 end = 0;
@@ -164,7 +165,7 @@ bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames,
         const MovieInput input = readInput(entry);
         if (!repeat || repeat > MaxFrames-end || !inputValid(input) ||
             (i && input == previous)) {
-            error = QStringLiteral("Повреждённые данные ввода в записи.");
+            error = Localization::text(QStringLiteral("Повреждённые данные ввода в записи."));
             return false;
         }
         end += repeat;
@@ -172,7 +173,7 @@ bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames,
         previous = input;
     }
     if (end != frames) {
-        error = QStringLiteral("Число кадров записи не совпадает с данными ввода.");
+        error = Localization::text(QStringLiteral("Число кадров записи не совпадает с данными ввода."));
         return false;
     }
     return true;
@@ -193,12 +194,12 @@ bool MovieTape::load(const QString& path, QString& error) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly) || file.size() < MovieHeaderBytes+HashBytes ||
         file.size() > MaxMovieFileBytes) {
-        error = QStringLiteral("Не удалось прочитать файл записи или превышен предел размера: %1").arg(path);
+        error = Localization::text(QStringLiteral("Не удалось прочитать файл записи или превышен предел размера: %1")).arg(path);
         return false;
     }
     const QByteArray bytes = file.readAll();
     if (bytes.size() != file.size() || !movieEnvelopeValid(bytes)) {
-        error = QStringLiteral("Повреждённый или неподдерживаемый файл записи: %1").arg(path);
+        error = Localization::text(QStringLiteral("Повреждённый или неподдерживаемый файл записи: %1")).arg(path);
         return false;
     }
     const quint32 metadataLength = read32(bytes.constData()+12);
@@ -208,14 +209,14 @@ bool MovieTape::load(const QString& path, QString& error) {
     const quint32 resumeLength = read32(bytes.constData()+48);
     const quint64 resumeFrame = read64(bytes.constData()+52);
     if (runCount > quint32(MaxRuns)) {
-        error = QStringLiteral("Превышен предел объёма ввода записи.");
+        error = Localization::text(QStringLiteral("Превышен предел объёма ввода записи."));
         return false;
     }
     const QByteArray metadataBytes(bytes.constData()+MovieHeaderBytes, metadataLength);
     QJsonParseError parseError;
     const QJsonDocument parsed = QJsonDocument::fromJson(metadataBytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !parsed.isObject()) {
-        error = QStringLiteral("Повреждено описание записи.");
+        error = Localization::text(QStringLiteral("Повреждено описание записи."));
         return false;
     }
     const QByteArray initial(bytes.constData()+MovieHeaderBytes+metadataLength, initialLength);
@@ -236,7 +237,7 @@ bool MovieTape::load(const QString& path, QString& error) {
 bool MovieTape::save(const QString& path, QString& error) const {
     error.clear();
     if (!isValid() || !path.endsWith(QStringLiteral(".krm"), Qt::CaseInsensitive)) {
-        error = QStringLiteral("Для записи нужен путь файла .krm.");
+        error = Localization::text(QStringLiteral("Для записи нужен путь файла .krm."));
         return false;
     }
     QByteArray bytes;
@@ -260,16 +261,16 @@ bool MovieTape::save(const QString& path, QString& error) const {
     if (QFileInfo::exists(path)) {
         QFile old(path);
         if (!old.open(QIODevice::ReadOnly) || old.size() > MaxMovieFileBytes || old.size() < 0) {
-            error = QStringLiteral("Не удалось проверить прежний файл записи: %1").arg(path);
+            error = Localization::text(QStringLiteral("Не удалось проверить прежний файл записи: %1")).arg(path);
             return false;
         }
         const QByteArray previous = old.readAll();
         if (previous.size() != old.size() || !movieEnvelopeValid(previous)) {
-            error = QStringLiteral("Прежний файл записи повреждён; он оставлен без изменений: %1").arg(path);
+            error = Localization::text(QStringLiteral("Прежний файл записи повреждён; он оставлен без изменений: %1")).arg(path);
             return false;
         }
         if (QByteArray(previous.constData()+32, 16) != id_) {
-            error = QStringLiteral("Файл содержит другую запись; выберите новое имя: %1").arg(path);
+            error = Localization::text(QStringLiteral("Файл содержит другую запись; выберите новое имя: %1")).arg(path);
             return false;
         }
         if (previous == bytes) return true;
@@ -281,11 +282,11 @@ bool MovieTape::save(const QString& path, QString& error) const {
 bool MovieTape::append(const MovieInput& input, QString& error) {
     error.clear();
     if (!isValid() || !inputValid(input)) {
-        error = QStringLiteral("Некорректный ввод кадра записи.");
+        error = Localization::text(QStringLiteral("Некорректный ввод кадра записи."));
         return false;
     }
     if (frameCount_ >= MaxFrames) {
-        error = QStringLiteral("Достигнут предел числа кадров записи.");
+        error = Localization::text(QStringLiteral("Достигнут предел числа кадров записи."));
         return false;
     }
     if (!runs_.empty() && runs_.back().input == input) {
@@ -294,7 +295,7 @@ bool MovieTape::append(const MovieInput& input, QString& error) {
         return true;
     }
     if (runs_.size() >= size_t(MaxRuns)) {
-        error = QStringLiteral("Достигнут предел памяти записи ввода.");
+        error = Localization::text(QStringLiteral("Достигнут предел памяти записи ввода."));
         return false;
     }
     runs_.push_back({input, frameCount_+1});
@@ -331,7 +332,7 @@ bool MovieTape::truncate(quint64 frameCount) {
 QByteArray MovieTape::checkpoint(quint64 cursor, QString& error) const {
     error.clear();
     if (!isValid() || cursor > frameCount_) {
-        error = QStringLiteral("Недопустимая позиция записи.");
+        error = Localization::text(QStringLiteral("Недопустимая позиция записи."));
         return {};
     }
     quint32 count = 0;
@@ -369,20 +370,20 @@ bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
         bytes.size() > MaxCheckpointBytes ||
         std::memcmp(bytes.constData(), CheckpointMagic, 8) ||
         read32(bytes.constData()+8) != FormatVersion || !validHash(bytes)) {
-        error = QStringLiteral("Повреждена контрольная точка записи.");
+        error = Localization::text(QStringLiteral("Повреждена контрольная точка записи."));
         return false;
     }
     const quint64 savedCursor = read64(bytes.constData()+12);
     const quint32 count = read32(bytes.constData()+68);
     if (QByteArray(bytes.constData()+20, 16) != id_ ||
         QByteArray(bytes.constData()+36, 32) != fingerprint_) {
-        error = QStringLiteral("Контрольная точка относится к другой записи или игре.");
+        error = Localization::text(QStringLiteral("Контрольная точка относится к другой записи или игре."));
         return false;
     }
     if (count > quint32(MaxRuns) || savedCursor > MaxFrames ||
         quint64(bytes.size()) != quint64(CheckpointHeaderBytes) +
             quint64(count)*InputBytes + HashBytes) {
-        error = QStringLiteral("Превышен предел контрольной точки записи.");
+        error = Localization::text(QStringLiteral("Превышен предел контрольной точки записи."));
         return false;
     }
     std::deque<Run> prefix;
@@ -390,7 +391,7 @@ bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
         return false;
     if (readOnly) {
         if (!prefixMatches(prefix, savedCursor)) {
-            error = QStringLiteral("Контрольная точка не совпадает с текущей веткой воспроизведения.");
+            error = Localization::text(QStringLiteral("Контрольная точка не совпадает с текущей веткой воспроизведения."));
             return false;
         }
     } else {
@@ -405,7 +406,7 @@ bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
 bool MovieTape::forkAt(quint64 frameCount, QString& error) {
     error.clear();
     if (!truncate(frameCount)) {
-        error = QStringLiteral("Недопустимая позиция ответвления записи.");
+        error = Localization::text(QStringLiteral("Недопустимая позиция ответвления записи."));
         return false;
     }
     id_ = QUuid::createUuid().toRfc4122();

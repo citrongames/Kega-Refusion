@@ -135,6 +135,12 @@ def main() -> None:
         shutil.copy2(source, output)
     # Plugin search paths are configured by the executable before QApplication starts.
 
+    shutil.copytree(root / "languages", stage / "languages")
+    qtbase_ru = qt_root / "translations/qtbase_ru.qm"
+    if not qtbase_ru.is_file():
+        raise SystemExit(f"Missing Qt Russian translation: {qtbase_ru}")
+    shutil.copy2(qtbase_ru, stage / "languages/qtbase_ru.qm")
+
     notices = stage / "licenses"
     notices.mkdir()
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")

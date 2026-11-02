@@ -58,6 +58,9 @@ public:
     void setRewindEnabled(bool enabled);
     void setRewindMemoryMiB(int mebibytes);
     void setBackgroundPaused(bool paused);
+    void setPerformanceMetricsEnabled(bool enabled);
+    void setGameFpsEnabled(bool enabled);
+    void setExpansionDevices(bool cd, bool x32);
     void requestSlotStatus(int selected);
     void configureAchievements(bool enabled, bool hardcore);
     void loginAchievements(QString user, QString password);
@@ -76,6 +79,7 @@ signals:
     void movieHardwareChanged(const QByteArray& controllersJson);
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
+    void performanceMetricsChanged(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
     void gameLoaded(const QString& path, double fps, const QString& contentName);
@@ -94,7 +98,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse };
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions };
     struct Command {
         Type type;
         QString path;

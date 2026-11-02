@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "InputManager.h"
 
 #include <QElapsedTimer>
@@ -220,6 +221,8 @@ struct InputManager::Impl {
     bool sdlReady = false;
     bool initialScan = true;
     bool enabled = true;
+    bool backgroundGamepadEnabled = false;
+    bool backgroundGamepadActive = false;
     std::array<unsigned, playerCount> masks{};
     std::array<unsigned, playerCount> previews{};
     bool legacyPortOneGun = false;
@@ -239,6 +242,9 @@ struct InputManager::Impl {
             for (int player = 0; player < playerCount; ++player)
                 mappings[p][player] = InputManager::defaultMapping(ConsoleProfile(p), player);
         QSettings settings(settingsPath, QSettings::IniFormat);
+        backgroundGamepadEnabled = settings.value(QStringLiteral("input/backgroundGamepad"), false).toBool();
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
+                    backgroundGamepadEnabled ? "1" : "0");
         for (int p = 0; p < 4; ++p) for (int player = 0; player < playerCount; ++player) {
             auto& m = mappings[p][player];
             const QString prefix = settingsPrefix(ConsoleProfile(p), player);
@@ -326,7 +332,7 @@ struct InputManager::Impl {
             SDL_JoystickEventState(SDL_ENABLE);
             SDL_GameControllerEventState(SDL_ENABLE);
         } else {
-            const QString message = QStringLiteral("Геймпады недоступны: %1").arg(QString::fromUtf8(SDL_GetError()));
+            const QString message = Localization::text(QStringLiteral("Геймпады недоступны: %1")).arg(QString::fromUtf8(SDL_GetError()));
             QTimer::singleShot(0, owner, [parent, message] { emit parent->notification(message); });
         }
     }
@@ -385,7 +391,7 @@ struct InputManager::Impl {
         QStringList notices;
         for (int i = int(devices.size()) - 1; i >= 0; --i) {
             if (!present.contains(devices[i]->instanceId)) {
-                notices.push_back(QStringLiteral("Геймпад отключён: %1").arg(devices[i]->name));
+                notices.push_back(Localization::text(QStringLiteral("Геймпад отключён: %1")).arg(devices[i]->name));
                 if (capture && captureInstance == devices[i]->instanceId) cancelCapture();
                 devices.erase(devices.begin() + i);
                 changed = true;
@@ -411,7 +417,7 @@ struct InputManager::Impl {
             device->key = base;
             while (findByKey(device->key))
                 device->key = base + '#' + QString::number(++ordinal);
-            notices.push_back(QStringLiteral("Геймпад подключён: %1").arg(device->name));
+            notices.push_back(Localization::text(QStringLiteral("Геймпад подключён: %1")).arg(device->name));
             devices.push_back(std::move(device));
             changed = true;
         }
@@ -474,7 +480,7 @@ struct InputManager::Impl {
         // multiply movement. Reuse its device assignments; pad-only input has no
         // clock reads or extra SDL axis calls.
         bool needed = false;
-        if (enabled && !capture) {
+        if ((enabled || backgroundGamepadActive) && !capture) {
             for (unsigned player = 0; player < playerCount; ++player) {
                 const auto& mapping = effective(int(player));
                 needed |= connected(player) && mapping.controllerType != ControllerType::Pad &&
@@ -535,7 +541,7 @@ struct InputManager::Impl {
             unsigned mask = pad;
             for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
                 if (activeGameplayTarget(profile, m, it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
-            if (!enabled || capture || !connected(player)) mask = 0;
+            if ((!enabled && !backgroundGamepadActive) || capture || !connected(player)) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
                 emit owner->maskChanged(player, mask);
@@ -773,13 +779,13 @@ PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
 }
 QString InputManager::bindingName(const PadBinding& binding) {
     switch (binding.kind) {
-    case PadBinding::Button: return QStringLiteral("Кнопка %1").arg(binding.index + 1);
-    case PadBinding::Axis: return QStringLiteral("Ось %1 %2").arg(binding.index + 1).arg(binding.direction > 0 ? '+' : '-');
-    case PadBinding::Hat: return QStringLiteral("Крестовина %1 (%2)").arg(binding.index + 1).arg(binding.direction);
-    case PadBinding::Automatic: return QStringLiteral("Авто");
-    case PadBinding::None: return QStringLiteral("Не назначено");
+    case PadBinding::Button: return Localization::text(QStringLiteral("Кнопка %1")).arg(binding.index + 1);
+    case PadBinding::Axis: return Localization::text(QStringLiteral("Ось %1 %2")).arg(binding.index + 1).arg(binding.direction > 0 ? '+' : '-');
+    case PadBinding::Hat: return Localization::text(QStringLiteral("Крестовина %1 (%2)")).arg(binding.index + 1).arg(binding.direction);
+    case PadBinding::Automatic: return Localization::text(QStringLiteral("Авто"));
+    case PadBinding::None: return Localization::text(QStringLiteral("Не назначено"));
     }
-    return QStringLiteral("Не назначено");
+    return Localization::text(QStringLiteral("Не назначено"));
 }
 QString InputManager::profileName(ConsoleProfile profile) {
     switch (profile) {
@@ -796,38 +802,38 @@ QVector<int> InputManager::gameTargets(ConsoleProfile profile, bool sixButton, C
 }
 QString InputManager::targetName(ConsoleProfile profile, int target, ControllerType type) {
     if (validControllerType(profile, type) != ControllerType::Pad) {
-        if (target == 1) return QStringLiteral("Курок");
-        if (target == 2) return QStringLiteral("Перезарядка");
-        if (target == 0) return QStringLiteral("Кнопка 2");
-        if (target == 8) return QStringLiteral("Кнопка 3");
+        if (target == 1) return Localization::text(QStringLiteral("Курок"));
+        if (target == 2) return Localization::text(QStringLiteral("Перезарядка"));
+        if (target == 0) return Localization::text(QStringLiteral("Кнопка 2"));
+        if (target == 8) return Localization::text(QStringLiteral("Кнопка 3"));
     }
     switch (target) {
-    case 4: return QStringLiteral("Вверх");
-    case 5: return QStringLiteral("Вниз");
-    case 6: return QStringLiteral("Влево");
-    case 7: return QStringLiteral("Вправо");
+    case 4: return Localization::text(QStringLiteral("Вверх"));
+    case 5: return Localization::text(QStringLiteral("Вниз"));
+    case 6: return Localization::text(QStringLiteral("Влево"));
+    case 7: return Localization::text(QStringLiteral("Вправо"));
     case 0: return profile == ConsoleProfile::MegaDrive ? QStringLiteral("B") : QStringLiteral("1");
     case 8: return profile == ConsoleProfile::MegaDrive ? QStringLiteral("C") : QStringLiteral("2");
     case 1: return QStringLiteral("A");
-    case 3: return profile == ConsoleProfile::MasterSystem ? QStringLiteral("Пауза консоли") : QStringLiteral("Start");
+    case 3: return profile == ConsoleProfile::MasterSystem ? Localization::text(QStringLiteral("Пауза консоли")) : QStringLiteral("Start");
     case 2: return QStringLiteral("Mode");
     case 9: return QStringLiteral("Y");
     case 10: return QStringLiteral("X");
     case 11: return QStringLiteral("Z");
-    case PauseCommand: return QStringLiteral("Пауза эмуляции");
-    case FastForwardCommand: return QStringLiteral("Ускорение");
-    case SaveCommand: return QStringLiteral("Сохранить состояние");
-    case LoadCommand: return QStringLiteral("Загрузить состояние");
-    case ResetCommand: return QStringLiteral("Сброс");
-    case HardResetCommand: return QStringLiteral("Перезапуск питания");
-    case FrameAdvanceCommand: return QStringLiteral("Следующий кадр");
-    case FullscreenCommand: return QStringLiteral("Полный экран");
-    case MuteCommand: return QStringLiteral("Без звука");
-    case NextSlotCommand: return QStringLiteral("Следующий слот");
-    case PreviousSlotCommand: return QStringLiteral("Предыдущий слот");
-    case MenuCommand: return QStringLiteral("Меню");
-    case RewindCommand: return QStringLiteral("Перемотка назад");
-    default: return QStringLiteral("Кнопка %1").arg(target);
+    case PauseCommand: return Localization::text(QStringLiteral("Пауза эмуляции"));
+    case FastForwardCommand: return Localization::text(QStringLiteral("Ускорение"));
+    case SaveCommand: return Localization::text(QStringLiteral("Сохранить состояние"));
+    case LoadCommand: return Localization::text(QStringLiteral("Загрузить состояние"));
+    case ResetCommand: return Localization::text(QStringLiteral("Сброс"));
+    case HardResetCommand: return Localization::text(QStringLiteral("Перезапуск питания"));
+    case FrameAdvanceCommand: return Localization::text(QStringLiteral("Следующий кадр"));
+    case FullscreenCommand: return Localization::text(QStringLiteral("Полный экран"));
+    case MuteCommand: return Localization::text(QStringLiteral("Без звука"));
+    case NextSlotCommand: return Localization::text(QStringLiteral("Следующий слот"));
+    case PreviousSlotCommand: return Localization::text(QStringLiteral("Предыдущий слот"));
+    case MenuCommand: return Localization::text(QStringLiteral("Меню"));
+    case RewindCommand: return Localization::text(QStringLiteral("Перемотка назад"));
+    default: return Localization::text(QStringLiteral("Кнопка %1")).arg(target);
     }
 }
 void InputManager::setProfile(ConsoleProfile profile) {
@@ -911,6 +917,23 @@ unsigned InputManager::mouseButtonMask(unsigned player, unsigned qtButtons) cons
         if (button && (qtButtons & unsigned(button))) mask |= 1u << target;
     }
     return mask;
+}
+bool InputManager::backgroundGamepadEnabled() const { return d->backgroundGamepadEnabled; }
+void InputManager::setBackgroundGamepadEnabled(bool enabled) {
+    if (d->backgroundGamepadEnabled == enabled) return;
+    d->backgroundGamepadEnabled = enabled;
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, enabled ? "1" : "0");
+    QSettings settings(d->settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("input/backgroundGamepad"), enabled);
+    if (!enabled) setBackgroundGamepadActive(false);
+    emit backgroundGamepadChanged(enabled);
+}
+void InputManager::setBackgroundGamepadActive(bool active) {
+    active = active && d->backgroundGamepadEnabled;
+    if (d->backgroundGamepadActive == active) return;
+    d->backgroundGamepadActive = active;
+    d->aimTimer.invalidate();
+    d->recompute();
 }
 void InputManager::setEnabled(bool enabled) {
     if (d->enabled == enabled) return;

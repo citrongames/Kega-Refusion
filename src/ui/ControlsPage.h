@@ -66,6 +66,7 @@ private:
     QLabel* deviceTypeLabel_ = nullptr;
     QComboBox* deviceTypeBox_ = nullptr;
     QCheckBox* showCrosshairBox_ = nullptr;
+    QCheckBox* backgroundGamepadBox_ = nullptr;
     QCheckBox* secondJustifierBox_ = nullptr;
     QLabel* aimSourceLabel_ = nullptr;
     QComboBox* aimSourceBox_ = nullptr;

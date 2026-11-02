@@ -35,6 +35,9 @@ public:
     bool selectDisc(int index, QString& error);
     bool setDiscEjected(bool ejected, QString& error);
     void runFrame(bool renderVideo = true, bool captureAudio = true);
+    bool frameInputPolled() const;
+    bool supportsInputPollMetrics() const;
+    void setExpansionDevices(bool cd, bool x32);
     void reset();
     bool hardReset(QString& error);
     // Region: 0 Auto, 1 Japan, 2 USA, 3 Europe. Filter: 0 Off, 1 Mono,
@@ -105,6 +108,8 @@ private:
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
+    bool applyExpansionDevices(QString& error);
+    bool hasCdHardware() const;
     void loadCheats();
     void applyCheats();
     void clearCoreCheats();
@@ -156,6 +161,7 @@ private:
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
+    bool attachCd_ = false, attach32x_ = false, contentNeeds32x_ = false;
     std::array<unsigned,3> buttons_{};
     std::array<bool,3> controllerConnected_{{true,false,false}};
     std::array<bool,3> controllerSixButton_{{true,true,true}};

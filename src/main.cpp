@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "core/EmulationSession.h"
 #include "ui/MainWindow.h"
 
@@ -63,38 +64,41 @@ int main(int argc, char* argv[]) {
     QApplication::setApplicationName(QStringLiteral("Kega Refusion"));
     QApplication::setOrganizationName(QStringLiteral("Kega Refusion"));
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
+    const QString appDirectory = QCoreApplication::applicationDirPath();
+    Localization::initialize(appDirectory,
+        QDir(appDirectory).filePath(QStringLiteral("data")));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("Kega Refusion — Mega Drive, Sega CD и Master System"));
+        Localization::text(QStringLiteral("Kega Refusion — Mega Drive, Sega CD и Master System")));
     parser.addHelpOption();
     QCommandLineOption performanceOption(QStringList{QStringLiteral("performance-check")},
-        QStringLiteral("Измерить работу окна в течение 10 секунд"));
+        Localization::text(QStringLiteral("Измерить работу окна в течение 10 секунд")));
     parser.addOption(performanceOption);
     QCommandLineOption coreOption(
         QStringList{QStringLiteral("core")},
-        QStringLiteral("Путь к ядру Genesis Plus GX Libretro"),
+        Localization::text(QStringLiteral("Путь к ядру Genesis Plus GX Libretro")),
         QStringLiteral("path"));
     QCommandLineOption dataOption(
         QStringList{QStringLiteral("data")},
-        QStringLiteral("Каталог настроек и сохранений"),
+        Localization::text(QStringLiteral("Каталог настроек и сохранений")),
         QStringLiteral("path"));
     QCommandLineOption smokeOption(
         QStringList{QStringLiteral("smoke-test")},
-        QStringLiteral("Показать окно на 3 секунды и завершить с кодом проверки"));
+        Localization::text(QStringLiteral("Показать окно на 3 секунды и завершить с кодом проверки")));
     QCommandLineOption screenshotOption(
         QStringList{QStringLiteral("screenshot")},
-        QStringLiteral("Снимок окна на второй секунде проверки"),
+        Localization::text(QStringLiteral("Снимок окна на второй секунде проверки")),
         QStringLiteral("path"));
     QCommandLineOption fullscreenOption(
         QStringList{QStringLiteral("fullscreen")},
-        QStringLiteral("Начать в полноэкранном режиме"));
+        Localization::text(QStringLiteral("Начать в полноэкранном режиме")));
     QCommandLineOption osdDemoOption(
         QStringList{QStringLiteral("osd-demo")},
-        QStringLiteral("Показать образцы экранных сообщений при проверке"));
+        Localization::text(QStringLiteral("Показать образцы экранных сообщений при проверке")));
     QCommandLineOption keyTestOption(
         QStringList{QStringLiteral("smoke-fullscreen-keys")},
-        QStringLiteral("При проверке нажать Esc, затем Alt+Enter"));
+        Localization::text(QStringLiteral("При проверке нажать Esc, затем Alt+Enter")));
     parser.addOption(coreOption);
     parser.addOption(dataOption);
     parser.addOption(smokeOption);
@@ -103,10 +107,9 @@ int main(int argc, char* argv[]) {
     parser.addOption(osdDemoOption);
     parser.addOption(keyTestOption);
     parser.addPositionalArgument(QStringLiteral("rom"),
-                                 QStringLiteral("Необязательный путь к игре"));
+                                 Localization::text(QStringLiteral("Необязательный путь к игре")));
     parser.process(app);
 
-    const QString appDirectory = QCoreApplication::applicationDirPath();
 #ifdef Q_OS_WIN
     const QString defaultCore = QStringLiteral("genesis_plus_gx_libretro.dll");
 #else
@@ -122,9 +125,10 @@ int main(int argc, char* argv[]) {
             ? parser.value(dataOption)
             : QDir(appDirectory).filePath(QStringLiteral("data")))
                                  .absoluteFilePath();
+    if (parser.isSet(dataOption)) Localization::initialize(appDirectory, dataPath);
     if (!QDir().mkpath(dataPath)) {
         QMessageBox::critical(nullptr, QStringLiteral("Kega Refusion"),
-                              QStringLiteral("Не удалось создать каталог данных: %1")
+                              Localization::text(QStringLiteral("Не удалось создать каталог данных: %1"))
                                   .arg(dataPath));
         return 2;
     }

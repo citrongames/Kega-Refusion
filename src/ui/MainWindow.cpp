@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "MainWindow.h"
 #include "AudioOutput.h"
 #include "ControlsPage.h"
@@ -37,6 +38,9 @@
 #include <QDialogButtonBox>
 #include <QListWidget>
 #include <QPushButton>
+#include <QStyle>
+#include <QPainter>
+#include <QPainterPath>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMediaDevices>
@@ -58,6 +62,56 @@
 namespace {
 constexpr int kBiosSettingsPage = 6;
 constexpr int kControlsSettingsPage = 7;
+
+// Small native line icons; created only when opening settings, with palette-aware selection.
+QIcon settingsSectionIcon(int section, const QPalette& palette) {
+    QIcon icon;
+    for (const auto mode : {QIcon::Normal, QIcon::Selected}) {
+        QPixmap image(48, 48); image.fill(Qt::transparent); image.setDevicePixelRatio(2);
+        QPainter p(&image); p.setRenderHint(QPainter::Antialiasing);
+        const QColor color = palette.color(mode == QIcon::Selected ? QPalette::HighlightedText : QPalette::Text);
+        p.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath path;
+        switch (section) {
+        case 0: // sliders
+            for (int row=0; row<3; ++row) {
+                const qreal y=6+6*row, x=row==1 ? 15 : 8;
+                p.drawLine(QPointF(3,y),QPointF(x-2,y)); p.drawLine(QPointF(x+2,y),QPointF(21,y));
+                p.drawEllipse(QPointF(x,y),2,2);
+            } break;
+        case 1: // cartridge
+            p.drawRoundedRect(QRectF(4,3,16,18),2,2);
+            p.drawRect(QRectF(7,6,10,6));
+            for(int x=8;x<=16;x+=4)p.drawLine(x,18,x,21);
+            break;
+        case 2: // rewind
+            path.moveTo(11,5);path.lineTo(3,12);path.lineTo(11,19);path.closeSubpath();
+            path.moveTo(21,5);path.lineTo(13,12);path.lineTo(21,19);path.closeSubpath();
+            p.drawPath(path);break;
+        case 3: // recording
+            p.drawEllipse(QPointF(12,12),8,8);p.setBrush(color);p.drawEllipse(QPointF(12,12),4,4);break;
+        case 4: // trophy
+            path.moveTo(7,3);path.lineTo(17,3);path.lineTo(17,9);path.cubicTo(17,17,7,17,7,9);path.closeSubpath();
+            p.drawPath(path);p.drawLine(12,15,12,20);p.drawLine(8,21,16,21);
+            p.drawArc(QRectF(3,4,8,7),90*16,180*16);p.drawArc(QRectF(13,4,8,7),270*16,180*16);break;
+        case 5: // speaker
+            path.moveTo(3,9);path.lineTo(7,9);path.lineTo(12,5);path.lineTo(12,19);path.lineTo(7,15);path.lineTo(3,15);path.closeSubpath();
+            p.drawPath(path);p.drawArc(QRectF(10,6,10,12),-60*16,120*16);
+            p.drawArc(QRectF(9,3,14,18),-60*16,120*16);break;
+        case 6: // firmware chip
+            p.drawRoundedRect(QRectF(6,6,12,12),1,1);p.drawRect(QRectF(9,9,6,6));
+            for(int v=8;v<=16;v+=4){p.drawLine(v,3,v,6);p.drawLine(v,18,v,21);p.drawLine(3,v,6,v);p.drawLine(18,v,21,v);}break;
+        case 7: // gamepad
+            path.moveTo(7,7);path.lineTo(17,7);path.cubicTo(21,7,23,19,19,19);
+            path.cubicTo(17,19,16,16,14,16);path.lineTo(10,16);
+            path.cubicTo(8,16,7,19,5,19);path.cubicTo(1,19,3,7,7,7);
+            p.drawPath(path);p.drawLine(6,10,6,14);p.drawLine(4,12,8,12);
+            p.setBrush(color);p.drawEllipse(QPointF(16,12),1,1);p.drawEllipse(QPointF(19,10),1,1);break;
+        }
+        p.end();icon.addPixmap(image,mode);
+    }
+    return icon;
+}
 
 QString shaderParameterPrefix(const QString& path) {
     const auto key = QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex();
@@ -167,11 +221,37 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
     session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
+    session_.setExpansionDevices(settings_.value(QStringLiteral("emulation/attachCd"), false).toBool(),
+                                 settings_.value(QStringLiteral("emulation/attach32x"), false).toBool());
+    connect(&session_, &EmulationSession::performanceMetricsChanged,
+            view_, &GameView::setPerformanceMetrics);
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setRewindEnabled(rewindEnabled_);
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
     buildMenus();
+    for (QAction* action : menuBar()->actions()) {
+        QMenu* menu = action->menu();
+        if (!menu) continue;
+        connect(menu, &QMenu::aboutToShow, this, [this] {
+            menuPauseActive_ = true;
+            session_.setBackgroundPaused(true);
+            releaseInput();
+        });
+        connect(menu, &QMenu::aboutToHide, this, [this] {
+            // A neighboring top menu may open while this one is closing.
+            QTimer::singleShot(0, this, [this] {
+                menuPauseActive_ = false;
+                for (QAction* action : menuBar()->actions()) {
+                    if (QMenu* menu = action->menu(); menu && menu->isVisible()) {
+                        menuPauseActive_ = true;
+                        break;
+                    }
+                }
+                updateInputEnabled();
+            });
+        });
+    }
     updateGunConfiguration();
     connect(&session_, &EmulationSession::movieHardwareChanged, this,
             [this](const QByteArray& controllersJson) {
@@ -233,13 +313,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             (notice.kind == AchievementNotice::Completed && !notice.hardcore)) return;
         QString heading, title = notice.title;
         if (notice.kind == AchievementNotice::GameReady) {
-            heading = QStringLiteral("ИГРА РАСПОЗНАНА");
+            heading = Localization::text(QStringLiteral("ИГРА РАСПОЗНАНА"));
         } else if (notice.kind == AchievementNotice::Unlocked) {
-            heading = QStringLiteral("ДОСТИЖЕНИЕ ОТКРЫТО");
+            heading = Localization::text(QStringLiteral("ДОСТИЖЕНИЕ ОТКРЫТО"));
             if (notice.rarity > 0.0) heading += QStringLiteral(" · %1%").arg(notice.rarity, 0, 'f', 2);
-            title += QStringLiteral(" · %1 очк.").arg(notice.points);
+            title += Localization::text(QStringLiteral(" · %1 очк.")).arg(notice.points);
         } else if (notice.kind == AchievementNotice::Completed) {
-            heading = QStringLiteral("МАСТЕРСТВО");
+            heading = Localization::text(QStringLiteral("МАСТЕРСТВО"));
         }
         view_->showAchievementNotice(heading, title, notice.description, notice.badgeUrl,
                                      notice.kind != AchievementNotice::GameReady);
@@ -279,7 +359,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(view_, &GameView::shaderFailed, this, [this](const QString& error) {
         settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
         updateShaderActions();
-        if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Шейдер"), error);
+        if (!smokeTest_) QMessageBox::warning(this, Localization::text(QStringLiteral("Шейдер")), error);
     });
     const QString shader = settings_.value(QStringLiteral("view/shaderPreset")).toString();
     if (!shader.isEmpty() && !applyShaderPreset(shader)) {
@@ -381,12 +461,12 @@ void MainWindow::buildMenus() {
         action->setShortcutContext(Qt::WindowShortcut);
         addAction(action);
     };
-    QMenu* fileMenu = menuBar()->addMenu(QStringLiteral("&Файл"));
-    QAction* openAction = fileMenu->addAction(QStringLiteral("Открыть игру…"));
+    QMenu* fileMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Файл")));
+    QAction* openAction = fileMenu->addAction(Localization::text(QStringLiteral("Открыть игру…")));
     openAction->setShortcut(QKeySequence::Open);
     shortcut(openAction);
     connect(openAction, &QAction::triggered, this, &MainWindow::openGameDialog);
-    closeGameAction_ = fileMenu->addAction(QStringLiteral("Закрыть игру"));
+    closeGameAction_ = fileMenu->addAction(Localization::text(QStringLiteral("Закрыть игру")));
     closeGameAction_->setEnabled(false);
     connect(closeGameAction_, &QAction::triggered, this, [this] {
         if (!session_.hasGame() || loading_) return;
@@ -396,11 +476,11 @@ void MainWindow::buildMenus() {
         updateInputEnabled();
         session_.closeGame();
     });
-    recentMenu_ = fileMenu->addMenu(QStringLiteral("Недавние игры"));
+    recentMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Недавние игры")));
     updateRecentMenu();
-    movieMenu_ = fileMenu->addMenu(QStringLiteral("Запись"));
+    movieMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Запись")));
     movieMenu_->setObjectName(QStringLiteral("movieMenu"));
-    movieRecordAction_ = movieMenu_->addAction(QStringLiteral("Начать запись…"));
+    movieRecordAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Начать запись…")));
     movieRecordAction_->setObjectName(QStringLiteral("movieRecord"));
     connect(movieRecordAction_, &QAction::triggered, this, [this] {
         const QString path = chooseMovieSavePath(false);
@@ -410,13 +490,13 @@ void MainWindow::buildMenus() {
         updateMovieActions();
         session_.startMovieRecording(path);
     });
-    movieResumeAction_ = movieMenu_->addAction(QStringLiteral("Продолжить запись…"));
+    movieResumeAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Продолжить запись…")));
     movieResumeAction_->setObjectName(QStringLiteral("movieResume"));
     connect(movieResumeAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString directory = QDir(dataPath_).filePath(QStringLiteral("movies"));
-        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Продолжить запись управления"),
-            directory, QStringLiteral("Записи управления (*.krm);;Все файлы (*)"));
+        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Продолжить запись управления")),
+            directory, Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
         view_->setFocus();
         if (path.isEmpty()) return;
         moviePending_ = true;
@@ -424,13 +504,13 @@ void MainWindow::buildMenus() {
         updateMovieActions();
         session_.resumeMovieRecording(path);
     });
-    moviePlayAction_ = movieMenu_->addAction(QStringLiteral("Воспроизвести…"));
+    moviePlayAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Воспроизвести…")));
     moviePlayAction_->setObjectName(QStringLiteral("moviePlay"));
     connect(moviePlayAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString directory = QDir(dataPath_).filePath(QStringLiteral("movies"));
-        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Воспроизвести запись управления"),
-            directory, QStringLiteral("Записи управления (*.krm);;Все файлы (*)"));
+        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Воспроизвести запись управления")),
+            directory, Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
         view_->setFocus();
         if (path.isEmpty()) return;
         moviePending_ = true;
@@ -439,7 +519,7 @@ void MainWindow::buildMenus() {
         session_.playMovie(path);
     });
     movieMenu_->addSeparator();
-    movieTakeoverAction_ = movieMenu_->addAction(QStringLiteral("Перехватить управление"));
+    movieTakeoverAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Перехватить управление")));
     movieTakeoverAction_->setObjectName(QStringLiteral("movieTakeover"));
     connect(movieTakeoverAction_, &QAction::triggered, this, [this] {
         releaseInput();
@@ -449,7 +529,7 @@ void MainWindow::buildMenus() {
         session_.takeOverMovie();
         view_->setFocus();
     });
-    movieRerecordAction_ = movieMenu_->addAction(QStringLiteral("Записывать с этого места…"));
+    movieRerecordAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Записывать с этого места…")));
     movieRerecordAction_->setObjectName(QStringLiteral("movieRerecord"));
     connect(movieRerecordAction_, &QAction::triggered, this, [this] {
         const QString path = chooseMovieSavePath(true);
@@ -459,7 +539,7 @@ void MainWindow::buildMenus() {
         updateMovieActions();
         session_.rerecordMovie(path);
     });
-    movieStopAction_ = movieMenu_->addAction(QStringLiteral("Остановить"));
+    movieStopAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Остановить")));
     movieStopAction_->setObjectName(QStringLiteral("movieStop"));
     connect(movieStopAction_, &QAction::triggered, this, [this] {
         releaseInput();
@@ -471,18 +551,18 @@ void MainWindow::buildMenus() {
     });
     updateMovieActions();
     QMenu* segaCdMenu = fileMenu->addMenu(QStringLiteral("Sega CD"));
-    changeDiscAction_ = segaCdMenu->addAction(QStringLiteral("Сменить диск…"));
+    changeDiscAction_ = segaCdMenu->addAction(Localization::text(QStringLiteral("Сменить диск…")));
     connect(changeDiscAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString initial = discIndex_ >= 0 && discIndex_ < discPaths_.size()
             ? QFileInfo(discPaths_[discIndex_]).absolutePath()
             : settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString();
-        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Сменить диск"), initial,
-            QStringLiteral("Диски Sega CD (*.cue *.iso *.chd);;Все файлы (*)"));
+        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Сменить диск")), initial,
+            Localization::text(QStringLiteral("Диски Sega CD (*.cue *.iso *.chd);;Все файлы (*)")));
         if (!path.isEmpty()) session_.changeDisc(path);
         view_->setFocus();
     });
-    ejectDiscAction_ = segaCdMenu->addAction(QStringLiteral("Извлечь диск"));
+    ejectDiscAction_ = segaCdMenu->addAction(Localization::text(QStringLiteral("Извлечь диск")));
     ejectDiscAction_->setCheckable(true);
     connect(ejectDiscAction_, &QAction::triggered, this, [this](bool ejected) {
         releaseInput();
@@ -490,27 +570,27 @@ void MainWindow::buildMenus() {
         ejectDiscAction_->setChecked(discEjected_);
         view_->setFocus();
     });
-    discMenu_ = segaCdMenu->addMenu(QStringLiteral("Диски плейлиста"));
+    discMenu_ = segaCdMenu->addMenu(Localization::text(QStringLiteral("Диски плейлиста")));
     discGroup_ = new QActionGroup(this);
     discGroup_->setExclusive(true);
     updateDiscMenu();
     fileMenu->addSeparator();
-    screenshotAction_ = fileMenu->addAction(QStringLiteral("Сохранить скриншот"));
+    screenshotAction_ = fileMenu->addAction(Localization::text(QStringLiteral("Сохранить скриншот")));
     screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
     screenshotAction_->setShortcut(QKeySequence(QStringLiteral("F12")));
     screenshotAction_->setAutoRepeat(false);
     screenshotAction_->setEnabled(false);
-    screenshotAction_->setToolTip(QStringLiteral("Чистое изображение игры без OSD; папка screenshots рядом с settings.ini."));
+    screenshotAction_->setToolTip(Localization::text(QStringLiteral("Чистое изображение игры без OSD; папка screenshots рядом с settings.ini.")));
     shortcut(screenshotAction_);
     connect(screenshotAction_, &QAction::triggered, this, &MainWindow::saveScreenshot);
     fileMenu->addSeparator();
-    QAction* quitAction = fileMenu->addAction(QStringLiteral("Выход"));
+    QAction* quitAction = fileMenu->addAction(Localization::text(QStringLiteral("Выход")));
     quitAction->setShortcut(QKeySequence::Quit);
     shortcut(quitAction);
     connect(quitAction, &QAction::triggered, this, &QWidget::close);
 
-    QMenu* emulationMenu = menuBar()->addMenu(QStringLiteral("&Эмуляция"));
-    pauseAction_ = emulationMenu->addAction(QStringLiteral("Пауза"));
+    QMenu* emulationMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Эмуляция")));
+    pauseAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза")));
     pauseAction_->setCheckable(true);
     pauseAction_->setShortcut(QKeySequence(QStringLiteral("P")));
     pauseAction_->setAutoRepeat(false);
@@ -519,19 +599,19 @@ void MainWindow::buildMenus() {
     connect(pauseAction_, &QAction::toggled, this, [this](bool paused) {
         session_.setPaused(paused);
     });
-    frameAdvanceAction_ = emulationMenu->addAction(QStringLiteral("Следующий кадр"));
+    frameAdvanceAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Следующий кадр")));
     frameAdvanceAction_->setShortcut(QKeySequence(Qt::Key_Period));
     frameAdvanceAction_->setAutoRepeat(false);
     frameAdvanceAction_->setEnabled(false);
     shortcut(frameAdvanceAction_);
     connect(frameAdvanceAction_, &QAction::triggered, this, [this] { session_.advanceFrame(); });
-    cheatsAction_ = emulationMenu->addAction(QStringLiteral("Читы…"));
+    cheatsAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Читы…")));
     cheatsAction_->setEnabled(false);
     connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
-    QAction* achievementsAction = emulationMenu->addAction(QStringLiteral("Достижения…"));
+    QAction* achievementsAction = emulationMenu->addAction(Localization::text(QStringLiteral("Достижения…")));
     achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
     connect(achievementsAction, &QAction::triggered, this, &MainWindow::showAchievements);
-    resetAction_ = emulationMenu->addAction(QStringLiteral("Сброс"));
+    resetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сброс")));
     resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     resetAction_->setAutoRepeat(false);
     resetAction_->setEnabled(false);
@@ -540,7 +620,7 @@ void MainWindow::buildMenus() {
         releaseInput();
         session_.resetGame();
     });
-    hardResetAction_ = emulationMenu->addAction(QStringLiteral("Перезапуск питания"));
+    hardResetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перезапуск питания")));
     hardResetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
     hardResetAction_->setAutoRepeat(false);
     hardResetAction_->setEnabled(false);
@@ -548,11 +628,11 @@ void MainWindow::buildMenus() {
     connect(hardResetAction_, &QAction::triggered, this, [this] {
         releaseInput(); session_.hardResetGame();
     });
-    regionMenu_ = emulationMenu->addMenu(QStringLiteral("Регион"));
+    regionMenu_ = emulationMenu->addMenu(Localization::text(QStringLiteral("Регион")));
     regionMenu_->setObjectName(QStringLiteral("regionMenu"));
     auto* regionGroup = new QActionGroup(this);
-    const QStringList regions{QStringLiteral("Авто"), QStringLiteral("Япония (NTSC-J)"),
-        QStringLiteral("США (NTSC-U)"), QStringLiteral("Европа (PAL)")};
+    const QStringList regions{Localization::text(QStringLiteral("Авто")), Localization::text(QStringLiteral("Япония (NTSC-J)")),
+        Localization::text(QStringLiteral("США (NTSC-U)")), Localization::text(QStringLiteral("Европа (PAL)"))};
     for (int region = 0; region < regions.size(); ++region) {
         QAction* action = regionMenu_->addAction(regions[region]);
         action->setObjectName(QStringLiteral("region%1").arg(region));
@@ -564,14 +644,14 @@ void MainWindow::buildMenus() {
             session_.setRegion(region);
         });
     }
-    fastForwardAction_ = emulationMenu->addAction(QStringLiteral("Ускорение (Tab)"));
+    fastForwardAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Ускорение (Tab)")));
     fastForwardAction_->setCheckable(true);
     fastForwardAction_->setEnabled(false);
     connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
-    rewindAction_ = emulationMenu->addAction(QStringLiteral("Перемотка назад (R)"));
+    rewindAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перемотка назад (R)")));
     rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
     connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
-    QAction* focusPause = emulationMenu->addAction(QStringLiteral("Пауза при потере фокуса"));
+    QAction* focusPause = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза при потере фокуса")));
     focusPause->setCheckable(true); focusPause->setChecked(pauseOnFocusLoss_);
     connect(focusPause, &QAction::toggled, this, [this](bool enabled) {
         pauseOnFocusLoss_ = enabled;
@@ -579,7 +659,7 @@ void MainWindow::buildMenus() {
         updateInputEnabled();
     });
     emulationMenu->addSeparator();
-    saveAction_ = emulationMenu->addAction(QStringLiteral("Сохранить состояние"));
+    saveAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сохранить состояние")));
     saveAction_->setShortcut(QKeySequence(QStringLiteral("F5")));
     saveAction_->setAutoRepeat(false);
     saveAction_->setEnabled(false);
@@ -587,7 +667,7 @@ void MainWindow::buildMenus() {
     connect(saveAction_, &QAction::triggered, this, [this] {
         session_.saveState(stateSlot_);
     });
-    loadAction_ = emulationMenu->addAction(QStringLiteral("Загрузить состояние"));
+    loadAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Загрузить состояние")));
     loadAction_->setShortcut(QKeySequence(QStringLiteral("F8")));
     loadAction_->setAutoRepeat(false);
     loadAction_->setEnabled(false);
@@ -596,7 +676,7 @@ void MainWindow::buildMenus() {
         releaseInput();
         session_.loadState(stateSlot_);
     });
-    QMenu* slotMenu = emulationMenu->addMenu(QStringLiteral("Слот сохранения"));
+    QMenu* slotMenu = emulationMenu->addMenu(Localization::text(QStringLiteral("Слот сохранения")));
     QActionGroup* slotGroup = new QActionGroup(this);
     slotGroup->setExclusive(true);
     for (int slot = 0; slot < 10; ++slot) {
@@ -618,19 +698,19 @@ void MainWindow::buildMenus() {
         updateMovieActions();
     });
 
-    QMenu* viewMenu = menuBar()->addMenu(QStringLiteral("&Вид"));
-    QMenu* aspectMenu = viewMenu->addMenu(QStringLiteral("Соотношение сторон"));
+    QMenu* viewMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Вид")));
+    QMenu* aspectMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Соотношение сторон")));
     QActionGroup* aspectGroup = new QActionGroup(this);
     aspectGroup->setExclusive(true);
-    struct AspectChoice { const char* label; GameView::AspectMode mode; int value; };
+    struct AspectChoice { QString label; GameView::AspectMode mode; int value; };
     const AspectChoice choices[] = {
-        {"Как на консоли", GameView::AspectMode::Console, 0},
-        {"Квадратные пиксели", GameView::AspectMode::SquarePixels, 1},
-        {"Растянуть", GameView::AspectMode::Stretch, 2},
+        {Localization::text(QStringLiteral("Как на консоли")), GameView::AspectMode::Console, 0},
+        {Localization::text(QStringLiteral("Квадратные пиксели")), GameView::AspectMode::SquarePixels, 1},
+        {Localization::text(QStringLiteral("Растянуть")), GameView::AspectMode::Stretch, 2},
     };
     const int aspect = settings_.value(QStringLiteral("view/aspect"), 0).toInt();
     for (const auto& choice : choices) {
-        QAction* action = aspectMenu->addAction(QString::fromUtf8(choice.label));
+        QAction* action = aspectMenu->addAction(choice.label);
         action->setCheckable(true);
         action->setChecked(choice.value == aspect);
         aspectGroup->addAction(action);
@@ -639,18 +719,18 @@ void MainWindow::buildMenus() {
             settings_.setValue(QStringLiteral("view/aspect"), choice.value);
         });
     }
-    QAction* integerAction = viewMenu->addAction(QStringLiteral("Целочисленный масштаб"));
+    QAction* integerAction = viewMenu->addAction(Localization::text(QStringLiteral("Целочисленный масштаб")));
     integerAction->setCheckable(true);
     integerAction->setChecked(settings_.value(QStringLiteral("view/integer"), false).toBool());
     connect(integerAction, &QAction::toggled, this, [this](bool enabled) {
         view_->setIntegerScaling(enabled);
         settings_.setValue(QStringLiteral("view/integer"), enabled);
     });
-    blarggMenu_ = viewMenu->addMenu(QStringLiteral("Фильтр Blargg NTSC"));
+    blarggMenu_ = viewMenu->addMenu(Localization::text(QStringLiteral("Фильтр Blargg NTSC")));
     blarggMenu_->setObjectName(QStringLiteral("blarggMenu"));
     auto* blarggGroup = new QActionGroup(this);
-    const QStringList filters{QStringLiteral("Выключен"), QStringLiteral("Монохромный"),
-        QStringLiteral("Композитный"), QStringLiteral("S-Video"), QStringLiteral("RGB")};
+    const QStringList filters{Localization::text(QStringLiteral("Выключен")), Localization::text(QStringLiteral("Монохромный")),
+        Localization::text(QStringLiteral("Композитный")), QStringLiteral("S-Video"), QStringLiteral("RGB")};
     for (int filter = 0; filter < filters.size(); ++filter) {
         QAction* action = blarggMenu_->addAction(filters[filter]);
         action->setObjectName(QStringLiteral("blargg%1").arg(filter));
@@ -662,12 +742,12 @@ void MainWindow::buildMenus() {
             session_.setBlarggFilter(filter);
         });
     }
-    QMenu* shaderMenu = viewMenu->addMenu(QStringLiteral("Шейдер"));
+    QMenu* shaderMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Шейдер")));
     shaderMenu->setObjectName(QStringLiteral("shaderMenu"));
     auto* shaderGroup = new QActionGroup(this);
-    shaderOffAction_ = shaderMenu->addAction(QStringLiteral("Выключен"));
+    shaderOffAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Выключен")));
     shaderGdaptAction_ = shaderMenu->addAction(QStringLiteral("GDAPT"));
-    shaderCustomAction_ = shaderMenu->addAction(QStringLiteral("Пользовательский"));
+    shaderCustomAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Пользовательский")));
     for (QAction* action : {shaderOffAction_, shaderGdaptAction_, shaderCustomAction_}) {
         action->setCheckable(true); shaderGroup->addAction(action);
     }
@@ -675,21 +755,21 @@ void MainWindow::buildMenus() {
     connect(shaderOffAction_, &QAction::triggered, this, [this] { applyShaderPreset({}); });
     connect(shaderGdaptAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/gdapt.glslp")); });
     shaderMenu->addSeparator();
-    QAction* shaderLoad = shaderMenu->addAction(QStringLiteral("Загрузить GLSL-пресет…"));
+    QAction* shaderLoad = shaderMenu->addAction(Localization::text(QStringLiteral("Загрузить GLSL-пресет…")));
     connect(shaderLoad, &QAction::triggered, this, [this] {
         releaseInput();
-        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Загрузить GLSL-пресет"),
+        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Загрузить GLSL-пресет")),
             settings_.value(QStringLiteral("files/shaderDirectory")).toString(),
-            QStringLiteral("GLSL-пресеты (*.glslp);;GLSL-шейдеры (*.glsl)"));
+            Localization::text(QStringLiteral("GLSL-пресеты (*.glslp);;GLSL-шейдеры (*.glsl)")));
         if (!path.isEmpty() && applyShaderPreset(path))
             settings_.setValue(QStringLiteral("files/shaderDirectory"), QFileInfo(path).absolutePath());
         view_->setFocus();
     });
-    shaderParametersAction_ = shaderMenu->addAction(QStringLiteral("Параметры…"));
+    shaderParametersAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Параметры…")));
     connect(shaderParametersAction_, &QAction::triggered, this, &MainWindow::editShaderParameters);
     updateShaderActions();
     viewMenu->addSeparator();
-    osdAction_ = viewMenu->addAction(QStringLiteral("Экранные сообщения (OSD)"));
+    osdAction_ = viewMenu->addAction(Localization::text(QStringLiteral("Экранные сообщения (OSD)")));
     osdAction_->setObjectName(QStringLiteral("osdAction"));
     osdAction_->setCheckable(true);
     osdAction_->setChecked(settings_.value(QStringLiteral("view/osd"), true).toBool());
@@ -697,16 +777,38 @@ void MainWindow::buildMenus() {
         settings_.setValue(QStringLiteral("view/osd"), enabled);
         view_->setOsdEnabled(enabled);
     });
+    fpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS эмуляции и скорость")));
+    fpsAction_->setObjectName(QStringLiteral("emulationFpsAction"));
+    fpsAction_->setCheckable(true);
+    fpsAction_->setChecked(settings_.value(QStringLiteral("view/emulationFps"), false).toBool());
+    connect(fpsAction_, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("view/emulationFps"), enabled);
+        session_.setPerformanceMetricsEnabled(enabled);
+        view_->setPerformanceMetricsEnabled(enabled);
+    });
+    session_.setPerformanceMetricsEnabled(fpsAction_->isChecked());
+    view_->setPerformanceMetricsEnabled(fpsAction_->isChecked());
+    gameFpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS игры (оценка по опросу управления)")));
+    gameFpsAction_->setObjectName(QStringLiteral("gameFpsAction"));
+    gameFpsAction_->setCheckable(true);
+    gameFpsAction_->setChecked(settings_.value(QStringLiteral("view/gameFps"), false).toBool());
+    connect(gameFpsAction_, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("view/gameFps"), enabled);
+        session_.setGameFpsEnabled(enabled);
+        view_->setGameFpsEnabled(enabled);
+    });
+    session_.setGameFpsEnabled(gameFpsAction_->isChecked());
+    view_->setGameFpsEnabled(gameFpsAction_->isChecked());
     viewMenu->addSeparator();
-    fullscreenAction_ = viewMenu->addAction(QStringLiteral("Полный экран"));
+    fullscreenAction_ = viewMenu->addAction(Localization::text(QStringLiteral("Полный экран")));
     fullscreenAction_->setShortcut(QKeySequence(QStringLiteral("Alt+Return")));
     fullscreenAction_->setAutoRepeat(false);
     fullscreenAction_->setCheckable(true);
     shortcut(fullscreenAction_);
     connect(fullscreenAction_, &QAction::toggled, this, &MainWindow::setFullscreenMode);
 
-    QMenu* soundMenu = menuBar()->addMenu(QStringLiteral("&Звук"));
-    muteAction_ = soundMenu->addAction(QStringLiteral("Без звука"));
+    QMenu* soundMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Звук")));
+    muteAction_ = soundMenu->addAction(Localization::text(QStringLiteral("Без звука")));
     muteAction_->setCheckable(true);
     muteAction_->setShortcut(QKeySequence(QStringLiteral("M")));
     muteAction_->setAutoRepeat(false);
@@ -722,7 +824,7 @@ void MainWindow::buildMenus() {
     QWidget* volumePanel = new QWidget(soundMenu);
     QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
     volumeLayout->setContentsMargins(12, 6, 12, 8);
-    volumeLayout->addWidget(new QLabel(QStringLiteral("Громкость"), volumePanel));
+    volumeLayout->addWidget(new QLabel(Localization::text(QStringLiteral("Громкость")), volumePanel));
     QSlider* volumeSlider = new QSlider(Qt::Horizontal, volumePanel);
     volumeSlider->setRange(0, 100);
     volumeSlider->setMinimumWidth(160);
@@ -736,21 +838,21 @@ void MainWindow::buildMenus() {
         audio_->setVolume(value);
         settings_.setValue(QStringLiteral("audio/volume"), value);
     });
-    QMenu* settingsMenu = menuBar()->addMenu(QStringLiteral("&Настройки"));
-    QAction* emulatorSettingsAction = settingsMenu->addAction(QStringLiteral("Настройки эмулятора…"));
+    QMenu* settingsMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Настройки")));
+    QAction* emulatorSettingsAction = settingsMenu->addAction(Localization::text(QStringLiteral("Настройки эмулятора…")));
     emulatorSettingsAction->setObjectName(QStringLiteral("emulatorSettingsAction"));
     connect(emulatorSettingsAction, &QAction::triggered, this, [this] { editSettings(); });
-    QAction* controlsAction = settingsMenu->addAction(QStringLiteral("Управление…"));
+    QAction* controlsAction = settingsMenu->addAction(Localization::text(QStringLiteral("Управление…")));
     connect(controlsAction, &QAction::triggered, this, &MainWindow::editControls);
-    QMenu* helpMenu = menuBar()->addMenu(QStringLiteral("&Справка"));
-    QAction* aboutAction = helpMenu->addAction(QStringLiteral("О программе"));
+    QMenu* helpMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Справка")));
+    QAction* aboutAction = helpMenu->addAction(Localization::text(QStringLiteral("О программе")));
     connect(aboutAction, &QAction::triggered, this, [this] {
-        QMessageBox::about(this, QStringLiteral("О Kega Refusion"),
-            QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
+        QMessageBox::about(this, Localization::text(QStringLiteral("О Kega Refusion")),
+            Localization::text(QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
             "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
             "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.<br>"
             "Состояния сохраняются в выбранный слот от 0 до 9.<br>"
-            "Клавиатуру и геймпады можно настроить в разделе «Управление»."));
+            "Клавиатуру и геймпады можно настроить в разделе «Управление».")));
     });
 }
 
@@ -758,7 +860,7 @@ bool MainWindow::applyShaderPreset(const QString& path) {
     QString error;
     if (!view_->setShaderPreset(path, &error)) {
         updateShaderActions();
-        if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Шейдер"), error);
+        if (!smokeTest_) QMessageBox::warning(this, Localization::text(QStringLiteral("Шейдер")), error);
         return false;
     }
     settings_.setValue(QStringLiteral("view/shaderPreset"), path);
@@ -785,7 +887,7 @@ void MainWindow::editShaderParameters() {
     if (parameters.isEmpty()) return;
     releaseInput();
     QDialog dialog(this);
-    dialog.setWindowTitle(QStringLiteral("Параметры шейдера"));
+    dialog.setWindowTitle(Localization::text(QStringLiteral("Параметры шейдера")));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
     layout->addLayout(form);
@@ -803,7 +905,7 @@ void MainWindow::editShaderParameters() {
         });
     }
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("Закрыть"));
+    buttons->button(QDialogButtonBox::Close)->setText(Localization::text(QStringLiteral("Закрыть")));
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
     dialog.exec(); view_->setFocus();
@@ -860,17 +962,17 @@ void MainWindow::saveScreenshot() {
     if (!session_.hasGame() || loading_) return;
     const QImage image = view_->captureGameImage();
     auto failed = [this](const QString& error) {
-        view_->showOsd(QStringLiteral("Не удалось сохранить скриншот: %1").arg(error), 4000,
+        view_->showOsd(Localization::text(QStringLiteral("Не удалось сохранить скриншот: %1")).arg(error), 4000,
                        QStringLiteral("screenshot"));
         qWarning("Screenshot failed: %s", qPrintable(error));
     };
     if (image.isNull()) {
-        failed(QStringLiteral("кадр игры ещё не готов"));
+        failed(Localization::text(QStringLiteral("кадр игры ещё не готов")));
         return;
     }
     const QDir directory(QDir(dataPath_).filePath(QStringLiteral("screenshots")));
     if (!QDir().mkpath(directory.absolutePath())) {
-        failed(QStringLiteral("не удалось создать папку %1").arg(QDir::toNativeSeparators(directory.absolutePath())));
+        failed(Localization::text(QStringLiteral("не удалось создать папку %1")).arg(QDir::toNativeSeparators(directory.absolutePath())));
         return;
     }
     QString name = currentGameName_.left(80);
@@ -907,12 +1009,12 @@ void MainWindow::saveScreenshot() {
             failed(error);
             return;
         }
-        view_->showOsd(QStringLiteral("Скриншот сохранён: %1").arg(filename), 2600,
+        view_->showOsd(Localization::text(QStringLiteral("Скриншот сохранён: %1")).arg(filename), 2600,
                        QStringLiteral("screenshot"));
         qInfo("Screenshot saved: %s", qPrintable(QDir::toNativeSeparators(file.fileName())));
         return;
     }
-    failed(QStringLiteral("не удалось подобрать свободное имя файла"));
+    failed(Localization::text(QStringLiteral("не удалось подобрать свободное имя файла")));
 }
 
 void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
@@ -931,9 +1033,9 @@ void MainWindow::openGameDialog() {
     if (loading_) return;
     releaseInput();
     const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("Открыть игру"),
+        this, Localization::text(QStringLiteral("Открыть игру")),
         settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
-        QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;Архивы (*.zip *.7z);;Все файлы (*)"));
+        Localization::text(QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;Архивы (*.zip *.7z);;Все файлы (*)")));
     if (!path.isEmpty()) openRom(path);
     else view_->setFocus();
 }
@@ -942,7 +1044,7 @@ void MainWindow::openRom(const QString& path) {
     if (loading_) return;
     const QFileInfo file(path);
     if (!file.exists() || !file.isFile()) {
-        const QString text = QStringLiteral("Файл не найден: %1").arg(path);
+        const QString text = Localization::text(QStringLiteral("Файл не найден: %1")).arg(path);
         if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"), text);
         return;
     }
@@ -955,7 +1057,7 @@ void MainWindow::openRom(const QString& path) {
         if (!error.isEmpty() || entries.isEmpty()) {
             if (!smokeTest_) setLoadingUi(false);
             if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"),
-                error.isEmpty() ? QStringLiteral("В архиве нет поддерживаемых игр.") : error);
+                error.isEmpty() ? Localization::text(QStringLiteral("В архиве нет поддерживаемых игр.")) : error);
             // Let the session report the same failure to the smoke-test observer.
             if (smokeTest_) session_.loadGame(path);
             else { view_->setFocus(); updateInputEnabled(); }
@@ -964,15 +1066,15 @@ void MainWindow::openRom(const QString& path) {
         if (entries.size() == 1) archiveEntry = entries.first();
         else if (!smokeTest_) {
             QDialog dialog(this);
-            dialog.setWindowTitle(QStringLiteral("Выбор игры из архива"));
+            dialog.setWindowTitle(Localization::text(QStringLiteral("Выбор игры из архива")));
             dialog.resize(620, 420);
             dialog.setMinimumSize(380, 260);
             auto* layout = new QVBoxLayout(&dialog);
-            auto* label = new QLabel(QStringLiteral("Выберите игру для загрузки:"), &dialog);
+            auto* label = new QLabel(Localization::text(QStringLiteral("Выберите игру для загрузки:")), &dialog);
             layout->addWidget(label);
             auto* list = new QListWidget(&dialog);
             list->setObjectName(QStringLiteral("archiveGameList"));
-            list->setAccessibleName(QStringLiteral("Игры в архиве"));
+            list->setAccessibleName(Localization::text(QStringLiteral("Игры в архиве")));
             list->setSelectionMode(QAbstractItemView::SingleSelection);
             list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
             list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -981,15 +1083,15 @@ void MainWindow::openRom(const QString& path) {
             for (const auto& entry : entries) {
                 auto* item = new QListWidgetItem(entry.name, list);
                 item->setData(Qt::UserRole, entry.index);
-                item->setToolTip(QStringLiteral("%1\n%2 КиБ").arg(entry.name).arg((entry.size+1023)/1024));
+                item->setToolTip(Localization::text(QStringLiteral("%1\n%2 КиБ")).arg(entry.name).arg((entry.size+1023)/1024));
             }
             list->setCurrentRow(0);
             layout->addWidget(list, 1);
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
             auto* loadButton = buttons->button(QDialogButtonBox::Ok);
-            loadButton->setText(QStringLiteral("Загрузить"));
+            loadButton->setText(Localization::text(QStringLiteral("Загрузить")));
             loadButton->setDefault(true);
-            buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
+            buttons->button(QDialogButtonBox::Cancel)->setText(Localization::text(QStringLiteral("Отмена")));
             layout->addWidget(buttons);
             connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
             connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -1018,7 +1120,7 @@ void MainWindow::editSettings(int initialPage) {
     input_->setEnabled(false);
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("emulatorSettingsDialog"));
-    dialog.setWindowTitle(QStringLiteral("Настройки эмулятора — Kega Refusion"));
+    dialog.setWindowTitle(Localization::text(QStringLiteral("Настройки эмулятора — Kega Refusion")));
     const QSize workArea = dialog.screen()->availableGeometry().size();
     const QSize target = QSize(1100, 720).boundedTo(workArea - QSize(48, 72));
     dialog.setMinimumSize(QSize(800, 560).boundedTo(target));
@@ -1032,12 +1134,20 @@ void MainWindow::editSettings(int initialPage) {
     content->setSpacing(18);
     auto* navigation = new QListWidget(&dialog);
     navigation->setObjectName(QStringLiteral("settingsNavigation"));
-    navigation->setFixedWidth(190);
+    navigation->setFixedWidth(236);
+    navigation->setIconSize(QSize(24, 24));
+    navigation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    navigation->setStyleSheet(QStringLiteral(
+        "QListWidget { outline: none; padding: 4px; } "
+        "QListWidget::item { min-height: 44px; padding: 2px 12px; border-radius: 5px; } "
+        "QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }"));
     navigation->setSpacing(4);
-    navigation->addItems({QStringLiteral("Общие"), QStringLiteral("Игры"),
-                          QStringLiteral("Перемотка"), QStringLiteral("Запись"),
-                          QStringLiteral("Достижения"), QStringLiteral("Звук"), QStringLiteral("BIOS"),
-                          QStringLiteral("Управление")});
+    navigation->addItems({Localization::text(QStringLiteral("Общие")), Localization::text(QStringLiteral("Игры")),
+                          Localization::text(QStringLiteral("Перемотка")), Localization::text(QStringLiteral("Запись")),
+                          Localization::text(QStringLiteral("Достижения")), Localization::text(QStringLiteral("Звук")), QStringLiteral("BIOS"),
+                          Localization::text(QStringLiteral("Управление"))});
+    for (int row = 0; row < navigation->count(); ++row)
+        navigation->item(row)->setIcon(settingsSectionIcon(row, dialog.palette()));
     auto* pages = new QStackedWidget(&dialog);
     pages->setObjectName(QStringLiteral("settingsPages"));
     content->addWidget(navigation);
@@ -1064,22 +1174,51 @@ void MainWindow::editSettings(int initialPage) {
         form->setVerticalSpacing(14);
         pageLayout->addLayout(form);
         pageLayout->addStretch();
-        pages->addWidget(page);
+        auto* scroll = new QScrollArea(pages);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidget(page);
+        pages->addWidget(scroll);
         return form;
     };
 
-    auto* general = addPage(QStringLiteral("Общие"),
-        QStringLiteral("Изображение и скорость работы эмулятора."));
+    auto* general = addPage(Localization::text(QStringLiteral("Общие")),
+        Localization::text(QStringLiteral("Изображение и скорость работы эмулятора.")));
+    auto* language = new QComboBox(&dialog);
+    language->setObjectName(QStringLiteral("interfaceLanguage"));
+    language->addItem(Localization::text(QStringLiteral("Как в системе")), QStringLiteral("system"));
+    for (const auto& entry : Localization::availableLanguages()) language->addItem(entry.name, entry.code);
+    const QString selectedLanguage = Localization::selectedLanguage();
+    const int languageIndex = language->findData(selectedLanguage);
+    language->setCurrentIndex(languageIndex >= 0 ? languageIndex : 0);
+    general->addRow(Localization::text(QStringLiteral("Язык интерфейса:")), language);
+    auto* languageHelp = new QLabel(Localization::text(QStringLiteral(
+        "Изменение языка применяется после перезапуска. Если перевода нет, используется английский.")), &dialog);
+    languageHelp->setWordWrap(true);
+    general->addRow(languageHelp);
+    auto* emulationFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS эмуляции и скорость в процентах")), &dialog);
+    emulationFps->setObjectName(QStringLiteral("emulationFps"));
+    emulationFps->setChecked(fpsAction_->isChecked());
+    general->addRow(emulationFps);
+    auto* gameFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS игры — оценку по опросу управления")), &dialog);
+    gameFps->setObjectName(QStringLiteral("gameFps"));
+    gameFps->setChecked(gameFpsAction_->isChecked());
+    general->addRow(gameFps);
+    auto* fpsHelp = new QLabel(Localization::text(QStringLiteral(
+        "100% — нормальная скорость эмуляции. Оценка FPS игры учитывает кадры, в которых игра читает управление; "
+        "частота игровой логики может отличаться. Оценка приведена к нормальной скорости игры. Счётчики включаются независимо от OSD.")), &dialog);
+    fpsHelp->setWordWrap(true);
+    general->addRow(fpsHelp);
     const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
                           .toString() == QLatin1String("jpeg");
     auto* screenshotFormat = new QComboBox(&dialog);
     screenshotFormat->setObjectName(QStringLiteral("screenshotFormat"));
-    screenshotFormat->addItem(QStringLiteral("PNG (без потерь)"), QStringLiteral("png"));
+    screenshotFormat->addItem(Localization::text(QStringLiteral("PNG (без потерь)")), QStringLiteral("png"));
     screenshotFormat->addItem(QStringLiteral("JPEG"), QStringLiteral("jpeg"));
     screenshotFormat->setCurrentIndex(jpeg ? 1 : 0);
-    general->addRow(QStringLiteral("Формат скриншотов:"), screenshotFormat);
+    general->addRow(Localization::text(QStringLiteral("Формат скриншотов:")), screenshotFormat);
     const bool osdEnabled = osdAction_->isChecked();
-    auto* showOsd = new QCheckBox(QStringLiteral("Показывать экранные сообщения (OSD)"), &dialog);
+    auto* showOsd = new QCheckBox(Localization::text(QStringLiteral("Показывать экранные сообщения (OSD)")), &dialog);
     showOsd->setObjectName(QStringLiteral("osdEnabled"));
     showOsd->setChecked(osdEnabled);
     general->addRow(showOsd);
@@ -1087,59 +1226,82 @@ void MainWindow::editSettings(int initialPage) {
     speed->setObjectName(QStringLiteral("fastForwardFactor"));
     for (int factor : {2, 3, 4, 6, 8, 12, 16, 32, 0})
         speed->addItem(factor ? QStringLiteral("×%1").arg(factor)
-                              : QStringLiteral("Без ограничения"), factor);
+                              : Localization::text(QStringLiteral("Без ограничения")), factor);
     speed->setCurrentIndex(speed->findData(fastForwardFactor_));
-    speed->setToolTip(QStringLiteral("Скорость при удержании Tab или назначенной кнопки ускорения."));
-    general->addRow(QStringLiteral("Скорость ускорения:"), speed);
+    speed->setToolTip(Localization::text(QStringLiteral("Скорость при удержании Tab или назначенной кнопки ускорения.")));
+    general->addRow(Localization::text(QStringLiteral("Скорость ускорения:")), speed);
 
-    auto* games = addPage(QStringLiteral("Игры"),
-        QStringLiteral("Совместимость картриджей и загрузка Sega CD."));
+    auto* games = addPage(Localization::text(QStringLiteral("Игры")),
+        Localization::text(QStringLiteral("Совместимость картриджей и загрузка Sega CD.")));
+    const bool attachCd = settings_.value(QStringLiteral("emulation/attachCd"), false).toBool();
+    const bool attach32x = settings_.value(QStringLiteral("emulation/attach32x"), false).toBool();
+    auto* cdAttachment = new QComboBox(&dialog);
+    cdAttachment->setObjectName(QStringLiteral("cdAttachment"));
+    auto* x32Attachment = new QComboBox(&dialog);
+    x32Attachment->setObjectName(QStringLiteral("x32Attachment"));
+    for (auto* combo : {cdAttachment, x32Attachment}) {
+        combo->addItem(Localization::text(QStringLiteral("Автоматически")), false);
+        combo->addItem(Localization::text(QStringLiteral("Подключено")), true);
+    }
+    cdAttachment->setCurrentIndex(attachCd ? 1 : 0);
+    x32Attachment->setCurrentIndex(attach32x ? 1 : 0);
+    games->addRow(Localization::text(QStringLiteral("Sega CD для обычных игр:")), cdAttachment);
+    games->addRow(Localization::text(QStringLiteral("32X для обычных игр:")), x32Attachment);
+    auto* attachmentHelp = new QLabel(Localization::text(QStringLiteral(
+        "Игры Sega CD и 32X подключают нужное устройство автоматически. «Подключено» оставляет устройство "
+        "и для обычных игр Mega Drive. Нужны BIOS. Изменения применятся при следующей загрузке или перезапуске питания.")), &dialog);
+    attachmentHelp->setWordWrap(true);
+    games->addRow(attachmentHelp);
     const bool fixChecksum = settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool();
-    auto* checksum = new QCheckBox(QStringLiteral("Автоисправлять контрольную сумму ROM"), &dialog);
+    auto* checksum = new QCheckBox(Localization::text(QStringLiteral("Автоисправлять контрольную сумму ROM")), &dialog);
     checksum->setObjectName(QStringLiteral("autoFixChecksum"));
     checksum->setChecked(fixChecksum);
     games->addRow(checksum);
-    auto* checksumHelp = new QLabel(QStringLiteral(
+    auto* checksumHelp = new QLabel(Localization::text(QStringLiteral(
         "Исправляется только копия ROM в памяти. Настройка применится при следующей "
-        "загрузке игры или перезапуске питания."), &dialog);
+        "загрузке игры или перезапуске питания.")), &dialog);
     checksumHelp->setWordWrap(true);
     games->addRow(checksumHelp);
     const bool fastCd = settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool();
     auto* cdLoading = new QComboBox(&dialog);
     cdLoading->setObjectName(QStringLiteral("cdLoadingMode"));
-    cdLoading->addItem(QStringLiteral("Обычная (как на консоли)"), false);
-    cdLoading->addItem(QStringLiteral("Ускоренная"), true);
+    cdLoading->addItem(Localization::text(QStringLiteral("Обычная (как на консоли)")), false);
+    cdLoading->addItem(Localization::text(QStringLiteral("Ускоренная")), true);
     cdLoading->setCurrentIndex(fastCd ? 1 : 0);
-    games->addRow(QStringLiteral("Загрузка CD:"), cdLoading);
-    auto* cdHelp = new QLabel(QStringLiteral(
+    games->addRow(Localization::text(QStringLiteral("Загрузка CD:")), cdLoading);
+    auto* cdHelp = new QLabel(Localization::text(QStringLiteral(
         "Ускоренный режим убирает задержки поиска дорожек. "
-        "Если игра зависает или звук рассинхронизируется, верните обычный режим."), &dialog);
+        "Если игра зависает или звук рассинхронизируется, верните обычный режим.")), &dialog);
     cdHelp->setWordWrap(true);
     games->addRow(cdHelp);
     const bool noSpriteLimit = settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool();
     auto* spriteLimit = new QComboBox(&dialog);
     spriteLimit->setObjectName(QStringLiteral("spriteLimitMode"));
-    spriteLimit->addItem(QStringLiteral("Как на консоли"), false);
-    spriteLimit->addItem(QStringLiteral("Снять ограничение"), true);
+    spriteLimit->addItem(Localization::text(QStringLiteral("Как на консоли")), false);
+    spriteLimit->addItem(Localization::text(QStringLiteral("Снять ограничение")), true);
     spriteLimit->setCurrentIndex(noSpriteLimit ? 1 : 0);
-    spriteLimit->setToolTip(QStringLiteral(
-        "Уменьшает мигание спрайтов; в отдельных играх может нарушать графические эффекты."));
-    games->addRow(QStringLiteral("Лимит спрайтов:"), spriteLimit);
+    spriteLimit->setToolTip(Localization::text(QStringLiteral(
+        "Уменьшает мигание спрайтов; в отдельных играх может нарушать графические эффекты.")));
+    games->addRow(Localization::text(QStringLiteral("Лимит спрайтов:")), spriteLimit);
     const bool movieActive = movieMode_ != 0;
+    cdAttachment->setEnabled(!movieActive && !achievementsHardcore_);
+    x32Attachment->setEnabled(!movieActive && !achievementsHardcore_);
     checksum->setEnabled(!movieActive && !achievementsHardcore_);
     cdLoading->setEnabled(!movieActive && !achievementsHardcore_);
     spriteLimit->setEnabled(!movieActive && !achievementsHardcore_);
     connect(&session_, &EmulationSession::achievementsHardcoreChanged, &dialog,
-            [this, checksum, cdLoading, spriteLimit](bool active) {
+            [this, checksum, cdLoading, spriteLimit, cdAttachment, x32Attachment](bool active) {
         const bool editable = movieMode_ == 0 && !active;
+        cdAttachment->setEnabled(editable);
+        x32Attachment->setEnabled(editable);
         checksum->setEnabled(editable);
         cdLoading->setEnabled(editable);
         spriteLimit->setEnabled(editable);
     });
 
-    auto* rewind = addPage(QStringLiteral("Перемотка"),
-        QStringLiteral("Запись истории игры для возврата к предыдущим кадрам."));
-    auto* recordHistory = new QCheckBox(QStringLiteral("Записывать историю перемотки"), &dialog);
+    auto* rewind = addPage(Localization::text(QStringLiteral("Перемотка")),
+        Localization::text(QStringLiteral("Запись истории игры для возврата к предыдущим кадрам.")));
+    auto* recordHistory = new QCheckBox(Localization::text(QStringLiteral("Записывать историю перемотки")), &dialog);
     recordHistory->setObjectName(QStringLiteral("rewindHistoryEnabled"));
     recordHistory->setChecked(rewindEnabled_);
     rewind->addRow(recordHistory);
@@ -1148,36 +1310,36 @@ void MainWindow::editSettings(int initialPage) {
     rewindMemory->setObjectName(QStringLiteral("rewindMemoryLimit"));
     rewindMemory->setRange(16, 1024);
     rewindMemory->setSingleStep(16);
-    rewindMemory->setSuffix(QStringLiteral(" МиБ"));
+    rewindMemory->setSuffix(Localization::text(QStringLiteral(" МиБ")));
     rewindMemory->setValue(memoryMiB);
-    rewind->addRow(QStringLiteral("Память перемотки:"), rewindMemory);
-    auto* rewindHelp = new QLabel(QStringLiteral(
+    rewind->addRow(Localization::text(QStringLiteral("Память перемотки:")), rewindMemory);
+    auto* rewindHelp = new QLabel(Localization::text(QStringLiteral(
         "История ограничена только памятью. При заполнении удаляются старые кадры. "
-        "Изменение лимита очищает историю; память выделяется по мере накопления."), &dialog);
+        "Изменение лимита очищает историю; память выделяется по мере накопления.")), &dialog);
     rewindHelp->setWordWrap(true);
     rewind->addRow(rewindHelp);
-    rewindMemory->setToolTip(QStringLiteral(
-        "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно."));
+    rewindMemory->setToolTip(Localization::text(QStringLiteral(
+        "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно.")));
     // The history memory limit remains adjustable while a recording is active.
 
-    auto* recording = addPage(QStringLiteral("Запись"),
-        QStringLiteral("Формат счётчика записи и воспроизведения на экране игры."));
+    auto* recording = addPage(Localization::text(QStringLiteral("Запись")),
+        Localization::text(QStringLiteral("Формат счётчика записи и воспроизведения на экране игры.")));
     const QString counterUnit = settings_.value(QStringLiteral("recording/counterUnit"),
         QStringLiteral("time")).toString();
     auto* recordingCounterUnit = new QComboBox(&dialog);
     recordingCounterUnit->setObjectName(QStringLiteral("recordingCounterUnit"));
-    recordingCounterUnit->addItem(QStringLiteral("Время (чч:мм:сс)"), QStringLiteral("time"));
-    recordingCounterUnit->addItem(QStringLiteral("Кадры"), QStringLiteral("frames"));
+    recordingCounterUnit->addItem(Localization::text(QStringLiteral("Время (чч:мм:сс)")), QStringLiteral("time"));
+    recordingCounterUnit->addItem(Localization::text(QStringLiteral("Кадры")), QStringLiteral("frames"));
     recordingCounterUnit->setCurrentIndex(counterUnit == QLatin1String("frames") ? 1 : 0);
-    recording->addRow(QStringLiteral("Счётчик на экране:"), recordingCounterUnit);
+    recording->addRow(Localization::text(QStringLiteral("Счётчик на экране:")), recordingCounterUnit);
 
     const bool achievementEnabled = settings_.value(QStringLiteral("achievements/enabled"), true).toBool();
     const bool achievementHardcoreRequested = settings_.value(QStringLiteral("achievements/hardcore"), false).toBool();
     bool achievementEnabledApplied = achievementEnabled;
     bool achievementHardcoreApplied = achievementHardcoreRequested;
-    auto* achievements = addPage(QStringLiteral("Достижения"),
-        QStringLiteral("RetroAchievements: учёт достижений доступен после входа в аккаунт."));
-    auto* achievementEnabledBox = new QCheckBox(QStringLiteral("Включить достижения"), &dialog);
+    auto* achievements = addPage(Localization::text(QStringLiteral("Достижения")),
+        Localization::text(QStringLiteral("RetroAchievements: учёт достижений доступен после входа в аккаунт.")));
+    auto* achievementEnabledBox = new QCheckBox(Localization::text(QStringLiteral("Включить достижения")), &dialog);
     achievementEnabledBox->setObjectName(QStringLiteral("achievementsEnabled"));
     achievementEnabledBox->setChecked(achievementEnabled);
     achievements->addRow(achievementEnabledBox);
@@ -1187,20 +1349,20 @@ void MainWindow::editSettings(int initialPage) {
     achievementMode->addItem(QStringLiteral("Hardcore"), true);
     if (!AchievementsHardcoreApproved) {
         achievementMode->setItemData(1, 0, Qt::UserRole - 1);
-        achievementMode->setItemData(1, QStringLiteral(
-            "Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. Сейчас доступен Softcore."),
+        achievementMode->setItemData(1, Localization::text(QStringLiteral(
+            "Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. Сейчас доступен Softcore.")),
             Qt::ToolTipRole);
     }
     achievementMode->setCurrentIndex(AchievementsHardcoreApproved && achievementHardcoreRequested ? 1 : 0);
     achievementMode->setEnabled(achievementEnabled);
     connect(achievementEnabledBox, &QCheckBox::toggled, achievementMode, &QWidget::setEnabled);
-    achievements->addRow(QStringLiteral("Режим:"), achievementMode);
-    auto* achievementToasts = new QCheckBox(QStringLiteral("Показывать уведомления о достижениях"), &dialog);
+    achievements->addRow(Localization::text(QStringLiteral("Режим:")), achievementMode);
+    auto* achievementToasts = new QCheckBox(Localization::text(QStringLiteral("Показывать уведомления о достижениях")), &dialog);
     achievementToasts->setObjectName(QStringLiteral("achievementNotifications"));
     achievementToasts->setChecked(achievementNotifications_);
-    achievementToasts->setToolTip(QStringLiteral("При выключенных уведомлениях достижения продолжают засчитываться."));
+    achievementToasts->setToolTip(Localization::text(QStringLiteral("При выключенных уведомлениях достижения продолжают засчитываться.")));
     achievements->addRow(achievementToasts);
-    auto* achievementSound = new QCheckBox(QStringLiteral("Звук открытия достижения"), &dialog);
+    auto* achievementSound = new QCheckBox(Localization::text(QStringLiteral("Звук открытия достижения")), &dialog);
     achievementSound->setObjectName(QStringLiteral("achievementSound"));
     achievementSound->setChecked(achievementSound_);
     achievementSound->setEnabled(achievementToasts->isChecked());
@@ -1208,29 +1370,29 @@ void MainWindow::editSettings(int initialPage) {
     achievements->addRow(achievementSound);
     auto* achievementPosition = new QComboBox(&dialog);
     achievementPosition->setObjectName(QStringLiteral("achievementPosition"));
-    achievementPosition->addItems({QStringLiteral("Сверху слева"), QStringLiteral("Сверху по центру"),
-        QStringLiteral("Сверху справа"), QStringLiteral("Снизу слева"),
-        QStringLiteral("Снизу по центру"), QStringLiteral("Снизу справа")});
+    achievementPosition->addItems({Localization::text(QStringLiteral("Сверху слева")), Localization::text(QStringLiteral("Сверху по центру")),
+        Localization::text(QStringLiteral("Сверху справа")), Localization::text(QStringLiteral("Снизу слева")),
+        Localization::text(QStringLiteral("Снизу по центру")), Localization::text(QStringLiteral("Снизу справа"))});
     achievementPosition->setCurrentIndex(achievementPosition_);
-    achievements->addRow(QStringLiteral("Положение уведомлений:"), achievementPosition);
+    achievements->addRow(Localization::text(QStringLiteral("Положение уведомлений:")), achievementPosition);
     auto* accountStatus = new QLabel(achievementsState_.status.isEmpty()
-        ? QStringLiteral("Войдите в RetroAchievements.") : achievementsState_.status, &dialog);
+        ? Localization::text(QStringLiteral("Войдите в RetroAchievements.")) : achievementsState_.status, &dialog);
     accountStatus->setObjectName(QStringLiteral("achievementAccountStatus"));
     accountStatus->setWordWrap(true);
     achievements->addRow(accountStatus);
     auto* achievementUser = new QLineEdit(&dialog);
     achievementUser->setObjectName(QStringLiteral("achievementUsername"));
     achievementUser->setText(achievementsState_.username);
-    achievements->addRow(QStringLiteral("Имя пользователя:"), achievementUser);
+    achievements->addRow(Localization::text(QStringLiteral("Имя пользователя:")), achievementUser);
     auto* achievementPassword = new QLineEdit(&dialog);
     achievementPassword->setObjectName(QStringLiteral("achievementPassword"));
     achievementPassword->setEchoMode(QLineEdit::Password);
-    achievements->addRow(QStringLiteral("Пароль:"), achievementPassword);
+    achievements->addRow(Localization::text(QStringLiteral("Пароль:")), achievementPassword);
     auto* accountButtons = new QWidget(&dialog);
     auto* accountButtonsLayout = new QHBoxLayout(accountButtons);
     accountButtonsLayout->setContentsMargins(0, 0, 0, 0);
-    auto* loginButton = new QPushButton(QStringLiteral("Войти"), accountButtons);
-    auto* logoutButton = new QPushButton(QStringLiteral("Выйти"), accountButtons);
+    auto* loginButton = new QPushButton(Localization::text(QStringLiteral("Войти")), accountButtons);
+    auto* logoutButton = new QPushButton(Localization::text(QStringLiteral("Выйти")), accountButtons);
     logoutButton->setEnabled(achievementsState_.loggedIn);
     accountButtonsLayout->addWidget(loginButton);
     accountButtonsLayout->addWidget(logoutButton);
@@ -1248,8 +1410,8 @@ void MainWindow::editSettings(int initialPage) {
         loginButton->setEnabled(active);
         logoutButton->setEnabled(active && achievementsState_.loggedIn);
         accountHint->setText(active
-            ? QStringLiteral("Вход и выход применяются сразу.")
-            : QStringLiteral("Включите достижения для входа в аккаунт."));
+            ? Localization::text(QStringLiteral("Вход и выход применяются сразу."))
+            : Localization::text(QStringLiteral("Включите достижения для входа в аккаунт.")));
     };
     connect(achievementEnabledBox, &QCheckBox::toggled, &dialog, updateAccountControls);
     updateAccountControls();
@@ -1261,7 +1423,7 @@ void MainWindow::editSettings(int initialPage) {
         const QString user = achievementUser->text().trimmed();
         const QString password = achievementPassword->text();
         if (user.isEmpty() || password.isEmpty()) {
-            accountStatus->setText(QStringLiteral("Введите имя пользователя и пароль."));
+            accountStatus->setText(Localization::text(QStringLiteral("Введите имя пользователя и пароль.")));
             return;
         }
         const bool hardcore = AchievementsHardcoreApproved &&
@@ -1275,11 +1437,11 @@ void MainWindow::editSettings(int initialPage) {
         }
         session_.loginAchievements(user, password);
         achievementPassword->clear();
-        accountStatus->setText(QStringLiteral("Вход в RetroAchievements…"));
+        accountStatus->setText(Localization::text(QStringLiteral("Вход в RetroAchievements…")));
     });
     connect(logoutButton, &QPushButton::clicked, &dialog, [this, accountStatus] {
         session_.logoutAchievements();
-        accountStatus->setText(QStringLiteral("Выход из RetroAchievements…"));
+        accountStatus->setText(Localization::text(QStringLiteral("Выход из RetroAchievements…")));
     });
     connect(&session_, &EmulationSession::achievementsChanged, &dialog,
             [accountStatus, updateAccountControls](const AchievementsState& state) {
@@ -1287,24 +1449,43 @@ void MainWindow::editSettings(int initialPage) {
         updateAccountControls();
     });
     const QString hardcoreHelp = AchievementsHardcoreApproved
-        ? QStringLiteral("Hardcore отключает загрузку состояния, перемотку и следующий кадр; "
-                         "включение режима перезапускает текущую игру.")
-        : QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. "
-                         "Сейчас доступен Softcore.");
-    auto* achievementHelp = new QLabel(QStringLiteral(
+        ? Localization::text(QStringLiteral("Hardcore отключает загрузку состояния, перемотку и следующий кадр; "
+                         "включение режима перезапускает текущую игру."))
+        : Localization::text(QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. "
+                         "Сейчас доступен Softcore."));
+    auto* achievementHelp = new QLabel(Localization::text(QStringLiteral(
         "Пароль не сохраняется; после входа хранится только токен. "
-        "Вход и выход выполняются сразу; остальные изменения — после «ОК». ") + hardcoreHelp, &dialog);
+        "Вход и выход выполняются сразу; остальные изменения — после «ОК». ")) + hardcoreHelp, &dialog);
     achievementHelp->setWordWrap(true);
     achievements->addRow(achievementHelp);
-    auto* accountFile = new QLabel(QStringLiteral("Файл входа: %1").arg(
+    auto* accountFile = new QLabel(Localization::text(QStringLiteral("Файл входа: %1")).arg(
         QDir::toNativeSeparators(QDir(dataPath_).filePath(QStringLiteral("retroachievements-account.ini")))), &dialog);
     accountFile->setTextFormat(Qt::PlainText);
     accountFile->setWordWrap(true);
     accountFile->setTextInteractionFlags(Qt::TextSelectableByMouse);
     achievements->addRow(accountFile);
 
-    auto* sound = addPage(QStringLiteral("Звук"),
-        QStringLiteral("Устройство воспроизведения звука игры."));
+    auto* clearBadges = new QPushButton(Localization::text(QStringLiteral("Очистить кэш картинок")), &dialog);
+    clearBadges->setObjectName(QStringLiteral("clearAchievementPictures"));
+    auto* cacheStatus = new QLabel(Localization::text(QStringLiteral(
+        "Удаляются только скачанные картинки. Достижения, прогресс и вход сохраняются.")), &dialog);
+    cacheStatus->setWordWrap(true);
+    achievements->addRow(clearBadges);
+    achievements->addRow(cacheStatus);
+    connect(clearBadges, &QPushButton::clicked, &dialog, [this, clearBadges, cacheStatus] {
+        clearBadges->setEnabled(false);
+        cacheStatus->setText(Localization::text(QStringLiteral("Очистка картинок…")));
+        achievementNetwork_->clearBadgeCache();
+    });
+    connect(achievementNetwork_, &AchievementNetwork::badgeCacheCleared, &dialog,
+            [clearBadges, cacheStatus](bool success) {
+        clearBadges->setEnabled(true);
+        cacheStatus->setText(success ? Localization::text(QStringLiteral("Кэш картинок очищен."))
+            : Localization::text(QStringLiteral("Не все картинки удалось удалить. Проверьте доступ к папке кэша.")));
+    });
+
+    auto* sound = addPage(Localization::text(QStringLiteral("Звук")),
+        Localization::text(QStringLiteral("Устройство воспроизведения звука игры.")));
     auto* outputDevice = new QComboBox(&dialog);
     outputDevice->setObjectName(QStringLiteral("audioOutputDevice"));
     outputDevice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -1315,24 +1496,24 @@ void MainWindow::editSettings(int initialPage) {
         outputDevice->clear();
         const QAudioDevice defaultDevice = QMediaDevices::defaultAudioOutput();
         const QString defaultName = defaultDevice.isNull()
-            ? QStringLiteral("нет устройства") : defaultDevice.description();
-        outputDevice->addItem(QStringLiteral("Системное по умолчанию (%1)").arg(defaultName), QByteArray());
+            ? Localization::text(QStringLiteral("нет устройства")) : defaultDevice.description();
+        outputDevice->addItem(Localization::text(QStringLiteral("Системное по умолчанию (%1)")).arg(defaultName), QByteArray());
         const auto outputs = QMediaDevices::audioOutputs();
         bool selectedPresent = selectedId.isEmpty();
         for (const QAudioDevice& device : outputs)
             selectedPresent = selectedPresent || device.id() == selectedId;
         if (!selectedPresent)
-            outputDevice->addItem(QStringLiteral("Недоступно — используется системное"), selectedId);
+            outputDevice->addItem(Localization::text(QStringLiteral("Недоступно — используется системное")), selectedId);
         for (const QAudioDevice& device : outputs)
             outputDevice->addItem(device.description(), device.id());
         outputDevice->setCurrentIndex(outputDevice->findData(selectedId));
     };
     connect(audio_, &AudioOutput::outputDevicesChanged, &dialog, refreshOutputs);
     refreshOutputs();
-    sound->addRow(QStringLiteral("Устройство вывода:"), outputDevice);
-    auto* outputHelp = new QLabel(QStringLiteral(
+    sound->addRow(Localization::text(QStringLiteral("Устройство вывода:")), outputDevice);
+    auto* outputHelp = new QLabel(Localization::text(QStringLiteral(
         "Если выбранное устройство отключено, звук временно выводится через системное. "
-        "После подключения выбор восстановится."), &dialog);
+        "После подключения выбор восстановится.")), &dialog);
     outputHelp->setWordWrap(true);
     sound->addRow(outputHelp);
 
@@ -1341,12 +1522,12 @@ void MainWindow::editSettings(int initialPage) {
     bool biosCreated = false;
     const auto createBiosPage = [this, &dialog, pages, biosPlaceholder, addPage] {
         auto* bios = addPage(QStringLiteral("BIOS"),
-            QStringLiteral("Файлы BIOS для запуска Sega CD и 32X."));
+            Localization::text(QStringLiteral("Файлы BIOS для запуска Sega CD и 32X.")));
         const auto reportBiosImport = [&dialog](const QString& title, const QStringList& imported,
                                                const QString& error, const QString& emptyMessage) {
             QString message;
             if (!imported.isEmpty())
-                message = QStringLiteral("Импортированы: %1").arg(imported.join(QStringLiteral(", ")));
+                message = Localization::text(QStringLiteral("Импортированы: %1")).arg(imported.join(QStringLiteral(", ")));
             if (!error.isEmpty()) {
                 if (!message.isEmpty()) message += QStringLiteral("\n\n");
                 QMessageBox::warning(&dialog, title, message + error);
@@ -1360,8 +1541,8 @@ void MainWindow::editSettings(int initialPage) {
         auto* cdForm = new QFormLayout;
         cdLayout->addLayout(cdForm);
         std::array<QLabel*, 3> cdStatusLabels{};
-        const QStringList cdRegions{QStringLiteral("Япония"), QStringLiteral("США"),
-                                    QStringLiteral("Европа")};
+        const QStringList cdRegions{Localization::text(QStringLiteral("Япония")), Localization::text(QStringLiteral("США")),
+                                    Localization::text(QStringLiteral("Европа"))};
         for (int region = 1; region <= 3; ++region) {
             auto* status = new QLabel(cdGroup);
             status->setObjectName(QStringLiteral("biosCdStatus%1").arg(region - 1));
@@ -1372,16 +1553,16 @@ void MainWindow::editSettings(int initialPage) {
             for (int region = 1; region <= 3; ++region) {
                 QString error;
                 const bool installed = SegaCdBios::validate(dataPath_, region, error);
-                cdStatusLabels[region - 1]->setText(installed ? QStringLiteral("Установлен")
-                                                            : QStringLiteral("Не готов"));
+                cdStatusLabels[region - 1]->setText(installed ? Localization::text(QStringLiteral("Установлен"))
+                                                            : Localization::text(QStringLiteral("Не готов")));
                 cdStatusLabels[region - 1]->setToolTip(error);
             }
         };
         auto* cdActions = new QHBoxLayout;
-        auto* checkCd = new QPushButton(QStringLiteral("Проверить"), cdGroup);
+        auto* checkCd = new QPushButton(Localization::text(QStringLiteral("Проверить")), cdGroup);
         checkCd->setObjectName(QStringLiteral("checkCdBios"));
         cdActions->addWidget(checkCd);
-        auto* importCd = new QPushButton(QStringLiteral("Импортировать из папки…"), cdGroup);
+        auto* importCd = new QPushButton(Localization::text(QStringLiteral("Импортировать из папки…")), cdGroup);
         importCd->setObjectName(QStringLiteral("importCdBios"));
         cdActions->addWidget(importCd);
         cdActions->addStretch();
@@ -1391,18 +1572,18 @@ void MainWindow::editSettings(int initialPage) {
         connect(importCd, &QPushButton::clicked, &dialog,
                 [this, &dialog, refreshCdBios, reportBiosImport] {
             const QString source = QFileDialog::getExistingDirectory(
-                &dialog, QStringLiteral("Папка с BIOS Sega CD"), QDir::homePath());
+                &dialog, Localization::text(QStringLiteral("Папка с BIOS Sega CD")), QDir::homePath());
             if (source.isEmpty()) return;
             QString error;
             const QStringList imported = SegaCdBios::importDirectory(source, dataPath_, error);
             refreshCdBios();
             reportBiosImport(QStringLiteral("BIOS Sega CD"), imported, error,
-                             QStringLiteral("Новые BIOS не найдены."));
+                             Localization::text(QStringLiteral("Новые BIOS не найдены.")));
         });
         auto* x32Group = new QGroupBox(QStringLiteral("32X"), &dialog);
         auto* x32Layout = new QVBoxLayout(x32Group);
-        auto* x32Hint = new QLabel(QStringLiteral("Для 32X нужны три файла BIOS. "
-            "Для CD32X также требуется BIOS Sega CD соответствующего региона."), x32Group);
+        auto* x32Hint = new QLabel(Localization::text(QStringLiteral("Для 32X нужны три файла BIOS. "
+            "Для CD32X также требуется BIOS Sega CD соответствующего региона.")), x32Group);
         x32Hint->setWordWrap(true);
         x32Layout->addWidget(x32Hint);
         auto* x32Form = new QFormLayout;
@@ -1424,16 +1605,16 @@ void MainWindow::editSettings(int initialPage) {
                 const QString path = biosDirectory.filePath(Sega32xBios::fileName(pieces[i]));
                 QString error;
                 const bool installed = Sega32xBios::validateFile(path, pieces[i], error);
-                x32StatusLabels[i]->setText(installed ? QStringLiteral("Установлен")
-                                                   : QStringLiteral("Не готов"));
+                x32StatusLabels[i]->setText(installed ? Localization::text(QStringLiteral("Установлен"))
+                                                   : Localization::text(QStringLiteral("Не готов")));
                 x32StatusLabels[i]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
             }
         };
         auto* x32Actions = new QHBoxLayout;
-        auto* check32x = new QPushButton(QStringLiteral("Проверить"), x32Group);
+        auto* check32x = new QPushButton(Localization::text(QStringLiteral("Проверить")), x32Group);
         check32x->setObjectName(QStringLiteral("check32xBios"));
         x32Actions->addWidget(check32x);
-        auto* import32x = new QPushButton(QStringLiteral("Импортировать из папки…"), x32Group);
+        auto* import32x = new QPushButton(Localization::text(QStringLiteral("Импортировать из папки…")), x32Group);
         import32x->setObjectName(QStringLiteral("import32xBios"));
         x32Actions->addWidget(import32x);
         x32Actions->addStretch();
@@ -1443,17 +1624,17 @@ void MainWindow::editSettings(int initialPage) {
         connect(import32x, &QPushButton::clicked, &dialog,
                 [this, &dialog, refresh32xBios, reportBiosImport] {
             const QString source = QFileDialog::getExistingDirectory(
-                &dialog, QStringLiteral("Папка с BIOS 32X"), QDir::homePath());
+                &dialog, Localization::text(QStringLiteral("Папка с BIOS 32X")), QDir::homePath());
             if (source.isEmpty()) return;
             QString error;
             const QStringList imported = Sega32xBios::importDirectory(source, dataPath_, error);
             refresh32xBios();
             reportBiosImport(QStringLiteral("BIOS 32X"), imported, error,
-                             QStringLiteral("Новые BIOS не найдены или уже установлены."));
+                             Localization::text(QStringLiteral("Новые BIOS не найдены или уже установлены.")));
         });
-        auto* biosHelp = new QLabel(QStringLiteral(
+        auto* biosHelp = new QLabel(Localization::text(QStringLiteral(
             "Импорт начнётся сразу после выбора папки. Существующие BIOS не заменяются; "
-            "«Отмена» не удалит импортированные файлы. Новые BIOS используются при следующем запуске игры."),
+            "«Отмена» не удалит импортированные файлы. Новые BIOS используются при следующем запуске игры.")),
             &dialog);
         biosHelp->setWordWrap(true);
         bios->addRow(biosHelp);
@@ -1495,8 +1676,8 @@ void MainWindow::editSettings(int initialPage) {
     navigation->setCurrentRow(qBound(0, initialPage, kControlsSettingsPage));
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("ОК"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("Отмена"));
+    buttons->button(QDialogButtonBox::Ok)->setText(Localization::text(QStringLiteral("ОК")));
+    buttons->button(QDialogButtonBox::Cancel)->setText(Localization::text(QStringLiteral("Отмена")));
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, navigation, &controls] {
         if (!controls || controls->apply()) dialog.accept();
         else navigation->setCurrentRow(kControlsSettingsPage);
@@ -1511,6 +1692,16 @@ void MainWindow::editSettings(int initialPage) {
         if ((screenshotFormat->currentIndex() == 1) != jpeg)
             settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
         osdAction_->setChecked(showOsd->isChecked());
+        fpsAction_->setChecked(emulationFps->isChecked());
+        gameFpsAction_->setChecked(gameFps->isChecked());
+        if (language->currentData().toString() != selectedLanguage)
+            settings_.setValue(QStringLiteral("ui/language"), language->currentData());
+        if (cdAttachment->isEnabled() && x32Attachment->isEnabled() &&
+            (cdAttachment->currentData().toBool() != attachCd || x32Attachment->currentData().toBool() != attach32x)) {
+            settings_.setValue(QStringLiteral("emulation/attachCd"), cdAttachment->currentData());
+            settings_.setValue(QStringLiteral("emulation/attach32x"), x32Attachment->currentData());
+            session_.setExpansionDevices(cdAttachment->currentData().toBool(), x32Attachment->currentData().toBool());
+        }
         const bool selectedAchievements = achievementEnabledBox->isChecked();
         const bool selectedHardcore = achievementMode->currentData().toBool();
         if (selectedAchievements != achievementEnabledApplied ||
@@ -1595,6 +1786,8 @@ void MainWindow::showAchievements() {
             achievementNetwork_, &AchievementNetwork::requestBadge);
     connect(achievementNetwork_, &AchievementNetwork::badgeReady,
             &dialog, &AchievementsDialog::setBadge);
+    connect(achievementNetwork_, &AchievementNetwork::badgeCacheCleared,
+            &dialog, [&dialog](bool) { dialog.clearBadgeImages(); });
     session_.requestAchievements();
     dialog.exec();
     view_->setFocus();
@@ -1646,8 +1839,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
     releaseInput();
     const QDir movies(QDir(dataPath_).filePath(QStringLiteral("movies")));
     if (!QDir().mkpath(movies.absolutePath())) {
-        QMessageBox::warning(this, QStringLiteral("Запись"),
-            QStringLiteral("Не удалось создать папку записей: %1").arg(movies.absolutePath()));
+        QMessageBox::warning(this, Localization::text(QStringLiteral("Запись")),
+            Localization::text(QStringLiteral("Не удалось создать папку записей: %1")).arg(movies.absolutePath()));
         view_->setFocus();
         return {};
     }
@@ -1660,8 +1853,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz")) +
         (branch ? QStringLiteral("-branch") : QString()) + QStringLiteral(".krm"));
     QString path = QFileDialog::getSaveFileName(this,
-        branch ? QStringLiteral("Записывать с этого места в новый файл") : QStringLiteral("Начать запись управления"),
-        proposal, QStringLiteral("Записи управления (*.krm)"), nullptr,
+        branch ? Localization::text(QStringLiteral("Записывать с этого места в новый файл")) : Localization::text(QStringLiteral("Начать запись управления")),
+        proposal, Localization::text(QStringLiteral("Записи управления (*.krm)")), nullptr,
         QFileDialog::DontConfirmOverwrite);
     view_->setFocus();
     if (path.isEmpty()) return {};
@@ -1670,8 +1863,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
     path = file.absoluteFilePath();
     // A branch is always a new file; leave source movies and earlier recordings intact.
     if (file.exists()) {
-        QMessageBox::warning(this, QStringLiteral("Запись"),
-            QStringLiteral("Файл уже существует. Выберите новое имя: %1").arg(path));
+        QMessageBox::warning(this, Localization::text(QStringLiteral("Запись")),
+            Localization::text(QStringLiteral("Файл уже существует. Выберите новое имя: %1")).arg(path));
         return {};
     }
     if (branch && !moviePath_.isEmpty()) {
@@ -1683,8 +1876,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
 #endif
         if (QDir::cleanPath(path).compare(QDir::cleanPath(QFileInfo(moviePath_).absoluteFilePath()),
                                           sensitivity) == 0) {
-            QMessageBox::warning(this, QStringLiteral("Запись"),
-                QStringLiteral("Для продолжения записи выберите новый файл."));
+            QMessageBox::warning(this, Localization::text(QStringLiteral("Запись")),
+                Localization::text(QStringLiteral("Для продолжения записи выберите новый файл.")));
             return {};
         }
     }
@@ -1705,8 +1898,8 @@ void MainWindow::updateMovieActions() {
                                      (movieMode_ == 2 || movieMode_ == 3));
     movieStopAction_->setEnabled(ready && protectedMovie);
     const QString stopLabel = movieMode_ == 1
-        ? QStringLiteral("Сохранить и закончить запись")
-        : QStringLiteral("Остановить воспроизведение");
+        ? Localization::text(QStringLiteral("Сохранить и закончить запись"))
+        : Localization::text(QStringLiteral("Остановить воспроизведение"));
     if (movieStopAction_->text() != stopLabel) movieStopAction_->setText(stopLabel);
     if (regionMenu_) regionMenu_->setEnabled(!protectedMovie && !moviePending_ &&
                                              !achievementsHardcore_);
@@ -1746,6 +1939,7 @@ void MainWindow::releaseInput() {
     if (rewindAction_ && rewindAction_->isChecked()) rewindAction_->setChecked(false);
     updateRewind();
     input_->releaseKeyboard();
+    input_->setBackgroundGamepadActive(false);
     input_->setEnabled(false);
     if (fastForwardAction_ && fastForwardAction_->isChecked())
         fastForwardAction_->setChecked(false);
@@ -1759,13 +1953,17 @@ void MainWindow::updateInputEnabled() {
     if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() &&
         pauseAction_->isChecked() && !loading_ && !achievementsHardcore_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
-    session_.setBackgroundPaused(QApplication::activeModalWidget() || (pauseOnFocusLoss_ &&
+    const bool modalActive = QApplication::activeModalWidget();
+    const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
+    session_.setBackgroundPaused(modalActive || popupActive || (pauseOnFocusLoss_ &&
         (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive)));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() &&
-                         !loading_ && !moviePending_ &&
-                         !QApplication::activeModalWidget() && !QApplication::activePopupWidget();
+                         !loading_ && !moviePending_ && !modalActive && !popupActive;
     view_->setLightgunInputEnabled(enabled);
     input_->setEnabled(enabled);
+    input_->setBackgroundGamepadActive(input_->backgroundGamepadEnabled() &&
+        session_.hasGame() && !loading_ && !moviePending_ &&
+        !modalActive && !popupActive && !enabled);
     input_->poll();
 }
 

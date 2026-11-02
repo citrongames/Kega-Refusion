@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "CoreFileSystem.h"
 #include "Mp3Stream.h"
 
@@ -47,7 +48,7 @@ bool virtualDirectory(const QString& path) {
 }
 
 void setVirtualError(const QString& path, const QString& detail) {
-    vfsError = QStringLiteral("Не удалось открыть виртуальный файл %1: %2").arg(path, detail);
+    vfsError = Localization::text(QStringLiteral("Не удалось открыть виртуальный файл %1: %2")).arg(path, detail);
     qWarning().noquote() << vfsError;
 }
 
@@ -93,7 +94,7 @@ retro_vfs_file_handle* openFile(const char* rawPath, unsigned mode, unsigned) {
     auto it = virtualFiles.constFind(path);
     if (it != virtualFiles.cend()) {
         if (access != RETRO_VFS_FILE_ACCESS_READ || update) {
-            setVirtualError(path, QStringLiteral("виртуальные файлы доступны только для чтения"));
+            setVirtualError(path, Localization::text(QStringLiteral("виртуальные файлы доступны только для чтения")));
             return nullptr;
         }
         if (it->kind == VirtualKind::Memory) {
@@ -201,7 +202,7 @@ int64_t fileRead(retro_vfs_file_handle* handle, void* data, uint64_t length) {
         const qint64 result = handle->mp3->read(static_cast<char*>(data), count);
         if (result > 0) mp3PcmBytes += quint64(std::max<qint64>(0,result-std::max<qint64>(0,44-before)));
         if (result < 0) setVirtualError(QString::fromUtf8(handle->originalPath),
-                                       QStringLiteral("ошибка чтения MP3"));
+                                       Localization::text(QStringLiteral("ошибка чтения MP3")));
         return result;
     }
     case retro_vfs_file_handle::Kind::Real: {
