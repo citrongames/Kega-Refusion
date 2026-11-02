@@ -9,6 +9,7 @@
 #include <QLibrary>
 #include <QTemporaryDir>
 #include <QtEndian>
+#include <array>
 #include <cstdio>
 #include <chrono>
 #include <cmath>
@@ -103,6 +104,61 @@ QByteArray step(MovieSession& movie, LibretroHost& host, Memory memory,
     host.runFrame(true,false); movie.afterFrame();
     return observation(host,memory);
 }
+// Original Z80 loop; a four-byte CRC fixup selects the PAL metadata rule
+// without including copyrighted game code or graphics.
+QByteArray makeSmsRegionFixture() {
+    QByteArray rom(0x80000,char(0));
+    rom.replace(0,10,QByteArray::fromHex("f331f0df2100c03418fd"));
+    rom.replace(0x7ff0,8,"TMR SEGA");rom[0x7fff]=char(0x41);
+    const auto crc=[&](){
+        quint32 value=0xffffffff;
+        static const auto table=[](){std::array<quint32,256> t{};
+            for(quint32 i=0;i<256;++i){quint32 v=i;for(int n=0;n<8;++n)v=(v>>1)^((v&1)?0xedb88320u:0);t[i]=v;}return t;}();
+        for(const char byte:rom)value=table[(value^quint8(byte))&255]^(value>>8);
+        return value^0xffffffff;
+    };
+    const int fix=rom.size()-4;const quint32 initial=crc();quint32 basis[32]{},masks[32]{};
+    for(unsigned bit=0;bit<32;++bit){rom[fix+int(bit/8)]=char(1u<<(bit%8));quint32 v=crc()^initial,m=quint32(1)<<bit;rom[fix+int(bit/8)]=0;
+        for(int k=31;k>=0;--k)if(v&(quint32(1)<<k)){if(basis[k]){v^=basis[k];m^=masks[k];}else{basis[k]=v;masks[k]=m;break;}}}
+    quint32 delta=0xc8718d40u^initial,mask=0;
+    for(int k=31;k>=0;--k)if(delta&(quint32(1)<<k)){require(basis[k]!=0,"SMS fixture CRC matrix failed");delta^=basis[k];mask^=masks[k];}
+    for(int i=0;i<4;++i)rom[fix+i]=char(mask>>(8*i));
+    require(crc()==0xc8718d40u,"SMS region fixture CRC mismatch");return rom;
+}
+
+void smsRegionRecording(const QString& core) {
+    QTemporaryDir temp;require(temp.isValid(),"SMS movie temp failed");QString error;
+    const auto rom=makeSmsRegionFixture();const QString path=temp.filePath("renamed-original-fixture.sms");writeFile(path,rom);
+    LibretroHost host(core,temp.filePath("data"));host.setExpansionDevices(false,false);
+    require(host.load(path,error),qPrintable(error));host.runFrame();
+    require(host.isMasterSystem()&&std::abs(host.fps()-50.0)<1.0,"SMS region fixture did not select PAL AUTO");
+    require(host.setRegion(2,error)&&host.hardReset(error),qPrintable(error));host.runFrame();
+    const double ntsc=host.fps();require(std::abs(ntsc-60.0)<1.0,"SMS manual NTSC did not override PAL metadata");
+    auto metadata=host.movieConfiguration();auto options=metadata.value("options").toObject();options.insert("genesis_plus_gx_region_detect","auto");metadata.insert("options",options);
+    // Simulate an older AUTO recording whose native snapshot was made at NTSC.
+    const auto snapshot=host.captureMovieState();MovieTape legacy;
+    const QString oldPath=temp.filePath("legacy-auto-ntsc.krm");
+    require(legacy.create(metadata,snapshot,error)&&legacy.append(MovieInput{},error)&&legacy.save(oldPath,error),qPrintable(error));
+    MovieSession movie(host,temp.filePath("data"));
+    require(movie.play(oldPath,false,error),qPrintable(error));
+    require(std::abs(host.fps()-ntsc)<1e-9&&std::abs(movie.frameRate()-ntsc)<1e-9,"legacy SMS AUTO replay lost its native NTSC cadence");
+    require(host.movieConfiguration().value("options").toObject().value("genesis_plus_gx_region_detect").toString()=="ntsc-u","legacy cadence was not movie-local pinned");
+    require(movie.finish(false,error),qPrintable(error));
+    // A pending user AUTO change must be applied for a new recording; its old
+    // live NTSC frame rate must not be treated as legacy replay metadata.
+    require(host.setRegion(0,error),qPrintable(error));
+    const QString newPath=temp.filePath("new-auto-pal.krm");
+    require(movie.startRecording(newPath,error),qPrintable(error));const double pal=host.fps();
+    require(std::abs(pal-50.0)<1.0&&std::abs(movie.frameRate()-pal)<1e-9,"new SMS recording retained stale pre-reset NTSC cadence");
+    MovieTape current;require(current.load(newPath,error),qPrintable(error));
+    require(std::abs(current.metadata().value("frameRate").toDouble()-pal)<1e-9,"new SMS recording did not store actual PAL rate");
+    require(current.metadata().value("options").toObject().value("genesis_plus_gx_region_detect").toString()=="auto","new recording unnecessarily pinned AUTO");
+    require(movie.finish(false,error)&&movie.play(newPath,false,error),qPrintable(error));
+    require(std::abs(host.fps()-pal)<1e-9&&host.movieConfiguration().value("options").toObject().value("genesis_plus_gx_region_detect").toString()=="auto","current SMS PAL recording did not keep AUTO");
+    require(movie.finish(false,error),qPrintable(error));
+    require(readFile(path)==rom,"SMS region fixture source changed");
+}
+
 void integration(const QString& core) {
     QTemporaryDir temp; require(temp.isValid(), "temporary directory failed");
     const QString romPath=temp.filePath("movie-test.md");
@@ -489,10 +545,13 @@ void compatibility(const QString& currentCore, const QString& legacyCore) {
 int main(int argc, char** argv) {
     QCoreApplication app(argc,argv);
     if (argc!=2 && argc!=3) {
-        std::fprintf(stderr,"usage: movie_integration_tests CORE [LEGACY_CORE]\n"); return 2;
+        std::fprintf(stderr,"usage: movie_integration_tests CORE [LEGACY_CORE|--sms-region]\n"); return 2;
     }
     try {
-        if (argc==3) {
+        if (argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--sms-region")) {
+            smsRegionRecording(QString::fromLocal8Bit(argv[1]));
+            std::puts("SMS movie region: legacy AUTO cadence, new pending AUTO and current PAL replay passed");
+        } else if (argc==3) {
             compatibility(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
             std::puts("Movie core compatibility: legacy, compatible rebuild, and advisory mismatch passed");
         } else {

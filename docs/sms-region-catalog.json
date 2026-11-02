@@ -1,0 +1,3662 @@
+{
+  "source": "https://github.com/mamedev/mame/blob/abe2112f4160845d90b90de365ddce14ddb28ce5/hash/sms.xml",
+  "source_license": "CC0-1.0",
+  "policy": "Exact CRC32 and byte size. European/Australian SMS releases without USA, World or Japan get PAL preference; shared Europe/Brazil/Korea releases prefer PAL, not proof that every cartridge requires PAL. Manual region overrides always win. Japanese hardware exceptions and non-SMS systems retain existing behavior. Unknown/modified/ambiguous ROMs retain current detection. No filenames or online runtime lookup.",
+  "excluded_multichip_or_bad": [
+    "Astro Warrior & Pit Pot (Europe, alt)",
+    "NBA Jam (Europe, prototype)",
+    "Sonic the Hedgehog Chaos (Europe, \"Ver 0.20\", prototype 19930630)",
+    "Sonic the Hedgehog Chaos (Europe, prototype 19930713)",
+    "Bank Panic (Europe, Sega Card)",
+    "Great Soccer (Europe, Sega Card)",
+    "Hang-On (Europe, Brazil, Australia, Sega Card)"
+  ],
+  "entries": [
+    {
+      "crc32": "0047B615",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "predatr2",
+          "description": "Predator 2 (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "00529114",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "secret",
+          "description": "Secret Command (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "026D94A4",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "monopoly",
+          "description": "Monopoly (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "04E9C089",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "sor2",
+          "description": "Streets of Rage II (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "05CDC24E",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "gloc",
+          "description": "G-LOC Air Battle (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "0667ED9F",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "jpark",
+          "description": "Jurassic Park (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "071B045E",
+      "size": 32768,
+      "releases": [
+        {
+          "id": "hangon",
+          "description": "Hang-On (Europe, Brazil, Australia)"
+        }
+      ]
+    },
+    {
+      "crc32": "07306947",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "dynduke",
+          "description": "Dynamite Duke (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "0BD8DA96",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "assaultc1",
+          "description": "Assault City (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "0C7366A0",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "speedbl2",
+          "description": "Speedball 2 (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "0CA95637",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "lghost",
+          "description": "Laser Ghost (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "0DF8597F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "basketn",
+          "description": "Basket Ball Nightmare (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "0E1CC1E0",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ddux",
+          "description": "Dynamite Dux (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "0ED170C9",
+      "size": 32768,
+      "releases": [
+        {
+          "id": "greatscr",
+          "description": "Great Soccer (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "102D5FEA",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "robocod",
+          "description": "James Pond 2 - Codename RoboCod (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "11C1BC8A",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "sspin",
+          "description": "Sonic The Hedgehog Spinball (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "1350E4F8",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "cybers",
+          "description": "The Cyber Shinobi (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "13AC9023",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "coolspot",
+          "description": "Cool Spot (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "147E02FA",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "asterix1",
+          "description": "Asterix (Europe, Brazil, v0)"
+        }
+      ]
+    },
+    {
+      "crc32": "15668CA4",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ultsoccr",
+          "description": "Ultimate Soccer (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "1575581D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "beast",
+          "description": "Shadow of the Beast (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "1A390B93",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tennis",
+          "description": "Tennis Ace (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "1B10A951",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "dracula",
+          "description": "Bram Stoker's Dracula (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "1B1D8CC2",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ngaiden",
+          "description": "Ninja Gaiden (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "1B312E04",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tazmaniap",
+          "description": "Taz-Mania (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "1B7D2A20",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "scip",
+          "description": "Special Criminal Investigation (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "1D6244EE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ssinv",
+          "description": "Super Space Invaders (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "1F8EFA1D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "wolfchld",
+          "description": "Wolfchild (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "1FDAE719",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "running",
+          "description": "Running Battle (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "205CAAE8",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "opwolf",
+          "description": "Operation Wolf (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "20F40CAE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "vampire",
+          "description": "Vampire (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "23163A12",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "champeur",
+          "description": "Champions of Europe (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "24E97200",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "landill",
+          "description": "Land of Illusion Starring Mickey Mouse (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "2663BF18",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "mk2",
+          "description": "Mortal Kombat II (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "294E0759",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "paperboy",
+          "description": "Paperboy (Europe, v0)"
+        }
+      ]
+    },
+    {
+      "crc32": "296879DD",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "segawtg",
+          "description": "Sega World Tournament Golf (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "29822980",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "cosmic",
+          "description": "Cosmic Spacehead (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "2B435FD6",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "klax",
+          "description": "Klax (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "2C61ED88",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "lemmingsp",
+          "description": "Lemmings (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "2D48C1D3",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "backtof3",
+          "description": "Back to the Future Part III (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "2DB21448",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "wwfsteel",
+          "description": "WWF WrestleMania: Steel Cage Challenge (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "302DC686",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "mk",
+          "description": "Mortal Kombat (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "357D4F78",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "puttputt",
+          "description": "Putt & Putter (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "3727D8B2",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ameripf",
+          "description": "American Pro Football (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "3793C01A",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "shdancer",
+          "description": "Shadow Dancer (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "38C53916",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "forgottn",
+          "description": "Forgotten Worlds (Europe, Brazil, Australia)"
+        }
+      ]
+    },
+    {
+      "crc32": "3932ADBC",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "outrneur",
+          "description": "Out Run Europa (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "3BE7F641",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "renegade",
+          "description": "Renegade (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "3CD816C6",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "mspacman",
+          "description": "Ms. Pac-Man (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "3E63768A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smurfs",
+          "description": "The Smurfs (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "3EC5E627",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "gground",
+          "description": "Gain Ground (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "406AA0C2",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "skickoff",
+          "description": "Super Kick Off (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "4077EFD9",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "pstrike",
+          "description": "Power Strike (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "426E5C8A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "rampart",
+          "description": "Rampart (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "42FC3A6E",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "deepduck",
+          "description": "Deep Duck Trouble Starring Donald Duck (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "46340C41",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "cheese",
+          "description": "Cheese Cat-astrophe Starring Speedy Gonzales (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "48651325",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "golfaman",
+          "description": "Golfamania (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "4AAAD0D6",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "worldgp",
+          "description": "World Grand Prix (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "4AB3790F",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "sor",
+          "description": "Streets of Rage (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "4F530CB2",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "sumgamesp1",
+          "description": "Summer Games (Europe, early prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "54F68C2A",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "superoff",
+          "description": "Super Off Road (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "55BF81A0",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smgp",
+          "description": "Super Monaco GP (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "5A1C3DDE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tecmow93",
+          "description": "Tecmo World Cup '93 (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "5B3B922C",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "sonic2a",
+          "description": "Sonic The Hedgehog 2 (Europe, Brazil, v0)"
+        }
+      ]
+    },
+    {
+      "crc32": "5C0B1F0F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "psychicw",
+          "description": "Psychic World (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "5C205EE1",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "xenon2",
+          "description": "Xenon 2 - Megablast (Image Works) (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "64A585EB",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "krustyfh",
+          "description": "Krusty's Fun House (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "64D6AF3B",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "impmiss",
+          "description": "Impossible Mission (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "655FB1F4",
+      "size": 32768,
+      "releases": [
+        {
+          "id": "bankp",
+          "description": "Bank Panic (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "66388128",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "sagaia",
+          "description": "Sagaia (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "6687FAB9",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "ecco",
+          "description": "Ecco the Dolphin (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "695A9A15",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "jungle",
+          "description": "The Jungle Book (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "69EFD483",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "astropit",
+          "description": "Astro Warrior & Pit Pot (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "6A5A1E39",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "olympgld",
+          "description": "Olympic Gold (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "6C1433F9",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "dstrike",
+          "description": "Desert Strike (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "6C696221",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "drrobotn",
+          "description": "Dr. Robotnik's Mean Bean Machine (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "6E1AD6FD",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "wcup90",
+          "description": "World Cup Italia '90 (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "6F9AC98F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "superman",
+          "description": "Superman - The Man of Steel (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "71ABEF27",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "daffy",
+          "description": "Daffy Duck in Hollywood (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "71C4CA8F",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "impmissp",
+          "description": "Impossible Mission (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "72420F38",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "addfam",
+          "description": "The Addams Family (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "761E9396",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ngaidenp",
+          "description": "Ninja Gaiden (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "7704287D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ppersia",
+          "description": "Prince of Persia (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "7982AE67",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smurfs2p",
+          "description": "The Smurfs 2 (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "7B27202F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ameribb",
+          "description": "American Baseball (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "7BA54510",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "zillion",
+          "description": "Zillion (Europe, v2)"
+        }
+      ]
+    },
+    {
+      "crc32": "7CC3E837",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tazmania",
+          "description": "Taz-Mania (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "7D7CE80B",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "wboymwld",
+          "description": "Wonder Boy in Monster World (Europe, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "7E5839A0",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "champhck",
+          "description": "Championship Hockey (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "7F30F793",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "astorm",
+          "description": "Alien Storm (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "7F3AFE58",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "wimbled2",
+          "description": "Wimbledon II (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "7F6D0DF6",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "luckydimp",
+          "description": "The Lucky Dime Caper Starring Donald Duck (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "80EB1FFF",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "sumgamesp",
+          "description": "Summer Games (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "8167CCC4",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "puttputtp",
+          "description": "Putt & Putter (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "81BFF9BB",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "wboymwldp",
+          "description": "Wonder Boy in Monster World (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "8212B754",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "roboterm",
+          "description": "RoboCop versus The Terminator (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "82EF2A7D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ottifant",
+          "description": "The Ottifants (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "8370F6CD",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "doublhwk",
+          "description": "Double Hawk (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "85CFC9C9",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "chasehq",
+          "description": "Taito Chase H.Q. (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "861B6E79",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "assaultc",
+          "description": "Assault City (Europe, Brazil, Light Phaser version)"
+        }
+      ]
+    },
+    {
+      "crc32": "887D9F6B",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "aceoface",
+          "description": "Ace of Aces (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "8AEB574B",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "indycrus",
+          "description": "Indiana Jones and the Last Crusade (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "8B43D21D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "airresc",
+          "description": "Air Rescue (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "8C9D5BE8",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "asterix",
+          "description": "Asterix (Europe, v1)"
+        }
+      ]
+    },
+    {
+      "crc32": "8D23587F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "jb007",
+          "description": "James Bond 007 - The Duel (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "8DA5C93F",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "sumgames",
+          "description": "Summer Games (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "912D92AF",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "wimbled",
+          "description": "Wimbledon (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "914D3FC4",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "wldgamesp",
+          "description": "World Games (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "93141463",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "mastcomb",
+          "description": "Masters of Combat (Europe, Brazil, Australia)"
+        }
+      ]
+    },
+    {
+      "crc32": "93CA8152",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "t2ag",
+          "description": "T2 - The Arcade Game (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "953F42E1",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "castlill",
+          "description": "Castle of Illusion Starring Mickey Mouse (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "9549FCE4",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "dcrystal",
+          "description": "Dragon Crystal (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "95B9EA95",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "pgatour",
+          "description": "PGA Tour Golf (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "96E75F48",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tecmow92",
+          "description": "Tecmo World Cup '92 (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "96FB4D4B",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "mastdark",
+          "description": "Master of Darkness (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "97E5BB7D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smurfs2",
+          "description": "The Smurfs 2 (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "9A8B28EC",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "sspirits",
+          "description": "Scramble Spirits (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "9CED34A7",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "hook",
+          "description": "Hook (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "9D9D0A5F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "zool",
+          "description": "Zool - Ninja of the 'Nth' Dimension (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "9F951756",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "robocop3",
+          "description": "RoboCop 3 (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A109A6FE",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "pstrike2",
+          "description": "Power Strike II (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A1710F13",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "luckydim",
+          "description": "The Lucky Dime Caper Starring Donald Duck (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A1D6D963",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smgpp2",
+          "description": "Super Monaco GP (Europe, older prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "A20290B6",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "wintol",
+          "description": "Winter Olympics - Lillehammer '94 (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "A2A60BC8",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "wldgames",
+          "description": "World Games (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A4AC35D8",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "gforce",
+          "description": "Galaxy Force (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A577CE46",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "micromac",
+          "description": "Micro Machines (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "A57CAD18",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "speedbl",
+          "description": "Speedball (Image Works) (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "A64898CE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "georgeko",
+          "description": "George Foreman's KO Boxing (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A67F2A5C",
+      "size": 1048576,
+      "releases": [
+        {
+          "id": "4pak",
+          "description": "4 PAK All Action (Australia)"
+        }
+      ]
+    },
+    {
+      "crc32": "A6BF8F9E",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "wcup94",
+          "description": "World Cup USA 94 (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A8061AEF",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "segachss",
+          "description": "Sega Chess (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "A908CFF5",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "spacegun",
+          "description": "Space Gun (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "AC56104F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "term2",
+          "description": "Terminator 2 - Judgment Day (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "ACEC894D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "indycrusp",
+          "description": "Indiana Jones and the Last Crusade (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "AE4A28D7",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "danan",
+          "description": "Danan: The Jungle Fighter (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "AEDF3BDF",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "sonicc",
+          "description": "Sonic The Hedgehog Chaos (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B0FC4577",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "buggyrun",
+          "description": "Buggy Run (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B137007A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "desert",
+          "description": "Desert Speedtrap Starring Road Runner and Wile E. Coyote (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B154EC38",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "batmanrn",
+          "description": "Batman Returns (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B4584DDE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "crashdum",
+          "description": "The Incredible Crash Dummies (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B52D60C8",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "ultima4",
+          "description": "Ultima IV - Quest of the Avatar (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B618B144",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "alien3",
+          "description": "Alien³ (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B67CEB76",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "mickmack",
+          "description": "Mick & Mack as the Global Gladiators (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B840A446",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "pitfight",
+          "description": "PitFighter - The Ultimate Challenge (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "B876FC74",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "roadrash",
+          "description": "Road Rash (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B8F0915A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "strider2",
+          "description": "Strider II (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "B9664AE1",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "fantdizz",
+          "description": "Fantastic Dizzy (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "BE31D63F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "flash",
+          "description": "The Flash (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "BE57A9A5",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "pacmania",
+          "description": "Pac-Mania (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "BE9A7071",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "hulk",
+          "description": "The Incredible Hulk (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "BF6F3E5F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "marble",
+          "description": "Marble Madness (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "BF7B7285",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tomjermv",
+          "description": "Tom and Jerry - The Movie (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "C0E25D62",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "calgame2",
+          "description": "California Games II (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "C172A22C",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "rbisland",
+          "description": "Rainbow Islands - The Story of Bubble Bobble 2 (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "C19430CE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "battleor",
+          "description": "Battle Out Run (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "C30E690A",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "chukrck2",
+          "description": "Chuck Rock II - Son of Chuck (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "C352C7EB",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "lionking",
+          "description": "Disney's The Lion King (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "C660FF34",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "tnzs",
+          "description": "The New Zealand Story (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "C7A1FDEF",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "populous",
+          "description": "Populous (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "C8718D40",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "aladdin",
+          "description": "Disney's Aladdin (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "C88A5064",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "dragon",
+          "description": "Dragon - The Bruce Lee Story (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "C93BD0E9",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "slapshotb",
+          "description": "Slap Shot (Europe, v0)"
+        }
+      ]
+    },
+    {
+      "crc32": "C9A449B7",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "wclead",
+          "description": "World Class Leader Board (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "C9DBF936",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "homea",
+          "description": "Home Alone (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "CA1D3752",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "sharrier",
+          "description": "Space Harrier (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "CA5C78A5",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "flint",
+          "description": "The Flintstones (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "CAEA8002",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "bnzabros",
+          "description": "Bonanza Bros. (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "CB09F355",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "loffire",
+          "description": "Line of Fire (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "CDE13FFB",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "herolanc",
+          "description": "Advanced Dungeons & Dragons - Heroes of the Lance (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "CF5AECCA",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "lemming2",
+          "description": "Lemmings 2 - The Tribes (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "D1CC08EE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "bartvssm",
+          "description": "The Simpsons - Bart vs. The Space Mutants (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "D33B296A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "slapshota",
+          "description": "Slap Shot (Europe, v1)"
+        }
+      ]
+    },
+    {
+      "crc32": "D40D03C7",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "ggroundp",
+          "description": "Gain Ground (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "D4B8F66D",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "starwars",
+          "description": "Star Wars (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "D6F2BFCA",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "sonic2",
+          "description": "Sonic The Hedgehog 2 (Europe, Brazil, Korea, v1)"
+        }
+      ]
+    },
+    {
+      "crc32": "D6F43DDA",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "outrun3d",
+          "description": "Out Run 3-D (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "D7416B83",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "mercs",
+          "description": "Mercs (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "D8F2F1B9",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "submarin",
+          "description": "Submarine Attack (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "D9190956",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "gauntlet",
+          "description": "Gauntlet (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "DD0E2927",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "chuckrck",
+          "description": "Chuck Rock (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "DD7ADBCC",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smgpp1",
+          "description": "Super Monaco GP (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "DE9F8517",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "ultima4p",
+          "description": "Ultima IV - Quest of the Avatar (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "DEF9B14E",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "astermis",
+          "description": "Asterix and the Secret Mission (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "E0B1AFF8",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "smashtv",
+          "description": "Smash T.V. (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "E4163163",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "arcadesh",
+          "description": "Arcade Smash Hits (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "E5374022",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "trivial",
+          "description": "Trivial Pursuit - Genus Edition (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "E5FF50D8",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "backtof2",
+          "description": "Back to the Future Part II (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "E8215C2E",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "marksman",
+          "description": "Marksman Shooting & Trap Shooting & Safari Hunt (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "E843BA7E",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "bublbobl",
+          "description": "Bubble Bobble (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "E890331D",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "smgp2",
+          "description": "Ayrton Senna's Super Monaco GP II (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "EA5C3A6F",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "dinobash",
+          "description": "Dinobasher Starring Bignose the Caveman (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "EBE45388",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "spidermn",
+          "description": "Spider-Man - Return of the Sinister Six (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "EC2DA554",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "gprider",
+          "description": "GP Rider (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "EC726C0D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "xenon2v",
+          "description": "Xenon 2 - Megablast (Virgin) (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "EC788661",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "f1",
+          "description": "F1 (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "ECF491CF",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "aerialas",
+          "description": "Aerial Assault (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "EDC5C012",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "termntr",
+          "description": "The Terminator (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "F369B2D8",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "lemmings",
+          "description": "Lemmings (Europe, Brazil, Korea)"
+        }
+      ]
+    },
+    {
+      "crc32": "F499034D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "agassi",
+          "description": "Andre Agassi Tennis (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "F6AD7B1D",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "fireforg",
+          "description": "Fire & Forget II (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "F6B2370A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "bartvsw",
+          "description": "The Simpsons - Bart vs. The World (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "F76D5CEE",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "doublhwkp",
+          "description": "Double Hawk (Europe, prototype)"
+        }
+      ]
+    },
+    {
+      "crc32": "F8176918",
+      "size": 131072,
+      "releases": [
+        {
+          "id": "sensible",
+          "description": "Sensible Soccer (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "F9B7D26B",
+      "size": 524288,
+      "releases": [
+        {
+          "id": "astergre",
+          "description": "Astérix and the Great Rescue (Europe, Brazil)"
+        }
+      ]
+    },
+    {
+      "crc32": "FA8E4CA0",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "sci",
+          "description": "Special Criminal Investigation (Europe)"
+        }
+      ]
+    },
+    {
+      "crc32": "FDAB876A",
+      "size": 262144,
+      "releases": [
+        {
+          "id": "heavyw",
+          "description": "Heavyweight Champ (Europe)"
+        }
+      ]
+    }
+  ],
+  "local_europe_folder": {
+    "matched": [
+      {
+        "file": "3.Europe/A/Ace of Aces (Europe).sms",
+        "crc32": "887D9F6B",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Addams Family, The (Europe).sms",
+        "crc32": "72420F38",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Aerial Assault (Europe).sms",
+        "crc32": "ECF491CF",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Air Rescue (Europe).sms",
+        "crc32": "8B43D21D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Aladdin (Europe).sms",
+        "crc32": "C8718D40",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/A/Alien 3 (Europe).sms",
+        "crc32": "B618B144",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Alien Storm (Europe).sms",
+        "crc32": "7F30F793",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/American Baseball (Europe).sms",
+        "crc32": "7B27202F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/American Pro Football (Europe).sms",
+        "crc32": "3727D8B2",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Andre Agassi Tennis (Europe).sms",
+        "crc32": "F499034D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Arcade Smash Hits (Europe).sms",
+        "crc32": "E4163163",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Assault City (Europe) (Light Phaser).sms",
+        "crc32": "861B6E79",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Assault City (Europe).sms",
+        "crc32": "0BD8DA96",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Asterix (Europe) (En,Fr) (Rev 1).sms",
+        "crc32": "8C9D5BE8",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/A/Asterix (Europe) (En,Fr).sms",
+        "crc32": "147E02FA",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/A/Asterix and the Great Rescue (Europe) (En,Fr,De,Es,It).sms",
+        "crc32": "F9B7D26B",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/A/Asterix and the Secret Mission (Europe) (En,Fr,De).sms",
+        "crc32": "DEF9B14E",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/A/Astro Warrior & Pit Pot (Europe).sms",
+        "crc32": "69EFD483",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/A/Ayrton Senna's Super Monaco GP II (Europe).sms",
+        "crc32": "E890331D",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/B/Back to the Future Part II (Europe).sms",
+        "crc32": "E5FF50D8",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Back to the Future Part III (Europe).sms",
+        "crc32": "2D48C1D3",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Bank Panic (Europe).sms",
+        "crc32": "655FB1F4",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/B/Basket Ball Nightmare (Europe).sms",
+        "crc32": "0DF8597F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Batman Returns (Europe).sms",
+        "crc32": "B154EC38",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Battle Out Run (Europe).sms",
+        "crc32": "C19430CE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Bonanza Bros. (Europe).sms",
+        "crc32": "CAEA8002",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Bram Stoker's Dracula (Europe).sms",
+        "crc32": "1B10A951",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Bubble Bobble (Europe).sms",
+        "crc32": "E843BA7E",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Buggy Run (Europe).sms",
+        "crc32": "B0FC4577",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/C/California Games II (Europe).sms",
+        "crc32": "C0E25D62",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Castle of Illusion Starring Mickey Mouse (Europe).sms",
+        "crc32": "953F42E1",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Champions of Europe (Europe).sms",
+        "crc32": "23163A12",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Championship Hockey (Europe).sms",
+        "crc32": "7E5839A0",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Cheese Cat-astrophe Starring Speedy Gonzales (Europe) (En,Fr,De,Es).sms",
+        "crc32": "46340C41",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/C/Chuck Rock (Europe).sms",
+        "crc32": "DD0E2927",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/C/Chuck Rock II - Son of Chuck (Europe).sms",
+        "crc32": "C30E690A",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/C/Cool Spot (Europe).sms",
+        "crc32": "13AC9023",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Cosmic Spacehead (Europe) (En,Fr,De,Es).sms",
+        "crc32": "29822980",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Cyber Shinobi, The (Europe).sms",
+        "crc32": "1350E4F8",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Daffy Duck in Hollywood (Europe) (En,Fr,De,Es,It).sms",
+        "crc32": "71ABEF27",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/D/Danan - The Jungle Fighter (Europe).sms",
+        "crc32": "AE4A28D7",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Deep Duck Trouble Starring Donald Duck (Europe).sms",
+        "crc32": "42FC3A6E",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/D/Desert Speedtrap Starring Road Runner and Wile E. Coyote (Europe) (En,Fr,De,Es,It).sms",
+        "crc32": "B137007A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Desert Strike (Europe) (En,Fr,De,Es).sms",
+        "crc32": "6C1433F9",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/D/Double Hawk (Europe).sms",
+        "crc32": "8370F6CD",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Dr. Robotnik's Mean Bean Machine (Europe).sms",
+        "crc32": "6C696221",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Dragon - The Bruce Lee Story (Europe).sms",
+        "crc32": "C88A5064",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Dragon Crystal (Europe).sms",
+        "crc32": "9549FCE4",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/D/Dynamite Duke (Europe).sms",
+        "crc32": "07306947",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Dynamite Dux (Europe).sms",
+        "crc32": "0E1CC1E0",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/E/Ecco the Dolphin (Europe).sms",
+        "crc32": "6687FAB9",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/F/F1 (Europe).sms",
+        "crc32": "EC788661",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/F/Fantastic Dizzy (Europe) (En,Fr,De,Es,It).sms",
+        "crc32": "B9664AE1",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/F/Fire & Forget II (Europe).sms",
+        "crc32": "F6AD7B1D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/F/Flash, The (Europe).sms",
+        "crc32": "BE31D63F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/F/Flintstones, The (Europe).sms",
+        "crc32": "CA5C78A5",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/F/Forgotten Worlds (Europe).sms",
+        "crc32": "38C53916",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/G-LOC Air Battle (Europe).sms",
+        "crc32": "05CDC24E",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Gain Ground (Europe).sms",
+        "crc32": "3EC5E627",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Galaxy Force (Europe).sms",
+        "crc32": "A4AC35D8",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/G/Gauntlet (Europe).sms",
+        "crc32": "D9190956",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/George Foreman's KO Boxing (Europe).sms",
+        "crc32": "A64898CE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Golfamania (Europe).sms",
+        "crc32": "48651325",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/GP Rider (Europe).sms",
+        "crc32": "EC2DA554",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/G/Great Soccer (Europe).sms",
+        "crc32": "0ED170C9",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/H/Hang-On (Europe).sms",
+        "crc32": "071B045E",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/H/Heavyweight Champ (Europe).sms",
+        "crc32": "FDAB876A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/H/Heroes of the Lance (Europe).sms",
+        "crc32": "CDE13FFB",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/H/Home Alone (Europe).sms",
+        "crc32": "C9DBF936",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/I/Impossible Mission (Europe).sms",
+        "crc32": "64D6AF3B",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/I/Incredible Crash Dummies, The (Europe).sms",
+        "crc32": "B4584DDE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/I/Incredible Hulk, The (Europe).sms",
+        "crc32": "BE9A7071",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/I/Indiana Jones and the Last Crusade (Europe).sms",
+        "crc32": "8AEB574B",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/J/James Bond 007 - The Duel (Europe).sms",
+        "crc32": "8D23587F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/J/James Pond 2 - Codename RoboCod (Europe).sms",
+        "crc32": "102D5FEA",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/J/Jungle Book, The (Europe).sms",
+        "crc32": "695A9A15",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/J/Jurassic Park (Europe).sms",
+        "crc32": "0667ED9F",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/K/Klax (Europe).sms",
+        "crc32": "2B435FD6",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/K/Krusty's Fun House (Europe).sms",
+        "crc32": "64A585EB",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/L/Land of Illusion Starring Mickey Mouse (Europe).sms",
+        "crc32": "24E97200",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/L/Laser Ghost (Europe).sms",
+        "crc32": "0CA95637",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/L/Lemmings (Europe).sms",
+        "crc32": "F369B2D8",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/L/Line of Fire (Europe).sms",
+        "crc32": "CB09F355",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/L/Lion King, The (Europe).sms",
+        "crc32": "C352C7EB",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/L/Lucky Dime Caper Starring Donald Duck, The (Europe).sms",
+        "crc32": "A1710F13",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Marble Madness (Europe).sms",
+        "crc32": "BF6F3E5F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Marksman Shooting & Trap Shooting & Safari Hunt (Europe).sms",
+        "crc32": "E8215C2E",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/M/Master of Darkness (Europe).sms",
+        "crc32": "96FB4D4B",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Masters of Combat (Europe).sms",
+        "crc32": "93141463",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Mercs (Europe).sms",
+        "crc32": "D7416B83",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/M/Mick & Mack as the Global Gladiators (Europe).sms",
+        "crc32": "B67CEB76",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Micro Machines (Europe).sms",
+        "crc32": "A577CE46",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Monopoly (Europe).sms",
+        "crc32": "026D94A4",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/M/Mortal Kombat (Europe).sms",
+        "crc32": "302DC686",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/M/Mortal Kombat II (Europe).sms",
+        "crc32": "2663BF18",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/M/Ms. Pac-Man (Europe).sms",
+        "crc32": "3CD816C6",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/N/New Zealand Story, The (Europe).sms",
+        "crc32": "C660FF34",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/N/Ninja Gaiden (Europe).sms",
+        "crc32": "1B1D8CC2",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/O/Olympic Gold (Europe) (En,Fr,De,Es,It,Nl,Pt,Sv).sms",
+        "crc32": "6A5A1E39",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/O/Operation Wolf (Europe).sms",
+        "crc32": "205CAAE8",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/O/Ottifants, The (Europe) (En,Fr,De,Es,It).sms",
+        "crc32": "82EF2A7D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/O/Out Run 3-D (Europe).sms",
+        "crc32": "D6F43DDA",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/O/Out Run Europa (Europe).sms",
+        "crc32": "3932ADBC",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Pac-Mania (Europe).sms",
+        "crc32": "BE57A9A5",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/P/Paperboy (Europe).sms",
+        "crc32": "294E0759",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/P/PGA Tour Golf (Europe).sms",
+        "crc32": "95B9EA95",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Pit Fighter (Europe).sms",
+        "crc32": "B840A446",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/P/Populous (Europe).sms",
+        "crc32": "C7A1FDEF",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Power Strike (USA, Europe).sms",
+        "crc32": "4077EFD9",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/P/Power Strike II (Europe).sms",
+        "crc32": "A109A6FE",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/P/Predator 2 (Europe).sms",
+        "crc32": "0047B615",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Prince of Persia (Europe).sms",
+        "crc32": "7704287D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Psychic World (Europe).sms",
+        "crc32": "5C0B1F0F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Putt & Putter (Europe).sms",
+        "crc32": "357D4F78",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/R/Rainbow Islands - The Story of Bubble Bobble 2 (Europe).sms",
+        "crc32": "C172A22C",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Rampart (Europe).sms",
+        "crc32": "426E5C8A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Renegade (Europe).sms",
+        "crc32": "3BE7F641",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Road Rash (Europe).sms",
+        "crc32": "B876FC74",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/R/RoboCop 3 (Europe).sms",
+        "crc32": "9F951756",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/RoboCop versus The Terminator (Europe).sms",
+        "crc32": "8212B754",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/R/Running Battle (Europe).sms",
+        "crc32": "1FDAE719",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Sagaia (Europe).sms",
+        "crc32": "66388128",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Schtroumpfs Autour du Monde, Les (Europe) (En,Fr,De,Es).sms",
+        "crc32": "97E5BB7D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Scramble Spirits (Europe).sms",
+        "crc32": "9A8B28EC",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Secret Command (Europe).sms",
+        "crc32": "00529114",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Sega Chess (Europe).sms",
+        "crc32": "A8061AEF",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Sega World Tournament Golf (Europe).sms",
+        "crc32": "296879DD",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Sensible Soccer (Europe).sms",
+        "crc32": "F8176918",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Shadow Dancer (Europe).sms",
+        "crc32": "3793C01A",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Shadow of the Beast (Europe).sms",
+        "crc32": "1575581D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Simpsons, The - Bart vs. The Space Mutants (Europe).sms",
+        "crc32": "D1CC08EE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Simpsons, The - Bart vs. The World (Europe).sms",
+        "crc32": "F6B2370A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Slap Shot (Europe) (Rev 1).sms",
+        "crc32": "D33B296A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Slap Shot (Europe).sms",
+        "crc32": "C93BD0E9",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Smurfs, The (Europe) (En,Fr,De,Es).sms",
+        "crc32": "3E63768A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Sonic Chaos (Europe).sms",
+        "crc32": "AEDF3BDF",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Sonic Spinball (Europe).sms",
+        "crc32": "11C1BC8A",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Sonic The Hedgehog 2 (Europe) (Rev 1).sms",
+        "crc32": "D6F2BFCA",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Sonic The Hedgehog 2 (Europe).sms",
+        "crc32": "5B3B922C",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Space Gun (Europe).sms",
+        "crc32": "A908CFF5",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Space Harrier (Europe).sms",
+        "crc32": "CA1D3752",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Special Criminal Investigation (Europe).sms",
+        "crc32": "FA8E4CA0",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Speedball (Europe) (Image Works).sms",
+        "crc32": "A57CAD18",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Speedball 2 (Europe).sms",
+        "crc32": "0C7366A0",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Spider-Man - Return of the Sinister Six (Europe).sms",
+        "crc32": "EBE45388",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Star Wars (Europe).sms",
+        "crc32": "D4B8F66D",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Streets of Rage (Europe).sms",
+        "crc32": "4AB3790F",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Streets of Rage II (Europe).sms",
+        "crc32": "04E9C089",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Strider II (Europe).sms",
+        "crc32": "B8F0915A",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Submarine Attack (Europe).sms",
+        "crc32": "D8F2F1B9",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Summer Games (Europe).sms",
+        "crc32": "8DA5C93F",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Super Kick Off (Europe) (En,Fr,De,Es,It,Nl,Pt,Sv).sms",
+        "crc32": "406AA0C2",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Super Monaco GP (Europe).sms",
+        "crc32": "55BF81A0",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Super Off Road (Europe).sms",
+        "crc32": "54F68C2A",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Super Smash T.V. (Europe).sms",
+        "crc32": "E0B1AFF8",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Super Space Invaders (Europe).sms",
+        "crc32": "1D6244EE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Superman - The Man of Steel (Europe).sms",
+        "crc32": "6F9AC98F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/T2 - The Arcade Game (Europe).sms",
+        "crc32": "93CA8152",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/T/Taito Chase H.Q. (Europe).sms",
+        "crc32": "85CFC9C9",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Taz-Mania (Europe).sms",
+        "crc32": "7CC3E837",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Tecmo World Cup '93 (Europe).sms",
+        "crc32": "5A1C3DDE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Tennis Ace (Europe).sms",
+        "crc32": "1A390B93",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Terminator 2 - Judgment Day (Europe).sms",
+        "crc32": "AC56104F",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Terminator, The (Europe).sms",
+        "crc32": "EDC5C012",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Tom and Jerry - The Movie (Europe).sms",
+        "crc32": "BF7B7285",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Trivial Pursuit - Genus Edition (Europe) (En,Fr,De,Es).sms",
+        "crc32": "E5374022",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/U/Ultima IV - Quest of the Avatar (Europe).sms",
+        "crc32": "B52D60C8",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/U/Ultimate Soccer (Europe) (En,Fr,De,Es,It).sms",
+        "crc32": "15668CA4",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/Wimbledon (Europe).sms",
+        "crc32": "912D92AF",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/Wimbledon II (Europe).sms",
+        "crc32": "7F3AFE58",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/Winter Olympics - Lillehammer '94 (Europe) (En,Fr,De,Es,It,Pt,Sv,No).sms",
+        "crc32": "A20290B6",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/W/Wolfchild (Europe).sms",
+        "crc32": "1F8EFA1D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/Wonder Boy in Monster World (Europe).sms",
+        "crc32": "7D7CE80B",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/W/World Class Leader Board (Europe).sms",
+        "crc32": "C9A449B7",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/World Cup Italia '90 (Europe).sms",
+        "crc32": "6E1AD6FD",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/W/World Cup USA 94 (Europe) (En,Fr,De,Es,It,Nl,Pt,Sv).sms",
+        "crc32": "A6BF8F9E",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/W/World Games (Europe).sms",
+        "crc32": "A2A60BC8",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/W/World Grand Prix (Europe).sms",
+        "crc32": "4AAAD0D6",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/W/WWF Wrestlemania - Steel Cage Challenge (Europe).sms",
+        "crc32": "2DB21448",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/X/Xenon 2 - Megablast (Europe) (Image Works).sms",
+        "crc32": "5C205EE1",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/X/Xenon 2 - Megablast (Europe) (Virgin).sms",
+        "crc32": "EC726C0D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/Z/Zillion (Europe) (Rev 2).sms",
+        "crc32": "7BA54510",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/Z/Zool - Ninja of the 'Nth' Dimension (Europe).sms",
+        "crc32": "9D9D0A5F",
+        "size": 262144
+      }
+    ],
+    "not_in_catalog": [
+      {
+        "file": "3.Europe/A/Action Fighter (Japan, Europe) (Rev 1).sms",
+        "crc32": "D91B340D",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/A/Action Fighter (USA, Europe) (Rev 2).sms",
+        "crc32": "3658F3E0",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/A/After Burner (World).sms",
+        "crc32": "1C951F8E",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/A/Alex Kidd - High-Tech World (USA, Europe).sms",
+        "crc32": "013C0A94",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/A/Alex Kidd - The Lost Stars (World).sms",
+        "crc32": "C13896D5",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Alex Kidd in Miracle World (USA, Europe) (Rev 1).sms",
+        "crc32": "AED9AAC4",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/A/Alex Kidd in Miracle World (USA, Europe).sms",
+        "crc32": "17A40E29",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/A/Alex Kidd in Shinobi World (USA, Europe).sms",
+        "crc32": "D2417ED7",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Alien Syndrome (USA, Europe).sms",
+        "crc32": "5CBFE997",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Altered Beast (USA, Europe).sms",
+        "crc32": "BBA2FE98",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/A/Aztec Adventure - The Golden Road to Paradise (World).sms",
+        "crc32": "FF614EB3",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/B/Black Belt (USA, Europe).sms",
+        "crc32": "DA3A2F57",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/B/Blade Eagle (World).sms",
+        "crc32": "8ECD201C",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/B/Bomber Raid (World).sms",
+        "crc32": "3084CF11",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/California Games (USA, Europe).sms",
+        "crc32": "AC6009A7",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Captain Silver (Japan, Europe).sms",
+        "crc32": "A4852757",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Casino Games (USA, Europe).sms",
+        "crc32": "3CFF6E80",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Choplifter (USA, Europe).sms",
+        "crc32": "4A21C15F",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/C/Cloud Master (USA, Europe).sms",
+        "crc32": "E7F62E6D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/C/Columns (USA, Europe).sms",
+        "crc32": "665FDA92",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/C/Cyborg Hunter (USA, Europe).sms",
+        "crc32": "908E7524",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/D/Dead Angle (USA, Europe).sms",
+        "crc32": "E2F7193E",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Dick Tracy (USA, Europe).sms",
+        "crc32": "F6FAB48D",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/D/Double Dragon (World).sms",
+        "crc32": "A55D89F3",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/E/E-SWAT - City Under Siege (USA, Europe) (Easy Version).sms",
+        "crc32": "C4BB1676",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/E/E-SWAT - City Under Siege (USA, Europe) (Hard Version).sms",
+        "crc32": "C10FCE39",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/E/Enduro Racer (USA, Europe).sms",
+        "crc32": "00E73541",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/F/F-16 Fighter (USA, Europe).sms",
+        "crc32": "EAEBF323",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/F/Fantasy Zone (World) (Rev 2).sms",
+        "crc32": "65D7E4E0",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/F/Fantasy Zone - The Maze (USA, Europe).sms",
+        "crc32": "D29889AD",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/F/Fantasy Zone II - The Tears of Opa-Opa (USA, Europe).sms",
+        "crc32": "B8B141F9",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Gangster Town (USA, Europe).sms",
+        "crc32": "5FC74D2A",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Ghost House (USA, Europe).sms",
+        "crc32": "F1F8FF2D",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/G/Ghostbusters (USA, Europe).sms",
+        "crc32": "1DDC3059",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Ghouls'n Ghosts (USA, Europe).sms",
+        "crc32": "7A92EBA6",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Global Defense (USA, Europe).sms",
+        "crc32": "B746A6F5",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Golden Axe (USA, Europe).sms",
+        "crc32": "C08132FB",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/G/Golden Axe Warrior (USA, Europe).sms",
+        "crc32": "C7DED988",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Golvellius (USA, Europe).sms",
+        "crc32": "A51376FE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/G/Great Baseball (USA, Europe).sms",
+        "crc32": "10ED6B57",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Great Basketball (World).sms",
+        "crc32": "2AC001EB",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Great Football (World).sms",
+        "crc32": "2055825F",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Great Golf (World).sms",
+        "crc32": "98E4AE4A",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/G/Great Volleyball (USA, Europe).sms",
+        "crc32": "8D43EA95",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/J/Joe Montana Football (USA, Europe).sms",
+        "crc32": "0A9089E5",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/K/Kenseiden (USA, Europe).sms",
+        "crc32": "516ED32E",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/K/Kung Fu Kid (USA, Europe).sms",
+        "crc32": "1E949D1F",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/L/Lord of the Sword (USA, Europe).sms",
+        "crc32": "E8511B08",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Maze Hunter 3-D (USA, Europe).sms",
+        "crc32": "31B8040B",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/M/Michael Jackson's Moonwalker (USA, Europe).sms",
+        "crc32": "56CC906B",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Miracle Warriors - Seal of the Dark Lord (USA, Europe).sms",
+        "crc32": "0E333B6E",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/M/Missile Defense 3-D (USA, Europe).sms",
+        "crc32": "FBE5CFBB",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/M/My Hero (USA, Europe).sms",
+        "crc32": "62F0C23D",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/N/Ninja, The (USA, Europe).sms",
+        "crc32": "66A15BD9",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/O/Out Run (World).sms",
+        "crc32": "5589D8D2",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Parlour Games (USA, Europe).sms",
+        "crc32": "E030E66C",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/P/Penguin Land (USA, Europe).sms",
+        "crc32": "F97E9875",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/P/Phantasy Star (USA, Europe) (Rev 2).sms",
+        "crc32": "E4A65E79",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/P/Phantasy Star (USA, Europe) (Rev 3).sms",
+        "crc32": "00BEF1D7",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/P/Poseidon Wars 3-D (USA, Europe).sms",
+        "crc32": "ABD48AD2",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/P/Pro Wrestling (USA, Europe).sms",
+        "crc32": "FBDE42D3",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/P/Psycho Fox (USA, Europe).sms",
+        "crc32": "97993479",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/Q/Quartet (USA, Europe).sms",
+        "crc32": "E0F34FA6",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/R/R-Type (World).sms",
+        "crc32": "BB54B6B0",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/R/R.C. Grand Prix (USA, Europe).sms",
+        "crc32": "54316FEA",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Rambo III (USA, Europe).sms",
+        "crc32": "DA5A7013",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Rampage (USA, Europe).sms",
+        "crc32": "42FC47EE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Rastan (USA, Europe).sms",
+        "crc32": "C547EB1B",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/R/Rescue Mission (USA, Europe).sms",
+        "crc32": "79AC8E7F",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/R/Rocky (World).sms",
+        "crc32": "1BCC7BE3",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Shanghai (USA, Europe).sms",
+        "crc32": "AAB67EC3",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Shinobi (USA, Europe).sms",
+        "crc32": "0C6FAC4E",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Shooting Gallery (USA, Europe).sms",
+        "crc32": "4B051022",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/Sonic The Hedgehog (USA, Europe).sms",
+        "crc32": "B519E833",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Space Harrier 3-D (USA, Europe).sms",
+        "crc32": "6BD5C2BF",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Speedball (Europe) (Virgin).sms",
+        "crc32": "5CCC1A65",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/S/SpellCaster (USA, Europe).sms",
+        "crc32": "4752CAE7",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Spider-Man vs. The Kingpin (USA, Europe).sms",
+        "crc32": "908FF25C",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/S/Spy vs. Spy (USA, Europe).sms",
+        "crc32": "78D7FAAB",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/S/Strider (USA, Europe).sms",
+        "crc32": "9802ED31",
+        "size": 524288
+      },
+      {
+        "file": "3.Europe/S/Super Tennis (USA, Europe).sms",
+        "crc32": "914514E3",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/S/Super Wonder Boy (Japan, Europe).sms",
+        "crc32": "E2FCB6F3",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/T/Teddy Boy (USA, Europe).sms",
+        "crc32": "2728FAA3",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/T/Thunder Blade (USA, Europe).sms",
+        "crc32": "AE920E4B",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/Time Soldiers (USA, Europe).sms",
+        "crc32": "51BD14BE",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/T/TransBot (USA, Europe).sms",
+        "crc32": "4BC42857",
+        "size": 32768
+      },
+      {
+        "file": "3.Europe/V/Vigilante (USA, Europe).sms",
+        "crc32": "DFB0B161",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/Wanted (USA, Europe).sms",
+        "crc32": "5359762D",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/W/Wonder Boy (USA, Europe).sms",
+        "crc32": "73705C02",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/W/Wonder Boy III - The Dragon's Trap (USA, Europe).sms",
+        "crc32": "679E1676",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/Wonder Boy in Monster Land (USA, Europe).sms",
+        "crc32": "8CBEF0C1",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/W/World Soccer (World).sms",
+        "crc32": "72112B75",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/Y/Ys - The Vanished Omens (USA, Europe).sms",
+        "crc32": "B33E2827",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/Z/Zaxxon 3-D (World).sms",
+        "crc32": "A3EF13CB",
+        "size": 262144
+      },
+      {
+        "file": "3.Europe/Z/Zillion (Japan, Europe) (En,Ja).sms",
+        "crc32": "60C19645",
+        "size": 131072
+      },
+      {
+        "file": "3.Europe/Z/Zillion II - The Tri Formation (World).sms",
+        "crc32": "2F2E3BC9",
+        "size": 131072
+      }
+    ]
+  },
+  "real_core_checks": [
+    {
+      "case": "aladdin-auto",
+      "rom": {
+        "path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/A/Aladdin (Europe).sms",
+        "size": 524288,
+        "sha256": "68a05a87a8051e839e9e86259bcebf742c6e79547e79a80bb971dc473f9e0fc9",
+        "crc32": "c8718d40"
+      },
+      "core": {
+        "path": "/home/vova/projects/Kega Refusion/build/core32x-linux/core/genesis_plus_gx_libretro.so",
+        "sha256": "b0e9f0c7bc21d67e7d60ff1e9a8f3c4da45f2d2bc97825790688ff0ea79cc1e8",
+        "library_name": "Genesis Plus GX",
+        "library_version": "v1.7.4 f27655b",
+        "current_source_tree": "/home/vova/projects/Kega Refusion/build/deps/genesis-plus-gx-32x-linux",
+        "current_sms_cart_c_sha256": "bc18497831a3ab9bf8dcad52e664add4e14fb52bf4c233c4484b83ba9e290f74",
+        "exact_extracted_local_types_sha256": "0808602b7222b33fea205ec0831f1daa66a9650b4d6440cee95d05f2a6b61e41",
+        "native_observer_sha256": "1ecd8f2a16c6bf2292fd03fdcbffb9ad391fb3ecd97c60a16b9ec6a4c5ed0a4b",
+        "symbol_provenance": "Exact local ELF .symtab via nm -an and exported retro_init load base. Z80 and SRAM types compiled from core headers; local romhw_t and slot declarations extracted verbatim from the reported current sms_cart.c. ELF hash identifies actual binary; current source tree is not independently a compiled-source attestation.",
+        "abi": {
+          "romhw_size": 8,
+          "slot_size": 24,
+          "romhw_fcr_offset": 0,
+          "romhw_mapper_offset": 4,
+          "romhw_pages_offset": 6,
+          "z80_size": 88
+        }
+      },
+      "timing": {
+        "initial_fps": 49.7014591857706,
+        "fps": 49.7014591857706,
+        "sample_rate": 44100.0,
+        "libretro_region": "PAL",
+        "sms_cart_region_detect_hint": 192,
+        "elapsed_seconds": 0.165
+      },
+      "hardware": {
+        "system_hw": 33,
+        "region_code": 192,
+        "vdp_pal": true
+      }
+    },
+    {
+      "case": "aladdin-manual-ntsc",
+      "rom": {
+        "path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/A/Aladdin (Europe).sms",
+        "size": 524288,
+        "sha256": "68a05a87a8051e839e9e86259bcebf742c6e79547e79a80bb971dc473f9e0fc9",
+        "crc32": "c8718d40"
+      },
+      "core": {
+        "path": "/home/vova/projects/Kega Refusion/build/core32x-linux/core/genesis_plus_gx_libretro.so",
+        "sha256": "b0e9f0c7bc21d67e7d60ff1e9a8f3c4da45f2d2bc97825790688ff0ea79cc1e8",
+        "library_name": "Genesis Plus GX",
+        "library_version": "v1.7.4 f27655b",
+        "current_source_tree": "/home/vova/projects/Kega Refusion/build/deps/genesis-plus-gx-32x-linux",
+        "current_sms_cart_c_sha256": "bc18497831a3ab9bf8dcad52e664add4e14fb52bf4c233c4484b83ba9e290f74",
+        "exact_extracted_local_types_sha256": "0808602b7222b33fea205ec0831f1daa66a9650b4d6440cee95d05f2a6b61e41",
+        "native_observer_sha256": "1ecd8f2a16c6bf2292fd03fdcbffb9ad391fb3ecd97c60a16b9ec6a4c5ed0a4b",
+        "symbol_provenance": "Exact local ELF .symtab via nm -an and exported retro_init load base. Z80 and SRAM types compiled from core headers; local romhw_t and slot declarations extracted verbatim from the reported current sms_cart.c. ELF hash identifies actual binary; current source tree is not independently a compiled-source attestation.",
+        "abi": {
+          "romhw_size": 8,
+          "slot_size": 24,
+          "romhw_fcr_offset": 0,
+          "romhw_mapper_offset": 4,
+          "romhw_pages_offset": 6,
+          "z80_size": 88
+        }
+      },
+      "timing": {
+        "initial_fps": 59.92274340431231,
+        "fps": 59.92274340431231,
+        "sample_rate": 44100.0,
+        "libretro_region": "NTSC",
+        "sms_cart_region_detect_hint": 192,
+        "elapsed_seconds": 0.187
+      },
+      "hardware": {
+        "system_hw": 33,
+        "region_code": 128,
+        "vdp_pal": false
+      }
+    },
+    {
+      "case": "bubblebobble-db-auto",
+      "rom": {
+        "path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/B/Bubble Bobble (Europe).sms",
+        "size": 262144,
+        "sha256": "310d5ef67a35d6af2b0f89f186f5d6df834904a09b4226207fbad1583ecc9a51",
+        "crc32": "e843ba7e"
+      },
+      "core": {
+        "path": "/home/vova/projects/Kega Refusion/build/core32x-linux/core/genesis_plus_gx_libretro.so",
+        "sha256": "b0e9f0c7bc21d67e7d60ff1e9a8f3c4da45f2d2bc97825790688ff0ea79cc1e8",
+        "library_name": "Genesis Plus GX",
+        "library_version": "v1.7.4 f27655b",
+        "current_source_tree": "/home/vova/projects/Kega Refusion/build/deps/genesis-plus-gx-32x-linux",
+        "current_sms_cart_c_sha256": "bc18497831a3ab9bf8dcad52e664add4e14fb52bf4c233c4484b83ba9e290f74",
+        "exact_extracted_local_types_sha256": "0808602b7222b33fea205ec0831f1daa66a9650b4d6440cee95d05f2a6b61e41",
+        "native_observer_sha256": "1ecd8f2a16c6bf2292fd03fdcbffb9ad391fb3ecd97c60a16b9ec6a4c5ed0a4b",
+        "symbol_provenance": "Exact local ELF .symtab via nm -an and exported retro_init load base. Z80 and SRAM types compiled from core headers; local romhw_t and slot declarations extracted verbatim from the reported current sms_cart.c. ELF hash identifies actual binary; current source tree is not independently a compiled-source attestation.",
+        "abi": {
+          "romhw_size": 8,
+          "slot_size": 24,
+          "romhw_fcr_offset": 0,
+          "romhw_mapper_offset": 4,
+          "romhw_pages_offset": 6,
+          "z80_size": 88
+        }
+      },
+      "timing": {
+        "initial_fps": 49.7014591857706,
+        "fps": 49.7014591857706,
+        "sample_rate": 44100.0,
+        "libretro_region": "PAL",
+        "sms_cart_region_detect_hint": 192,
+        "elapsed_seconds": 0.146
+      },
+      "hardware": {
+        "system_hw": 33,
+        "region_code": 192,
+        "vdp_pal": true
+      }
+    },
+    {
+      "case": "sonic-world-auto",
+      "rom": {
+        "path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/S/Sonic The Hedgehog (USA, Europe).sms",
+        "size": 262144,
+        "sha256": "6ad738965ece231427ee046b9905cfee470d5c01220afdd934da4673e4a2458b",
+        "crc32": "b519e833"
+      },
+      "core": {
+        "path": "/home/vova/projects/Kega Refusion/build/core32x-linux/core/genesis_plus_gx_libretro.so",
+        "sha256": "b0e9f0c7bc21d67e7d60ff1e9a8f3c4da45f2d2bc97825790688ff0ea79cc1e8",
+        "library_name": "Genesis Plus GX",
+        "library_version": "v1.7.4 f27655b",
+        "current_source_tree": "/home/vova/projects/Kega Refusion/build/deps/genesis-plus-gx-32x-linux",
+        "current_sms_cart_c_sha256": "bc18497831a3ab9bf8dcad52e664add4e14fb52bf4c233c4484b83ba9e290f74",
+        "exact_extracted_local_types_sha256": "0808602b7222b33fea205ec0831f1daa66a9650b4d6440cee95d05f2a6b61e41",
+        "native_observer_sha256": "1ecd8f2a16c6bf2292fd03fdcbffb9ad391fb3ecd97c60a16b9ec6a4c5ed0a4b",
+        "symbol_provenance": "Exact local ELF .symtab via nm -an and exported retro_init load base. Z80 and SRAM types compiled from core headers; local romhw_t and slot declarations extracted verbatim from the reported current sms_cart.c. ELF hash identifies actual binary; current source tree is not independently a compiled-source attestation.",
+        "abi": {
+          "romhw_size": 8,
+          "slot_size": 24,
+          "romhw_fcr_offset": 0,
+          "romhw_mapper_offset": 4,
+          "romhw_pages_offset": 6,
+          "z80_size": 88
+        }
+      },
+      "timing": {
+        "initial_fps": 59.92274340431231,
+        "fps": 59.92274340431231,
+        "sample_rate": 44100.0,
+        "libretro_region": "NTSC",
+        "sms_cart_region_detect_hint": 128,
+        "elapsed_seconds": 0.152
+      },
+      "hardware": {
+        "system_hw": 33,
+        "region_code": 128,
+        "vdp_pal": false
+      }
+    }
+  ],
+  "review": {
+    "entries": 207,
+    "sorted_unique_crc_size": true,
+    "manual_region_precedes_final_timing": true,
+    "japanese_fm_io_exceptions_preserved": true,
+    "non_sms_hardware_excluded": true,
+    "runtime_cost": "One binary search of at most eight comparisons at region detection; 1656 bytes of constant table data. Reuses the CRC already computed by the core. No per-frame work or runtime I/O.",
+    "legacy_quick_states": "Legacy quick-state/native-state formats do not store the console region or master clock. They continue to load under the current region. For an old NTSC quick state of a ROM now detected as PAL, select USA/60 Hz before loading if needed. Existing input recordings with frameRate metadata are handled separately."
+  }
+}

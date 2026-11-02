@@ -1,0 +1,270 @@
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -835,6 +835,238 @@
+   return 0;
+ }
+ 
++/* Known PAL-market SMS releases. Metadata: MAME hash/sms.xml (CC0-1.0),
++ * commit abe2112f4160845d90b90de365ddce14ddb28ce5.
++ * Shared Europe/Brazil/Korea releases prefer Europe; this is a default,
++ * not a claim that NTSC hardware is unsupported. Manual region wins.
++ * See docs/sms-region-catalog.json in Kega Refusion for source and policy.
++ * Sorted by CRC, then exact ROM size; never infer timing from a filename. */
++static int sms_cart_pal_release(uint32 crc)
++{
++  static const struct { uint32 crc; uint32 size; } releases[] =
++  {
++    {0x0047B615, 262144}, /* predatr2 */
++    {0x00529114, 131072}, /* secret */
++    {0x026D94A4, 131072}, /* monopoly */
++    {0x04E9C089, 524288}, /* sor2 */
++    {0x05CDC24E, 262144}, /* gloc */
++    {0x0667ED9F, 524288}, /* jpark */
++    {0x071B045E, 32768}, /* hangon */
++    {0x07306947, 262144}, /* dynduke */
++    {0x0BD8DA96, 262144}, /* assaultc1 */
++    {0x0C7366A0, 262144}, /* speedbl2 */
++    {0x0CA95637, 262144}, /* lghost */
++    {0x0DF8597F, 262144}, /* basketn */
++    {0x0E1CC1E0, 262144}, /* ddux */
++    {0x0ED170C9, 32768}, /* greatscr */
++    {0x102D5FEA, 524288}, /* robocod */
++    {0x11C1BC8A, 524288}, /* sspin */
++    {0x1350E4F8, 262144}, /* cybers */
++    {0x13AC9023, 262144}, /* coolspot */
++    {0x147E02FA, 524288}, /* asterix1 */
++    {0x15668CA4, 262144}, /* ultsoccr */
++    {0x1575581D, 262144}, /* beast */
++    {0x1A390B93, 262144}, /* tennis */
++    {0x1B10A951, 262144}, /* dracula */
++    {0x1B1D8CC2, 262144}, /* ngaiden */
++    {0x1B312E04, 262144}, /* tazmaniap */
++    {0x1B7D2A20, 262144}, /* scip */
++    {0x1D6244EE, 262144}, /* ssinv */
++    {0x1F8EFA1D, 262144}, /* wolfchld */
++    {0x1FDAE719, 262144}, /* running */
++    {0x205CAAE8, 262144}, /* opwolf */
++    {0x20F40CAE, 262144}, /* vampire */
++    {0x23163A12, 262144}, /* champeur */
++    {0x24E97200, 524288}, /* landill */
++    {0x2663BF18, 524288}, /* mk2 */
++    {0x294E0759, 131072}, /* paperboy */
++    {0x296879DD, 262144}, /* segawtg */
++    {0x29822980, 262144}, /* cosmic */
++    {0x2B435FD6, 131072}, /* klax */
++    {0x2C61ED88, 262144}, /* lemmingsp */
++    {0x2D48C1D3, 262144}, /* backtof3 */
++    {0x2DB21448, 262144}, /* wwfsteel */
++    {0x302DC686, 524288}, /* mk */
++    {0x357D4F78, 131072}, /* puttputt */
++    {0x3727D8B2, 262144}, /* ameripf */
++    {0x3793C01A, 524288}, /* shdancer */
++    {0x38C53916, 262144}, /* forgottn */
++    {0x3932ADBC, 262144}, /* outrneur */
++    {0x3BE7F641, 262144}, /* renegade */
++    {0x3CD816C6, 131072}, /* mspacman */
++    {0x3E63768A, 262144}, /* smurfs */
++    {0x3EC5E627, 262144}, /* gground */
++    {0x406AA0C2, 262144}, /* skickoff */
++    {0x4077EFD9, 131072}, /* pstrike */
++    {0x426E5C8A, 262144}, /* rampart */
++    {0x42FC3A6E, 524288}, /* deepduck */
++    {0x46340C41, 524288}, /* cheese */
++    {0x48651325, 262144}, /* golfaman */
++    {0x4AAAD0D6, 131072}, /* worldgp */
++    {0x4AB3790F, 524288}, /* sor */
++    {0x4F530CB2, 131072}, /* sumgamesp1 */
++    {0x54F68C2A, 131072}, /* superoff */
++    {0x55BF81A0, 262144}, /* smgp */
++    {0x5A1C3DDE, 262144}, /* tecmow93 */
++    {0x5B3B922C, 524288}, /* sonic2a */
++    {0x5C0B1F0F, 262144}, /* psychicw */
++    {0x5C205EE1, 262144}, /* xenon2 */
++    {0x64A585EB, 262144}, /* krustyfh */
++    {0x64D6AF3B, 131072}, /* impmiss */
++    {0x655FB1F4, 32768}, /* bankp */
++    {0x66388128, 262144}, /* sagaia */
++    {0x6687FAB9, 524288}, /* ecco */
++    {0x695A9A15, 262144}, /* jungle */
++    {0x69EFD483, 131072}, /* astropit */
++    {0x6A5A1E39, 262144}, /* olympgld */
++    {0x6C1433F9, 524288}, /* dstrike */
++    {0x6C696221, 262144}, /* drrobotn */
++    {0x6E1AD6FD, 131072}, /* wcup90 */
++    {0x6F9AC98F, 262144}, /* superman */
++    {0x71ABEF27, 524288}, /* daffy */
++    {0x71C4CA8F, 131072}, /* impmissp */
++    {0x72420F38, 262144}, /* addfam */
++    {0x761E9396, 262144}, /* ngaidenp */
++    {0x7704287D, 262144}, /* ppersia */
++    {0x7982AE67, 262144}, /* smurfs2p */
++    {0x7B27202F, 262144}, /* ameribb */
++    {0x7BA54510, 131072}, /* zillion */
++    {0x7CC3E837, 262144}, /* tazmania */
++    {0x7D7CE80B, 524288}, /* wboymwld */
++    {0x7E5839A0, 262144}, /* champhck */
++    {0x7F30F793, 262144}, /* astorm */
++    {0x7F3AFE58, 262144}, /* wimbled2 */
++    {0x7F6D0DF6, 262144}, /* luckydimp */
++    {0x80EB1FFF, 131072}, /* sumgamesp */
++    {0x8167CCC4, 131072}, /* puttputtp */
++    {0x81BFF9BB, 524288}, /* wboymwldp */
++    {0x8212B754, 524288}, /* roboterm */
++    {0x82EF2A7D, 262144}, /* ottifant */
++    {0x8370F6CD, 262144}, /* doublhwk */
++    {0x85CFC9C9, 262144}, /* chasehq */
++    {0x861B6E79, 262144}, /* assaultc */
++    {0x887D9F6B, 262144}, /* aceoface */
++    {0x8AEB574B, 262144}, /* indycrus */
++    {0x8B43D21D, 262144}, /* airresc */
++    {0x8C9D5BE8, 524288}, /* asterix */
++    {0x8D23587F, 262144}, /* jb007 */
++    {0x8DA5C93F, 131072}, /* sumgames */
++    {0x912D92AF, 262144}, /* wimbled */
++    {0x914D3FC4, 131072}, /* wldgamesp */
++    {0x93141463, 262144}, /* mastcomb */
++    {0x93CA8152, 524288}, /* t2ag */
++    {0x953F42E1, 262144}, /* castlill */
++    {0x9549FCE4, 131072}, /* dcrystal */
++    {0x95B9EA95, 262144}, /* pgatour */
++    {0x96E75F48, 262144}, /* tecmow92 */
++    {0x96FB4D4B, 262144}, /* mastdark */
++    {0x97E5BB7D, 262144}, /* smurfs2 */
++    {0x9A8B28EC, 262144}, /* sspirits */
++    {0x9CED34A7, 262144}, /* hook */
++    {0x9D9D0A5F, 262144}, /* zool */
++    {0x9F951756, 262144}, /* robocop3 */
++    {0xA109A6FE, 524288}, /* pstrike2 */
++    {0xA1710F13, 262144}, /* luckydim */
++    {0xA1D6D963, 262144}, /* smgpp2 */
++    {0xA20290B6, 524288}, /* wintol */
++    {0xA2A60BC8, 131072}, /* wldgames */
++    {0xA4AC35D8, 524288}, /* gforce */
++    {0xA577CE46, 262144}, /* micromac */
++    {0xA57CAD18, 131072}, /* speedbl */
++    {0xA64898CE, 262144}, /* georgeko */
++    {0xA67F2A5C, 1048576}, /* 4pak */
++    {0xA6BF8F9E, 524288}, /* wcup94 */
++    {0xA8061AEF, 262144}, /* segachss */
++    {0xA908CFF5, 524288}, /* spacegun */
++    {0xAC56104F, 262144}, /* term2 */
++    {0xACEC894D, 262144}, /* indycrusp */
++    {0xAE4A28D7, 262144}, /* danan */
++    {0xAEDF3BDF, 524288}, /* sonicc */
++    {0xB0FC4577, 524288}, /* buggyrun */
++    {0xB137007A, 262144}, /* desert */
++    {0xB154EC38, 262144}, /* batmanrn */
++    {0xB4584DDE, 262144}, /* crashdum */
++    {0xB52D60C8, 524288}, /* ultima4 */
++    {0xB618B144, 262144}, /* alien3 */
++    {0xB67CEB76, 262144}, /* mickmack */
++    {0xB840A446, 524288}, /* pitfight */
++    {0xB876FC74, 524288}, /* roadrash */
++    {0xB8F0915A, 262144}, /* strider2 */
++    {0xB9664AE1, 262144}, /* fantdizz */
++    {0xBE31D63F, 262144}, /* flash */
++    {0xBE57A9A5, 131072}, /* pacmania */
++    {0xBE9A7071, 524288}, /* hulk */
++    {0xBF6F3E5F, 262144}, /* marble */
++    {0xBF7B7285, 262144}, /* tomjermv */
++    {0xC0E25D62, 262144}, /* calgame2 */
++    {0xC172A22C, 262144}, /* rbisland */
++    {0xC19430CE, 262144}, /* battleor */
++    {0xC30E690A, 524288}, /* chukrck2 */
++    {0xC352C7EB, 524288}, /* lionking */
++    {0xC660FF34, 262144}, /* tnzs */
++    {0xC7A1FDEF, 262144}, /* populous */
++    {0xC8718D40, 524288}, /* aladdin */
++    {0xC88A5064, 262144}, /* dragon */
++    {0xC93BD0E9, 262144}, /* slapshotb */
++    {0xC9A449B7, 262144}, /* wclead */
++    {0xC9DBF936, 262144}, /* homea */
++    {0xCA1D3752, 262144}, /* sharrier */
++    {0xCA5C78A5, 262144}, /* flint */
++    {0xCAEA8002, 262144}, /* bnzabros */
++    {0xCB09F355, 524288}, /* loffire */
++    {0xCDE13FFB, 524288}, /* herolanc */
++    {0xCF5AECCA, 524288}, /* lemming2 */
++    {0xD1CC08EE, 262144}, /* bartvssm */
++    {0xD33B296A, 262144}, /* slapshota */
++    {0xD40D03C7, 262144}, /* ggroundp */
++    {0xD4B8F66D, 524288}, /* starwars */
++    {0xD6F2BFCA, 524288}, /* sonic2 */
++    {0xD6F43DDA, 262144}, /* outrun3d */
++    {0xD7416B83, 524288}, /* mercs */
++    {0xD8F2F1B9, 262144}, /* submarin */
++    {0xD9190956, 131072}, /* gauntlet */
++    {0xDD0E2927, 524288}, /* chuckrck */
++    {0xDD7ADBCC, 262144}, /* smgpp1 */
++    {0xDE9F8517, 524288}, /* ultima4p */
++    {0xDEF9B14E, 524288}, /* astermis */
++    {0xE0B1AFF8, 262144}, /* smashtv */
++    {0xE4163163, 262144}, /* arcadesh */
++    {0xE5374022, 524288}, /* trivial */
++    {0xE5FF50D8, 262144}, /* backtof2 */
++    {0xE8215C2E, 131072}, /* marksman */
++    {0xE843BA7E, 262144}, /* bublbobl */
++    {0xE890331D, 524288}, /* smgp2 */
++    {0xEA5C3A6F, 262144}, /* dinobash */
++    {0xEBE45388, 262144}, /* spidermn */
++    {0xEC2DA554, 524288}, /* gprider */
++    {0xEC726C0D, 262144}, /* xenon2v */
++    {0xEC788661, 262144}, /* f1 */
++    {0xECF491CF, 262144}, /* aerialas */
++    {0xEDC5C012, 262144}, /* termntr */
++    {0xF369B2D8, 262144}, /* lemmings */
++    {0xF499034D, 262144}, /* agassi */
++    {0xF6AD7B1D, 262144}, /* fireforg */
++    {0xF6B2370A, 262144}, /* bartvsw */
++    {0xF76D5CEE, 262144}, /* doublhwkp */
++    {0xF8176918, 131072}, /* sensible */
++    {0xF9B7D26B, 524288}, /* astergre */
++    {0xFA8E4CA0, 262144}, /* sci */
++    {0xFDAB876A, 262144}, /* heavyw */
++  };
++  unsigned int lo = 0, hi = sizeof(releases) / sizeof(releases[0]);
++  while (lo < hi)
++  {
++    unsigned int mid = lo + (hi - lo) / 2;
++    if ((releases[mid].crc < crc) ||
++        ((releases[mid].crc == crc) && (releases[mid].size < cart.romsize)))
++      lo = mid + 1;
++    else
++      hi = mid;
++  }
++  return (lo < sizeof(releases) / sizeof(releases[0])) &&
++         (releases[lo].crc == crc) && (releases[lo].size == cart.romsize);
++}
++
+ int sms_cart_region_detect(void)
+ {
+   int i = sizeof(game_list) / sizeof(rominfo_t) - 1;
+@@ -848,15 +1080,28 @@
+     return REGION_JAPAN_NTSC;
+   }
+ 
++  /* Header export code does not distinguish NTSC from PAL. Restrict the
++   * catalog to SMS hardware; GG/SG and explicit Mark III keep their policy. */
++  int pal_release = (!config.system || (config.system == SYSTEM_SMS) || (config.system == SYSTEM_SMS2)) &&
++                    ((system_hw == SYSTEM_SMS) || (system_hw == SYSTEM_SMS2)) &&
++                    sms_cart_pal_release(crc);
++
+   /* game database */
+   do
+   {
+     if (crc == game_list[i].crc)
+     {
++      /* Keep Japanese I/O/FM exceptions, but refine generic export entries. */
++      if (pal_release && ((game_list[i].region == REGION_USA) ||
++                          (game_list[i].region == REGION_EUROPE)))
++        return REGION_EUROPE;
+       return game_list[i].region;
+     }
+   }
+   while(i--);
++
++  if (pal_release)
++    return REGION_EUROPE;
+ 
+   /* Mark-III hardware */
+   if (config.system == SYSTEM_MARKIII)

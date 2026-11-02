@@ -1,0 +1,87 @@
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -815,6 +815,12 @@
+ {
+   return (cart_rom.mapper == MAPPER_RAM_2K || cart_rom.mapper == MAPPER_RAM_8K ||
+           cart_rom.mapper == MAPPER_RAM_8K_EXT1) ? cart_rom.mapper : 0;
++}
++
++/* Scope deterministic compatibility to this board, not unrelated SMS games. */
++int sms_cart_codies_active(void)
++{
++  return cart_rom.mapper == MAPPER_CODIES;
+ }
+ 
+ int sms_cart_ram_size(void)
+@@ -2124,22 +2130,25 @@
+ 
+ static void write_mapper_codies(unsigned int address, unsigned char data)
+ {
+-  if (address == 0x0000)
+-  {
+-    mapper_16k_w(1,data);
+-    return;
+-  }
+-
+-  if (address == 0x4000)
+-  {
+-    mapper_16k_w(2,data);
+-    return;
+-  }
+-
+-  if (address == 0x8000)
+-  {
+-    mapper_16k_w(3,data);
+-    return;
++  /* The board decodes A14/A15, not the lower address lines.  Writes to
++   * cartridge RAM override the slot 2 register when that RAM is enabled. */
++  switch (address >> 14)
++  {
++    case 0:
++      mapper_16k_w(1,data);
++      return;
++
++    case 1:
++      mapper_16k_w(2,data);
++      return;
++
++    case 2:
++      if ((address < 0xA000) || !(slot.fcr[2] & 0x80))
++      {
++        mapper_16k_w(3,data);
++        return;
++      }
++      break;
+   }
+ 
+   z80_writemap[address >> 10][address & 0x03FF] = data;
+--- a/core/cart_hw/sms_cart.h
++++ b/core/cart_hw/sms_cart.h
+@@ -48,6 +48,7 @@
+ extern void sms_cart_reset(void);
+ extern void sms_cart_switch(uint8 mode);
+ extern int sms_cart_ram_size(void);
++extern int sms_cart_codies_active(void);
+ extern int sms_cart_achievement_mapper(void);
+ extern int sms_cart_region_detect(void);
+ extern int sms_cart_context_save(uint8 *state);
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3630,6 +3630,8 @@
+  * Bump only for incompatible state layout or deterministic execution changes. */
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
++   if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
++      return "kegarefusion-recording-v2-sms-codemasters-v1";
+    if (md_cart_sonic6_active) return "kegarefusion-recording-v2-sonic6-v1";
+    if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v2-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-recording-v2-poker-hardware-v1";
+@@ -3652,6 +3654,8 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
++      return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1";
+    if (md_cart_sonic6_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
+    if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";

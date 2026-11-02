@@ -1,0 +1,12 @@
+{
+  "version": "0.14.8",
+  "windows": {
+    "KegaRefusion.exe": "83822b5520af784fe6b90a026925ce50bcd82344f456da1dd9dc8a3e93a1bc49",
+    "cores/genesis_plus_gx_libretro.dll": "3f9ad2d6e0c0fa34efda097056dad3e33cfa1160ed6bf77fb6680dfea09c78f7"
+  },
+  "linux": {
+    "KegaRefusion-linux-x86_64/KegaRefusion": "873d5c48e84791bd88372c67a7635600d7328d99d1f44bc23aa475d7e2d901b9",
+    "KegaRefusion-linux-x86_64/cores/genesis_plus_gx_libretro.so": "f4b04ca67044229305516ccc2886ca572a619d5ab4f06fbd925eae991c478a9f",
+    "archive_sha256": "001dd99c384beac0b551f9c4fdfeced55faeb057b23a137b1faa91256b779e0b"
+  }
+}

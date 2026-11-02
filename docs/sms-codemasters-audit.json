@@ -1,0 +1,3940 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-11-02",
+  "scope": "Codemasters hardware paths in the current patched Genesis Plus GX core and every accessible relevant content in the specified SMS collection.",
+  "coverage": {
+    "collection_root": "/mnt/d/emulation/Sega Master System/roms",
+    "loose_files_crc_scanned": 657,
+    "codemasters_native_unique": 5,
+    "mapper_conversion_unique": 1,
+    "unique_contents_observed": 6,
+    "known_SMS_Codemasters_database_entries_covered": [
+      "29822980",
+      "8813514B",
+      "B9664AE1",
+      "A577CE46",
+      "EA5C3A6F"
+    ],
+    "RAM_game_in_this_SMS_collection": false,
+    "optional_container": {
+      "path": "master system roms.7z",
+      "size": 47158258,
+      "status": "encrypted_header_inaccessible",
+      "error": "The archive header is encrypted, but currently not supported",
+      "contents_unknown": true,
+      "blocks_mapper_audit": false
+    }
+  },
+  "hardware_model": {
+    "ROM_slots": "Three 16 KiB windows at 0000-3FFF, 4000-7FFF and 8000-BFFF, initially banks 0/1/0. Slot 0 includes the first 1 KiB. Register reads return mapped content, not a latch.",
+    "mirrors": "The maintained hardware reference documents register aliases throughout each 16 KiB ROM window. A physical Cosmic Spacehead PAL16R4 pinout lacks A0..A13. No separate exact-address prototype decoder was established.",
+    "RAM": "Bit 7 of writes to 4000 enables 8 KiB RAM at A000-BFFF. Lower 8000-9FFF remains ROM, bank2 changes preserve RAM, and disabling RAM reveals the current ROM bank.",
+    "physical_battery": "Ernie Els Golf has non-battery-backed RAM, as established by board photographs. It is a GG game absent from this SMS collection. Save-buffer tests do not assert a physical battery.",
+    "state": "Native state stores four FCR bytes and reconstructs mappings. SRAM contents are separate; application rewind/movie/network wrappers append save memory. The fixture checks native maps and a combined state-plus-save-memory roundtrip.",
+    "reset": "Reset restores 0/1/0 with RAM disabled while preserving the exposed SRAM buffer. Public save-memory export/import across game reload is verified.",
+    "RAM_buffer_offset": "The existing implementation maps the 8 KiB region into sram.sram[0x2000..0x3FFF]; the exported size includes this range."
+  },
+  "confirmed_gap_and_fix": {
+    "baseline": "write_mapper_codies recognized only exact0000/4000/8000, ignoring hardware aliases.",
+    "fix": "Decode the16KiB window using A14/A15. When RAM is enabled, writesA000-BFFF go to RAM instead of bank2; lower-slot2 aliases still select the ROM bank.",
+    "patch": "tools/patches/genesis-plus-gx-sms-codemasters.patch",
+    "changed_code": "write_mapper_codies plus a read-only active-board getter and scoped ABI branches. No RAM layout/native state format change.",
+    "fixture": "tests/sms_codemasters_mapper_tests.py",
+    "baseline_result": "Canonical banking/RAM/state/reset/battery checks passed. Ten alias-related assertions failed.",
+    "fixed_result": "All checks pass, including all three slot aliases, full slot0, no Sega-register shadowing, RAM precedence, state, reset and save-memory roundtrip.",
+    "fixture_artifacts": [
+      "build/verification/sms-audit/codemasters/fixture-baseline.json",
+      "build/verification/sms-audit/codemasters/fixture-fixed-final.json"
+    ],
+    "final_tested_core_sha256": "76bc5753114d84b25626885531542295e9885b0b27d405c21247b2d939765423",
+    "scoped_recording_abi": "kegarefusion-recording-v2-sms-codemasters-v1",
+    "scoped_network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1",
+    "compatibility_controls": {
+      "pass": true,
+      "cases": [
+        {
+          "label": "codemasters",
+          "recording_abi": "kegarefusion-recording-v2-sms-codemasters-v1",
+          "network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1"
+        },
+        {
+          "label": "ordinary_sms",
+          "recording_abi": "kegarefusion-recording-v2",
+          "network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1"
+        },
+        {
+          "label": "ordinary_md_after_sms",
+          "recording_abi": "kegarefusion-recording-v2",
+          "network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1"
+        }
+      ]
+    }
+  },
+  "prototype_followup": {
+    "crc32": "8813514B",
+    "cases": [
+      {
+        "selection": 0,
+        "name": "Dizzy the Adventurer",
+        "baseline_artifact": "build/verification/sms-audit/codemasters/8813514B-game0-baseline.json",
+        "fixed_artifact": "build/verification/sms-audit/codemasters/8813514B-game0-fixed.json",
+        "video_equal": true,
+        "PCM_equal": true,
+        "observed": "Both reach the language-selection menu.",
+        "baseline_video_sha256": "0dd27a34d9afc1c7ec1f4fa5cc746842eeae4a2a78919ea0c146f7f4a376b745",
+        "fixed_video_sha256": "0dd27a34d9afc1c7ec1f4fa5cc746842eeae4a2a78919ea0c146f7f4a376b745",
+        "baseline_PCM_sha256": "48679807b5603a634aeab4dbce1976a28a1d15f20188cfb27730b40227fb52c2",
+        "fixed_PCM_sha256": "48679807b5603a634aeab4dbce1976a28a1d15f20188cfb27730b40227fb52c2",
+        "input_intervals": [
+          {
+            "at_frame_zero_based": 1300,
+            "count": 8,
+            "libretro_mask": 1
+          }
+        ],
+        "baseline_final_PC": "0x8104",
+        "fixed_final_PC": "0x8104",
+        "baseline_final_FCR": [
+          0,
+          0,
+          1,
+          5
+        ],
+        "fixed_final_FCR": [
+          0,
+          0,
+          1,
+          5
+        ],
+        "actual_writes_baseline": [
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x0000",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 0,
+            "first_pc": "0x400c",
+            "last_pc": "0x400c",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              0
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x4000",
+            "kind": "memory_write",
+            "first_value": 1,
+            "last_value": 1,
+            "first_pc": "0x4010",
+            "last_pc": "0x4010",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              1
+            ]
+          },
+          {
+            "calls": 7137,
+            "changed": 4760,
+            "address": "0x8000",
+            "kind": "memory_write",
+            "first_value": 2,
+            "last_value": 5,
+            "first_pc": "0x4014",
+            "last_pc": "0x4406",
+            "first_frame": 1,
+            "last_frame": 2400,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              5
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              2,
+              3,
+              5,
+              6
+            ]
+          }
+        ],
+        "actual_writes_fixed": [
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x0000",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 0,
+            "first_pc": "0x400c",
+            "last_pc": "0x400c",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              0
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x4000",
+            "kind": "memory_write",
+            "first_value": 1,
+            "last_value": 1,
+            "first_pc": "0x4010",
+            "last_pc": "0x4010",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              1
+            ]
+          },
+          {
+            "calls": 7137,
+            "changed": 4760,
+            "address": "0x8000",
+            "kind": "memory_write",
+            "first_value": 2,
+            "last_value": 5,
+            "first_pc": "0x4014",
+            "last_pc": "0x4406",
+            "first_frame": 1,
+            "last_frame": 2400,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              5
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              2,
+              3,
+              5,
+              6
+            ]
+          }
+        ]
+      },
+      {
+        "selection": 1,
+        "name": "Go! Dizzy Go!",
+        "baseline_artifact": "build/verification/sms-audit/codemasters/8813514B-game1-baseline.json",
+        "fixed_artifact": "build/verification/sms-audit/codemasters/8813514B-game1-fixed.json",
+        "video_equal": false,
+        "PCM_equal": false,
+        "observed": "Both return/restart instead of entering the incomplete minigame; exact resulting video/PCM differs. The broad decoder services noncanonical writes that baseline ignored.",
+        "baseline_video_sha256": "a517cedf143ce2e218bf1480384c39ea69c1cfef0e5faeaeb55d469e58f0dc6f",
+        "fixed_video_sha256": "963465d556d6d1c66cb8d0859fe610860e9928379c28fb57e7f739b2ab877c51",
+        "baseline_PCM_sha256": "be3922d16720f758011ce2db5a1d2d1ff7f790628bde595f9412db5585e6c336",
+        "fixed_PCM_sha256": "7bbc5fa306b22893cd1f986fedd32732708ef3bb1a1c53540c117526914ea2c0",
+        "input_intervals": [
+          {
+            "at_frame_zero_based": 1300,
+            "count": 8,
+            "libretro_mask": 1
+          },
+          {
+            "at_frame_zero_based": 1100,
+            "count": 8,
+            "libretro_mask": 32
+          }
+        ],
+        "baseline_final_PC": "0x5989",
+        "fixed_final_PC": "0x8104",
+        "baseline_final_FCR": [
+          0,
+          14,
+          15,
+          5
+        ],
+        "fixed_final_FCR": [
+          0,
+          0,
+          1,
+          5
+        ],
+        "actual_writes_baseline": [
+          {
+            "calls": 35,
+            "changed": 1,
+            "address": "0x0000",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 14,
+            "first_pc": "0x400c",
+            "last_pc": "0x8005",
+            "first_frame": 1,
+            "last_frame": 2389,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              0,
+              14
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x0080",
+            "kind": "memory_write",
+            "first_value": 255,
+            "last_value": 255,
+            "first_pc": "0xb801",
+            "last_pc": "0xb801",
+            "first_frame": 1512,
+            "last_frame": 1512,
+            "first_before_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "priority": 0,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              255
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x016e",
+            "kind": "memory_write",
+            "first_value": 255,
+            "last_value": 255,
+            "first_pc": "0xc1b1",
+            "last_pc": "0xc1b1",
+            "first_frame": 1510,
+            "last_frame": 1510,
+            "first_before_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "priority": 0,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              255
+            ]
+          },
+          {
+            "calls": 35,
+            "changed": 1,
+            "address": "0x4000",
+            "kind": "memory_write",
+            "first_value": 1,
+            "last_value": 15,
+            "first_pc": "0x4010",
+            "last_pc": "0x800a",
+            "first_frame": 1,
+            "last_frame": 2389,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              1,
+              15
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x6001",
+            "kind": "memory_write",
+            "first_value": 145,
+            "last_value": 145,
+            "first_pc": "0xc19b",
+            "last_pc": "0xc19b",
+            "first_frame": 1510,
+            "last_frame": 1510,
+            "first_before_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "priority": 0,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              145
+            ]
+          },
+          {
+            "calls": 3864,
+            "changed": 2578,
+            "address": "0x8000",
+            "kind": "memory_write",
+            "first_value": 2,
+            "last_value": 5,
+            "first_pc": "0x4014",
+            "last_pc": "0x4406",
+            "first_frame": 1,
+            "last_frame": 1309,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              5
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              2,
+              3,
+              5,
+              6
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x8080",
+            "kind": "memory_write",
+            "first_value": 255,
+            "last_value": 255,
+            "first_pc": "0xc425",
+            "last_pc": "0xc425",
+            "first_frame": 1507,
+            "last_frame": 1507,
+            "first_before_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "priority": 0,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              255
+            ]
+          }
+        ],
+        "actual_writes_fixed": [
+          {
+            "calls": 7,
+            "changed": 2,
+            "address": "0x0000",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 0,
+            "first_pc": "0x400c",
+            "last_pc": "0x400c",
+            "first_frame": 1,
+            "last_frame": 1520,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              2
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              0,
+              14
+            ]
+          },
+          {
+            "calls": 2,
+            "changed": 1,
+            "address": "0x016e",
+            "kind": "memory_write",
+            "first_value": 255,
+            "last_value": 255,
+            "first_pc": "0xc1b1",
+            "last_pc": "0xc1b1",
+            "first_frame": 1510,
+            "last_frame": 1513,
+            "first_before_fcr": [
+              0,
+              14,
+              145,
+              255
+            ],
+            "last_after_fcr": [
+              0,
+              255,
+              97,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              255
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x0504",
+            "kind": "memory_write",
+            "first_value": 255,
+            "last_value": 255,
+            "first_pc": "0xbfac",
+            "last_pc": "0xbfac",
+            "first_frame": 1513,
+            "last_frame": 1513,
+            "first_before_fcr": [
+              0,
+              255,
+              97,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              255,
+              97,
+              0
+            ],
+            "priority": 0,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              255
+            ]
+          },
+          {
+            "calls": 7,
+            "changed": 2,
+            "address": "0x4000",
+            "kind": "memory_write",
+            "first_value": 1,
+            "last_value": 1,
+            "first_pc": "0x4010",
+            "last_pc": "0x4010",
+            "first_frame": 1,
+            "last_frame": 1520,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              2
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              1,
+              15
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 1,
+            "address": "0x6001",
+            "kind": "memory_write",
+            "first_value": 145,
+            "last_value": 145,
+            "first_pc": "0xc19b",
+            "last_pc": "0xc19b",
+            "first_frame": 1510,
+            "last_frame": 1510,
+            "first_before_fcr": [
+              0,
+              14,
+              15,
+              255
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              145,
+              255
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              145
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 1,
+            "address": "0x609f",
+            "kind": "memory_write",
+            "first_value": 97,
+            "last_value": 97,
+            "first_pc": "0xc19b",
+            "last_pc": "0xc19b",
+            "first_frame": 1513,
+            "last_frame": 1513,
+            "first_before_fcr": [
+              0,
+              255,
+              145,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              255,
+              97,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              97
+            ]
+          },
+          {
+            "calls": 6449,
+            "changed": 4302,
+            "address": "0x8000",
+            "kind": "memory_write",
+            "first_value": 2,
+            "last_value": 5,
+            "first_pc": "0x4014",
+            "last_pc": "0x4406",
+            "first_frame": 1,
+            "last_frame": 2400,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              5
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              2,
+              3,
+              5,
+              6
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 1,
+            "address": "0x8080",
+            "kind": "memory_write",
+            "first_value": 255,
+            "last_value": 255,
+            "first_pc": "0xc425",
+            "last_pc": "0xc425",
+            "first_frame": 1507,
+            "last_frame": 1507,
+            "first_before_fcr": [
+              0,
+              14,
+              15,
+              5
+            ],
+            "last_after_fcr": [
+              0,
+              14,
+              15,
+              255
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              255
+            ]
+          },
+          {
+            "calls": 2,
+            "changed": 1,
+            "address": "0x82a4",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 0,
+            "first_pc": "0xc153",
+            "last_pc": "0xc154",
+            "first_frame": 1513,
+            "last_frame": 1513,
+            "first_before_fcr": [
+              0,
+              255,
+              145,
+              255
+            ],
+            "last_after_fcr": [
+              0,
+              255,
+              145,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "selection": 2,
+        "name": "Panic Dizzy",
+        "baseline_artifact": "build/verification/sms-audit/codemasters/8813514B-game2-baseline.json",
+        "fixed_artifact": "build/verification/sms-audit/codemasters/8813514B-game2-fixed.json",
+        "video_equal": true,
+        "PCM_equal": true,
+        "observed": "Both reach the Panic Dizzy game screen.",
+        "baseline_video_sha256": "15d8e673c0eee1fb23deb89e52faa74769eaaae31b9e00e9c4ed5055a6cc0b0b",
+        "fixed_video_sha256": "15d8e673c0eee1fb23deb89e52faa74769eaaae31b9e00e9c4ed5055a6cc0b0b",
+        "baseline_PCM_sha256": "5e1a1ea1d9b8e51dd806505fe68aafb8616ee0d710f1cb38f3b8178e4280d6ca",
+        "fixed_PCM_sha256": "5e1a1ea1d9b8e51dd806505fe68aafb8616ee0d710f1cb38f3b8178e4280d6ca",
+        "input_intervals": [
+          {
+            "at_frame_zero_based": 1300,
+            "count": 8,
+            "libretro_mask": 1
+          },
+          {
+            "at_frame_zero_based": 1100,
+            "count": 8,
+            "libretro_mask": 32
+          },
+          {
+            "at_frame_zero_based": 1160,
+            "count": 8,
+            "libretro_mask": 32
+          }
+        ],
+        "baseline_final_PC": "0x037c",
+        "fixed_final_PC": "0x037c",
+        "baseline_final_FCR": [
+          0,
+          0,
+          1,
+          2
+        ],
+        "fixed_final_FCR": [
+          0,
+          0,
+          1,
+          2
+        ],
+        "actual_writes_baseline": [
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x0000",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 0,
+            "first_pc": "0x400c",
+            "last_pc": "0x400c",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              0
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x4000",
+            "kind": "memory_write",
+            "first_value": 1,
+            "last_value": 1,
+            "first_pc": "0x4010",
+            "last_pc": "0x4010",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              1
+            ]
+          },
+          {
+            "calls": 7097,
+            "changed": 4735,
+            "address": "0x8000",
+            "kind": "memory_write",
+            "first_value": 2,
+            "last_value": 2,
+            "first_pc": "0x4014",
+            "last_pc": "0x02b5",
+            "first_frame": 1,
+            "last_frame": 2400,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              2
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2800"
+            },
+            "values_seen": [
+              2,
+              3,
+              5,
+              6
+            ]
+          }
+        ],
+        "actual_writes_fixed": [
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x0000",
+            "kind": "memory_write",
+            "first_value": 0,
+            "last_value": 0,
+            "first_pc": "0x400c",
+            "last_pc": "0x400c",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              0
+            ]
+          },
+          {
+            "calls": 1,
+            "changed": 0,
+            "address": "0x4000",
+            "kind": "memory_write",
+            "first_value": 1,
+            "last_value": 1,
+            "first_pc": "0x4010",
+            "last_pc": "0x4010",
+            "first_frame": 1,
+            "last_frame": 1,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              1
+            ]
+          },
+          {
+            "calls": 7097,
+            "changed": 4735,
+            "address": "0x8000",
+            "kind": "memory_write",
+            "first_value": 2,
+            "last_value": 2,
+            "first_pc": "0x4014",
+            "last_pc": "0x02b5",
+            "first_frame": 1,
+            "last_frame": 2400,
+            "first_before_fcr": [
+              0,
+              0,
+              1,
+              0
+            ],
+            "last_after_fcr": [
+              0,
+              0,
+              1,
+              2
+            ],
+            "priority": 1,
+            "handler": {
+              "name": "write_mapper_codies",
+              "offset": "0x4d2480"
+            },
+            "values_seen": [
+              2,
+              3,
+              5,
+              6
+            ]
+          }
+        ]
+      }
+    ],
+    "baseline_noncanonical_writes": "On the incomplete Go! Dizzy Go! path, writes include8080=FF,6001=91 and016E=FF. The old handler ignored them; the hardware-window decoder services them.",
+    "interpretation": "The two functioning menu/game paths preserve complete video/PCM exactly. The incomplete path already fails to enter normal play on baseline. A first-person Maxim technical comment independently identifies one incomplete SMS prototype minigame that resets. No evidence for a separate exact-address decoder board was found; the incomplete ROM was not patched or repaired.",
+    "limitations": "No physical prototype board was measured here. Physical pinout evidence is directly for Cosmic Spacehead; the complete three-window model also relies on the maintained primary hardware documentation."
+  },
+  "Micro_Machines_conversion": {
+    "native_crc32": "A577CE46",
+    "converted_crc32": "3648E5E4",
+    "differing_bytes": 244,
+    "runs": [
+      {
+        "offset": "0xf",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x18",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xb2",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1cd",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1d7",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x292",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x2ec",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x36b",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x45b",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x466",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xaa0",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xaaa",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xab4",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xabe",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xacf",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xada",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xae4",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xaee",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xaf8",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xb01",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xb0c",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xee9",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x12c2",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x12cd",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x12d8",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1ac0",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1cf7",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1dea",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1f09",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1f11",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1f29",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1f31",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1f56",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x1f6a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x201a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x2026",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x22de",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x22e6",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3173",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3185",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3191",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x319c",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x32e8",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x343d",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3448",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3a26",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3b58",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3b6a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3d51",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3dc0",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3dd4",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3e27",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3e32",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3f1a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3f2e",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3f48",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3f51",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3fb7",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3fc0",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x4734",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x473c",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x482a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x4832",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x48c5",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x48ce",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x49f2",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x516c",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5177",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x51a0",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x51ab",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x51d2",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5528",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x552f",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5547",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x554e",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5599",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x55ad",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5630",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x563c",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x59e7",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5aab",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5ab3",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x5b7b",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x64c1",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x6614",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x661f",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x662a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x6635",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x6648",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x6714",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x6738",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x6a8f",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x728d",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x732a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x73c5",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x73ce",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x746e",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x747a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7483",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7627",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7665",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7a76",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7a8c",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7c6a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7c75",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7cd9",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7d12",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7d65",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7dd9",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7dfd",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7e02",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7f51",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7f5a",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x7ffa",
+        "original": "52e3",
+        "converted": "5331"
+      },
+      {
+        "offset": "0xafc2",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0xafca",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3bb09",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3bb12",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3bb29",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3bcf9",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3bd02",
+        "original": "0080",
+        "converted": "ffff"
+      },
+      {
+        "offset": "0x3bd0b",
+        "original": "0080",
+        "converted": "ffff"
+      }
+    ],
+    "interpretation": "121 little-endian address operands change 0080 to FFFF (bank register8000 to SegaFFFF), plus the two Sega checksum bytes at7FFA. No Codemasters hardware rule is assigned to this conversion. Manual PAL is documented; no new fix database entry is added."
+  },
+  "records": [
+    {
+      "relative_path": "5.Beta/Dinobasher Starring Bignose the Caveman (Europe) (Proto).sms",
+      "absolute_path": "/mnt/d/emulation/Sega Master System/roms/5.Beta/Dinobasher Starring Bignose the Caveman (Europe) (Proto).sms",
+      "size": 262144,
+      "crc32": "EA5C3A6F",
+      "sha256": "127b14aa1f61a092ce5a70afa63527c039a5125b904cfa3a860c7c713f2e3a24",
+      "database_comment": "Dinobasher - Starring Bignose the Caveman [Proto]",
+      "header7fe0": "102211931103d06d3092000000000000544d522053454741ffff985700000040",
+      "status": "analyzed_supported",
+      "identity_verified_after_runtime": true,
+      "observed": "Заставка и выбор игроков переходят к Paradise Island; адресное продолжение до 3000 кадров показывает движущегося персонажа на уровне.",
+      "runtime_artifacts": {
+        "baseline": "build/verification/sms-audit/codemasters/EA5C3A6F-baseline.json",
+        "decoder_fixed": "build/verification/sms-audit/codemasters/EA5C3A6F-fixed.json",
+        "followup": "build/verification/sms-audit/codemasters/EA5C3A6F-follow.json"
+      },
+      "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "decoder_fixed_core_sha256": "37792f30cdd8e4df4fdd050b96211152ba5a3b62e6a7f605831ebd15e9982080",
+      "actual_initial_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      "actual_final_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          2
+        ]
+      },
+      "automatic_region": "Europe_PAL",
+      "fps": 49.7014591857706,
+      "bank_write_observations": [
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x0000",
+          "kind": "memory_write",
+          "first_value": 0,
+          "last_value": 0,
+          "first_pc": "0x3c4e",
+          "last_pc": "0x3c4e",
+          "first_frame": 235,
+          "last_frame": 235,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            0
+          ]
+        },
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x4000",
+          "kind": "memory_write",
+          "first_value": 1,
+          "last_value": 1,
+          "first_pc": "0x3c52",
+          "last_pc": "0x3c52",
+          "first_frame": 235,
+          "last_frame": 235,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            1
+          ]
+        },
+        {
+          "calls": 17295,
+          "changed": 17029,
+          "address": "0x8000",
+          "kind": "memory_write",
+          "first_value": 11,
+          "last_value": 2,
+          "first_pc": "0x0088",
+          "last_pc": "0x3d73",
+          "first_frame": 1,
+          "last_frame": 3000,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            2,
+            3,
+            4,
+            6,
+            7,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15
+          ]
+        }
+      ],
+      "comparison_1200_frames_same_region": {
+        "video_sequence_equal": true,
+        "complete_PCM_equal": true,
+        "all_checkpoint_maps_FCR_PC_equal": true
+      },
+      "scope": "1200-frame baseline/fix observation plus purposeful followup where menus/intros remained. Not a complete playthrough or listening-based sound-quality assessment.",
+      "baseline_video_sha256": "1e02d7976155e34f4208e0b331a65f2d02ad1e45889495e66aa6265c3aeae371",
+      "fixed_video_sha256": "1e02d7976155e34f4208e0b331a65f2d02ad1e45889495e66aa6265c3aeae371",
+      "baseline_PCM_sha256": "720dc88b593c9b753a824d9c9b2d69b95acba721ed1d246c2bd83f2a5fe52f3f",
+      "fixed_PCM_sha256": "720dc88b593c9b753a824d9c9b2d69b95acba721ed1d246c2bd83f2a5fe52f3f",
+      "input_intervals": [
+        {
+          "at_frame_zero_based": 120,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 300,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 480,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 600,
+          "count": 180,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 660,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 720,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 840,
+          "count": 120,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 900,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 960,
+          "count": 12,
+          "libretro_mask": 1
+        }
+      ],
+      "baseline_initial_FCR": [
+        0,
+        0,
+        1,
+        0
+      ],
+      "fixed_final_FCR": [
+        0,
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "relative_path": "5.Beta/Excellent Dizzy Collection, The (USA, Europe) (En,Fr,De,Es,It) (Proto).sms",
+      "absolute_path": "/mnt/d/emulation/Sega Master System/roms/5.Beta/Excellent Dizzy Collection, The (USA, Europe) (En,Fr,De,Es,It) (Proto).sms",
+      "size": 262144,
+      "crc32": "8813514B",
+      "sha256": "f9cfcad94d7fa8a863d7b9fbeda5ed02e29787f3b56bc6114aea900c2bb44831",
+      "database_comment": "Excellent Dizzy Collection, The [Proto]",
+      "header7fe0": "10251193153573478db8000000000000544d522053454741ffff728800000040",
+      "status": "analyzed_supported_with_prototype_limit",
+      "identity_verified_after_runtime": true,
+      "observed": "Меню сборника и смена полных банков0/1 работают. Dizzy the Adventurer доходит до выбора языка, Panic Dizzy — до игрового экрана. Неполный Go! Dizzy Go! возвращается/перезапускает меню; полный запуск этой подигры не заявляется.",
+      "runtime_artifacts": {
+        "baseline": "build/verification/sms-audit/codemasters/8813514B-baseline.json",
+        "decoder_fixed": "build/verification/sms-audit/codemasters/8813514B-fixed.json",
+        "followup": null
+      },
+      "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "decoder_fixed_core_sha256": "37792f30cdd8e4df4fdd050b96211152ba5a3b62e6a7f605831ebd15e9982080",
+      "actual_initial_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      "actual_final_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          6
+        ]
+      },
+      "automatic_region": "Europe_PAL",
+      "fps": 49.7014591857706,
+      "bank_write_observations": [
+        {
+          "calls": 12,
+          "changed": 4,
+          "address": "0x0000",
+          "kind": "memory_write",
+          "first_value": 0,
+          "last_value": 0,
+          "first_pc": "0x400c",
+          "last_pc": "0x400c",
+          "first_frame": 1,
+          "last_frame": 1178,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            0,
+            14
+          ]
+        },
+        {
+          "calls": 3,
+          "changed": 2,
+          "address": "0x016e",
+          "kind": "memory_write",
+          "first_value": 255,
+          "last_value": 255,
+          "first_pc": "0xc1b1",
+          "last_pc": "0xc1b1",
+          "first_frame": 686,
+          "last_frame": 1174,
+          "first_before_fcr": [
+            0,
+            14,
+            145,
+            255
+          ],
+          "last_after_fcr": [
+            0,
+            255,
+            145,
+            255
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            255
+          ]
+        },
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x0504",
+          "kind": "memory_write",
+          "first_value": 255,
+          "last_value": 255,
+          "first_pc": "0xbfac",
+          "last_pc": "0xbfac",
+          "first_frame": 689,
+          "last_frame": 689,
+          "first_before_fcr": [
+            0,
+            255,
+            97,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            255,
+            97,
+            0
+          ],
+          "priority": 0,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            255
+          ]
+        },
+        {
+          "calls": 12,
+          "changed": 4,
+          "address": "0x4000",
+          "kind": "memory_write",
+          "first_value": 1,
+          "last_value": 1,
+          "first_pc": "0x4010",
+          "last_pc": "0x4010",
+          "first_frame": 1,
+          "last_frame": 1178,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            1,
+            15
+          ]
+        },
+        {
+          "calls": 2,
+          "changed": 2,
+          "address": "0x6001",
+          "kind": "memory_write",
+          "first_value": 145,
+          "last_value": 145,
+          "first_pc": "0xc19b",
+          "last_pc": "0xc19b",
+          "first_frame": 686,
+          "last_frame": 1174,
+          "first_before_fcr": [
+            0,
+            14,
+            15,
+            255
+          ],
+          "last_after_fcr": [
+            0,
+            14,
+            145,
+            255
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            145
+          ]
+        },
+        {
+          "calls": 1,
+          "changed": 1,
+          "address": "0x609f",
+          "kind": "memory_write",
+          "first_value": 97,
+          "last_value": 97,
+          "first_pc": "0xc19b",
+          "last_pc": "0xc19b",
+          "first_frame": 689,
+          "last_frame": 689,
+          "first_before_fcr": [
+            0,
+            255,
+            145,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            255,
+            97,
+            0
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            97
+          ]
+        },
+        {
+          "calls": 2257,
+          "changed": 1506,
+          "address": "0x8000",
+          "kind": "memory_write",
+          "first_value": 2,
+          "last_value": 6,
+          "first_pc": "0x4014",
+          "last_pc": "0x00d0",
+          "first_frame": 1,
+          "last_frame": 1200,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            6
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            2,
+            3,
+            5,
+            6
+          ]
+        },
+        {
+          "calls": 2,
+          "changed": 2,
+          "address": "0x8080",
+          "kind": "memory_write",
+          "first_value": 255,
+          "last_value": 255,
+          "first_pc": "0xc425",
+          "last_pc": "0xc425",
+          "first_frame": 683,
+          "last_frame": 1171,
+          "first_before_fcr": [
+            0,
+            14,
+            15,
+            5
+          ],
+          "last_after_fcr": [
+            0,
+            14,
+            15,
+            255
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            255
+          ]
+        },
+        {
+          "calls": 2,
+          "changed": 1,
+          "address": "0x82a4",
+          "kind": "memory_write",
+          "first_value": 0,
+          "last_value": 0,
+          "first_pc": "0xc153",
+          "last_pc": "0xc154",
+          "first_frame": 689,
+          "last_frame": 689,
+          "first_before_fcr": [
+            0,
+            255,
+            145,
+            255
+          ],
+          "last_after_fcr": [
+            0,
+            255,
+            145,
+            0
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            0
+          ]
+        }
+      ],
+      "comparison_1200_frames_same_region": {
+        "video_sequence_equal": false,
+        "complete_PCM_equal": false,
+        "all_checkpoint_maps_FCR_PC_equal": false
+      },
+      "scope": "1200-frame baseline/fix observation plus purposeful followup where menus/intros remained. Not a complete playthrough or listening-based sound-quality assessment.",
+      "baseline_video_sha256": "7c3c418d5bc952e6fa15b1977dd4bd5c3a6b524c87f6153992d065a80da71626",
+      "fixed_video_sha256": "61b5ecd5a434076a8bd1c79389bb4e362da4397af7d8c191ea94bda453ba3ae6",
+      "baseline_PCM_sha256": "3da172d2e4b30fa9790203358f4dda129178d4e434ec35d89835ad63d5558ee0",
+      "fixed_PCM_sha256": "25a2922827aedc77743bcc5b9e11ae02dd872fda72f59e935a54548eb3175216",
+      "input_intervals": [
+        {
+          "at_frame_zero_based": 120,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 300,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 480,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 600,
+          "count": 180,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 660,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 720,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 840,
+          "count": 120,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 900,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 960,
+          "count": 12,
+          "libretro_mask": 1
+        }
+      ],
+      "baseline_initial_FCR": [
+        0,
+        0,
+        1,
+        0
+      ],
+      "fixed_final_FCR": [
+        0,
+        0,
+        1,
+        6
+      ]
+    },
+    {
+      "relative_path": "7.Fixed/Micro Machines (Europe) [Mapper Fix].sms",
+      "absolute_path": "/mnt/d/emulation/Sega Master System/roms/7.Fixed/Micro Machines (Europe) [Mapper Fix].sms",
+      "size": 262144,
+      "crc32": "3648E5E4",
+      "sha256": "394cb322979f675f6a4e48e6893cbe4d3e0b3178778cc9861ca74dfeba591e21",
+      "database_comment": null,
+      "header7fe0": "102411931311b4b54c4a000000000000544d522053454741ffff533100000040",
+      "status": "analyzed_mapper_conversion",
+      "identity_verified_after_runtime": true,
+      "observed": "Выбор режима и персонажа реагирует на ввод; 3000-кадровое продолжение остаётся в меню персонажей. Гонка не заявляется проверенной, но реальный mapper активно переключает банки во время меню.",
+      "runtime_artifacts": {
+        "baseline": "build/verification/sms-audit/codemasters/3648E5E4-baseline.json",
+        "decoder_fixed": "build/verification/sms-audit/codemasters/3648E5E4-fixed.json",
+        "followup": "build/verification/sms-audit/codemasters/3648E5E4-follow.json"
+      },
+      "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "decoder_fixed_core_sha256": "37792f30cdd8e4df4fdd050b96211152ba5a3b62e6a7f605831ebd15e9982080",
+      "actual_initial_mapper": {
+        "id": 16,
+        "name": "MAPPER_SEGA",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          2
+        ]
+      },
+      "actual_final_mapper": {
+        "id": 16,
+        "name": "MAPPER_SEGA",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          2
+        ]
+      },
+      "automatic_region": "USA_NTSC",
+      "fps": 59.92274340431231,
+      "bank_write_observations": [
+        {
+          "calls": 6361,
+          "changed": 6360,
+          "address": "0xffff",
+          "kind": "memory_write",
+          "first_value": 2,
+          "last_value": 2,
+          "first_pc": "0x0011",
+          "last_pc": "0xdb4d",
+          "first_frame": 7,
+          "last_frame": 3000,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_sega",
+            "offset": "0x4d2500"
+          },
+          "values_seen": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            8,
+            9,
+            10,
+            11,
+            12,
+            14,
+            15
+          ]
+        }
+      ],
+      "comparison_1200_frames_same_region": {
+        "video_sequence_equal": true,
+        "complete_PCM_equal": true,
+        "all_checkpoint_maps_FCR_PC_equal": true
+      },
+      "scope": "1200-frame baseline/fix observation plus purposeful followup where menus/intros remained. Not a complete playthrough or listening-based sound-quality assessment.",
+      "baseline_video_sha256": "d9dbe4d4404e501f9a87d9b7b545fa9bf67852dc9ef2fcdaed1f2647ed9cdca6",
+      "fixed_video_sha256": "d9dbe4d4404e501f9a87d9b7b545fa9bf67852dc9ef2fcdaed1f2647ed9cdca6",
+      "baseline_PCM_sha256": "eff657cf2d47a46165583ce7841855bb61fc72b62166487c29a52df070519a63",
+      "fixed_PCM_sha256": "eff657cf2d47a46165583ce7841855bb61fc72b62166487c29a52df070519a63",
+      "input_intervals": [
+        {
+          "at_frame_zero_based": 120,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 300,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 480,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 600,
+          "count": 180,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 660,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 720,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 840,
+          "count": 120,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 900,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 960,
+          "count": 12,
+          "libretro_mask": 1
+        }
+      ],
+      "baseline_initial_FCR": [
+        0,
+        0,
+        1,
+        2
+      ],
+      "fixed_final_FCR": [
+        0,
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "relative_path": "3.Europe/C/Cosmic Spacehead (Europe) (En,Fr,De,Es).sms",
+      "absolute_path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/C/Cosmic Spacehead (Europe) (En,Fr,De,Es).sms",
+      "size": 262144,
+      "crc32": "29822980",
+      "sha256": "1377189c097116fd49f9298368fd3138a28fbe48a08ff7b097d9360ac891bb9b",
+      "database_comment": "Cosmic Spacehead",
+      "header7fe0": "103108931059c51b3be4000000000000544d522053454741ffff894a0000004c",
+      "status": "analyzed_supported",
+      "identity_verified_after_runtime": true,
+      "observed": "Меню и язык переходят к сцене Old Lino Town с действиями и инвентарём; реальные переключения банков наблюдаются.",
+      "runtime_artifacts": {
+        "baseline": "build/verification/sms-audit/codemasters/29822980-baseline.json",
+        "decoder_fixed": "build/verification/sms-audit/codemasters/29822980-fixed.json",
+        "followup": null
+      },
+      "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "decoder_fixed_core_sha256": "37792f30cdd8e4df4fdd050b96211152ba5a3b62e6a7f605831ebd15e9982080",
+      "actual_initial_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      "actual_final_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          12
+        ]
+      },
+      "automatic_region": "Europe_PAL",
+      "fps": 49.7014591857706,
+      "bank_write_observations": [
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x0000",
+          "kind": "memory_write",
+          "first_value": 0,
+          "last_value": 0,
+          "first_pc": "0x0278",
+          "last_pc": "0x0278",
+          "first_frame": 159,
+          "last_frame": 159,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            13
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            13
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            0
+          ]
+        },
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x4000",
+          "kind": "memory_write",
+          "first_value": 1,
+          "last_value": 1,
+          "first_pc": "0x027c",
+          "last_pc": "0x027c",
+          "first_frame": 159,
+          "last_frame": 159,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            13
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            13
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            1
+          ]
+        },
+        {
+          "calls": 7630,
+          "changed": 7315,
+          "address": "0x8000",
+          "kind": "memory_write",
+          "first_value": 13,
+          "last_value": 12,
+          "first_pc": "0x3c40",
+          "last_pc": "0x34c2",
+          "first_frame": 3,
+          "last_frame": 1200,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            12
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            11,
+            12,
+            13,
+            14,
+            15
+          ]
+        }
+      ],
+      "comparison_1200_frames_same_region": {
+        "video_sequence_equal": true,
+        "complete_PCM_equal": true,
+        "all_checkpoint_maps_FCR_PC_equal": true
+      },
+      "scope": "1200-frame baseline/fix observation plus purposeful followup where menus/intros remained. Not a complete playthrough or listening-based sound-quality assessment.",
+      "baseline_video_sha256": "69d520ad8c1cba0628abb5538701d9e15261fceb02135dd90eea87310f4d7e4c",
+      "fixed_video_sha256": "69d520ad8c1cba0628abb5538701d9e15261fceb02135dd90eea87310f4d7e4c",
+      "baseline_PCM_sha256": "2857b8d9a7657edfba74ad8e8ee161d349bf23065853a6e63b395e2304e8be8b",
+      "fixed_PCM_sha256": "2857b8d9a7657edfba74ad8e8ee161d349bf23065853a6e63b395e2304e8be8b",
+      "input_intervals": [
+        {
+          "at_frame_zero_based": 120,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 300,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 480,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 600,
+          "count": 180,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 660,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 720,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 840,
+          "count": 120,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 900,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 960,
+          "count": 12,
+          "libretro_mask": 1
+        }
+      ],
+      "baseline_initial_FCR": [
+        0,
+        0,
+        1,
+        0
+      ],
+      "fixed_final_FCR": [
+        0,
+        0,
+        1,
+        12
+      ]
+    },
+    {
+      "relative_path": "3.Europe/F/Fantastic Dizzy (Europe) (En,Fr,De,Es,It).sms",
+      "absolute_path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/F/Fantastic Dizzy (Europe) (En,Fr,De,Es,It).sms",
+      "size": 262144,
+      "crc32": "B9664AE1",
+      "sha256": "f0b9f293ec534f38e1028016e7e8bcb56a96591faa88d6e8ec5cab2bd5abfb3b",
+      "database_comment": "Fantastic Dizzy",
+      "header7fe0": "101808931131d1662f99000000000000544d522053454741ffffc4fa00000040",
+      "status": "analyzed_supported",
+      "identity_verified_after_runtime": true,
+      "observed": "Выбор языка и сюжетное вступление переходят к игровому инвентарю Home Sweet Home. Ввод и банки работают; полный сюжет не проверялся.",
+      "runtime_artifacts": {
+        "baseline": "build/verification/sms-audit/codemasters/B9664AE1-baseline.json",
+        "decoder_fixed": "build/verification/sms-audit/codemasters/B9664AE1-fixed.json",
+        "followup": "build/verification/sms-audit/codemasters/B9664AE1-follow.json"
+      },
+      "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "decoder_fixed_core_sha256": "37792f30cdd8e4df4fdd050b96211152ba5a3b62e6a7f605831ebd15e9982080",
+      "actual_initial_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      "actual_final_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          2
+        ]
+      },
+      "automatic_region": "Europe_PAL",
+      "fps": 49.7014591857706,
+      "bank_write_observations": [
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x0000",
+          "kind": "memory_write",
+          "first_value": 0,
+          "last_value": 0,
+          "first_pc": "0x03bd",
+          "last_pc": "0x03bd",
+          "first_frame": 4,
+          "last_frame": 4,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            0
+          ]
+        },
+        {
+          "calls": 1,
+          "changed": 0,
+          "address": "0x4000",
+          "kind": "memory_write",
+          "first_value": 1,
+          "last_value": 1,
+          "first_pc": "0x03c1",
+          "last_pc": "0x03c1",
+          "first_frame": 4,
+          "last_frame": 4,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            1
+          ]
+        },
+        {
+          "calls": 16728,
+          "changed": 13095,
+          "address": "0x8000",
+          "kind": "memory_write",
+          "first_value": 2,
+          "last_value": 2,
+          "first_pc": "0x03c5",
+          "last_pc": "0x35a6",
+          "first_frame": 4,
+          "last_frame": 3000,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            11,
+            12,
+            13,
+            14,
+            15
+          ]
+        }
+      ],
+      "comparison_1200_frames_same_region": {
+        "video_sequence_equal": true,
+        "complete_PCM_equal": true,
+        "all_checkpoint_maps_FCR_PC_equal": true
+      },
+      "scope": "1200-frame baseline/fix observation plus purposeful followup where menus/intros remained. Not a complete playthrough or listening-based sound-quality assessment.",
+      "baseline_video_sha256": "69f77d8c6d65da60e2bbc5dc6c2d95c435f8dbe697c6d0db43a3a720273ca01b",
+      "fixed_video_sha256": "69f77d8c6d65da60e2bbc5dc6c2d95c435f8dbe697c6d0db43a3a720273ca01b",
+      "baseline_PCM_sha256": "b38b91c078526fe74b42f283cd0d7818419e393e595a4cc7b1b9c2d47a5fb52f",
+      "fixed_PCM_sha256": "b38b91c078526fe74b42f283cd0d7818419e393e595a4cc7b1b9c2d47a5fb52f",
+      "input_intervals": [
+        {
+          "at_frame_zero_based": 120,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 300,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 480,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 600,
+          "count": 180,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 660,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 720,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 840,
+          "count": 120,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 900,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 960,
+          "count": 12,
+          "libretro_mask": 1
+        }
+      ],
+      "baseline_initial_FCR": [
+        0,
+        0,
+        1,
+        0
+      ],
+      "fixed_final_FCR": [
+        0,
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "relative_path": "3.Europe/M/Micro Machines (Europe).sms",
+      "absolute_path": "/mnt/d/emulation/Sega Master System/roms/3.Europe/M/Micro Machines (Europe).sms",
+      "size": 262144,
+      "crc32": "A577CE46",
+      "sha256": "cfbc86deccdcd31b64f886b1c344cc017e39c665928820bdfa16ae65d281057a",
+      "database_comment": "Micro Machines",
+      "header7fe0": "102411931311b4b54c4a000000000000544d522053454741ffff52e300000040",
+      "status": "analyzed_supported",
+      "identity_verified_after_runtime": true,
+      "observed": "Выбор режима и персонажа реагирует на ввод; 3000-кадровое продолжение остаётся в меню персонажей. Гонка не заявляется проверенной, но реальный mapper активно переключает банки во время меню.",
+      "runtime_artifacts": {
+        "baseline": "build/verification/sms-audit/codemasters/A577CE46-baseline.json",
+        "decoder_fixed": "build/verification/sms-audit/codemasters/A577CE46-fixed.json",
+        "followup": "build/verification/sms-audit/codemasters/A577CE46-follow.json"
+      },
+      "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "decoder_fixed_core_sha256": "37792f30cdd8e4df4fdd050b96211152ba5a3b62e6a7f605831ebd15e9982080",
+      "actual_initial_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      "actual_final_mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          2
+        ]
+      },
+      "automatic_region": "Europe_PAL",
+      "fps": 49.7014591857706,
+      "bank_write_observations": [
+        {
+          "calls": 6485,
+          "changed": 6485,
+          "address": "0x8000",
+          "kind": "memory_write",
+          "first_value": 2,
+          "last_value": 2,
+          "first_pc": "0x0011",
+          "last_pc": "0xdb4d",
+          "first_frame": 6,
+          "last_frame": 3000,
+          "first_before_fcr": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "last_after_fcr": [
+            0,
+            0,
+            1,
+            2
+          ],
+          "priority": 1,
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2480"
+          },
+          "values_seen": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            8,
+            9,
+            10,
+            11,
+            12,
+            14,
+            15
+          ]
+        }
+      ],
+      "comparison_1200_frames_same_region": {
+        "video_sequence_equal": true,
+        "complete_PCM_equal": true,
+        "all_checkpoint_maps_FCR_PC_equal": true
+      },
+      "scope": "1200-frame baseline/fix observation plus purposeful followup where menus/intros remained. Not a complete playthrough or listening-based sound-quality assessment.",
+      "baseline_video_sha256": "e327ddc4b1deaba1a63fb4d2baf8c261144bcbe7a6d2dc56bb84684fbfcfc25c",
+      "fixed_video_sha256": "e327ddc4b1deaba1a63fb4d2baf8c261144bcbe7a6d2dc56bb84684fbfcfc25c",
+      "baseline_PCM_sha256": "e95022b414d8b1403cb135b0f699de3a9e570fe434d09599129d8a5133a0bdad",
+      "fixed_PCM_sha256": "e95022b414d8b1403cb135b0f699de3a9e570fe434d09599129d8a5133a0bdad",
+      "input_intervals": [
+        {
+          "at_frame_zero_based": 120,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 300,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 480,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 600,
+          "count": 180,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 660,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 720,
+          "count": 12,
+          "libretro_mask": 1
+        },
+        {
+          "at_frame_zero_based": 840,
+          "count": 120,
+          "libretro_mask": 128
+        },
+        {
+          "at_frame_zero_based": 900,
+          "count": 12,
+          "libretro_mask": 256
+        },
+        {
+          "at_frame_zero_based": 960,
+          "count": 12,
+          "libretro_mask": 1
+        }
+      ],
+      "baseline_initial_FCR": [
+        0,
+        0,
+        1,
+        0
+      ],
+      "fixed_final_FCR": [
+        0,
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://www.smspower.org/Development/Mappers",
+      "supports": "Three slots, mirrored register ranges, initial banks0/1/0, no fixed first1KiB, RAM enable semantics."
+    },
+    {
+      "url": "https://www.smspower.org/forums/1098-MappingHardwareInCodemastersSMSCartridges",
+      "supports": "Mike G physical Cosmic Spacehead PAL16R4 pinout and discussion showing no address input belowA14."
+    },
+    {
+      "url": "https://www.smspower.org/forums/13169-CodemastersCartridgePCBScans",
+      "supports": "Original board photographs; Bock2021 identifies Ernie Els Golf8KiB non-battery RAM."
+    },
+    {
+      "url": "https://www.smspower.org/Development/CodemastersHeader",
+      "supports": "Additional Codemasters header and internal checksum format."
+    },
+    {
+      "url": "https://gamedev.net/blogs/161/entry-1343919-turning-japanese/",
+      "supports": "Maxim technical correction on full-slot paging and one incomplete resetting SMS prototype minigame."
+    },
+    {
+      "url": "https://raw.githubusercontent.com/mamedev/mame/master/src/devices/bus/sega8/rom.cpp",
+      "supports": "Independent implementation comparison only; its exact-address dispatch is not treated as physical hardware proof."
+    }
+  ],
+  "limits": "Full playthroughs, all prototype functionality, physical board reverse engineering and external battery hardware claims are outside this bounded audit. No user ROM/settings/saves were changed. The encrypted optional archive was not cracked.",
+  "fixture_validation": {
+    "baseline_core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+    "fixed_core_sha256": "76bc5753114d84b25626885531542295e9885b0b27d405c21247b2d939765423",
+    "baseline_results": [
+      {
+        "mode": "canonical",
+        "fixture_crc32": "29822980",
+        "fixture_sha256": "029cebdd05ba44cf66424e74698a006826f6c843b220394bf7fa5c10ea904c1f",
+        "checks": [
+          {
+            "name": "reset_0x100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "reset_0x4100",
+            "expected": 65,
+            "observed": 65,
+            "pass": true
+          },
+          {
+            "name": "reset_0x8100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "slot0_includes_vectors",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot0_first1K",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot1_bank2",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "slot2_bank5",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "slot2_end",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "register_read_is_ROM",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot0",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot1",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot2",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "RAM_bit_does_not_change_ROM_bank",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "RAM_low",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "bank2_changes_under_RAM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_survives_bank2",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high_survives_bank2",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_current_ROM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_ROM_end",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_reenable_preserves_data",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "native_state_restores_three_banks_RAM_enable_battery_is_separate",
+            "expected": "4344473cc3",
+            "observed": "4344473cc3",
+            "pass": true
+          },
+          {
+            "name": "state_plus_battery_roundtrip",
+            "expected": "434447a55a",
+            "observed": "434447a55a",
+            "pass": true
+          },
+          {
+            "name": "soft_reset_preserves_battery",
+            "pass": true
+          },
+          {
+            "name": "soft_reset_default_banks_0_1_0",
+            "pass": true
+          },
+          {
+            "name": "battery_export_includes_actual_mapped_RAM_offset_2000_3FFF",
+            "pass": true,
+            "exported_size": 16384
+          },
+          {
+            "name": "battery_reload_public_memory_roundtrip",
+            "pass": true
+          }
+        ],
+        "pass": true
+      },
+      {
+        "mode": "mirrors",
+        "fixture_crc32": "29822980",
+        "fixture_sha256": "940f682eeebb806d1a0c97b500208fe33c2859d8837d7698bfb061a8d1e65f23",
+        "checks": [
+          {
+            "name": "reset_0x100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "reset_0x4100",
+            "expected": 65,
+            "observed": 65,
+            "pass": true
+          },
+          {
+            "name": "reset_0x8100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "slot0_includes_vectors",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot0_first1K",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot1_bank2",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "slot2_bank5",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "slot2_end",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "register_read_is_ROM",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot0",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot1",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot2",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "RAM_bit_does_not_change_ROM_bank",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "RAM_low",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "bank2_changes_under_RAM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_survives_bank2",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high_survives_bank2",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_current_ROM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_ROM_end",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_reenable_preserves_data",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x1",
+            "expected": 67,
+            "observed": 64,
+            "pass": false
+          },
+          {
+            "name": "mirror_0x3fff",
+            "expected": 68,
+            "observed": 64,
+            "pass": false
+          },
+          {
+            "name": "mirror_0x4001",
+            "expected": 67,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "mirror_0x7fff",
+            "expected": 68,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "mirror_0x8001",
+            "expected": 70,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "mirror_0x9fff",
+            "expected": 71,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "mirror_0xa000",
+            "expected": 72,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "mirror_0xbfff",
+            "expected": 73,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "mirror_lower8K_with_RAM",
+            "expected": 74,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "RAM_priority_over_alias",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_write_does_not_bank2",
+            "expected": 74,
+            "observed": 66,
+            "pass": false
+          },
+          {
+            "name": "RAM_write_still_works",
+            "expected": 166,
+            "observed": 166,
+            "pass": true
+          }
+        ],
+        "pass": false
+      }
+    ],
+    "fixed_results": [
+      {
+        "mode": "canonical",
+        "fixture_crc32": "29822980",
+        "fixture_sha256": "029cebdd05ba44cf66424e74698a006826f6c843b220394bf7fa5c10ea904c1f",
+        "checks": [
+          {
+            "name": "reset_0x100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "reset_0x4100",
+            "expected": 65,
+            "observed": 65,
+            "pass": true
+          },
+          {
+            "name": "reset_0x8100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "slot0_includes_vectors",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot0_first1K",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot1_bank2",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "slot2_bank5",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "slot2_end",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "register_read_is_ROM",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot0",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot1",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot2",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "RAM_bit_does_not_change_ROM_bank",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "RAM_low",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "bank2_changes_under_RAM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_survives_bank2",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high_survives_bank2",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_current_ROM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_ROM_end",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_reenable_preserves_data",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "native_state_restores_three_banks_RAM_enable_battery_is_separate",
+            "expected": "4344473cc3",
+            "observed": "4344473cc3",
+            "pass": true
+          },
+          {
+            "name": "state_plus_battery_roundtrip",
+            "expected": "434447a55a",
+            "observed": "434447a55a",
+            "pass": true
+          },
+          {
+            "name": "soft_reset_preserves_battery",
+            "pass": true
+          },
+          {
+            "name": "soft_reset_default_banks_0_1_0",
+            "pass": true
+          },
+          {
+            "name": "battery_export_includes_actual_mapped_RAM_offset_2000_3FFF",
+            "pass": true,
+            "exported_size": 16384
+          },
+          {
+            "name": "battery_reload_public_memory_roundtrip",
+            "pass": true
+          }
+        ],
+        "pass": true
+      },
+      {
+        "mode": "mirrors",
+        "fixture_crc32": "29822980",
+        "fixture_sha256": "940f682eeebb806d1a0c97b500208fe33c2859d8837d7698bfb061a8d1e65f23",
+        "checks": [
+          {
+            "name": "reset_0x100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "reset_0x4100",
+            "expected": 65,
+            "observed": 65,
+            "pass": true
+          },
+          {
+            "name": "reset_0x8100",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "slot0_includes_vectors",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot0_first1K",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "slot1_bank2",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "slot2_bank5",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "slot2_end",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "register_read_is_ROM",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot0",
+            "expected": 64,
+            "observed": 64,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot1",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "SEGA_registers_no_effect_slot2",
+            "expected": 69,
+            "observed": 69,
+            "pass": true
+          },
+          {
+            "name": "RAM_bit_does_not_change_ROM_bank",
+            "expected": 66,
+            "observed": 66,
+            "pass": true
+          },
+          {
+            "name": "RAM_low",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "bank2_changes_under_RAM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_survives_bank2",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_high_survives_bank2",
+            "expected": 90,
+            "observed": 90,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_current_ROM",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_disable_reveals_ROM_end",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "RAM_reenable_preserves_data",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x1",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x3fff",
+            "expected": 68,
+            "observed": 68,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x4001",
+            "expected": 67,
+            "observed": 67,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x7fff",
+            "expected": 68,
+            "observed": 68,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x8001",
+            "expected": 70,
+            "observed": 70,
+            "pass": true
+          },
+          {
+            "name": "mirror_0x9fff",
+            "expected": 71,
+            "observed": 71,
+            "pass": true
+          },
+          {
+            "name": "mirror_0xa000",
+            "expected": 72,
+            "observed": 72,
+            "pass": true
+          },
+          {
+            "name": "mirror_0xbfff",
+            "expected": 73,
+            "observed": 73,
+            "pass": true
+          },
+          {
+            "name": "mirror_lower8K_with_RAM",
+            "expected": 74,
+            "observed": 74,
+            "pass": true
+          },
+          {
+            "name": "RAM_priority_over_alias",
+            "expected": 165,
+            "observed": 165,
+            "pass": true
+          },
+          {
+            "name": "RAM_write_does_not_bank2",
+            "expected": 74,
+            "observed": 74,
+            "pass": true
+          },
+          {
+            "name": "RAM_write_still_works",
+            "expected": 166,
+            "observed": 166,
+            "pass": true
+          }
+        ],
+        "pass": true
+      }
+    ],
+    "scoped_compatibility": {
+      "pass": true,
+      "cases": [
+        {
+          "label": "codemasters",
+          "recording_abi": "kegarefusion-recording-v2-sms-codemasters-v1",
+          "network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1"
+        },
+        {
+          "label": "ordinary_sms",
+          "recording_abi": "kegarefusion-recording-v2",
+          "network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1"
+        },
+        {
+          "label": "ordinary_md_after_sms",
+          "recording_abi": "kegarefusion-recording-v2",
+          "network_abi": "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1"
+        }
+      ]
+    },
+    "same_generated_fixture_content": true,
+    "fixture_generation": "Original Z80 program copies itself into work RAM before bank changes. A 32-bit CRC suffix selects the existing Codemasters board entry without any copyrighted game bytes."
+  },
+  "region_patch_readonly_review": {
+    "result": "No actionable finding. No additional emulation runs were performed for this review.",
+    "lookup_entries": 207,
+    "sorted_unique": true,
+    "catalog_pairs_exactly_match_patch": true,
+    "known_mapper_fix_3648E5E4_excluded": true,
+    "bounds": "Binary search uses [lo,hi), checks lo<count before indexing, and requires exact CRC plus ROM byte size.",
+    "priority": "SMS/SMS2 only; explicit Mark III excluded; Japanese FM exception precedes lookup; non-generic Japanese database region is retained. Manual config.region_detect overrides auto later in loadrom.c.",
+    "native_files_edited_for_review": false
+  },
+  "self_contained_evidence": "Fixture observations, expected/observed values, exact hashes, all relevant ROM writes, prototype comparisons and source URLs are embedded here. Scratch traces/screens may be removed after final review; their relative names are provenance labels, not required dependencies."
+}

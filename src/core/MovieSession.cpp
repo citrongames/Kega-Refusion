@@ -64,6 +64,9 @@ bool MovieSession::startRecording(const QString& path, QString& error) {
     if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед началом записи.")); return false; }
     host_.setMoviePlayback(true); // Movie editing must not write imported/rewound battery data to normal saves.
     auto config = host_.movieConfiguration(true);
+    // The current cadence can be stale while a user region change is pending.
+    // Only an existing recording may pin replay to its saved frame rate.
+    config.remove(QStringLiteral("frameRate"));
     if (!host_.prepareMovie(config, error)) {
         restorePreviousSession(host_, previous, previousDisc, false, error);
         return false;

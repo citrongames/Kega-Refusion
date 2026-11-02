@@ -1,0 +1,512 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "scope": "Generated original SMS fixtures and focused real-core movie integration. No copyrighted ROM data or user ROM writes; no full-platform matrix or broad ABI bump.",
+  "generated_native_tests": {
+    "core": "/home/vova/projects/Kega Refusion/build/linux/core/genesis_plus_gx_libretro.so",
+    "core_sha256": "f4b04ca67044229305516ccc2886ca572a619d5ab4f06fbd925eae991c478a9f",
+    "fixture_scope": "Original generated loop, no copyrighted ROM bytes; exact CRC+size selects known PAL catalog rule. One core instance per child process.",
+    "pass": true,
+    "results": [
+      {
+        "case": "pal_auto",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 33,
+          "region_code": 192,
+          "vdp_pal": 1,
+          "fps": 49.7014591857706,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 33,
+          "region_code": 192,
+          "vdp_pal": 1
+        },
+        "pass": true,
+        "native_state_probe": {
+          "saved_under": {
+            "hardware": 33,
+            "region_code": 128,
+            "vdp_pal": 0,
+            "fps": 59.92274340431231,
+            "sample_rate": 44100.0
+          },
+          "loaded_under": {
+            "hardware": 33,
+            "region_code": 192,
+            "vdp_pal": 1,
+            "fps": 49.7014591857706,
+            "sample_rate": 44100.0
+          },
+          "state_accepted": true,
+          "after_restore": {
+            "hardware": 33,
+            "region_code": 192,
+            "vdp_pal": 1,
+            "fps": 49.7014591857706,
+            "sample_rate": 44100.0
+          },
+          "contains_console_cadence": false,
+          "finding": "Native GPX payload accepts the state but retains current console region/PAL clock. Movie replay needs its saved frameRate to pin the original cadence."
+        }
+      },
+      {
+        "case": "pal_sms",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 32,
+          "region_code": 192,
+          "vdp_pal": 1,
+          "fps": 49.7014591857706,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 32,
+          "region_code": 192,
+          "vdp_pal": 1
+        },
+        "pass": true
+      },
+      {
+        "case": "pal_sms2",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 33,
+          "region_code": 192,
+          "vdp_pal": 1,
+          "fps": 49.7014591857706,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 33,
+          "region_code": 192,
+          "vdp_pal": 1
+        },
+        "pass": true
+      },
+      {
+        "case": "manual_ntsc_wins",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 33,
+          "region_code": 128,
+          "vdp_pal": 0,
+          "fps": 59.92274340431231,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "region_code": 128,
+          "vdp_pal": 0
+        },
+        "pass": true
+      },
+      {
+        "case": "renamed_same_bytes",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 33,
+          "region_code": 192,
+          "vdp_pal": 1,
+          "fps": 49.7014591857706,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 33,
+          "region_code": 192,
+          "vdp_pal": 1
+        },
+        "pass": true
+      },
+      {
+        "case": "manual_japan_wins",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 33,
+          "region_code": 0,
+          "vdp_pal": 0,
+          "fps": 59.92274340431231,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "region_code": 0,
+          "vdp_pal": 0
+        },
+        "pass": true
+      },
+      {
+        "case": "markIII_excluded",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 16,
+          "region_code": 128,
+          "vdp_pal": 0,
+          "fps": 59.92274340431231,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 16,
+          "region_code": 128,
+          "vdp_pal": 0
+        },
+        "pass": true
+      },
+      {
+        "case": "gamegear_excluded",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 524288,
+        "fixture_sha256": "0aad0ff7904e61065b84c5a2a50a476b7aeb52ae47cd70816fbc173aa5a96d60",
+        "actual": {
+          "hardware": 65,
+          "region_code": 128,
+          "vdp_pal": 0,
+          "fps": 59.92274340431231,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 65,
+          "vdp_pal": 0
+        },
+        "pass": true
+      },
+      {
+        "case": "same_crc_wrong_size_excluded",
+        "fixture_crc32": "C8718D40",
+        "fixture_size": 262144,
+        "fixture_sha256": "e5791cf5e9b2423dd22441231443b96f2097802dcd9465558eace97011cff953",
+        "actual": {
+          "hardware": 33,
+          "region_code": 128,
+          "vdp_pal": 0,
+          "fps": 59.92274340431231,
+          "sample_rate": 44100.0
+        },
+        "expected": {
+          "hardware": 33,
+          "region_code": 128,
+          "vdp_pal": 0
+        },
+        "pass": true
+      }
+    ]
+  },
+  "movie_validation": {
+    "target": "movie_integration_tests",
+    "focused_command": "build/linux/bin/movie_integration_tests CORE --sms-region",
+    "focused_pass": true,
+    "focused_core_sha256": "76bc5753114d84b25626885531542295e9885b0b27d405c21247b2d939765423",
+    "cases": [
+      "Legacy AUTO recording with an NTSC native snapshot and recorded fractional NTSC frameRate replays at its original cadence after the catalog begins selecting PAL.",
+      "A new recording with a pending user AUTO change applies the new PAL catalog default and records actual post-reset PAL frameRate; stale live NTSC cadence is not reused.",
+      "A current PAL AUTO recording retains AUTO and its fractional PAL rate on replay."
+    ],
+    "existing_movie_target_pass": true,
+    "existing_movie_checks": [
+      "deterministic replay",
+      "slots",
+      "rewind",
+      "resume",
+      "battery guard",
+      "fork",
+      "manual PAL/NTSC metadata rates"
+    ],
+    "log": "build/verification/sms-audit/movie-regression.log",
+    "not_run": "No broad full ctest run; other build/package work remains with the lead agent."
+  },
+  "native_state_finding": {
+    "console_fields_not_serialized": [
+      "region_code",
+      "vdp_pal",
+      "system_clock",
+      "lines_per_frame"
+    ],
+    "source_evidence": [
+      {
+        "file": "build/deps/genesis-plus-gx-32x-linux/core/state.c",
+        "function": "state_load",
+        "line": 69,
+        "finding": "Resets using current console configuration, then restores CPU/RAM/VDP/audio/cart context."
+      },
+      {
+        "file": "build/deps/genesis-plus-gx-32x-linux/core/vdp_ctrl.c",
+        "function": "vdp_context_save",
+        "line": 480,
+        "finding": "Stores VDP registers and status, not console PAL/clock selection."
+      },
+      {
+        "file": "src/core/LibretroHost.cpp",
+        "function": "stateCoreIdentity",
+        "line": 1671,
+        "finding": "Quick-state compatibility intentionally uses a stable native-state identity across compatible rebuilds."
+      }
+    ],
+    "real_core_probe": "A generated Aladdin-key fixture saved under manual NTSC is accepted under new AUTO PAL, and after unserialize remains PAL49.701459 instead of restoring NTSC59.922743. See generated_native_tests.results[0].native_state_probe.",
+    "legacy_quick_state_boundary": "Old raw/quick states lack cadence metadata. Their original TV standard cannot reliably be inferred. Select the known original region before restoring such a state; this work does not change the quick-state format or guess from filenames."
+  },
+  "movie_fix": {
+    "files": [
+      "src/core/LibretroHost.cpp",
+      "src/core/MovieSession.cpp"
+    ],
+    "prepareMovie_line": 1614,
+    "new_recording_line": 69,
+    "conditions": [
+      "Actual hardware is SMS or SMS2 (0x20/0x21).",
+      "Recorded region and VDP options are both AUTO.",
+      "Saved frameRate and current core fps identify opposite PAL/NTSC cadence families within1fps of50/60."
+    ],
+    "action": "Pin a movie-local region option to pal or ntsc-u and repeat the cached-content power reset before restoring the snapshot. Existing movie configuration restoration returns the user options after replay.",
+    "new_recordings": "The transient pre-reset config omits frameRate; after reset the existing code captures the actual cadence into the stored recording metadata.",
+    "unchanged": [
+      "Explicit manual region choices",
+      "Explicit manual VDP choices",
+      "Japan AUTO when cadence already agrees",
+      "Game Gear, MarkIII, SG1000 and MD/CD replay policies",
+      "Native-state layout and recording format",
+      "Existing permissive/advisory core-version mismatch behavior"
+    ],
+    "older_metadata_without_frameRate": "Remains readable. No cadence is guessed when the metadata cannot establish it.",
+    "abi_assessment": "No broad or region-specific recording ABI bump is needed for this default-selection change: recorded auto/auto cadence is restored from metadata before snapshot replay. The separate Codemasters decoder change has its own scoped contract. Native quick-state cadence absence remains an explicit legacy boundary."
+  },
+  "guard_regression_found_and_fixed": {
+    "finding": "get_region runs before forced config.system is applied to system_hw. Testing only current system_hw let a forced GameGear SMS-compatibility load inherit catalog PAL.",
+    "fix_owner": "lead agent",
+    "correct_gate": "config.system must be AUTO/SMS/SMS2, as well as the existing runtime SMS/SMS2 gate.",
+    "verified": "Generated forced GameGear now retains NTSC; MarkIII export-header baseline policy remains unchanged.",
+    "final_generated_core_sha256": "f4b04ca67044229305516ccc2886ca572a619d5ab4f06fbd925eae991c478a9f"
+  },
+  "reproduction": {
+    "native": "python3 tests/sms_region_tests.py --core CORE --output RESULT.json",
+    "movie": "movie_integration_tests CORE --sms-region"
+  },
+  "observer_control_validation": {
+    "sonic": {
+      "checks": {
+        "video_equal": true,
+        "full_pcm_equal": true,
+        "hardware_checkpoints_equal": true,
+        "initial_hardware_equal": true,
+        "final_hardware_equal": true
+      },
+      "core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "mapper": {
+        "id": 16,
+        "name": "MAPPER_SEGA",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          2
+        ]
+      },
+      "timing": {
+        "initial_fps": 59.92274340431231,
+        "fps": 59.92274340431231,
+        "sample_rate": 44100.0,
+        "libretro_region": "NTSC",
+        "sms_cart_region_detect_hint": 128,
+        "elapsed_seconds": 1.108
+      },
+      "region": "USA_NTSC",
+      "abi": {
+        "romhw_size": 8,
+        "slot_size": 24,
+        "romhw_fcr_offset": 0,
+        "romhw_mapper_offset": 4,
+        "romhw_pages_offset": 6,
+        "z80_size": 88
+      },
+      "actual_writes": [
+        {
+          "address": "0x0003",
+          "calls": 2,
+          "changed": 0,
+          "values_seen": [
+            255
+          ],
+          "first_pc": "0x05ae",
+          "handler": {
+            "name": "write_mapper_sega",
+            "offset": "0x4d2480"
+          }
+        },
+        {
+          "address": "0xfffc",
+          "calls": 1,
+          "changed": 1,
+          "values_seen": [
+            128
+          ],
+          "first_pc": "0x0290",
+          "handler": {
+            "name": "write_mapper_sega",
+            "offset": "0x4d2480"
+          }
+        },
+        {
+          "address": "0xfffd",
+          "calls": 1,
+          "changed": 0,
+          "values_seen": [
+            0
+          ],
+          "first_pc": "0x0295",
+          "handler": {
+            "name": "write_mapper_sega",
+            "offset": "0x4d2480"
+          }
+        },
+        {
+          "address": "0xfffe",
+          "calls": 7594,
+          "changed": 7136,
+          "values_seen": [
+            0,
+            1,
+            3,
+            4,
+            5,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "first_pc": "0x029a",
+          "handler": {
+            "name": "write_mapper_sega",
+            "offset": "0x4d2480"
+          }
+        },
+        {
+          "address": "0xffff",
+          "calls": 6616,
+          "changed": 5681,
+          "values_seen": [
+            0,
+            2,
+            5,
+            6,
+            9,
+            10,
+            11,
+            12,
+            13,
+            15
+          ],
+          "first_pc": "0x029f",
+          "handler": {
+            "name": "write_mapper_sega",
+            "offset": "0x4d2480"
+          }
+        }
+      ]
+    },
+    "codemasters": {
+      "checks": {
+        "video_equal": true,
+        "full_pcm_equal": true,
+        "hardware_checkpoints_equal": true,
+        "initial_hardware_equal": true,
+        "final_hardware_equal": true
+      },
+      "core_sha256": "332578f92cb8484c56efaa41f48fac5a628a6ec18dd45dc62b7459fe1093c252",
+      "mapper": {
+        "id": 19,
+        "name": "MAPPER_CODIES",
+        "pages": 16,
+        "fcr": [
+          0,
+          0,
+          1,
+          0
+        ]
+      },
+      "timing": {
+        "initial_fps": 49.7014591857706,
+        "fps": 49.7014591857706,
+        "sample_rate": 44100.0,
+        "libretro_region": "PAL",
+        "sms_cart_region_detect_hint": 192,
+        "elapsed_seconds": 0.645
+      },
+      "region": "Europe_PAL",
+      "abi": {
+        "romhw_size": 8,
+        "slot_size": 24,
+        "romhw_fcr_offset": 0,
+        "romhw_mapper_offset": 4,
+        "romhw_pages_offset": 6,
+        "z80_size": 88
+      },
+      "actual_writes": [
+        {
+          "address": "0x0000",
+          "calls": 1,
+          "changed": 0,
+          "values_seen": [
+            0
+          ],
+          "first_pc": "0x0278",
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2800"
+          }
+        },
+        {
+          "address": "0x4000",
+          "calls": 1,
+          "changed": 0,
+          "values_seen": [
+            1
+          ],
+          "first_pc": "0x027c",
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2800"
+          }
+        },
+        {
+          "address": "0x8000",
+          "calls": 7630,
+          "changed": 7315,
+          "values_seen": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            11,
+            12,
+            13,
+            14,
+            15
+          ],
+          "first_pc": "0x3c40",
+          "handler": {
+            "name": "write_mapper_codies",
+            "offset": "0x4d2800"
+          }
+        }
+      ]
+    }
+  }
+}
