@@ -203,3 +203,9 @@ Menu pause shares the worker's automatic pause input but not its manual pause st
 Achievement image-cache clearing cancels queued/background work and invalidates stale callbacks with a cache generation. The single IO worker drains preceding writes before deleting only owned URL-hash `.img` files; new requests wait until completion. Credentials, progress and unrelated files are untouched. The GUI never waits synchronously for cache deletion.
 
 Core patches form an ordered receipt-managed stack. Updating an earlier layer unwinds known later layers and restores them with the new revision; conflicting edits are retained and reported. Unchanged receipts do not rewrite sources or rebuild objects.
+
+## BIOS filenames and explicit save files (0.20.1)
+
+BIOS roles are resolved from content in the portable `data/bios` directory. A valid canonical filename wins; otherwise valid candidates are selected in filename order, independent of extension. Invalid canonical files cannot hide a valid renamed image. Recognition retains at most 256 metadata records per BIOS family and no BIOS payloads; it runs only for explicit validation/loading. Core VFS aliases expose the expected role names without renaming or duplicating user files. The 32X loader uses the same VFS as Sega CD. Recording metadata keeps canonical role keys and fingerprints actual selected content, so a rename does not change identity.
+
+The Emulation menu also saves to and loads from a chosen `.krs` file. The dialog suggests the game name and remembers the last directory. Normal saves reuse `KRSTATE1`; active recordings reuse their provenance-aware `KRMSLOT1` envelope and prefix checks. Missing files remain nonmodal notices. Explicit path operations are local worker commands and are host-only during netplay; successful host loading triggers the existing shared snapshot synchronization. Hardcore still blocks loading. No new automatic writes or background scanning are introduced.

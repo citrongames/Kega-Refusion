@@ -345,6 +345,7 @@ retro_vfs_interface* CoreFileSystem::interface() {
 }
 
 void CoreFileSystem::clearVirtualFiles() { virtualFiles.clear(); mp3PcmBytes = 0; }
+void CoreFileSystem::removeVirtualFile(const QString& virtualPath) { virtualFiles.remove(normalized(virtualPath)); }
 
 void CoreFileSystem::addMemoryFile(QString virtualPath, QByteArray bytes) {
     virtualFiles.insert(normalized(virtualPath), {VirtualKind::Memory, std::move(bytes), {}});

@@ -194,6 +194,10 @@ unsigned MovieSession::occupiedSlots() const {
 
 bool MovieSession::saveSlot(int slot, QString& error) {
     if (!active() || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет активной записи.")); return false; }
+    return saveFile(slotPath(slot), error);
+}
+bool MovieSession::saveFile(const QString& path, QString& error) {
+    if (!active() || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет активной записи или не выбран файл сохранения.")); return false; }
     const auto state = host_.captureMovieState();
     const auto prefix = tape_.checkpoint(cursor_, error);
     if (state.isEmpty() || state.size() > MaxSnapshot || prefix.isEmpty() || prefix.size() > MaxPrefix) {
@@ -213,16 +217,23 @@ bool MovieSession::saveSlot(int slot, QString& error) {
     stream.writeRawData(state.constData(), state.size());
     stream.writeRawData(prefix.constData(), prefix.size());
     stream.writeRawData(pixels.constData(), pixels.size());
-    return atomicWrite(slotPath(slot), QByteArrayLiteral("KRMSLOT1") + hash(payload) + payload, error);
+    return atomicWrite(path, QByteArrayLiteral("KRMSLOT1") + hash(payload) + payload, error);
 }
 
 bool MovieSession::loadSlot(int slot, QImage& frame, double& aspect, bool& missing, QString& error) {
     missing = false;
     if (!active() || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет активной записи.")); return false; }
-    QFile file(slotPath(slot));
+    const bool loaded = loadFile(slotPath(slot), frame, aspect, missing, error);
+    if (missing) error = Localization::text(QStringLiteral("Сохранение записи в слоте %1 не найдено")).arg(slot);
+    return loaded;
+}
+bool MovieSession::loadFile(const QString& path, QImage& frame, double& aspect, bool& missing, QString& error) {
+    missing = false;
+    if (!active() || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет активной записи или не выбран файл сохранения.")); return false; }
+    QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         missing = !QFileInfo::exists(file.fileName());
-        error = missing ? Localization::text(QStringLiteral("Сохранение записи в слоте %1 не найдено")).arg(slot)
+        error = missing ? Localization::text(QStringLiteral("Файл сохранения записи не найден: %1")).arg(path)
                         : Localization::text(QStringLiteral("Не удалось прочитать сохранение записи: %1")).arg(file.errorString());
         return false;
     }

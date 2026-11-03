@@ -71,8 +71,10 @@ public:
     // activeChanged excludes descriptions and disabled-code edits.
     bool setCheats(const CheatList& entries, QString& error, bool* activeChanged = nullptr);
     bool saveState(int slot, QString& error);
+    bool saveStateToFile(const QString& path, QString& error);
     enum class StateLoadError { None, Missing, Failed };
     bool loadState(int slot, QString& error, StateLoadError* failure = nullptr);
+    bool loadStateFromFile(const QString& path, QString& error, StateLoadError* failure = nullptr);
     QByteArray serialize() const;
     QByteArray netplayDigest() const;
     static QByteArray unpackNetworkState(const QByteArray& packed);

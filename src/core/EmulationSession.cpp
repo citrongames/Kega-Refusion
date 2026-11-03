@@ -229,6 +229,8 @@ bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio) {
 }
 void EmulationSession::saveState(int slot) { enqueue({Type::Save,{},slot}); }
 void EmulationSession::loadState(int slot) { enqueue({Type::Restore,{},slot}); }
+void EmulationSession::saveStateToFile(const QString& path) { if (!path.isEmpty()) enqueue({Type::SaveFile,path}); }
+void EmulationSession::loadStateFromFile(const QString& path) { if (!path.isEmpty()) enqueue({Type::RestoreFile,path}); }
 void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
     if (port >= MaxControllerPlayers || id >= 16) return;
     if (pressed) buttons_[port].fetch_or(1u << id); else buttons_[port].fetch_and(~(1u << id));
@@ -769,6 +771,9 @@ void EmulationSession::run() {
             if (command.type==Type::Load || command.type==Type::Close || command.type==Type::NetMode)
                 cheatSearch.clear();
             if(networkMode && (command.type==Type::Load || command.type==Type::Close))networkTimeline.stop();
+            if(networkMode==2 && (command.type==Type::SaveFile || command.type==Type::RestoreFile)) {
+                emit actionNotice(QStringLiteral("Сохранение в файл доступно только хосту онлайн-сессии.")); continue;
+            }
             if(networkMode && (command.type==Type::MovieRecord || command.type==Type::MoviePlay ||
                 command.type==Type::MovieResume || command.type==Type::MovieFork || command.type==Type::Disc)) {
                 emit actionNotice(QStringLiteral("Завершите онлайн-сессию перед этим действием.")); continue;
@@ -777,7 +782,7 @@ void EmulationSession::run() {
                command.type!=Type::Port && command.type!=Type::ControllerType && command.type!=Type::ControllerKind)
                 networkDirty=true;
             if (achievementHardcore) {
-                const bool prohibited = command.type == Type::Restore || command.type == Type::FrameAdvance ||
+                const bool prohibited = command.type == Type::Restore || command.type == Type::RestoreFile || command.type == Type::FrameAdvance ||
                     command.type == Type::MoviePlay || command.type == Type::MovieResume || command.type == Type::MovieFork ||
                     command.type == Type::Cheats || command.type == Type::Region ||
                     (command.type == Type::Checksum && command.value) ||
@@ -1286,27 +1291,43 @@ void EmulationSession::run() {
                 } else emit errorOccurred(error);
                 break;
             case Type::Save:
-                if (movie.active() ? movie.saveSlot(command.value,error) : host.saveState(command.value,error)) {
-                    slotStatus();
-                    emit actionCompleted(Localization::text(QStringLiteral("Сохранено: слот %1")).arg(command.value));
+            case Type::SaveFile: {
+                const bool named = command.type == Type::SaveFile;
+                const bool saved = movie.active()
+                    ? (named ? movie.saveFile(command.path,error) : movie.saveSlot(command.value,error))
+                    : (named ? host.saveStateToFile(command.path,error) : host.saveState(command.value,error));
+                if (saved) {
+                    if (!named) slotStatus();
+                    emit actionCompleted(named ? Localization::text(QStringLiteral("Сохранено в файл: %1")).arg(QFileInfo(command.path).fileName())
+                                               : Localization::text(QStringLiteral("Сохранено: слот %1")).arg(command.value));
                 } else emit errorOccurred(error);
                 break;
-            case Type::Restore: {
+            }
+            case Type::Restore:
+            case Type::RestoreFile: {
+                const bool named = command.type == Type::RestoreFile;
                 if (movie.active()) {
                     bool missing = false; QImage frame; double aspect = host.aspectRatio();
-                    if (movie.loadSlot(command.value,frame,aspect,missing,error)) {
+                    const bool restored = named ? movie.loadFile(command.path,frame,aspect,missing,error)
+                                                : movie.loadSlot(command.value,frame,aspect,missing,error);
+                    if (restored) {
                         achievements.reset();
                         clearHistory(); clearAudio(); resetMetrics();
                         if (!frame.isNull()) publishVideo(frame,aspect);
                         movieStatus(true);
-                        emit actionCompleted(Localization::text(QStringLiteral("Загружено: слот %1")).arg(command.value));
+                        emit actionCompleted(named ? Localization::text(QStringLiteral("Загружено из файла: %1")).arg(QFileInfo(command.path).fileName())
+                                                   : Localization::text(QStringLiteral("Загружено: слот %1")).arg(command.value));
                         pacer.reset(nowNs());
                     } else emit actionNotice(error);
                 } else {
                     LibretroHost::StateLoadError failure;
-                    if (host.loadState(command.value,error,&failure)) {
+                    const bool restored = named ? host.loadStateFromFile(command.path,error,&failure)
+                                                : host.loadState(command.value,error,&failure);
+                    if (restored) {
                         clearHistory(); clearAudio(); resetMetrics();
-                        emit actionCompleted(Localization::text(QStringLiteral("Загружено: слот %1")).arg(command.value));
+                        if (networkMode==1) networkDirty=true;
+                        emit actionCompleted(named ? Localization::text(QStringLiteral("Загружено из файла: %1")).arg(QFileInfo(command.path).fileName())
+                                                   : Localization::text(QStringLiteral("Загружено: слот %1")).arg(command.value));
                         pacer.reset(nowNs());
                     } else if (failure == LibretroHost::StateLoadError::Missing) emit actionNotice(error);
                     else emit errorOccurred(error);

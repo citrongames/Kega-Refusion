@@ -405,6 +405,27 @@ void testCore(const QString& corePath) {
     require(host.loadState(0, error), "could not load slot zero");
     require(runAndCapture(host).frame == expectedNext.frame, "slot zero did not restore video");
 
+    // A chosen path uses the same native envelope, independent of quick slots.
+    const QString namedState = temp.filePath("chosen-state.krs");
+    error.clear();
+    require(host.saveStateToFile(namedState, error), "could not save state to chosen file");
+    require(readFile(namedState).left(8) == QByteArrayLiteral("KRSTATE1"),
+            "chosen state file did not use the native envelope");
+    const auto expectedNamedNext = runAndCapture(host);
+    runAndCapture(host);
+    error.clear();
+    require(host.loadStateFromFile(namedState, error), "could not load state from chosen file");
+    const auto restoredNamed = runAndCapture(host);
+    require(restoredNamed.frame == expectedNamedNext.frame, "chosen file did not restore video");
+    // The core omits audio resampler history from disk states; verify output resumes.
+    require(!restoredNamed.audio.isEmpty(), "chosen file restore stopped audio");
+    error.clear();
+    LibretroHost::StateLoadError missingNamed;
+    requireRejected(host.loadStateFromFile(temp.filePath("absent.krs"), error, &missingNamed), error,
+                    "missing chosen file was accepted");
+    require(missingNamed == LibretroHost::StateLoadError::Missing,
+            "missing chosen file not classified");
+
     error.clear();
     require(host.saveState(9, error), "could not save slot nine");
     const QString slotNine = stateFile(dataPath, romPath, 9);
@@ -441,6 +462,9 @@ void testCore(const QString& corePath) {
     writeFile(otherSlot, savedZero);
     error.clear();
     requireRejected(host.loadState(0, error), error, "state from a different ROM was accepted");
+    error.clear();
+    requireRejected(host.loadStateFromFile(namedState, error), error,
+                    "chosen state from a different ROM was accepted");
     require(host.loaded(), "state rejection unloaded the game");
     host.unload();
     require(!host.loaded() && host.frame().isNull() && host.audio().isEmpty(),
@@ -1712,7 +1736,7 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
-                                     mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
+                                     mode == QLatin1String("--state-files") || mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
                                      mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper") || mode == QLatin1String("--svp-bus") || mode == QLatin1String("--sdk99-hardware") || mode == QLatin1String("--barver-hardware"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
         std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--barver-hardware|--sdk99-hardware|--svp-bus|--sonic-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
@@ -1774,6 +1798,10 @@ int main(int argc, char** argv) {
         if (mode == QLatin1String("--video-geometry")) {
             testNativeVideoGeometry(QString::fromLocal8Bit(argv[1]));
             std::puts("native filtered video geometry passed"); return 0;
+        }
+        if (mode == QLatin1String("--state-files")) {
+            testCore(QString::fromLocal8Bit(argv[1]));
+            std::puts("core state-file integration passed"); return 0;
         }
         if (mode == QLatin1String("--archive-only")) {
             testArchiveCore(QString::fromLocal8Bit(argv[1]));

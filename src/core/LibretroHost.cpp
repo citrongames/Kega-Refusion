@@ -31,6 +31,18 @@ thread_local LibretroHost* LibretroHost::active_ = nullptr;
 
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
+constexpr const char* biosRoleNames[]{"bios_CD_J.bin", "bios_CD_U.bin", "bios_CD_E.bin",
+    "32X_G_BIOS.BIN", "32X_M_BIOS.BIN", "32X_S_BIOS.BIN"};
+QString resolvedBiosPath(const QString& dataPath, const QString& role) {
+    QString error;
+    for (int i=0; i<3; ++i)
+        if (role == QLatin1String(biosRoleNames[i])) return SegaCdBios::resolve(dataPath,i+1,error);
+    constexpr Sega32xBios::Piece pieces[]{Sega32xBios::Piece::M68k,
+        Sega32xBios::Piece::MasterSh2,Sega32xBios::Piece::SlaveSh2};
+    for (int i=0; i<3; ++i)
+        if (role == QLatin1String(biosRoleNames[i+3])) return Sega32xBios::resolve(dataPath,pieces[i],error);
+    return {};
+}
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
 constexpr qsizetype maxAchievementProgressSize = 2 * 1024 * 1024;
 bool mdControllerHardware(unsigned system) { return system == 0x80 || system == 0x84; }
@@ -256,9 +268,10 @@ void LibretroHost::setDiscIdentity() {
     const auto region = optionOverrides_.find("genesis_plus_gx_region_detect");
     identity += region == optionOverrides_.end() ? QByteArray("auto") : region->second;
     identity += '\0';
-    for (const auto* code : {"J","U","E"}) {
-        QFile bios(dataPath_ + "/bios/bios_CD_" + code + ".bin");
-        identity += bios.open(QIODevice::ReadOnly) && bios.size() == 131072 ? digest(bios.readAll()) : QByteArray(32,'\0');
+    for (int i=0; i<3; ++i) {
+        QFile bios(resolvedBiosPath(dataPath_,QString::fromLatin1(biosRoleNames[i])));
+        identity += !bios.fileName().isEmpty() && bios.open(QIODevice::ReadOnly) && bios.size() == 131072
+            ? digest(bios.read(131073)) : QByteArray(32,'\0');
     }
     romHash_ = digest(identity);
 }
@@ -581,6 +594,15 @@ void LibretroHost::setExpansionDevices(bool cd, bool x32) {
     attachCd_ = cd; attach32x_ = x32;
 }
 bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
+    // Refresh only the six BIOS aliases at a power/load boundary, never during
+    // emulation. Disc aliases remain mounted. The peer shares this thread's VFS.
+    if (!linkParent_) for (const auto* name : biosRoleNames) {
+        const QString role = QString::fromLatin1(name);
+        const QString virtualPath = QDir(dataPath_ + "/bios").filePath(role);
+        CoreFileSystem::removeVirtualFile(virtualPath);
+        const QString actual = resolvedBiosPath(dataPath_,role);
+        if (!actual.isEmpty()) CoreFileSystem::addAlias(virtualPath,actual);
+    }
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
@@ -1586,8 +1608,8 @@ QJsonObject LibretroHost::movieBiosFingerprints() const {
     const bool cd = hasCdHardware();
     const bool x32 = api_->features && (api_->features() & 2u);
     const auto fingerprint = [this,&result](const char* name, qint64 expectedSize) {
-        QFile source(dataPath_ + "/bios/" + QString::fromLatin1(name));
-        if (!source.open(QIODevice::ReadOnly)) {
+        QFile source(resolvedBiosPath(dataPath_,QString::fromLatin1(name)));
+        if (source.fileName().isEmpty() || !source.open(QIODevice::ReadOnly)) {
             result.insert(QLatin1String(name), QStringLiteral("missing")); return;
         }
         if (source.size() != expectedSize) {
@@ -1730,9 +1752,9 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
             QStringLiteral("bios_CD_E.bin"), QStringLiteral("32X_G_BIOS.BIN"),
             QStringLiteral("32X_M_BIOS.BIN"), QStringLiteral("32X_S_BIOS.BIN")};
         if (!names.contains(it.key())) continue;
-        QFile file(dataPath_ + QStringLiteral("/bios/") + it.key());
+        QFile file(resolvedBiosPath(dataPath_,it.key()));
         QString value = QStringLiteral("missing");
-        if (file.open(QIODevice::ReadOnly)) {
+        if (!file.fileName().isEmpty() && file.open(QIODevice::ReadOnly)) {
             const qint64 expected = it.key().startsWith(QStringLiteral("bios_CD_")) ? 131072
                 : it.key() == QLatin1String("32X_G_BIOS.BIN") ? 256
                 : it.key() == QLatin1String("32X_M_BIOS.BIN") ? 2048 : 1024;
@@ -1990,6 +2012,10 @@ QByteArray LibretroHost::stateCoreIdentity() const {
 }
 bool LibretroHost::saveState(int slot, QString& error) {
     if (!loaded_ || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет игры или неверный слот сохранения.")); return false; }
+    return saveStateToFile(statePath(slot), error);
+}
+bool LibretroHost::saveStateToFile(const QString& path, QString& error) {
+    if (!loaded_ || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет игры или не выбран файл сохранения.")); return false; }
     if (isCd() && discEjected()) { error = Localization::text(QStringLiteral("Закройте привод перед сохранением состояния.")); return false; }
     QByteArray payload = serialize();
     if (payload.isEmpty()) { error = Localization::text(QStringLiteral("Ядро не смогло сохранить состояние.")); return false; }
@@ -2014,19 +2040,29 @@ bool LibretroHost::saveState(int slot, QString& error) {
     quint32 size = qToBigEndian(quint32(payload.size()));
     bytes.append(reinterpret_cast<const char*>(&size), sizeof(size));
     bytes.append(payload);
-    return atomicWrite(statePath(slot), bytes, error);
+    return atomicWrite(path, bytes, error);
 }
 bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) {
     if (failure) *failure = StateLoadError::Failed;
     if (!loaded_ || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет игры или неверный слот сохранения.")); return false; }
+    StateLoadError result = StateLoadError::Failed;
+    const bool loaded = loadStateFromFile(saveReadPath(QStringLiteral("states"), QStringLiteral(".slot%1.krs").arg(slot)), error, &result);
+    if (failure) *failure = result;
+    if (result == StateLoadError::Missing)
+        error = Localization::text(QStringLiteral("Сохранение в слоте %1 не найдено")).arg(slot);
+    return loaded;
+}
+bool LibretroHost::loadStateFromFile(const QString& path, QString& error, StateLoadError* failure) {
+    if (failure) *failure = StateLoadError::Failed;
+    if (!loaded_ || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет игры или не выбран файл сохранения.")); return false; }
     if (isCd() && discEjected()) { error = Localization::text(QStringLiteral("Закройте привод перед загрузкой состояния.")); return false; }
-    QFile file(saveReadPath(QStringLiteral("states"), QStringLiteral(".slot%1.krs").arg(slot)));
+    QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         if (!QFileInfo::exists(file.fileName())) {
             if (failure) *failure = StateLoadError::Missing;
-            error = Localization::text(QStringLiteral("Сохранение в слоте %1 не найдено")).arg(slot);
+            error = Localization::text(QStringLiteral("Файл сохранения не найден: %1")).arg(path);
         } else {
-            error = Localization::text(QStringLiteral("Не удалось прочитать сохранение в слоте %1: %2")).arg(slot).arg(file.errorString());
+            error = Localization::text(QStringLiteral("Не удалось прочитать сохранение: %1")).arg(file.errorString());
         }
         return false;
     }

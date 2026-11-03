@@ -913,6 +913,25 @@
     "Хост отключил вас от сеанса.": "The host removed you from the session.",
     "Не удалось загрузить достижения": "Could not load achievements",
     "Мышь захвачена · Esc — освободить": "Mouse captured · Esc to release",
-    "Захват мыши недоступен.": "Mouse capture is unavailable."
+    "Захват мыши недоступен.": "Mouse capture is unavailable.",
+    "Выключить всё": "Disable all",
+    "Очистить список": "Clear list",
+    "ожидается доступный образ BIOS размером 131072 байта": "expected a readable 131072-byte BIOS image",
+    "Не найден BIOS 32X: %1.": "32X BIOS not found: %1.",
+    "Авторы:": "Authors:",
+    "<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro).<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.": "<b>Kega Refusion</b><br>A compact emulator based on Genesis Plus GX (Libretro).<br><br>Games: MD, GEN, BIN, SMD, SMS, GG, SG, 68K and Sega CD (CUE, ISO, CHD, M3U). ZIP and 7z archives are supported. 32X support is experimental.",
+    "Сохранить в файл…": "Save to File…",
+    "Загрузить из файла…": "Load from File…",
+    "Сохранить в файл": "Save to File",
+    "Загрузить из файла": "Load from File",
+    "Сохранения Kega Refusion (*.krs);;Все файлы (*)": "Kega Refusion Saves (*.krs);;All Files (*)",
+    "Сохранено в файл: %1": "Saved to file: %1",
+    "Загружено из файла: %1": "Loaded from file: %1",
+    "Нет игры или не выбран файл сохранения.": "No game is loaded or no save file was selected.",
+    "Нет активной записи или не выбран файл сохранения.": "No active recording or no save file was selected.",
+    "Файл сохранения не найден: %1": "Save file not found: %1",
+    "Файл сохранения записи не найден: %1": "Recording save file not found: %1",
+    "Не удалось прочитать сохранение: %1": "Could not read save: %1",
+    "Сохранение в файл доступно только хосту онлайн-сессии.": "Saving to a file is available only to the online session host."
   }
 }

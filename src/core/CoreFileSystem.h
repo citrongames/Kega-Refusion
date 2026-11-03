@@ -10,6 +10,7 @@ class CoreFileSystem final {
 public:
     static retro_vfs_interface* interface();
     static void clearVirtualFiles();
+    static void removeVirtualFile(const QString& virtualPath);
     static void addMemoryFile(QString virtualPath, QByteArray bytes);
     static void addAlias(QString virtualPath, QString actualPath, bool mp3 = false);
     static QString lastError();

@@ -7,6 +7,8 @@
 // Region values match the application setting: 1 Japan, 2 USA, 3 Europe.
 class SegaCdBios final {
 public:
+    // Returns the actual installed image path, or an empty string with a diagnostic.
+    static QString resolve(const QString& dataPath, int region, QString& error);
     static QStringList importDirectory(const QString& sourceDirectory, const QString& dataPath,
                                        QString& error);
     static QString status(const QString& dataPath, int region);

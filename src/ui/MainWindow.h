@@ -148,6 +148,8 @@ private:
     QAction* screenshotAction_ = nullptr;
     QAction* saveAction_ = nullptr;
     QAction* loadAction_ = nullptr;
+    QAction* saveFileAction_ = nullptr;
+    QAction* loadFileAction_ = nullptr;
     QAction* osdAction_ = nullptr;
     QAction* fpsAction_ = nullptr;
     QAction* gameFpsAction_ = nullptr;

@@ -15,6 +15,7 @@ private:
     void addRow(const CheatEntry& entry);
     void setRow(int row, const CheatEntry& entry);
     void updateButtons();
+    void sortRows();
     void importCht();
     void exportCht();
     bool collectValidated(CheatList& entries);
@@ -28,5 +29,9 @@ private:
     QPushButton* import_ = nullptr;
     QPushButton* export_ = nullptr;
     QPushButton* remove_ = nullptr;
+    QPushButton* disableAll_ = nullptr;
+    QPushButton* clearAll_ = nullptr;
+    quint64 nextRowOrder_ = 0;
+    bool sortPending_ = false;
     QLabel* feedback_ = nullptr;
 };

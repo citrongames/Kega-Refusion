@@ -16,7 +16,9 @@ public:
     bool beforeFrame(const MovieInput& live, QString& error);
     void afterFrame();
     bool saveSlot(int slot, QString& error);
+    bool saveFile(const QString& path, QString& error);
     bool loadSlot(int slot, QImage& frame, double& aspect, bool& missing, QString& error);
+    bool loadFile(const QString& path, QImage& frame, double& aspect, bool& missing, QString& error);
     unsigned occupiedSlots() const;
     QByteArray captureRewind() const;
     bool restoreRewind(const QByteArray& state, QString& error);

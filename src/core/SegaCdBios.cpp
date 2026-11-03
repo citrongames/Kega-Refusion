@@ -5,8 +5,13 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSaveFile>
 #include <QtEndian>
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <utility>
@@ -104,7 +109,7 @@ bool readImage(const QString& path, QByteArray& bytes, QString& error) {
         error = Localization::text(QStringLiteral("Неверный размер BIOS %1: требуется 131072 байта.")).arg(path);
         return false;
     }
-    bytes = file.readAll();
+    bytes = file.read(biosSize + 1);
     if (bytes.size() != biosSize) {
         error = Localization::text(QStringLiteral("Не удалось полностью прочитать BIOS: %1")).arg(path);
         return false;
@@ -116,43 +121,101 @@ void appendError(QString& error, const QString& detail) {
     if (!error.isEmpty()) error += QLatin1Char('\n');
     error += detail;
 }
+struct Recognition {
+    qint64 size;
+    QDateTime modified;
+    QDateTime metadataChanged;
+    QDateTime created;
+    const Region* region;
+    QString reason;
+};
+
+// These checks run during user actions and loading, outside frame-time paths.
+// Cache recognition by metadata, without retaining BIOS bytes.
+QMutex recognitionMutex;
+QHash<QString, Recognition> recognitionCache;
+constexpr int recognitionCacheLimit = 256;
+
+const Region* recognizeFile(const QFileInfo& info, QString& reason) {
+    if (!info.isFile() || !info.isReadable() || info.size() != biosSize) {
+        reason = Localization::text(QStringLiteral("ожидается доступный образ BIOS размером 131072 байта"));
+        return nullptr;
+    }
+    const QString path = info.absoluteFilePath();
+    {
+        QMutexLocker lock(&recognitionMutex);
+        const auto cached = recognitionCache.constFind(path);
+        if (cached != recognitionCache.cend() && cached->size == info.size() &&
+            cached->modified == info.lastModified() &&
+            cached->metadataChanged == info.metadataChangeTime() &&
+            cached->created == info.birthTime()) {
+            reason = cached->reason;
+            return cached->region;
+        }
+    }
+    QByteArray bytes;
+    if (!readImage(path, bytes, reason)) return nullptr;
+    const Region* region = identify(bytes, reason);
+    {
+        QMutexLocker lock(&recognitionMutex);
+        if (recognitionCache.size() >= recognitionCacheLimit) recognitionCache.clear();
+        recognitionCache.insert(path, {info.size(), info.lastModified(), info.metadataChangeTime(),
+                                       info.birthTime(), region, reason});
+    }
+    return region;
+}
 } // namespace
 
-bool SegaCdBios::validate(const QString& dataPath, int region, QString& error) {
+QString SegaCdBios::resolve(const QString& dataPath, int region, QString& error) {
     error.clear();
     const Region* expected = findRegion(region);
     if (!expected) {
         error = Localization::text(QStringLiteral("Неизвестный регион Sega CD: %1.")).arg(region);
-        return false;
+        return {};
     }
-    const QString path = biosPath(dataPath, *expected);
-    if (!QFileInfo::exists(path)) {
-        error = Localization::text(QStringLiteral("Для региона «%1» не найден BIOS: %2."))
-                    .arg(Localization::text(QString::fromUtf8(expected->label)), path);
-        return false;
+    const QString canonical = biosPath(dataPath, *expected);
+    QString canonicalError;
+    const QFileInfo canonicalInfo(canonical);
+    if (canonicalInfo.exists()) {
+        QString reason;
+        const Region* actual = recognizeFile(canonicalInfo, reason);
+        if (actual == expected) return canonical;
+        if (!actual) {
+            canonicalError = Localization::text(QStringLiteral("BIOS %1 недействителен: %2.")).arg(canonical, reason);
+        } else {
+            canonicalError = Localization::text(QStringLiteral("BIOS %1 относится к региону «%2», ожидается «%3»."))
+                .arg(canonical, Localization::text(QString::fromUtf8(actual->label)),
+                     Localization::text(QString::fromUtf8(expected->label)));
+        }
     }
-    QByteArray bytes;
-    if (!readImage(path, bytes, error)) return false;
-    QString reason;
-    const Region* actual = identify(bytes, reason);
-    if (!actual) {
-        error = Localization::text(QStringLiteral("BIOS %1 недействителен: %2.")).arg(path, reason);
-        return false;
+    QDir directory(QDir(dataPath).filePath(QStringLiteral("bios")));
+    auto entries = directory.entryInfoList(QDir::Files | QDir::Readable | QDir::NoDotAndDotDot, QDir::NoSort);
+    std::sort(entries.begin(), entries.end(), [](const QFileInfo& a, const QFileInfo& b) {
+        return a.fileName() < b.fileName();
+    });
+    for (const QFileInfo& info : std::as_const(entries)) {
+        if (info.absoluteFilePath() == canonical || info.size() != biosSize) continue;
+        QString reason;
+        if (recognizeFile(info, reason) == expected) return info.absoluteFilePath();
     }
-    if (actual != expected) {
-        error = Localization::text(QStringLiteral("BIOS %1 относится к региону «%2», ожидается «%3»."))
-                    .arg(path, Localization::text(QString::fromUtf8(actual->label)), Localization::text(QString::fromUtf8(expected->label)));
-        return false;
-    }
-    return true;
+    error = canonicalError.isEmpty()
+        ? Localization::text(QStringLiteral("Для региона «%1» не найден BIOS: %2."))
+              .arg(Localization::text(QString::fromUtf8(expected->label)), canonical)
+        : canonicalError;
+    return {};
+}
+
+bool SegaCdBios::validate(const QString& dataPath, int region, QString& error) {
+    return !resolve(dataPath, region, error).isEmpty();
 }
 
 QString SegaCdBios::status(const QString& dataPath, int region) {
     QString error;
-    if (!validate(dataPath, region, error)) return error;
+    const QString path = resolve(dataPath, region, error);
+    if (path.isEmpty()) return error;
     const Region* expected = findRegion(region);
     return Localization::text(QStringLiteral("BIOS Sega CD для региона «%1» установлен: %2"))
-        .arg(Localization::text(QString::fromUtf8(expected->label)), biosPath(dataPath, *expected));
+        .arg(Localization::text(QString::fromUtf8(expected->label)), path);
 }
 
 QStringList SegaCdBios::importDirectory(const QString& sourceDirectory, const QString& dataPath,
@@ -186,12 +249,12 @@ QStringList SegaCdBios::importDirectory(const QString& sourceDirectory, const QS
         if (candidate.path.isEmpty()) continue;
         found = true;
         const QString destination = biosPath(dataPath, region);
+        QString validationError;
+        if (!resolve(dataPath, region.id, validationError).isEmpty()) continue;
         const QFileInfo existing(destination);
         if (existing.exists() || existing.isSymLink()) {
-            QString validationError;
-            if (!validate(dataPath, region.id, validationError))
-                appendError(error, Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1"))
-                                   .arg(validationError));
+            appendError(error, Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1"))
+                               .arg(validationError));
             continue;
         }
         if (!QDir().mkpath(QFileInfo(destination).absolutePath())) {

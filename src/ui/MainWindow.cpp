@@ -287,6 +287,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(netplay_, &NetplayController::readinessWaitingChanged, view_, &GameView::setReadinessWaiting);
     connect(netplay_, &NetplayController::activeChanged, this, [this](bool active) {
         if (netplayLeaveAction_) netplayLeaveAction_->setEnabled(active);
+        updateMovieActions();
         updateGunPresentation();
         updateInputEnabled();
     });
@@ -500,7 +501,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateMovieActions();
         setWindowTitle(QStringLiteral("Kega Refusion"));
         for (auto* action : {pauseAction_,resetAction_,hardResetAction_,fastForwardAction_,
-                             rewindAction_,saveAction_,loadAction_}) action->setEnabled(false);
+                             rewindAction_,saveAction_,loadAction_,saveFileAction_,loadFileAction_}) action->setEnabled(false);
         view_->setFocus();
         updateInputEnabled();
     });
@@ -715,19 +716,6 @@ void MainWindow::buildMenus() {
     frameAdvanceAction_->setEnabled(false);
     shortcut(frameAdvanceAction_);
     connect(frameAdvanceAction_, &QAction::triggered, this, [this] { session_.advanceFrame(); });
-    auto* cheatsMenu = menuBar()->addMenu(Localization::text(QStringLiteral("Читы")));
-    cheatsMenu->setObjectName(QStringLiteral("cheatsMenu"));
-    cheatsAction_ = cheatsMenu->addAction(Localization::text(QStringLiteral("Коды / Game Genie…")));
-    cheatsAction_->setEnabled(false);
-    connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
-    cheatSearchAction_ = cheatsMenu->addAction(Localization::text(QStringLiteral("Поиск читов…")));
-    cheatSearchAction_->setEnabled(false);
-    connect(cheatSearchAction_, &QAction::triggered, this, &MainWindow::showCheatSearch);
-    connect(cheatsAction_, &QAction::changed, this, [this] {
-        const bool enabled=cheatsAction_->isEnabled();
-        cheatSearchAction_->setEnabled(enabled);
-        if (!enabled && cheatSearchDialog_) cheatSearchDialog_->close();
-    });
     QAction* achievementsAction = emulationMenu->addAction(Localization::text(QStringLiteral("Достижения…")));
     achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
     connect(achievementsAction, &QAction::triggered, this, &MainWindow::showAchievements);
@@ -778,6 +766,45 @@ void MainWindow::buildMenus() {
     connect(loadAction_, &QAction::triggered, this, [this] {
         releaseInput();
         session_.loadState(stateSlot_);
+    });
+    saveFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сохранить в файл…")));
+    saveFileAction_->setObjectName(QStringLiteral("saveStateFileAction"));
+    saveFileAction_->setEnabled(false);
+    connect(saveFileAction_, &QAction::triggered, this, [this] {
+        if (!session_.hasGame() || loading_ || moviePending_ || session_.networkClient()) return;
+        releaseInput();
+        QString stem = currentGameName_.left(80);
+        for (qsizetype i = 0; i < stem.size(); ++i)
+            if (stem.at(i).unicode() < 32 || QStringLiteral("\\/:*?\"<>|").contains(stem.at(i)))
+                stem[i] = QLatin1Char('_');
+        if (stem.trimmed().isEmpty()) stem = QStringLiteral("game");
+        const QString directory = settings_.value(QStringLiteral("emulation/stateFileDirectory"),
+            QFileInfo(currentRom_).absolutePath()).toString();
+        QString path = QFileDialog::getSaveFileName(this,
+            Localization::text(QStringLiteral("Сохранить в файл")),
+            QDir(directory).filePath(stem + QStringLiteral(".krs")),
+            Localization::text(QStringLiteral("Сохранения Kega Refusion (*.krs);;Все файлы (*)")));
+        view_->setFocus();
+        if (path.isEmpty()) return;
+        if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".krs");
+        settings_.setValue(QStringLiteral("emulation/stateFileDirectory"), QFileInfo(path).absolutePath());
+        session_.saveStateToFile(QFileInfo(path).absoluteFilePath());
+    });
+    loadFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Загрузить из файла…")));
+    loadFileAction_->setObjectName(QStringLiteral("loadStateFileAction"));
+    loadFileAction_->setEnabled(false);
+    connect(loadFileAction_, &QAction::triggered, this, [this] {
+        if (!session_.hasGame() || loading_ || moviePending_ || achievementsHardcore_ || session_.networkClient()) return;
+        releaseInput();
+        const QString directory = settings_.value(QStringLiteral("emulation/stateFileDirectory"),
+            QFileInfo(currentRom_).absolutePath()).toString();
+        const QString path = QFileDialog::getOpenFileName(this,
+            Localization::text(QStringLiteral("Загрузить из файла")), directory,
+            Localization::text(QStringLiteral("Сохранения Kega Refusion (*.krs);;Все файлы (*)")));
+        view_->setFocus();
+        if (path.isEmpty()) return;
+        settings_.setValue(QStringLiteral("emulation/stateFileDirectory"), QFileInfo(path).absolutePath());
+        session_.loadStateFromFile(QFileInfo(path).absoluteFilePath());
     });
     QMenu* slotMenu = emulationMenu->addMenu(Localization::text(QStringLiteral("Слот сохранения")));
     QActionGroup* slotGroup = new QActionGroup(this);
@@ -994,6 +1021,19 @@ void MainWindow::buildMenus() {
     netplayLeaveAction_->setObjectName(QStringLiteral("netplayLeaveAction"));
     netplayLeaveAction_->setEnabled(netplay_->active());
     connect(netplayLeaveAction_, &QAction::triggered, netplay_, &NetplayController::leaveSession);
+    auto* cheatsMenu = menuBar()->addMenu(Localization::text(QStringLiteral("Читы")));
+    cheatsMenu->setObjectName(QStringLiteral("cheatsMenu"));
+    cheatsAction_ = cheatsMenu->addAction(Localization::text(QStringLiteral("Коды / Game Genie…")));
+    cheatsAction_->setEnabled(false);
+    connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
+    cheatSearchAction_ = cheatsMenu->addAction(Localization::text(QStringLiteral("Поиск читов…")));
+    cheatSearchAction_->setEnabled(false);
+    connect(cheatSearchAction_, &QAction::triggered, this, &MainWindow::showCheatSearch);
+    connect(cheatsAction_, &QAction::changed, this, [this] {
+        const bool enabled=cheatsAction_->isEnabled();
+        cheatSearchAction_->setEnabled(enabled);
+        if (!enabled && cheatSearchDialog_) cheatSearchDialog_->close();
+    });
     QMenu* settingsMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Настройки")));
     QAction* emulatorSettingsAction = settingsMenu->addAction(Localization::text(QStringLiteral("Настройки эмулятора…")));
     emulatorSettingsAction->setObjectName(QStringLiteral("emulatorSettingsAction"));
@@ -1012,12 +1052,18 @@ void MainWindow::buildMenus() {
     QMenu* helpMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Справка")));
     QAction* aboutAction = helpMenu->addAction(Localization::text(QStringLiteral("О программе")));
     connect(aboutAction, &QAction::triggered, this, [this] {
-        QMessageBox::about(this, Localization::text(QStringLiteral("О Kega Refusion")),
+        QMessageBox about(QMessageBox::Information, Localization::text(QStringLiteral("О Kega Refusion")),
             Localization::text(QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
             "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
-            "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.<br>"
-            "Состояния сохраняются в выбранный слот от 0 до 9.<br>"
-            "Клавиатуру и геймпады можно настроить в разделе «Управление».")));
+            "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.")) +
+            QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Авторы:")) +
+            QStringLiteral("<br>vova791 — Салата Владимир<br>Codex ChatGPT"), QMessageBox::Ok, this);
+        about.setObjectName(QStringLiteral("aboutDialog"));
+        about.setIconPixmap(windowIcon().pixmap(64,64));
+        about.setTextFormat(Qt::RichText);
+        about.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                             Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
+        about.exec();
     });
 }
 
@@ -1818,10 +1864,11 @@ void MainWindow::editSettings(int initialPage) {
         const auto refreshCdBios = [this, cdStatusLabels] {
             for (int region = 1; region <= 3; ++region) {
                 QString error;
-                const bool installed = SegaCdBios::validate(dataPath_, region, error);
+                const QString path = SegaCdBios::resolve(dataPath_, region, error);
+                const bool installed = !path.isEmpty();
                 cdStatusLabels[region - 1]->setText(installed ? Localization::text(QStringLiteral("Установлен"))
                                                             : Localization::text(QStringLiteral("Не готов")));
-                cdStatusLabels[region - 1]->setToolTip(error);
+                cdStatusLabels[region - 1]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
             }
         };
         auto* cdActions = new QHBoxLayout;
@@ -1866,11 +1913,10 @@ void MainWindow::editSettings(int initialPage) {
             x32Form->addRow(labels[i] + QLatin1Char(':'), status);
         }
         const auto refresh32xBios = [this, pieces, x32StatusLabels] {
-            const QDir biosDirectory(QDir(dataPath_).filePath(QStringLiteral("bios")));
             for (int i = 0; i < 3; ++i) {
-                const QString path = biosDirectory.filePath(Sega32xBios::fileName(pieces[i]));
                 QString error;
-                const bool installed = Sega32xBios::validateFile(path, pieces[i], error);
+                const QString path = Sega32xBios::resolve(dataPath_, pieces[i], error);
+                const bool installed = !path.isEmpty();
                 x32StatusLabels[i]->setText(installed ? Localization::text(QStringLiteral("Установлен"))
                                                    : Localization::text(QStringLiteral("Не готов")));
                 x32StatusLabels[i]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
@@ -2316,6 +2362,9 @@ void MainWindow::updateMovieActions() {
                                                 !moviePending_ && !achievementsHardcore_);
     if (saveAction_) saveAction_->setEnabled(game && !moviePending_);
     if (loadAction_) loadAction_->setEnabled(game && !moviePending_ && !achievementsHardcore_);
+    const bool namedStateAvailable = game && !moviePending_ && !session_.networkClient();
+    if (saveFileAction_) saveFileAction_->setEnabled(namedStateAvailable);
+    if (loadFileAction_) loadFileAction_->setEnabled(namedStateAvailable && !achievementsHardcore_);
     if (rewindAction_) rewindAction_->setEnabled(game && rewindEnabled_ &&
                                                 !moviePending_ && !achievementsHardcore_);
     if (changeDiscAction_) changeDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_);
@@ -2486,6 +2535,16 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    // Apply before the first native show, including Qt-created message/file
+    // dialogs. MainWindow and the modeless lobby keep their own window flags.
+    if (event->type() == QEvent::Polish) {
+        if (auto* dialog = qobject_cast<QDialog*>(watched)) {
+            auto flags = dialog->windowFlags();
+            flags &= ~(Qt::WindowMinMaxButtonsHint | Qt::WindowContextHelpButtonHint);
+            flags |= Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint;
+            if (flags != dialog->windowFlags()) dialog->setWindowFlags(flags);
+        }
+    }
     if (watched == this && event->type() == QEvent::WindowBlocked) {
         if (!netplay_->active()) session_.setBackgroundPaused(true);
         releaseInput();

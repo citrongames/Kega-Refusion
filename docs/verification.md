@@ -247,3 +247,13 @@ The overlay now contains only one-decimal numbers: emulation `59.9`, game estima
 - Discovery is only started on lobby creation or explicit Retry. Cancel/leave
   invalidates old requests; fixed request/body/datagram limits prevent a slow
   or noisy discovery path from blocking the GUI or growing queues indefinitely.
+
+
+## 0.20.1 — BIOS names, chosen save files, cheat editor and dialog cleanup
+
+- Linux `bios_resolution_tests` passed: content-based discovery with arbitrary names/extensions, invalid canonical fallback, deterministic preference, metadata change/deletion handling, and no duplicate imports. Generated CD fixtures and isolated copies of locally provided 32X BIOS were used; no BIOS bytes are included in the repository.
+- Linux real-core `bios_host_tests` passed: Sega CD and attached 32X load and power reset, unchanged recording fingerprints after rename, quick states saved before rename successfully loaded afterward, and no canonical BIOS copies created.
+- Linux `core_integration_tests --state-files` passed: chosen `.krs` uses the normal envelope, restores video and working audio, classifies missing files and rejects a different ROM. Like ordinary slots, disk saves do not promise byte-exact immediate PCM because the core resets resampler history. The initial stricter PCM comparison was corrected to the existing state contract.
+- Offscreen `cheat_ui_tests` passed: enabled-first stable display, disable all, clear all, preserved patch order and default-size controls. Existing search reply checks in that target also passed; unrelated suites were not rerun.
+- Source review confirms explicit paths stay local and host-only during netplay, remote command parsing cannot introduce them, successful host loads use shared snapshot synchronization, recording saves retain the existing prefix/provenance format, and Hardcore still blocks loading.
+- Linux and Windows application/core builds succeeded. About text/authorship and close-only dialog flags were checked in source; no Windows desktop control or interactive Windows testing was performed.

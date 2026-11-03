@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDialogButtonBox>
 #include <QPixmap>
 #include <QPushButton>
 #include <QTableWidget>
@@ -29,8 +30,8 @@ int main(int argc, char** argv) {
         Localization::initialize(QDir::currentPath(), QDir::tempPath());
 
         const CheatList entries{
-            {QStringLiteral("FF0000:0001+FF0001:0002"), QStringLiteral("Lives and score"), true},
-            {QStringLiteral("FF0002:0003"), QStringLiteral("Disabled bonus"), false}};
+            {QStringLiteral("FF0000:0001+FF0001:0002"), QStringLiteral("Lives and score"), false},
+            {QStringLiteral("FF0002:0003"), QStringLiteral("Bonus"), true}};
         CheatsDialog editor(entries, Cheats::Platform::MegaDrive,
                             QStringLiteral("Sonic the Hedgehog"));
         editor.show();
@@ -45,6 +46,25 @@ int main(int argc, char** argv) {
                 importButton->geometry().right() <= editor.width(),
                 "CHT actions overflow the default dialog width");
         preview(editor, QDir(directory).filePath(QStringLiteral("cheats-dialog.png")));
+        require(cheatTable->item(0,1)->text()==entries[1].code,"enabled cheat did not move above disabled");
+        auto* disableAll=editor.findChild<QPushButton*>(QStringLiteral("disableAllCheatsButton"));
+        auto* clearAll=editor.findChild<QPushButton*>(QStringLiteral("clearAllCheatsButton"));
+        require(disableAll && clearAll && disableAll->isVisible() && clearAll->isVisible(),"bulk actions missing");
+        cheatTable->item(1,0)->setCheckState(Qt::Checked);
+        QApplication::processEvents();
+        require(cheatTable->item(0,1)->text()==entries[0].code,"checkbox reordering lost stable row identity");
+        disableAll->click();
+        require(!disableAll->isEnabled() && cheatTable->rowCount()==2,"disable all removed rows or stayed enabled");
+        for(int row=0;row<2;++row) require(cheatTable->item(row,0)->checkState()==Qt::Unchecked,"disable all missed a row");
+        editor.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+        require(editor.cheats().size()==2 && editor.cheats()[0].code==entries[0].code &&
+            editor.cheats()[1].code==entries[1].code && !editor.cheats()[0].enabled &&
+            !editor.cheats()[1].enabled,"display order changed patch priority or disabled state");
+        CheatsDialog cleared(entries,Cheats::Platform::MegaDrive,QStringLiteral("Clear fixture"));
+        cleared.findChild<QPushButton*>(QStringLiteral("clearAllCheatsButton"))->click();
+        cleared.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+        require(cleared.cheats().isEmpty(),"clear list did not remove all enabled and disabled codes");
+
 
         CheatSearchDialog search;
         quint64 requestId = 0;

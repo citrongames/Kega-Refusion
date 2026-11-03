@@ -303,13 +303,13 @@
 +static bool kegarefusion_read_32x_bios(const char *dir, const char *name, uint8_t *data, size_t length)
 +{
 +   char path[1024];
-+   FILE *file;
++   RFILE *file;
 +   bool okay;
 +   fill_pathname_join(path, dir, name, sizeof(path));
-+   file = fopen(path, "rb");
++   file = filestream_open(path, RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE);
 +   if (!file) return false;
-+   okay = fread(data, 1, length, file) == length && fgetc(file) == EOF && !ferror(file);
-+   fclose(file);
++   okay = filestream_get_size(file) == (int64_t)length && filestream_read(file, data, length) == (int64_t)length;
++   filestream_close(file);
 +   return okay;
 +}
 +static bool kegarefusion_load_32x(const char *dir, const char *extension)

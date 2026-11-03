@@ -15,11 +15,19 @@
 #include <QStringList>
 #include <QStyledItemDelegate>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <utility>
 
 namespace {
+class EnabledItem final : public QTableWidgetItem {
+public:
+    bool operator<(const QTableWidgetItem& other) const override {
+        if (checkState() != other.checkState()) return checkState() > other.checkState();
+        return data(Qt::UserRole).toULongLong() < other.data(Qt::UserRole).toULongLong();
+    }
+};
 class CheatDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
@@ -63,8 +71,14 @@ CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, 
     layout->addLayout(actions);
     auto* capacity = new QLabel(Localization::text(QStringLiteral("До %1 записей · %2 активных кодов"))
         .arg(Cheats::MaxEntries).arg(Cheats::MaxCodes),this);
-    capacity->setAlignment(Qt::AlignRight);
-    layout->addWidget(capacity);
+    auto* bulkActions = new QHBoxLayout;
+    disableAll_ = new QPushButton(Localization::text(QStringLiteral("Выключить всё")),this);
+    disableAll_->setObjectName(QStringLiteral("disableAllCheatsButton"));
+    clearAll_ = new QPushButton(Localization::text(QStringLiteral("Очистить список")),this);
+    clearAll_->setObjectName(QStringLiteral("clearAllCheatsButton"));
+    bulkActions->addWidget(disableAll_); bulkActions->addWidget(clearAll_);
+    bulkActions->addStretch(); bulkActions->addWidget(capacity);
+    layout->addLayout(bulkActions);
     feedback_ = new QLabel(this);
     feedback_->setWordWrap(true);
     feedback_->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -79,8 +93,9 @@ CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, 
     for (int row = 0; row < entries.size(); ++row) setRow(row, entries[row]);
     connect(add_,&QPushButton::clicked,this,[this] {
         if (table_->rowCount() >= Cheats::MaxEntries) return;
-        addRow({}); table_->setCurrentCell(table_->rowCount()-1,1);
-        table_->editItem(table_->item(table_->rowCount()-1,1)); updateButtons();
+        addRow({}); auto* code = table_->item(table_->rowCount()-1,1);
+        sortRows(); table_->setCurrentItem(code);
+        table_->editItem(code); updateButtons();
     });
     connect(remove_,&QPushButton::clicked,this,[this] {
         auto rows = table_->selectionModel()->selectedRows();
@@ -88,30 +103,60 @@ CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, 
         for (const auto& index : rows) table_->removeRow(index.row());
         setFeedback({}); updateButtons();
     });
+    connect(disableAll_,&QPushButton::clicked,this,[this] {
+        const QSignalBlocker blocker(table_);
+        table_->setUpdatesEnabled(false);
+        for (int row=0; row<table_->rowCount(); ++row)
+            table_->item(row,0)->setCheckState(Qt::Unchecked);
+        sortRows(); table_->setUpdatesEnabled(true);
+        setFeedback({}); updateButtons();
+    });
+    connect(clearAll_,&QPushButton::clicked,this,[this] {
+        const QSignalBlocker blocker(table_);
+        table_->setRowCount(0);
+        setFeedback({}); updateButtons();
+    });
     connect(import_, &QPushButton::clicked, this, &CheatsDialog::importCht);
     connect(export_, &QPushButton::clicked, this, &CheatsDialog::exportCht);
     connect(table_,&QTableWidget::itemSelectionChanged,this,&CheatsDialog::updateButtons);
-    connect(table_,&QTableWidget::itemChanged,this,[this] { setFeedback({}); });
+    connect(table_,&QTableWidget::itemChanged,this,[this](QTableWidgetItem* item) {
+        setFeedback({});
+        if (item->column()==0 && !sortPending_) {
+            sortPending_=true;
+            // Reorder after the checkbox event completes, preserving the selected item.
+            QTimer::singleShot(0,this,[this] { sortPending_=false; sortRows(); updateButtons(); });
+        }
+    });
     connect(buttons,&QDialogButtonBox::accepted,this,&CheatsDialog::save);
     connect(buttons,&QDialogButtonBox::rejected,this,&QDialog::reject);
-    updateButtons();
+    sortRows(); updateButtons();
 }
 void CheatsDialog::addRow(const CheatEntry& entry) {
+    const QSignalBlocker blocker(table_);
     const int row = table_->rowCount();
     table_->insertRow(row);
     setRow(row, entry);
 }
 void CheatsDialog::setRow(int row, const CheatEntry& entry) {
-    auto* enabled = new QTableWidgetItem;
+    auto* enabled = new EnabledItem;
+    enabled->setData(Qt::UserRole,QVariant::fromValue(nextRowOrder_++));
     enabled->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
     enabled->setCheckState(entry.enabled ? Qt::Checked : Qt::Unchecked);
     table_->setItem(row, 0, enabled);
     table_->setItem(row, 1, new QTableWidgetItem(entry.code));
     table_->setItem(row, 2, new QTableWidgetItem(entry.description));
 }
+void CheatsDialog::sortRows() {
+    table_->sortItems(0,Qt::AscendingOrder);
+}
 void CheatsDialog::updateButtons() {
     add_->setEnabled(table_->rowCount() < Cheats::MaxEntries);
     remove_->setEnabled(!table_->selectionModel()->selectedRows().isEmpty());
+    clearAll_->setEnabled(table_->rowCount()>0);
+    bool anyEnabled=false;
+    for (int row=0; row<table_->rowCount() && !anyEnabled; ++row)
+        anyEnabled=table_->item(row,0)->checkState()==Qt::Checked;
+    disableAll_->setEnabled(anyEnabled);
 }
 void CheatsDialog::setFeedback(const QString& text, bool error) {
     feedback_->setText(text);
@@ -167,7 +212,7 @@ void CheatsDialog::importCht() {
             setRow(first + index, fresh[index]);
         table_->setUpdatesEnabled(true);
     }
-    updateButtons();
+    sortRows(); updateButtons();
     QString summary = Localization::text(QStringLiteral("Импортировано: %1; пропущено: %2."))
         .arg(fresh.size()).arg(imported.skipped + duplicates);
     if (duplicates)
@@ -186,14 +231,24 @@ bool CheatsDialog::collectValidated(CheatList& normalized) {
     table_->setCurrentItem(nullptr); // Commit an active cell editor before collecting its text.
     CheatList entries;
     entries.reserve(table_->rowCount());
-    for (int row = 0; row < table_->rowCount(); ++row)
-        entries.append({table_->item(row, 1)->text(), table_->item(row, 2)->text(),
-                        table_->item(row, 0)->checkState() == Qt::Checked});
+    for (int row=0; row<table_->rowCount(); ++row)
+        entries.append({table_->item(row,1)->text(),table_->item(row,2)->text(),
+                        table_->item(row,0)->checkState()==Qt::Checked});
+    CheatList visible;
     QString error;
-    if (!Cheats::normalize(entries, platform_, normalized, error)) {
-        setFeedback(error, true);
-        return false;
+    if (!Cheats::normalize(entries,platform_,visible,error)) {
+        setFeedback(error,true); return false;
     }
+    // Validate in displayed order so row errors identify the visible row, but
+    // preserve native patch priority and avoid rewriting merely on opening.
+    QList<int> rows;
+    for (int row=0; row<table_->rowCount(); ++row) rows.append(row);
+    std::sort(rows.begin(),rows.end(),[this](int a,int b) {
+        return table_->item(a,0)->data(Qt::UserRole).toULongLong() <
+               table_->item(b,0)->data(Qt::UserRole).toULongLong();
+    });
+    normalized.clear(); normalized.reserve(visible.size());
+    for (int row : rows) normalized.append(visible[row]);
     return true;
 }
 void CheatsDialog::exportCht() {

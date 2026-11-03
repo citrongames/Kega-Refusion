@@ -4,7 +4,13 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <array>
+#include <algorithm>
+#include <utility>
 
 namespace {
 struct Image {
@@ -59,6 +65,44 @@ void append(QString& error,const QString& detail) {
     if (!error.isEmpty()) error+=QLatin1Char('\n');
     error+=detail;
 }
+struct Recognition {
+    qint64 size;
+    QDateTime modified;
+    QDateTime metadataChanged;
+    QDateTime created;
+    const Image* image;
+};
+
+// Metadata-bound cache; no BIOS bytes retained after recognition.
+QMutex recognitionMutex;
+QHash<QString, Recognition> recognitionCache;
+constexpr int recognitionCacheLimit=256;
+
+const Image* recognizeFile(const QFileInfo& info) {
+    if (!info.isFile() || !info.isReadable() ||
+        (info.size()!=256 && info.size()!=1024 && info.size()!=2048)) return nullptr;
+    const QString path=info.absoluteFilePath();
+    {
+        QMutexLocker lock(&recognitionMutex);
+        const auto cached=recognitionCache.constFind(path);
+        if (cached!=recognitionCache.cend() && cached->size==info.size() &&
+            cached->modified==info.lastModified() &&
+            cached->metadataChanged==info.metadataChangeTime() &&
+            cached->created==info.birthTime())
+            return cached->image;
+    }
+    QByteArray bytes;
+    QString error;
+    if (!readImage(path,info.size(),bytes,error)) return nullptr;
+    const Image* image=identify(bytes);
+    {
+        QMutexLocker lock(&recognitionMutex);
+        if (recognitionCache.size()>=recognitionCacheLimit) recognitionCache.clear();
+        recognitionCache.insert(path,{info.size(),info.lastModified(),info.metadataChangeTime(),
+                                      info.birthTime(),image});
+    }
+    return image;
+}
 }
 QString Sega32xBios::fileName(Piece piece) {
     const auto* image=imageFor(piece);
@@ -77,11 +121,38 @@ bool Sega32xBios::validateFile(const QString& path,Piece piece,QString& error) {
     }
     return true;
 }
+QString Sega32xBios::resolve(const QString& dataPath,Piece piece,QString& error) {
+    error.clear();
+    const Image* expected=imageFor(piece);
+    if (!expected) {
+        error=Localization::text(QStringLiteral("Неизвестная часть BIOS 32X."));
+        return {};
+    }
+    const QString canonical=pathFor(dataPath,*expected);
+    const QFileInfo canonicalInfo(canonical);
+    if (canonicalInfo.exists() && recognizeFile(canonicalInfo)==expected) return canonical;
+    QDir directory(QDir(dataPath).filePath(QStringLiteral("bios")));
+    auto entries=directory.entryInfoList(QDir::Files|QDir::Readable|QDir::NoDotAndDotDot,QDir::NoSort);
+    std::sort(entries.begin(),entries.end(),[](const QFileInfo& a,const QFileInfo& b) {
+        return a.fileName()<b.fileName();
+    });
+    for (const QFileInfo& info:std::as_const(entries)) {
+        if (info.absoluteFilePath()==canonical || info.size()!=expected->size) continue;
+        if (recognizeFile(info)==expected) return info.absoluteFilePath();
+    }
+    if (canonicalInfo.exists()) {
+        error=Localization::text(QStringLiteral("BIOS %1 не распознан: контрольная сумма не соответствует поддерживаемому образу %2."))
+                  .arg(canonical,QString::fromLatin1(expected->label));
+    } else {
+        error=Localization::text(QStringLiteral("Не найден BIOS 32X: %1.")).arg(canonical);
+    }
+    return {};
+}
 bool Sega32xBios::validate(const QString& dataPath,QString& error) {
     error.clear();
     for (const auto& image:images) {
         QString detail;
-        if (!validateFile(pathFor(dataPath,image),image.piece,detail)) append(error,detail);
+        if (resolve(dataPath,image.piece,detail).isEmpty()) append(error,detail);
     }
     return error.isEmpty();
 }
@@ -114,11 +185,11 @@ QStringList Sega32xBios::importDirectory(const QString& sourceDirectory,const QS
         found=true;
         const auto& image=images[i];
         const QString destination=pathFor(dataPath,image);
+        QString detail;
+        if (!resolve(dataPath,image.piece,detail).isEmpty()) continue;
         const QFileInfo existing(destination);
         if (existing.exists() || existing.isSymLink()) {
-            QString detail;
-            if (!validateFile(destination,image.piece,detail))
-                append(error,Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1")).arg(detail));
+            append(error,Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1")).arg(detail));
             continue;
         }
         if (!QDir().mkpath(QFileInfo(destination).absolutePath())) {
