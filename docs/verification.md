@@ -328,3 +328,8 @@ Both platforms now use checksum-pinned FFmpeg 7.1.2 with PNG/AAC encoders and MO
 - Linux `video_recording_tests` passed once against minimal FFmpeg: exact RGB round trip, AAC sound, PAL input-recording export, raw pixels despite Blargg, live stepping and cancellation. Windows `--encode-only` generated 65 RGB frames plus AAC; external FFmpeg decoding confirmed every pixel and a non-silent audio track. No desktop or interactive Windows gameplay automation.
 - Both Release application builds passed. Packaged Windows files match staging byte-for-byte, with no leftover root DLLs. Linux app and both cores retain identical allocated sections after package stripping; isolated offscreen archive startup exited 0. Archive excludes Qt multimedia plugins, full FFmpeg and QtQuick. Packaging dependency parsing now handles spaces in source paths.
 - Compatibility answer derives from Qt 6.10 requirements and renderer code: Windows 10 1809+ x64/Windows 11, desktop OpenGL 2.1 (WGL on Windows, Qt X11/Wayland on Linux). No specific GPU minimum or Windows 10 runtime test is claimed. Linux package is built against glibc 2.43.
+
+
+## Settings master volume — 2026-11-03
+
+Added a 0–100% master-volume slider to Settings / Sound with a numeric percentage. It mirrors the existing menu slider bidirectionally, reusing immediate output/OSD updates and the existing 400 ms coalesced, changed-only preference save. Connections belong to the dialog widgets and are removed when it closes. Existing Russian/English Volume label is reused. Windows and Linux Release builds passed; Windows deployment matches staging. This small UI-only change was checked by code review/build, without repeating audio or core suites.

@@ -1872,6 +1872,22 @@ void MainWindow::editSettings(int initialPage) {
 
     auto* sound = addPage(Localization::text(QStringLiteral("Звук")),
         Localization::text(QStringLiteral("Устройство воспроизведения звука игры.")));
+    auto* settingsVolume = new QSlider(Qt::Horizontal, &dialog);
+    settingsVolume->setObjectName(QStringLiteral("settingsMasterVolumeSlider"));
+    settingsVolume->setRange(volumeSlider_->minimum(), volumeSlider_->maximum());
+    settingsVolume->setValue(volumeSlider_->value());
+    auto* volumeValue = new QLabel(QStringLiteral("%1%").arg(settingsVolume->value()), &dialog);
+    volumeValue->setMinimumWidth(volumeValue->fontMetrics().horizontalAdvance(QStringLiteral("100%")));
+    auto* settingsVolumeRow = new QHBoxLayout;
+    settingsVolumeRow->addWidget(settingsVolume, 1);
+    settingsVolumeRow->addWidget(volumeValue);
+    sound->addRow(Localization::text(QStringLiteral("Громкость")), settingsVolumeRow);
+    // Share the menu's update/persistence path, including its coalesced writes.
+    connect(settingsVolume, &QSlider::valueChanged, volumeSlider_, &QSlider::setValue);
+    connect(volumeSlider_, &QSlider::valueChanged, settingsVolume, &QSlider::setValue);
+    connect(settingsVolume, &QSlider::valueChanged, volumeValue, [volumeValue](int value) {
+        volumeValue->setText(QStringLiteral("%1%").arg(value));
+    });
     auto* outputDevice = new QComboBox(&dialog);
     outputDevice->setObjectName(QStringLiteral("audioOutputDevice"));
     outputDevice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
