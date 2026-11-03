@@ -16,7 +16,7 @@ An unsupported archive codec never falls back to an external command.
 ## Limits
 
 Both listing and extraction validate every entry, including non-ROM data.
-Streaming limits are 512 MiB for the outer file, 32 MiB per member, 128 MiB for
+Streaming limits are 512 MiB for the outer file, 128 MiB per member, 128 MiB for
 all decoded data and 4096 headers. Thus a solid 7z stream or a large ignored file
 cannot bypass the decoded-data budget. Listing/extraction are synchronous and
 may decode a solid archive more than once.

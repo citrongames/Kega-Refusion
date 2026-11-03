@@ -126,11 +126,24 @@ int main(int argc, char** argv) {
         rejected(save(temp.path() + "/empty-rom" + suffix, pack(sevenZip, {{"empty.md", {}}})));
         rejected(save(temp.path() + "/oversized" + suffix,
             pack(sevenZip, {{"large.md", QByteArray(64 * 1024, '\0'), RomArchive::MaxMemberSize + 1}})));
+        // The writer repeats this small block; do not allocate a full-size
+        // expected ROM just to verify the largest supported cartridge.
+        const QByteArray largeBlock(64 * 1024, 'R');
+        const QString largePath = save(temp.path() + "/max-rom" + suffix,
+            pack(sevenZip, {{"large.32x", largeBlock, CartridgeLimits::MaxRomSize}}));
+        const auto largeEntries = RomArchive::list(largePath, &error);
+        check(largeEntries.size() == 1 && error.isEmpty() &&
+              largeEntries[0].size == CartridgeLimits::MaxRomSize,
+              "list 128 MiB cartridge");
+        const auto largeRom = RomArchive::extract(largePath, largeEntries[0], &error);
+        check(largeRom.size() == CartridgeLimits::MaxRomSize && error.isEmpty() &&
+              largeRom.startsWith(largeBlock) && largeRom.endsWith(largeBlock),
+              "extract 128 MiB cartridge without truncation");
         QVector<Fixture> recognized;
-        for (const auto* extension : {"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k"})
+        for (const auto* extension : {"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k", "32x"})
             recognized.append({QByteArray("game.") + extension, payload});
         check(RomArchive::list(save(temp.path() + "/extensions" + suffix,
-              pack(sevenZip, recognized)), &error).size() == 8, "all cartridge extensions");
+              pack(sevenZip, recognized)), &error).size() == 9, "all cartridge extensions");
     }
     rejected(save(temp.path() + "/encrypted.zip", pack(false, {{"game.md", payload}}, true)));
     auto crcBad = pack(false, {{"game.md", payload}}, false, true);

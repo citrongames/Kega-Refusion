@@ -1,4 +1,5 @@
 #pragma once
+#include "CartridgeLimits.h"
 #include <QByteArray>
 #include <QString>
 #include <QVector>
@@ -13,7 +14,7 @@ public:
     };
 
     static constexpr qint64 MaxArchiveSize = 512LL * 1024 * 1024;
-    static constexpr qint64 MaxMemberSize = 32LL * 1024 * 1024;
+    static constexpr qint64 MaxMemberSize = CartridgeLimits::MaxRomSize;
     static constexpr qint64 MaxDecodedSize = 128LL * 1024 * 1024;
     static constexpr int MaxEntries = 4096;
 

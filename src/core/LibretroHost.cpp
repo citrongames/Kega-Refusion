@@ -6,6 +6,7 @@
 #include <rc_hash.h>
 #include <rc_consoles.h>
 #include "RomArchive.h"
+#include "CartridgeLimits.h"
 #include "VideoFrameGeometry.h"
 #include "SegaCdBios.h"
 #include "Sega32xBios.h"
@@ -461,15 +462,17 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     } else {
         QFile file(info.absoluteFilePath());
         if (!file.open(QIODevice::ReadOnly)) { error = Localization::text(QStringLiteral("Не удалось открыть игру: %1")).arg(file.errorString()); return false; }
-        if (file.size() < 512 || file.size() > 32 * 1024 * 1024) {
-            error = Localization::text(QStringLiteral("Некорректный размер ROM (ожидается от 512 байт до 32 МиБ).")); return false;
+        const qint64 fileSize = file.size();
+        if (fileSize < 512 || fileSize > CartridgeLimits::MaxRomSize) {
+            error = Localization::text(QStringLiteral("Некорректный размер ROM (ожидается от 512 байт до 128 МиБ).")); return false;
         }
-        content = file.readAll();
-        if (content.size() != file.size()) { error = Localization::text(QStringLiteral("ROM прочитан не полностью.")); return false; }
+        // Bound the read even if another process grows the file after sizing.
+        content = file.read(fileSize + 1);
+        if (content.size() != fileSize || file.size() != fileSize) { error = Localization::text(QStringLiteral("ROM прочитан не полностью.")); return false; }
     }
     const auto ext = QFileInfo(name).suffix().toLower();
     const QStringList supported{"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k", "32x"};
-    if (!supported.contains(ext) || content.size() < 512 || content.size() > 32 * 1024 * 1024) {
+    if (!supported.contains(ext) || content.size() < 512 || content.size() > CartridgeLimits::MaxRomSize) {
         error = Localization::text(QStringLiteral("Неподдерживаемый картридж или неверный размер ROM.")); return false;
     }
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
@@ -875,8 +878,11 @@ void LibretroHost::prepareCoreContent() {
     // MD header in the detected byte order authorizes the two-byte patch.
     if (!segaHeader(normalized) || (normalized.size() & 1)) return;
     quint16 checksum = 0;
+    // Read through the const buffer: non-const QByteArray indexing detaches
+    // the shared ROM and needlessly copies up to 128 MiB just to sum bytes.
+    const auto* checksumBytes = reinterpret_cast<const quint8*>(normalized.constData());
     for (qsizetype i = 0x200; i < normalized.size(); i += 2)
-        checksum = quint16(checksum + (quint16(quint8(normalized[i])) << 8) + quint8(normalized[i+1]));
+        checksum = quint16(checksum + (quint16(checksumBytes[i]) << 8) + checksumBytes[i+1]);
     // Identification belongs to the core: a valid but nonstandard header checksum
     // can select cartridge protection, banking or backup hardware. Older cores
     // without this query keep the original header rather than lose that identity.

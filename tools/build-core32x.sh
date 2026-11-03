@@ -53,8 +53,9 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-debug-audio.patch"
   "$root/tools/patches/genesis-plus-gx-multitap.patch"
   "$root/tools/patches/genesis-plus-gx-controller-devices.patch"
-  "$root/tools/patches/genesis-plus-gx-recording-video.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-recording-video.patch"
+  "$root/tools/patches/genesis-plus-gx-large-ssf.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -305,7 +306,7 @@ if (( sources_changed )); then rm -f "$checkout/genesis_plus_gx_libretro.$extens
 jobs=${KEGA_CORE_JOBS:-$(nproc)}
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'KEGA_CORE_JOBS must be a positive integer.' >&2; exit 2; }
 if (( jobs > 8 )); then jobs=8; fi
-make -s -C "$checkout" -f Makefile.libretro "${make_args[@]}" -j "$jobs" all
+make -s -C "$checkout" -f Makefile.libretro "${make_args[@]}" MAX_ROM_SIZE=134217728 -j "$jobs" all
 out="$root/build/core32x-$platform/core"
 mkdir -p "$out"
 if ! cmp -s "$checkout/genesis_plus_gx_libretro.$extension" "$out/genesis_plus_gx_libretro.$extension"; then

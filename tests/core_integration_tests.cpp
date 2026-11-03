@@ -1181,6 +1181,339 @@ void testAqMicrowire(const QString& corePath) {
     const auto ordinary=host.serialize();require(ordinary.mid(ordinary.size()-160,8)!="KRAQ93C!","Aq state leaked to next game");
 }
 
+// Original extended-SSF diagnostic at the exact 128 MiB cartridge limit.
+// A RAM-resident 68000 mailbox can remap all eight 512 KiB windows, including
+// bank zero, without fetching the diagnostic itself through a changed bank.
+QByteArray makeLargeSsfRom(bool withSram = false) {
+    constexpr int romSize = 128 * 1024 * 1024;
+    QByteArray rom(romSize, char(0xff));
+    rom.replace(0, 0x200, makeTestRom().left(0x200));
+    rom.replace(0x100, 16, "SEGA SSF        ");
+    putLong(rom, 0, 0x00fff000);
+    putLong(rom, 0x1a4, quint32(romSize - 1));
+    rom[0x18e] = rom[0x18f] = 0;
+    if (withSram) {
+        rom.replace(0x1b0, 2, "RA"); rom[0x1b2] = char(0xf8); rom[0x1b3] = char(0x20);
+        putLong(rom, 0x1b4, 0x200000); putLong(rom, 0x1b8, 0x20ffff);
+    }
+    // Every physical 64 KiB page has distinct data and executable code. The
+    // final data marker ends at byte 0x07FFFFFF, so truncation cannot pass.
+    for (quint32 page = 0; page < quint32(romSize); page += 0x10000) {
+        putLong(rom, int(page + 0x0800), 0x50000000u | page);
+        putLong(rom, int(page + 0xfffc), 0xa0000000u | page);
+        rom[int(page + 0x1000)] = char(0x20);
+        rom[int(page + 0x1001)] = char(0x3c); // MOVE.L #physical marker,D0
+        putLong(rom, int(page + 0x1002), 0xd0000000u | page);
+        rom[int(page + 0x1006)] = char(0x4e);
+        rom[int(page + 0x1007)] = char(0x75); // RTS
+    }
+
+    int pc = 0x600;
+    const auto word = [&](quint16 value) { rom[pc++] = char(value >> 8); rom[pc++] = char(value); };
+    const auto branch = [&](quint16 opcode) { word(opcode); const int at = pc; word(0); return at; };
+    const auto target = [&](int at, int to) {
+        const quint16 displacement = quint16(to - at);
+        rom[at] = char(displacement >> 8); rom[at + 1] = char(displacement);
+    };
+    const int idle = pc;
+    word(0x4a79); word(0xff); word(0); // TST.W pending count
+    const int wait = branch(0x6700); target(wait, idle);
+    word(0x3e39); word(0xff); word(0); // MOVE.W count,D7
+    word(0x4279); word(0xff); word(0); // consume count
+    word(0x41f9); word(0xff); word(0x100);  // records: op:u16,address:u32,value:u16
+    word(0x43f9); word(0xff); word(0x1000); // 32-bit results
+    const int next = pc;
+    word(0x3218); word(0x2458); word(0x3418);
+    word(0x0c41); word(1); const int toWrite = branch(0x6700);
+    word(0x0c41); word(2); const int toReadLong = branch(0x6700);
+    word(0x0c41); word(3); const int toReadByte = branch(0x6700);
+    word(0x0c41); word(4); const int toCall = branch(0x6700);
+    word(0x70ff); const int bad = branch(0x6000);
+    target(toWrite, pc); word(0x1482); word(0x7000); const int wrote = branch(0x6000); // MOVE.B D2,(A2)
+    target(toReadLong, pc); word(0x2012); const int readLong = branch(0x6000);
+    target(toReadByte, pc); word(0x7000); word(0x1012); const int readByte = branch(0x6000);
+    target(toCall, pc); word(0x4e92); // JSR (A2); page helper returns D0
+    const int record = pc;
+    for (const int at : {bad, wrote, readLong, readByte}) target(at, record);
+    word(0x22c0); word(0x5347); const int more = branch(0x6600); target(more, next);
+    word(0x33fc); word(0xc0de); word(0xff); word(2);
+    const int again = branch(0x6000); target(again, idle);
+    const int mailboxWords = (pc - 0x600) / 2;
+
+    // Bootstrap copies the mailbox to 0xFF8000 on every reset. The mapper
+    // resets before the CPU vectors are fetched, restoring this low ROM page.
+    pc = 0x200;
+    word(0x46fc); word(0x2700);
+    word(0x4279); word(0xff); word(0);
+    word(0x4279); word(0xff); word(2);
+    word(0x41f9); word(0); word(0x600);
+    word(0x43f9); word(0xff); word(0x8000);
+    word(0x3e3c); word(quint16(mailboxWords - 1));
+    const int copy = pc;
+    word(0x32d8); // MOVE.W (A0)+,(A1)+
+    const int repeat = branch(0x51cf); target(repeat, copy); // DBRA D7,copy
+    word(0x4ef9); word(0xff); word(0x8000);
+    require(pc < 0x600 && mailboxWords > 0 && mailboxWords < 0x100, "SSF bootstrap overlap");
+    return rom;
+}
+
+void testLargeSsfMapper(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "SSF mapper temp failed");
+    LibretroHost host(corePath, temp.path() + "/data"); QString error;
+    QLibrary inspect(corePath); require(inspect.load(), "SSF mapper core inspection failed");
+    using Memory = void* (*)(unsigned);
+    const auto memory = reinterpret_cast<Memory>(inspect.resolve("retro_get_memory_data"));
+    require(memory, "SSF mapper memory API missing");
+    const QString ordinaryPath = temp.filePath("ordinary.md");
+    writeFile(ordinaryPath, makeTestRom());
+    require(host.setAutoFixChecksum(false, error) && host.load(ordinaryPath, error), "SSF ordinary baseline load failed");
+    const auto ordinaryStateSize = host.serialize().size();
+    require(ordinaryStateSize > 0, "SSF ordinary state missing");
+    const QString path = temp.filePath("original-128m-ssf.md");
+    writeFile(path, makeLargeSsfRom());
+    require(QFile(path).size() == 128 * 1024 * 1024, "SSF fixture size is not 128 MiB");
+    require(host.load(path, error), "128 MiB SSF fixture load failed");
+    host.runFrame(false, false);
+
+    constexpr int swap = QSysInfo::ByteOrder == QSysInfo::LittleEndian ? 1 : 0;
+    unsigned char* ram = nullptr;
+    const auto refreshRam = [&]() {
+        ram = static_cast<unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+        require(ram, "SSF work RAM missing");
+    };
+    refreshRam();
+    const auto ramWord = [&](int at, unsigned value) {
+        ram[at ^ swap] = quint8(value >> 8); ram[(at + 1) ^ swap] = quint8(value);
+    };
+    struct Check { quint16 operation; quint32 address, expected; };
+    QByteArray script; std::vector<Check> checks;
+    const auto queue = [&](quint16 operation, quint32 address, quint16 value, quint32 expected) {
+        const int at = int(script.size()); script.resize(at + 8);
+        script[at] = char(operation >> 8); script[at + 1] = char(operation);
+        putLong(script, at + 2, address);
+        script[at + 6] = char(value >> 8); script[at + 7] = char(value);
+        checks.push_back({operation, address, expected});
+    };
+    const auto map = [&](unsigned window, unsigned bank) {
+        require(window < 8 && bank < 256, "SSF invalid test bank");
+        queue(1, 0xa130f1u + window * 2, quint16(bank), 0);
+    };
+    const auto window = [&](unsigned index, unsigned bank) {
+        for (quint32 page = 0; page < 8; ++page) {
+            const quint32 address = (index << 19) + (page << 16);
+            const quint32 physical = (bank << 19) + (page << 16);
+            queue(2, address + 0x0800, 0, 0x50000000u | physical);
+            queue(2, address + 0xfffc, 0, 0xa0000000u | physical);
+            queue(3, address + 0x0801, 0, (physical >> 16) & 0xff);
+            queue(4, address + 0x1000, 0, 0xd0000000u | physical);
+        }
+    };
+    const auto all = [&](const std::vector<unsigned>& banks) {
+        require(banks.size() == 8, "SSF invalid test mapping");
+        for (unsigned index = 0; index < 8; ++index) window(index, banks[index]);
+    };
+    const auto run = [&]() {
+        require(!script.isEmpty() && script.size() % 8 == 0 && script.size() < 0xe00,
+                "SSF mailbox script size invalid");
+        for (int i = 0; i < script.size(); ++i) ram[(0x100 + i) ^ swap] = quint8(script[i]);
+        ramWord(2, 0); ramWord(0, unsigned(checks.size()));
+        host.runFrame(false, false);
+        require(ram[0 ^ swap] == 0 && ram[1 ^ swap] == 0 &&
+                ram[2 ^ swap] == 0xc0 && ram[3 ^ swap] == 0xde, "SSF mailbox did not finish");
+        for (size_t i = 0; i < checks.size(); ++i) {
+            quint32 observed = 0;
+            for (int b = 0; b < 4; ++b) observed = (observed << 8) | ram[(0x1000 + int(i) * 4 + b) ^ swap];
+            const auto& check = checks[i];
+            const auto detail = QStringLiteral("SSF op%1 at%2 expected%3 got%4")
+                .arg(check.operation).arg(check.address, 6, 16, QLatin1Char('0'))
+                .arg(check.expected, 8, 16, QLatin1Char('0')).arg(observed, 8, 16, QLatin1Char('0')).toLocal8Bit();
+            require(observed == check.expected, detail.constData());
+        }
+        script.clear(); checks.clear();
+    };
+    const std::vector<unsigned> initial{0, 1, 2, 3, 4, 5, 6, 7};
+    // Cover the former 32 MiB boundary, the high bit of the 512 KiB bank
+    // selector, and both last banks in the requested 0x300000/0x380000 windows.
+    const std::vector<unsigned> high{0x40, 0x41, 0x7f, 0x80, 0xc0, 0xfd, 0xfe, 0xff};
+    all(initial); run();
+    for (unsigned index = 0; index < 8; ++index) map(index, high[index]);
+    all(high); run();
+    const auto active = host.serialize();
+    require(active.size() == ordinaryStateSize, "SSF cartridge enlarged the fixed native state");
+    for (unsigned index = 0; index < 8; ++index) map(index, 7 - index);
+    for (unsigned index = 0; index < 8; ++index) window(index, 7 - index);
+    run();
+    require(host.unserialize(active), "SSF high-bank state restore failed");
+    refreshRam(); all(high); run(); // No mapper writes: all 64 page bases must restore.
+    host.reset(); host.runFrame(false, false); refreshRam(); all(initial); run();
+    require(host.unserialize(active), "SSF high-bank restore after soft reset failed");
+    refreshRam(); all(high); run();
+    require(host.hardReset(error), "SSF mapper power reset failed");
+    host.runFrame(false, false); refreshRam(); all(initial); run();
+    require(host.unserialize(active), "SSF high-bank restore after power reset failed");
+    refreshRam(); all(high); run();
+    require(host.load(ordinaryPath, error), "SSF ordinary reload failed");
+    require(host.serialize().size() == ordinaryStateSize, "SSF native state size leaked to ordinary cartridge");
+}
+
+// This direct-core stage deliberately uses original inert BIOS fixtures. The
+// adapter and SH2 remain reset, so no BIOS program is executed. Calling the
+// core directly keeps the application's genuine-BIOS recognition intact.
+QByteArray largeSsfSystemDirectory;
+bool largeSsfEnvironment(unsigned command, void* data) {
+    switch (command) {
+    case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
+    case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
+        *static_cast<const char**>(data) = largeSsfSystemDirectory.constData(); return true;
+    case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
+        *static_cast<bool*>(data) = false; return true;
+    case RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION:
+        *static_cast<unsigned*>(data) = 0; return true;
+    case RETRO_ENVIRONMENT_GET_CAN_DUPE:
+        *static_cast<bool*>(data) = true; return true;
+    case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
+    case RETRO_ENVIRONMENT_SET_VARIABLES:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void testLargeSsf32xMapper(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "32X SSF mapper temp failed");
+    largeSsfSystemDirectory = QFile::encodeName(temp.path());
+    writeFile(temp.filePath("32X_G_BIOS.BIN"), QByteArray(256, char(0)));
+    writeFile(temp.filePath("32X_M_BIOS.BIN"), QByteArray(2048, char(0)));
+    writeFile(temp.filePath("32X_S_BIOS.BIN"), QByteArray(1024, char(0)));
+    QString path = temp.filePath("original-128m-ssf.32x");
+    writeFile(path, makeLargeSsfRom(true));
+    QLibrary inspect(corePath); require(inspect.load(), "32X SSF core inspection failed");
+    const auto init = reinterpret_cast<decltype(&retro_init)>(inspect.resolve("retro_init"));
+    const auto deinit = reinterpret_cast<decltype(&retro_deinit)>(inspect.resolve("retro_deinit"));
+    const auto load = reinterpret_cast<decltype(&retro_load_game)>(inspect.resolve("retro_load_game"));
+    const auto unload = reinterpret_cast<decltype(&retro_unload_game)>(inspect.resolve("retro_unload_game"));
+    const auto step = reinterpret_cast<decltype(&retro_run)>(inspect.resolve("retro_run"));
+    const auto reset = reinterpret_cast<decltype(&retro_reset)>(inspect.resolve("retro_reset"));
+    const auto memory = reinterpret_cast<decltype(&retro_get_memory_data)>(inspect.resolve("retro_get_memory_data"));
+    const auto stateSize = reinterpret_cast<decltype(&retro_serialize_size)>(inspect.resolve("retro_serialize_size"));
+    const auto save = reinterpret_cast<decltype(&retro_serialize)>(inspect.resolve("retro_serialize"));
+    const auto restore = reinterpret_cast<decltype(&retro_unserialize)>(inspect.resolve("retro_unserialize"));
+    using Features = unsigned (*)();
+    const auto features = reinterpret_cast<Features>(inspect.resolve("retro_kegarefusion_core_features"));
+    const auto setEnvironment = reinterpret_cast<decltype(&retro_set_environment)>(inspect.resolve("retro_set_environment"));
+    const auto setVideo = reinterpret_cast<decltype(&retro_set_video_refresh)>(inspect.resolve("retro_set_video_refresh"));
+    const auto setAudio = reinterpret_cast<decltype(&retro_set_audio_sample)>(inspect.resolve("retro_set_audio_sample"));
+    const auto setBatch = reinterpret_cast<decltype(&retro_set_audio_sample_batch)>(inspect.resolve("retro_set_audio_sample_batch"));
+    const auto setPoll = reinterpret_cast<decltype(&retro_set_input_poll)>(inspect.resolve("retro_set_input_poll"));
+    const auto setInput = reinterpret_cast<decltype(&retro_set_input_state)>(inspect.resolve("retro_set_input_state"));
+    require(init && deinit && load && unload && step && reset && memory && stateSize && save && restore &&
+            features && setEnvironment && setVideo && setAudio && setBatch && setPoll && setInput,
+            "32X SSF libretro API missing");
+    setEnvironment(largeSsfEnvironment);
+    setVideo(+[](const void*, unsigned, unsigned, size_t) {});
+    setAudio(+[](int16_t, int16_t) {});
+    setBatch(+[](const int16_t*, size_t frames) { return frames; });
+    setPoll(+[]() {});
+    setInput(+[](unsigned, unsigned, unsigned, unsigned) -> int16_t { return 0; });
+    struct Cleanup {
+        void (*deinit)(); void (*unload)(); bool loaded = false;
+        ~Cleanup() { if (loaded) unload(); deinit(); }
+    };
+    init(); Cleanup cleanup{deinit, unload};
+    QByteArray encodedPath;
+    const auto loadFixture = [&]() {
+        encodedPath = QFile::encodeName(path);
+        const retro_game_info game{encodedPath.constData(), nullptr, 0, nullptr};
+        require(load(&game), "32X SSF generated fixture load failed");
+        cleanup.loaded = true; step();
+    };
+    loadFixture();
+    require((features() & 2u) != 0, "32X SSF extension did not attach the adapter");
+    constexpr int swap = QSysInfo::ByteOrder == QSysInfo::LittleEndian ? 1 : 0;
+    unsigned char* ram = nullptr;
+    const auto refreshRam = [&]() {
+        ram = static_cast<unsigned char*>(memory(RETRO_MEMORY_SYSTEM_RAM));
+        require(ram, "32X SSF work RAM missing");
+    };
+    refreshRam();
+    QByteArray script;
+    struct Check { quint32 address, expected; };
+    std::vector<Check> checks;
+    const auto queue = [&](quint16 operation, quint32 address, quint16 value, quint32 expected) {
+        const int at = int(script.size()); script.resize(at + 8);
+        script[at] = char(operation >> 8); script[at + 1] = char(operation);
+        putLong(script, at + 2, address); script[at + 6] = char(value >> 8); script[at + 7] = char(value);
+        checks.push_back({address, expected});
+    };
+    const auto write = [&](quint32 address, quint16 value) { queue(1, address, value, 0); };
+    const auto window = [&](unsigned index, unsigned bank) {
+        for (quint32 page = 0; page < 8; ++page) {
+            const quint32 address = (index << 19) + (page << 16);
+            const quint32 physical = (bank << 19) + (page << 16);
+            queue(2, address + 0x0800, 0, 0x50000000u | physical);
+            queue(2, address + 0xfffc, 0, 0xa0000000u | physical);
+            queue(4, address + 0x1000, 0, 0xd0000000u | physical);
+        }
+    };
+    const auto run = [&]() {
+        require(!script.isEmpty() && script.size() < 0xe00, "32X SSF mailbox script size invalid");
+        for (int i = 0; i < script.size(); ++i) ram[(0x100 + i) ^ swap] = quint8(script[i]);
+        ram[2 ^ swap] = ram[3 ^ swap] = 0;
+        ram[0 ^ swap] = quint8(checks.size() >> 8); ram[1 ^ swap] = quint8(checks.size());
+        step();
+        require(ram[0 ^ swap] == 0 && ram[1 ^ swap] == 0 &&
+                ram[2 ^ swap] == 0xc0 && ram[3 ^ swap] == 0xde, "32X SSF mailbox did not finish");
+        for (size_t i = 0; i < checks.size(); ++i) {
+            quint32 observed = 0;
+            for (int b = 0; b < 4; ++b) observed = (observed << 8) | ram[(0x1000 + int(i) * 4 + b) ^ swap];
+            const auto detail = QStringLiteral("32X SSF at%1 expected%2 got%3")
+                .arg(checks[i].address, 6, 16, QLatin1Char('0'))
+                .arg(checks[i].expected, 8, 16, QLatin1Char('0')).arg(observed, 8, 16, QLatin1Char('0')).toLocal8Bit();
+            require(observed == checks[i].expected, detail.constData());
+        }
+        script.clear(); checks.clear();
+    };
+    const std::vector<unsigned> high{0, 0x41, 0x7f, 0x80, 0xc0, 0xfd, 0xfe, 0xff};
+    const auto all = [&](bool banked) {
+        for (unsigned index = 0; index < 8; ++index) window(index, banked ? high[index] : index);
+    };
+    const auto capture = [&]() {
+        QByteArray state(qsizetype(stateSize()), char(0));
+        require(!state.isEmpty() && save(state.data(), size_t(state.size())), "32X SSF state capture failed");
+        return state;
+    };
+    const auto restoreState = [&](const QByteArray& state) {
+        require(restore(state.constData(), size_t(state.size())), "32X SSF state restore failed");
+        refreshRam();
+    };
+    write(0xa130f1, 0x40); window(0, 0); run(); // F1 must never select ROM bank zero.
+    write(0xa130f1, 0x81); write(0x200001, 0x42); queue(3, 0x200001, 0, 0x42);
+    write(0xa130f1, 0x83); write(0x200001, 0x99); queue(3, 0x200001, 0, 0x42);
+    write(0xa130f1, 0); window(0, 0); window(4, 4); run();
+    for (unsigned index = 1; index < 8; ++index) write(0xa130f1u + index * 2, quint16(high[index]));
+    all(true); run();
+    const auto romState = capture();
+    write(0xa130f1, 1); queue(3, 0x200001, 0, 0x42); window(0, 0); run();
+    const auto sramState = capture();
+    write(0xa130f1, 0); all(true); run(); // SRAM must reveal the full high physical page again.
+    for (unsigned index = 1; index < 8; ++index) write(0xa130f1u + index * 2, quint16(index));
+    all(false); run();
+    restoreState(sramState); queue(3, 0x200001, 0, 0x42); window(0, 0); run();
+    write(0xa130f1, 0); all(true); run(); // Hidden high page must survive a state too.
+    restoreState(romState); all(true); run();
+    reset(); step(); refreshRam(); all(false); run();
+    restoreState(romState); all(true); run();
+    unload(); cleanup.loaded = false; loadFixture(); refreshRam(); all(false); run();
+    restoreState(romState); all(true); run();
+    // A following MD cartridge must regain the extended EverDrive F1 layout.
+    unload(); cleanup.loaded = false;
+    const QString mdPath = temp.filePath("original-128m-ssf.md");
+    require(QFile::rename(path, mdPath), "32X SSF extension isolation rename failed"); path = mdPath;
+    loadFixture(); refreshRam();
+    require((features() & 2u) == 0, "32X SSF attachment leaked to MD cartridge");
+    write(0xa130f1, 0x40); window(0, 0x40); run();
+}
+
 // Generated, original diagnostic for the identified Sonic Jam 6 bank board.
 // Uses the existing makeTestRom(), setPrefixCrc(), putLong() and file helpers.
 // No game instructions or data are included.
@@ -1753,9 +2086,9 @@ int main(int argc, char** argv) {
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
     if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--state-files") || mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
-                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper") || mode == QLatin1String("--svp-bus") || mode == QLatin1String("--sdk99-hardware") || mode == QLatin1String("--barver-hardware"))) &&
+                                     mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper") || mode == QLatin1String("--large-ssf-mapper") || mode == QLatin1String("--svp-bus") || mode == QLatin1String("--sdk99-hardware") || mode == QLatin1String("--barver-hardware"))) &&
         !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
-        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--barver-hardware|--sdk99-hardware|--svp-bus|--sonic-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
+        std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--barver-hardware|--sdk99-hardware|--svp-bus|--sonic-mapper|--large-ssf-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
@@ -1776,6 +2109,11 @@ int main(int argc, char** argv) {
         if (mode == QLatin1String("--svp-bus")) {
             testAbsentSvpBus(QString::fromLocal8Bit(argv[1]));
             std::puts("Absent SVP byte/word/long open bus and ignored writes, reset/power passed"); return 0;
+        }
+        if (mode == QLatin1String("--large-ssf-mapper")) {
+            testLargeSsfMapper(QString::fromLocal8Bit(argv[1]));
+            testLargeSsf32xMapper(QString::fromLocal8Bit(argv[1]));
+            std::puts("128 MiB MD/32X SSF data/fetch, all 64 bank pages, F1 SRAM, state/reset and isolation passed"); return 0;
         }
         if (mode == QLatin1String("--sonic-mapper")) {
             testSonicMapper(QString::fromLocal8Bit(argv[1]));
