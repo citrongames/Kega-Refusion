@@ -6,6 +6,7 @@
 #include <QThread>
 #include <QImage>
 #include <QByteArray>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <atomic>
@@ -78,6 +79,7 @@ public:
     void closeNetworkGame();
     void receiveNetworkSlots(unsigned mask);
     void acknowledgeNetworkDatagram() { auto n=networkQueuedDatagrams_.load();while(n>0&&!networkQueuedDatagrams_.compare_exchange_weak(n,n-1)){} }
+    void acknowledgeNetworkQuality() { networkQualityPending_.store(false); }
     void acknowledgeNetworkSnapshot() { networkSnapshotPending_.store(false); }
     void receiveNetworkSnapshot(const QByteArray& snapshot);
     void receiveNetworkRewindPreview(const QByteArray& bytes);
@@ -92,6 +94,7 @@ public:
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void networkQualityChanged(const QJsonObject& quality);
     void networkModeFailed(const QString& error);
     void networkLinkCableChanged(bool enabled);
     void networkCommandRequested(const QByteArray& command);
@@ -153,6 +156,7 @@ private:
     std::atomic_int networkQueuedDatagrams_{0};
     std::atomic<quint64> networkPeerId_{0}, networkLinkCableRevision_{0};
     std::atomic_bool networkSnapshotPending_{false}, networkPreviewPending_{false};
+    std::atomic_bool networkQualityPending_{false};
     std::atomic_bool networkWaiting_{false}, networkLinkCableDesired_{false};
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);

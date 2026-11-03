@@ -1,0 +1,87 @@
+--- a/include/ggponet.h
++++ b/include/ggponet.h
+@@ -291,6 +291,14 @@
+  * network.kbps_sent - The estimated bandwidth used between the two
+  * clients, in kilobits per second.
+  *
++ * network.quality_samples - Local count of received quality replies. Zero
++ * means no RTT measurement has arrived; subsequent samples are nonzero.
++ * The counter wraps from UINT_MAX to 1. Compare for inequality, not ordering.
++ *
++ * network.quality_age_ms - Age of the latest RTT measurement in milliseconds,
++ * or -1 before the first quality reply. Saturates at INT_MAX. Repeated getter
++ * calls do not create samples. These fields do not change the wire protocol.
++ *
+  * timesync.local_frames_behind - The number of frames GGPO.net calculates
+  * that the local client is behind the remote client at this instant in
+  * time.  For example, if at this instant the current game client is running
+@@ -307,6 +315,8 @@
+       int   recv_queue_len;
+       int   ping;
+       int   kbps_sent;
++      unsigned int quality_samples;
++      int   quality_age_ms;
+    } network;
+    struct {
+       int   local_frames_behind;
+--- a/lib/ggpo/network/udp_proto.h
++++ b/lib/ggpo/network/udp_proto.h
+@@ -163,6 +163,8 @@
+     * Stats
+     */
+    int            _round_trip_time;
++   unsigned int   _quality_samples;
++   unsigned int   _last_quality_reply_time;
+    int            _packets_sent;
+    int            _bytes_sent;
+    int            _kbps_sent;
+--- a/lib/ggpo/network/udp_proto.cpp
++++ b/lib/ggpo/network/udp_proto.cpp
+@@ -9,6 +9,7 @@
+ 
+ #include "../ggpo_types.h"
+ #include "bitvector.h"
++#include <limits.h>
+ 
+ static const int UDP_HEADER_SIZE = 28;     /* Size of IP + UDP headers */
+ static const int NUM_SYNC_PACKETS = 5;
+@@ -96,8 +97,12 @@
+    _queue(-1),
+    _remote_magic_number(0),
+    _connected(false),
++   _round_trip_time(0),
++   _quality_samples(0),
++   _last_quality_reply_time(0),
+    _packets_sent(0),
+    _bytes_sent(0),
++   _kbps_sent(0),
+    _stats_start_time(0),
+    _local_frame_advantage(0),
+    _remote_frame_advantage(0),
+@@ -770,7 +775,11 @@
+ bool
+ UdpProtocol::OnQualityReply(UdpMsg *msg, int len)
+ {
+-   _round_trip_time = GGPOPlatform::GetCurrentTimeMS() - msg->u.quality_reply.pong;
++   const unsigned int now = GGPOPlatform::GetCurrentTimeMS();
++   const unsigned int elapsed = now - msg->u.quality_reply.pong;
++   _round_trip_time = elapsed > (unsigned int)INT_MAX ? INT_MAX : (int)elapsed;
++   _last_quality_reply_time = now;
++   if (++_quality_samples == 0) _quality_samples = 1;
+    return true;
+ }
+ 
+@@ -784,6 +793,13 @@
+ UdpProtocol::GetNetworkStats(struct GGPONetworkStats *s)
+ {
+    s->network.ping = _round_trip_time;
++   s->network.quality_samples = _quality_samples;
++   if (_quality_samples) {
++      const unsigned int age = GGPOPlatform::GetCurrentTimeMS() - _last_quality_reply_time;
++      s->network.quality_age_ms = age > (unsigned int)INT_MAX ? INT_MAX : (int)age;
++   } else {
++      s->network.quality_age_ms = -1;
++   }
+    s->network.send_queue_len = _pending_output.size();
+    s->network.kbps_sent = _kbps_sent;
+    s->timesync.remote_frames_behind = _remote_frame_advantage;

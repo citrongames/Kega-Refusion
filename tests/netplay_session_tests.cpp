@@ -14,6 +14,10 @@
 #include <QDateTime>
 #include <QSslSocket>
 #include <QJsonDocument>
+#include <QCryptographicHash>
+#include <QSet>
+#include <memory>
+#include <algorithm>
 #include <QtEndian>
 #include <cstdio>
 #include <cstdlib>
@@ -64,6 +68,28 @@ public:
         require(changes==before,"repeated lobby packet repeated readiness signal");
         c.receive(0,kega::net::MessageKind::Control,lobby(false));
         require(!waiting,"client did not clear host readiness waiting");c.leaveSession();
+    }
+    struct DatagramDelay {
+        int pending=0, maximumPending=0;
+        quint64 sequence=0;
+        bool overflow=false;
+    };
+    static std::shared_ptr<DatagramDelay> delayDatagrams(NetplayController& c) {
+        auto state=std::make_shared<DatagramDelay>();
+        QObject::disconnect(&c.session_,&EmulationSession::networkDatagramReady,&c,nullptr);
+        QObject::connect(&c.session_,&EmulationSession::networkDatagramReady,&c,
+            [&c,state](quint64 peer,const QByteArray& packet) {
+                c.session_.acknowledgeNetworkDatagram();
+                if(!c.active_)return;
+                if(state->pending>=128){state->overflow=true;return;}
+                ++state->pending;state->maximumPending=std::max(state->maximumPending,state->pending);
+                const int delayMs=80+int(state->sequence++%5)*5;
+                QTimer::singleShot(delayMs,&c,[&c,state,peer,packet] {
+                    --state->pending;
+                    if(c.active_)c.datagrams_.send(peer,packet);
+                });
+            });
+        return state;
     }
     static QByteArray debug(NetplayController& c){return QJsonDocument(QJsonObject{{"status",c.status_},{"manifestBytes",c.manifest_.size()},{"localBytes",c.localManifest_.size()},{"download",c.downloading_},{"allowDownload",c.allowDownloads_},{"path",c.gamePath_},{"ready",c.gameReady_},{"appliedEpoch",QString::number(c.applyingEpoch_)}}).toJson(QJsonDocument::Compact);}
     static void create(NetplayController& c){c.startHost(0,QStringLiteral("127.0.0.1"),{});}
@@ -121,9 +147,184 @@ static QByteArray rom(bool outputs=false){
     branch(waitBranch,wait);branch(silentBranch,silent);branch(volumeDoneBranch,volumeDone);branch(endBranch,endWait);branch(repeat,wait);
     return b;
 }
+// Separate from the normal/link regression scenarios: real wall-clock GGPO
+// quality replies and bounded UDP delay run for one short, uninterrupted game.
+static int qualityScenario(QApplication& app,const QStringList& args) {
+    const auto resultPath=[](const QString& root,bool hosting) {
+        return root+(hosting?"/quality-host.json":"/quality-client.json");
+    };
+    if(args.size()==3 && args[2]=="--quality") {
+        QTemporaryDir scratch;if(!scratch.isValid())return 1;
+        write(scratch.filePath("host.md"),rom(true));write(scratch.filePath("renamed.md"),rom(true));
+        QProcess host,client;
+        const auto diagnose=[](const char* stage,QProcess& process,QByteArray output=QByteArray{}) {
+            output+=process.readAllStandardOutput();
+            const auto errorOutput=process.readAllStandardError();
+            std::fprintf(stderr,"quality %s: program=%s args=[%s] state=%d exitStatus=%d exitCode=%d(0x%08x) error=%d errorString=%s\nSTDOUT: %s\nSTDERR: %s\n",
+                stage,qPrintable(process.program()),qPrintable(process.arguments().join(" | ")),
+                int(process.state()),int(process.exitStatus()),process.exitCode(),unsigned(process.exitCode()),
+                int(process.error()),qPrintable(process.errorString()),output.constData(),errorOutput.constData());
+        };
+        const QString executable=QCoreApplication::applicationFilePath();
+        host.start(executable,{"--quality-host",args[1],scratch.path(),"--quality"});
+        if(!host.waitForStarted(5000)){diagnose("host launch failed",host);return 1;}
+        QByteArray startup;
+        QElapsedTimer readiness;readiness.start();
+        while(!startup.contains("READY") && readiness.elapsed()<10000) {
+            startup+=host.readAllStandardOutput();
+            if(startup.contains("READY") || host.state()==QProcess::NotRunning)break;
+            const qint64 remaining=10000-readiness.elapsed();
+            if(remaining<=0)break;
+            host.waitForReadyRead(int(std::min<qint64>(250,remaining)));
+        }
+        startup+=host.readAllStandardOutput();
+        if(!startup.contains("READY")){
+            std::fprintf(stderr,"quality host readiness deadline elapsed=%lldms\n",static_cast<long long>(readiness.elapsed()));
+            diagnose("host startup failed",host,startup);
+            if(host.state()!=QProcess::NotRunning){host.kill();host.waitForFinished();}
+            return 1;
+        }
+        client.start(executable,{"--quality-client",args[1],scratch.path(),"--quality"});
+        if(!client.waitForStarted(5000)){
+            diagnose("client launch failed",client);host.kill();host.waitForFinished();return 1;
+        }
+        const bool hostDone=host.waitForFinished(22000),clientDone=client.waitForFinished(5000);
+        const auto hostError=host.readAllStandardError(),clientError=client.readAllStandardError();
+        if(!hostDone){host.kill();host.waitForFinished();}
+        if(!clientDone){client.kill();client.waitForFinished();}
+        if(!hostDone||!clientDone||host.exitStatus()!=QProcess::NormalExit||client.exitStatus()!=QProcess::NormalExit||
+           host.exitCode()!=0||client.exitCode()!=0) {
+            std::fprintf(stderr,"quality session failed\nHOST: %s\nCLIENT: %s\n",hostError.constData(),clientError.constData());return 1;
+        }
+        const auto hostResult=QJsonDocument::fromJson(read(resultPath(scratch.path(),true))).object();
+        const auto clientResult=QJsonDocument::fromJson(read(resultPath(scratch.path(),false))).object();
+        const QString digest=hostResult.value("finalDigest").toString();
+        if(digest.isEmpty()||digest!=clientResult.value("finalDigest").toString()) {
+            std::fprintf(stderr,"quality session final real-core video output diverged\nHOST: %s\nCLIENT: %s\n",
+                         QJsonDocument(hostResult).toJson(QJsonDocument::Compact).constData(),
+                         QJsonDocument(clientResult).toJson(QJsonDocument::Compact).constData());return 1;
+        }
+        std::fprintf(stderr,"quality evidence HOST: %s\nCLIENT: %s\n",
+                     QJsonDocument(hostResult).toJson(QJsonDocument::Compact).constData(),
+                     QJsonDocument(clientResult).toJson(QJsonDocument::Compact).constData());
+        std::puts("quality session: 80-100ms one-way UDP, alternating input, measured RTT, applied input-delay increase, rollback activity, no resync and converged real-core output passed");
+        return 0;
+    }
+    if(args.size()!=5 || (args[1]!="--quality-host"&&args[1]!="--quality-client"))return 2;
+    const bool hosting=args[1]=="--quality-host";
+    const QString root=args[3],data=root+(hosting?"/quality-host-data":"/quality-client-data");
+    std::fprintf(stderr,"quality child role=%s core=%s scratch=%s\n",hosting?"host":"client",qPrintable(args[2]),qPrintable(root));
+    std::fflush(stderr);
+    QDir().mkpath(data);
+    QSettings settings(data+"/settings.ini",QSettings::IniFormat);
+    settings.setValue("netplay/nickname",hosting?"Quality Host":"Quality Client");
+    std::fprintf(stderr,"quality stage settings ready\n");std::fflush(stderr);
+    EmulationSession session(args[2],data);
+    std::fprintf(stderr,"quality stage worker created\n");std::fflush(stderr);
+    NetplayController controller(session,data,settings,nullptr);
+    std::fprintf(stderr,"quality stage controller created\n");std::fflush(stderr);
+    const auto delayed=NetplayScenario::delayDatagrams(controller);
+    QElapsedTimer running;
+    int frames=0,startFrames=0,snapshots=0,snapshotsAtAssign=0,phase=0,resyncs=0;
+    int qualitySamples=0,validRttSamples=0,maxPing=0,maxDelay=0,rollbackEvents=0,maxRollbackFrames=0,greenFrames=0;
+    bool created=false,written=false;
+    QSet<QRgb> observedColors;
+    QByteArray finalDigest;
+    QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& error) {
+        std::fprintf(stderr,"quality core error: %s\n",qPrintable(error));app.exit(1);
+    });
+    QObject::connect(&controller,&NetplayController::notice,&app,[&](const QString& text) {
+        std::fprintf(stderr,"quality notice: %s\n",qPrintable(text));
+    });
+    QObject::connect(&session,&EmulationSession::networkResyncRequested,&app,[&]{++resyncs;});
+    QObject::connect(&session,&EmulationSession::networkSnapshotReady,&app,[&](const QByteArray&){++snapshots;});
+    QObject::connect(&session,&EmulationSession::networkSnapshotApplied,&app,[&](bool ok,const QString& error) {
+        if(!ok){std::fprintf(stderr,"quality snapshot failed: %s\n",qPrintable(error));app.exit(1);}
+    });
+    QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&](const QString&,double,const QString&) {
+        if(!hosting||created)return;
+        created=true;NetplayScenario::create(controller);
+        const QString invite=NetplayScenario::invitation(controller);
+        if(invite.isEmpty()){std::fprintf(stderr,"quality host invite unavailable\n");app.exit(1);return;}
+        write(root+"/invite",invite.toUtf8());std::puts("READY");std::fflush(stdout);
+    });
+    QObject::connect(&session,&EmulationSession::networkQualityChanged,&app,[&](const QJsonObject& quality) {
+        if(!running.isValid()||!quality.value("active").toBool()||written)return;
+        ++qualitySamples;
+        const int ping=quality.value("pingMs").toInt(-1);
+        if(ping>=0){++validRttSamples;maxPing=std::max(maxPing,ping);}
+        maxDelay=std::max(maxDelay,quality.value("delayFrames").toInt(-1));
+        rollbackEvents+=quality.value("rollbackEvents").toInt();
+        maxRollbackFrames=std::max(maxRollbackFrames,quality.value("maxRollbackFrames").toInt());
+    });
+    QObject::connect(&session,&EmulationSession::videoFrameReady,&app,[&] {
+        QImage image;double aspect;session.takeVideoFrame(image,aspect);++frames;
+        if(!running.isValid()||image.isNull()||written)return;
+        const auto elapsed=running.elapsed();
+        const QRgb pixel=image.pixel(image.width()/2,image.height()/2);
+        if(elapsed<11000)observedColors.insert(pixel);
+        if(elapsed>=11000 && qGreen(pixel)>qRed(pixel)+8) {
+            ++greenFrames;
+            if(elapsed>=12500 && greenFrames>=12 && finalDigest.isEmpty()) {
+                const QImage canonical=image.convertToFormat(QImage::Format_RGB32);
+                finalDigest=QCryptographicHash::hash(
+                    QByteArray::fromRawData(reinterpret_cast<const char*>(canonical.constBits()),canonical.sizeInBytes()),
+                    QCryptographicHash::Sha256).toHex();
+            }
+        }
+    });
+    QTimer poll;poll.setInterval(50);
+    QObject::connect(&poll,&QTimer::timeout,&app,[&] {
+        if(delayed->overflow){std::fprintf(stderr,"quality injected packet queue exceeded 128 entries\n");app.exit(1);return;}
+        if(!running.isValid()) {
+            if(hosting) {
+                const auto peer=NetplayScenario::ready(controller);
+                if(phase==0 && peer) {
+                    snapshotsAtAssign=snapshots;NetplayScenario::assign(controller,peer);phase=1;
+                } else if(phase==1 && peer && snapshots>snapshotsAtAssign) {
+                    running.start();startFrames=frames;write(root+"/quality-start",QByteArray("start"));
+                }
+            } else if(QFile::exists(root+"/quality-start")) {running.start();startFrames=frames;}
+            return;
+        }
+        const auto elapsed=running.elapsed();
+        const bool pressed=(elapsed/75)%2!=0;
+        session.setButtons(0,elapsed<11000?(pressed?(hosting?0x10:1):0):(hosting?0x10:0));
+        if(elapsed<13000)return;
+        if(!written) {
+            const QJsonObject result{{"frames",frames-startFrames},{"qualitySamples",qualitySamples},
+                {"validRttSamples",validRttSamples},{"maxPingMs",maxPing},{"maxDelayFrames",maxDelay},
+                {"rollbackEvents",rollbackEvents},{"maxRollbackFrames",maxRollbackFrames},{"resyncs",resyncs},
+                {"maxPendingDatagrams",delayed->maximumPending},{"differentColors",observedColors.size()},
+                {"settledGreenFrames",greenFrames},{"finalDigest",QString::fromLatin1(finalDigest)}};
+            write(resultPath(root,hosting),QJsonDocument(result).toJson(QJsonDocument::Compact));written=true;
+            if(frames-startFrames<240 || qualitySamples<6 || validRttSamples<3 || maxPing<120 ||
+               maxDelay<1 || maxDelay>4 || rollbackEvents<=0 || maxRollbackFrames<=0 || resyncs!=0 ||
+               observedColors.size()<2 || greenFrames<12 || finalDigest.isEmpty()) {
+                std::fprintf(stderr,"quality requirements failed: %s\n",QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
+                app.exit(1);return;
+            }
+        }
+        if(QFile::exists(resultPath(root,!hosting)))app.exit(0);
+    });
+    poll.start();
+    QTimer::singleShot(19000,&app,[&] {
+        std::fprintf(stderr,"quality timeout role=%s phase=%d frames=%d samples=%d delay=%d rollback=%d resync=%d detail=%s\n",
+                     hosting?"host":"client",phase,frames,qualitySamples,maxDelay,rollbackEvents,resyncs,
+                     NetplayScenario::debug(controller).constData());app.exit(1);
+    });
+    QTimer::singleShot(3000,&app,[&]{std::fprintf(stderr,"quality stage event loop alive worker=%d loaded=%d frames=%d\n",int(session.isRunning()),int(session.hasGame()),frames);std::fflush(stderr);});
+    std::fprintf(stderr,"quality stage requesting game\n");std::fflush(stderr);
+    if(hosting)session.loadGame(root+"/host.md");
+    else {NetplayScenario::join(controller,QString::fromUtf8(read(root+"/invite")));session.loadGame(root+"/renamed.md");}
+    std::fprintf(stderr,"quality stage event loop starting\n");std::fflush(stderr);
+    const int result=app.exec();controller.leaveSession();session.shutdown();return result;
+}
+
 int main(int argc,char** argv){
     QApplication app(argc,argv);app.setQuitOnLastWindowClosed(false);
     const auto args=app.arguments();
+    if(args.contains("--quality"))return qualityScenario(app,args);
     if(args.size()==2 && args[1]=="--waiting-only") {
         QTemporaryDir scratch;if(!scratch.isValid())return 1;
         QSettings settings(scratch.filePath("settings.ini"),QSettings::IniFormat);

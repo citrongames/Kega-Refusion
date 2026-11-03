@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QHash>
+#include <QPair>
 #include <QWidget>
 
 class QCheckBox;
@@ -10,6 +12,7 @@ class QLabel;
 class QLineEdit;
 class QProgressBar;
 class QPushButton;
+class QShowEvent;
 class QTableWidget;
 
 // A modeless view of an active direct-connection session. The networking layer
@@ -32,6 +35,8 @@ public:
     void showCreateDialog();
     void showJoinDialog();
     void setLobbyState(const QJsonObject& state);
+    // Local measurements from the emulation worker; never part of lobby broadcasts.
+    void setNetworkQuality(const QJsonObject& quality);
 
 signals:
     void createRequested(quint16 port, const QString& advertisedAddress,
@@ -52,16 +57,21 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
     QString selectedPeerId() const;
     void updateModerationButtons();
     void updateParticipants(const QJsonObject& state);
+    void updateQualitySummary();
+    void updateParticipantPings();
 
-    QJsonObject state_;
+    QJsonObject state_, networkQuality_;
+    QHash<QString,QPair<int,int>> qualityPings_;
     QLabel* status_ = nullptr;
     QLabel* addressStatus_ = nullptr;
     QLabel* participantsTitle_ = nullptr;
+    QLabel* qualitySummary_ = nullptr;
     QLabel* romName_ = nullptr;
     QLabel* romStatus_ = nullptr;
     QLineEdit* invite_ = nullptr;

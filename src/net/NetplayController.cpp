@@ -46,6 +46,11 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(&datagrams_,&NetDatagramChannel::error,this,[this](const QString& error){
         if(active_){status_=error;emit notice(error);refreshLobby();}
     });
+    connect(&session_,&EmulationSession::networkQualityChanged,this,[this](const QJsonObject& quality){
+        session_.acknowledgeNetworkQuality();
+        if(!active_)return;
+        networkQuality_=quality;lobby_->setNetworkQuality(quality);
+    });
     connect(&session_,&EmulationSession::networkDatagramReady,this,[this](quint64 peer,const QByteArray& packet){
         session_.acknowledgeNetworkDatagram();
         if(active_)datagrams_.send(peer,packet);
@@ -258,6 +263,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     });
     connect(&session_,&EmulationSession::networkGameLoading,this,[this](const QString& path,int index){
         if(!active_)return;
+        networkQuality_={};lobby_->setNetworkQuality({});
         gameReady_=false;gamePath_=path;sourceArchiveIndex_=index;files_->requestCancel();
         // Preserve verification only for the explicitly completed download.
         if(path!=downloadedPath_)localManifest_.clear();
@@ -268,6 +274,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(&session_,&EmulationSession::networkGameSource,this,[this](const QString& path,int index){if(active_)prepareSource(path,index);});
     connect(&session_,&EmulationSession::gameLoaded,this,[this](const QString& path,double,const QString& name){gamePath_=path;gameName_=name;onGameLoaded(path);});
     connect(&session_,&EmulationSession::gameClosed,this,[this]{
+        networkQuality_={};lobby_->setNetworkQuality({});
         gamePath_.clear();gameName_.clear();localManifest_.clear();gameReady_=false;
         if(active_&&hosting_){manifest_.clear();readyPeers_.clear();announceContent();}
         refreshLobby();
@@ -298,7 +305,7 @@ void NetplayController::createSession(){
     refreshLobby();lobby_->showCreateDialog();
 }
 void NetplayController::joinSession(){if(active_){showLobby();return;}lobby_->showJoinDialog();}
-void NetplayController::showLobby(){refreshLobby();lobby_->show();lobby_->raise();lobby_->activateWindow();}
+void NetplayController::showLobby(){refreshLobby();lobby_->setNetworkQuality(networkQuality_);lobby_->show();lobby_->raise();lobby_->activateWindow();}
 void NetplayController::setHostAddress(const QString& address){
     invite_=NetTransport::makeInvitation(address,transport_.localPort(),invitationKey_);
     inviteWithPassword_=invite_;
@@ -353,6 +360,7 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
 }
 void NetplayController::leaveSession(){
     if(!active_)return;
+    networkQuality_={};lobby_->setNetworkQuality({});
     stopping_=true;active_=false;connectionLost_=remoteConnectionWaiting_=remoteReadinessWaiting_=false;
     addressPending_=false;automaticAddress_=false;addressRetry_=false;addressDiscovery_->cancel();
     invitationKey_.clear();invitationPassword_.clear();lanInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();

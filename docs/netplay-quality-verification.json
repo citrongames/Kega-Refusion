@@ -1,0 +1,216 @@
+{
+  "version": "0.16.0",
+  "date": "2026-11-03",
+  "scope": "Generated original Mega Drive ROM; two independent local processes per platform; authenticated UDP delayed 80-100ms one-way by bounded test-only timers; no user GUI automation",
+  "policy_tests": {
+    "result": "PASS",
+    "groups": [
+      "LAN delay0 and transient rejection",
+      "increase1frame and ceiling4",
+      "5second increase cooldown",
+      "15quiet sample/15second reduction",
+      "pause/stale suspension",
+      "50/60Hz conversion and jitter allowance",
+      "new session reset",
+      "invalid FPS and RTT EWMA"
+    ]
+  },
+  "ui_tests": {
+    "result": "PASS",
+    "platform": "Linux offscreen Qt",
+    "languages": [
+      "ru",
+      "en"
+    ],
+    "checks": [
+      "labels and honest unknown values",
+      "local UDP override and TCP fallback",
+      "no role widget recreation or selection changes",
+      "no role command emissions from repeated telemetry",
+      "hidden latest sample cache",
+      "clear on inactive"
+    ]
+  },
+  "ggpo_freshness": {
+    "pass": true,
+    "verified_at_utc": "2026-11-03T02:23:45.881704+00:00",
+    "test": "Existing tests/ggpo_packet_tests.cpp, compiled separately against regenerated GGPO source",
+    "test_exit_code": 0,
+    "test_binary_sha256": "4629546f781a9d8f7a9245e59816ded658e487131217bcb2b2f51cd762bbf673",
+    "source_identity": "345b6dc88f4889b9924bdc44c75e1fc2f5ca4c2d99ae86a638ed83b111c7b6c5",
+    "quality_patch_sha256": "98630e50a00ded2e7fcb0f7723ead6346583fed34dbfecf210a5e222185cd1df",
+    "checks": [
+      "RTT and bandwidth initialized to zero",
+      "Before first reply: quality_samples=0 and quality_age_ms=-1",
+      "Each quality reply advances the nonzero sample serial",
+      "Repeated statistics reads preserve the sample serial",
+      "Statistics reads and injected replies create no outgoing probes",
+      "Existing compressed packet bounds and malformed input tests pass"
+    ],
+    "additional_focused_probe": {
+      "pass": true,
+      "checks": [
+        "Quality counter UINT_MAX wraps to nonzero 1",
+        "Old sample age saturates at INT_MAX",
+        "Delay increase duplicates queued input; delay decrease drops next capture"
+      ]
+    },
+    "preparation": {
+      "verified_archive": true,
+      "all_patches_applied_without_fuzz": true,
+      "second_run_reused_source_stamp": true
+    },
+    "wire_change": false,
+    "scope": "No CMake, policy, UI or session edits; spectator statistics remain unsupported",
+    "rerun_with_frame_delay_patch": {
+      "pass": true,
+      "source_identity": "37d4face270e61511401428c8f9e08d0494bb2217797475923caf0a5d284e382",
+      "verified_at_utc": "2026-11-03T02:37:29.200594+00:00"
+    }
+  },
+  "ggpo_frame_delay": {
+    "pass": true,
+    "verified_at_utc": "2026-11-03T02:37:29.200594+00:00",
+    "test": "Existing ggpo_packet_tests with actual paired P2P backends and custom UDP transport",
+    "test_exit_code": 0,
+    "test_binary_sha256": "5f2294017682e7b0ce42e5176324516a09f828f27c5cc5bf3ea3d67b72d1f658",
+    "source_identity": "37d4face270e61511401428c8f9e08d0494bb2217797475923caf0a5d284e382",
+    "frame_delay_patch_sha256": "1ab47dcac87c4e7dfdb06c85a0cfca10d8c3688669fb9407e01c56088416c033",
+    "scenarios": [
+      {
+        "local_queue": 0,
+        "initial_delay": 0,
+        "runtime_increase": 1,
+        "runtime_decrease": 0
+      },
+      {
+        "local_queue": 0,
+        "initial_delay": 2,
+        "runtime_increase": 3,
+        "runtime_decrease": 2
+      },
+      {
+        "local_queue": 1,
+        "initial_delay": 0,
+        "runtime_increase": 1,
+        "runtime_decrease": 0
+      },
+      {
+        "local_queue": 1,
+        "initial_delay": 2,
+        "runtime_increase": 3,
+        "runtime_decrease": 2
+      }
+    ],
+    "checks": [
+      "Handshake and frame exchange between two real GGPO P2P backends",
+      "Runtime delay grows after an acknowledged nonempty UDP input stream",
+      "Every remote confirmed input equals its canonical local queued input",
+      "Startup delayed frames preserve zero bits before the first captured press",
+      "Runtime padding preserves the previous queued input",
+      "Delay decrease deliberately drops a duplicate capture without a wire-frame gap",
+      "Existing freshness and packet-bound tests continue to pass",
+      "Normal sequential input path adds no confirmed-queue lookup or extra input copy"
+    ],
+    "wire_change": false,
+    "preparation": {
+      "all_three_managed_patches_applied": true,
+      "second_run_reused_source_stamp": true
+    }
+  },
+  "integration": {
+    "linux": {
+      "host": {
+        "differentColors": 4,
+        "finalDigest": "b2770ec37bda9324062d3fd366ce6a2272506b2e4cdfc9cfb4c10fa9341160c5",
+        "frames": 722,
+        "maxDelayFrames": 2,
+        "maxPendingDatagrams": 9,
+        "maxPingMs": 193,
+        "maxRollbackFrames": 7,
+        "qualitySamples": 13,
+        "resyncs": 0,
+        "rollbackEvents": 135,
+        "settledGreenFrames": 114,
+        "validRttSamples": 11
+      },
+      "client": {
+        "differentColors": 4,
+        "finalDigest": "b2770ec37bda9324062d3fd366ce6a2272506b2e4cdfc9cfb4c10fa9341160c5",
+        "frames": 722,
+        "maxDelayFrames": 2,
+        "maxPendingDatagrams": 8,
+        "maxPingMs": 191,
+        "maxRollbackFrames": 7,
+        "qualitySamples": 13,
+        "resyncs": 0,
+        "rollbackEvents": 136,
+        "settledGreenFrames": 115,
+        "validRttSamples": 12
+      }
+    },
+    "windows": {
+      "host": {
+        "differentColors": 4,
+        "finalDigest": "b2770ec37bda9324062d3fd366ce6a2272506b2e4cdfc9cfb4c10fa9341160c5",
+        "frames": 716,
+        "maxDelayFrames": 1,
+        "maxPendingDatagrams": 8,
+        "maxPingMs": 212,
+        "maxRollbackFrames": 7,
+        "qualitySamples": 12,
+        "resyncs": 0,
+        "rollbackEvents": 133,
+        "settledGreenFrames": 116,
+        "validRttSamples": 9
+      },
+      "client": {
+        "differentColors": 4,
+        "finalDigest": "b2770ec37bda9324062d3fd366ce6a2272506b2e4cdfc9cfb4c10fa9341160c5",
+        "frames": 718,
+        "maxDelayFrames": 2,
+        "maxPendingDatagrams": 9,
+        "maxPingMs": 209,
+        "maxRollbackFrames": 7,
+        "qualitySamples": 13,
+        "resyncs": 0,
+        "rollbackEvents": 132,
+        "settledGreenFrames": 121,
+        "validRttSamples": 12
+      }
+    },
+    "cross_platform_final_video_hash_equal": true,
+    "resyncs": 0,
+    "runtime_seconds_each_scenario": 13
+  },
+  "resource_bounds": {
+    "max_auto_delay_frames": 4,
+    "quality_sample_interval_ms": 1000,
+    "max_rtt_age_ms": 2500,
+    "max_pending_gui_quality_reports": 1,
+    "extra_network_probes": 0,
+    "new_disk_telemetry": false,
+    "normal_input_transmit_path": "No queue lookup or extra input copy; only inserted delay padding needs lookup"
+  },
+  "limitations": [
+    "Two local processes tested on Linux and Windows separately, not a live cross-OS connection",
+    "Final full RGB32 frame hash convergence is not a native-state checksum",
+    "Synthetic delayed input scenario is not a full commercial game playthrough",
+    "No packet-loss percentage exposed; jitter is smoothed successive RTT difference",
+    "Spectator GGPO RTT statistics remain unsupported",
+    "GGPO TIMESYNC pacing unchanged"
+  ],
+  "published_sha256": {
+    "KegaRefusion.exe": "b5abf2c7db37f1d498af08bf1129c030354f9ae511b506dde3e1a6fc6dfa5441",
+    "cores/genesis_plus_gx_libretro.dll": "acbb697ef75e6bcf24ca9d310c82351de65e69c4fa603586996511c4a5444438",
+    "cores/genesis_plus_gx_libretro_linkpeer.dll": "acbb697ef75e6bcf24ca9d310c82351de65e69c4fa603586996511c4a5444438",
+    "languages/ru.json": "d692c3717b7d82f7bac48407a3511d8f2cebe9dfdf69959d35f2d40d4bcb31c6",
+    "languages/en.json": "ee1ac79d9fda985e991c96d3037d34fcd0fceabc84e655c85fbb744c192acfc6",
+    "linux/KegaRefusion": "ecbbd3c525a8a89f12989e466cb2e584386ca34a6a010abab0174634d9aa67d0",
+    "linux/cores/genesis_plus_gx_libretro.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
+    "linux/cores/genesis_plus_gx_libretro_linkpeer.so": "e8d956d6725e10d850b565542927464c8cf02d6780ef46b4713744dccdd7cbfc",
+    "linux/languages/ru.json": "d692c3717b7d82f7bac48407a3511d8f2cebe9dfdf69959d35f2d40d4bcb31c6",
+    "linux/languages/en.json": "ee1ac79d9fda985e991c96d3037d34fcd0fceabc84e655c85fbb744c192acfc6",
+    "KegaRefusion-0.16.0-linux-x86_64.tar.gz": "1e3702ae34f501afda9b4071dc324c2ca70b47f5ea5a5868eadee8122471b652"
+  }
+}

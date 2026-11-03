@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract a pinned Flycast GGPO core and apply the audited Kega transport patch."""
+"""Extract a pinned Flycast GGPO core and apply the audited Kega patches."""
 
 import hashlib
 from pathlib import Path
@@ -16,7 +16,9 @@ ARCHIVE_SHA256 = "84e4d734f839bd68a6ec19353ecbfb2286f93ca7969fd32dc5b9dd7b48f351
 ARCHIVE = DEPS / "downloads" / f"flycast-{COMMIT}.tar.gz"
 TARGET = DEPS / "ggpo-src"
 STAGE = DEPS / "ggpo-stage"
-PATCH = ROOT / "tools" / "patches" / "ggpo-kega.patch"
+PATCHES = (ROOT / "tools" / "patches" / "ggpo-kega.patch",
+           ROOT / "tools" / "patches" / "ggpo-quality-stats.patch",
+           ROOT / "tools" / "patches" / "ggpo-frame-delay.patch")
 
 
 def checksum(path: Path) -> str:
@@ -75,8 +77,8 @@ def extract_ggpo() -> int:
 
 def main() -> None:
     pinned_archive()
-    patch_bytes = PATCH.read_bytes()
-    identity = hashlib.sha256(COMMIT.encode() + patch_bytes).hexdigest()
+    patch_bytes = [patch.read_bytes() for patch in PATCHES]
+    identity = hashlib.sha256(COMMIT.encode() + b"\0" + b"\0".join(patch_bytes)).hexdigest()
     stamp = TARGET / ".kega-source-id"
     if stamp.is_file() and stamp.read_text() == identity:
         print(TARGET)
@@ -86,8 +88,9 @@ def main() -> None:
     STAGE.mkdir(parents=True)
     try:
         count = extract_ggpo()
-        subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-d", str(STAGE),
-                        "-i", str(PATCH)], check=True)
+        for patch in PATCHES:
+            subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-d", str(STAGE),
+                            "-i", str(patch)], check=True)
         (STAGE / ".kega-source-id").write_text(identity)
         if TARGET.exists():
             shutil.rmtree(TARGET)

@@ -64,6 +64,7 @@ private:
     kega::net::NetDatagramChannel datagrams_;
     QSet<quint64> udpReadyPeers_;
     QByteArray rosterBytes_, lastLobbyBytes_;
+    QJsonObject networkQuality_;
     NetAddressDiscovery* addressDiscovery_=nullptr;
     QByteArray invitationKey_;
     QString invitationPassword_,lanInvite_,addressStatus_,connectionId_;

@@ -1,5 +1,9 @@
 #include "NetRollbackSession.h"
 #include "NetplayTimeline.h"
+#include "NetDelayPolicy.h"
+#include <QElapsedTimer>
+#include <algorithm>
+#include <cmath>
 #include "core/LibretroHost.h"
 #include <ggponet.h>
 #include <kega_ggpo_transport.h>
@@ -34,9 +38,13 @@ MovieInput decodeInput(const char* data) {
 struct NetRollbackSession::Impl {
     struct Peer { quint64 id; int role; quint32 address; };
     struct Packet { quint32 address; QByteArray data; };
+    struct RemoteQuality {
+        quint64 id; GGPOPlayerHandle handle; unsigned serial=0; NetRttEstimate estimate;
+    };
     LibretroHost* host = nullptr;
     GGPOSession* session = nullptr;
     GGPOPlayerHandle localHandle = -1;
+    int localRole=0;
     quint64 epoch = 0, localId = 0, frame = 0;
     QVector<Peer> peers, players;
     QList<QPair<int,MovieInput>> contributions;
@@ -50,6 +58,14 @@ struct NetRollbackSession::Impl {
     int rollbackPosition=0,lastHistoryFrame=0;
     Send send;
     bool running = false, localQueued = false;
+    QVector<RemoteQuality> remoteQuality;
+    QElapsedTimer qualityClock;
+    qint64 lastQualityMs=0;
+    quint64 qualityFrame=0;
+    int rollbackFrames=0,rollbackEvents=0,maxRollbackFrames=0,rollbackGroupFrames=0;
+    bool realtime=false,havePreviousInput=false;
+    std::array<char,InputSize> previousInput{};
+    NetDelayPolicy delay;
     QString failure;
     static thread_local Impl* current;
     struct Scope { Impl* previous; Scope(Impl* value): previous(current) { current=value; } ~Scope(){ current=previous; } };
@@ -82,6 +98,8 @@ struct NetRollbackSession::Impl {
         for(size_t i=0;i<self.states.size();++i)if(self.states[i].constData()==reinterpret_cast<char*>(buffer))self.rollbackPosition=self.stateFrames[i];
         if(!self.host->restoreMovieState(QByteArray::fromRawData(reinterpret_cast<char*>(buffer),length),error,true))
             throw std::runtime_error(error.toStdString());
+        ++self.rollbackEvents;
+        self.rollbackGroupFrames=0;
         return true;
     }
     static bool log(char*,unsigned char*,int) { return true; }
@@ -104,6 +122,8 @@ struct NetRollbackSession::Impl {
         auto& self=*current;
         NetplayTimeline::apply(*self.host,self.synchronize());
         ++self.rollbackPosition;
+        ++self.rollbackFrames;
+        self.maxRollbackFrames=std::max(self.maxRollbackFrames,++self.rollbackGroupFrames);
         const bool preview=self.historyEnabled&&self.localId==0&&self.rollbackPosition%2==0;
         self.host->runFrame(preview,false); // Only rewind previews; no presentation, audio queue, achievements or disk writes.
         if(ggpo_advance_frame(self.session)!=GGPO_OK) throw std::runtime_error("GGPO rollback advance failed");
@@ -171,7 +191,7 @@ bool NetRollbackSession::takeConfirmedHistory(RewindFrame& output) {
 bool NetRollbackSession::active() const {return d->session!=nullptr;}
 quint64 NetRollbackSession::position() const {return d->frame;}
 bool NetRollbackSession::start(LibretroHost& host,quint64 epoch,const QJsonArray& roster,quint64 localId,Send send,QString& error) {
-    stop();error.clear();d->host=&host;d->epoch=epoch;d->localId=localId;d->send=std::move(send);
+    stop();error.clear();d->qualityClock.start();d->host=&host;d->epoch=epoch;d->localId=localId;d->send=std::move(send);
     if(!epoch || roster.isEmpty() || roster.size()>32) {error=QStringLiteral("Invalid GGPO roster");return false;}
     bool localPresent=false,hostPresent=false;
     for(int i=0;i<roster.size();++i) {
@@ -211,7 +231,8 @@ bool NetRollbackSession::start(LibretroHost& host,quint64 epoch,const QJsonArray
                 const auto address=QHostAddress(peer.address).toString().toLatin1();
                 if(player.type==GGPO_PLAYERTYPE_REMOTE) {std::strncpy(player.u.remote.ip_address,address.constData(),sizeof(player.u.remote.ip_address)-1);player.u.remote.port=1;}
                 GGPOPlayerHandle handle=-1;if(!d->check(ggpo_add_player(d->session,&player,&handle),error)){stop();return false;}
-                if(peer.id==localId)d->localHandle=handle;
+                if(peer.id==localId){d->localHandle=handle;d->localRole=peer.role;}
+                else d->remoteQuality.append({peer.id,handle,0,{}});
             }
             if(localId==0) for(const auto& peer:d->peers) if(peer.id && !peer.role) {
                 GGPOPlayer player{};player.size=sizeof(player);player.type=GGPO_PLAYERTYPE_SPECTATOR;
@@ -245,9 +266,23 @@ NetRollbackSession::Result NetRollbackSession::beforeFrame(const MovieInput& loc
     try {
         if(d->localHandle>=0 && !d->localQueued) {
             auto bytes=encodeInput(local);
+            const int previousDelay=d->delay.frames();
+            int nextDelay=d->realtime?d->delay.pending():previousDelay;
+            // GGPO drops one captured input when reducing delay by one. Only
+            // drop a duplicate, including pointer aim, never a fresh button edge.
+            if(nextDelay<previousDelay && (!d->havePreviousInput || bytes!=d->previousInput))
+                nextDelay=previousDelay;
+            if(nextDelay!=previousDelay && !d->check(ggpo_set_frame_delay(d->session,d->localHandle,nextDelay),error))return Failed;
             const auto result=ggpo_add_local_input(d->session,d->localHandle,bytes.data(),bytes.size());
-            if(result==GGPO_ERRORCODE_PREDICTION_THRESHOLD || result==GGPO_ERRORCODE_NOT_SYNCHRONIZED)return Wait;
+            if(result==GGPO_ERRORCODE_PREDICTION_THRESHOLD || result==GGPO_ERRORCODE_NOT_SYNCHRONIZED) {
+                // No input entered GGPO. Restore the delay, so a later retry
+                // cannot discard a newly pressed button after the wait.
+                if(nextDelay!=previousDelay && !d->check(ggpo_set_frame_delay(d->session,d->localHandle,previousDelay),error))return Failed;
+                return Wait;
+            }
             if(!d->check(result,error))return Failed;
+            if(nextDelay!=previousDelay)d->delay.applied(nextDelay,d->qualityClock.elapsed());
+            d->previousInput=bytes;d->havePreviousInput=true;
             d->localQueued=true;
         }
         std::array<char,GGPO_MAX_PLAYERS*InputSize> values{};int disconnected=0;
@@ -266,4 +301,45 @@ bool NetRollbackSession::afterFrame(QString& error) {
         if(!d->check(ggpo_advance_frame(d->session),error))return false;
         ++d->frame;d->localQueued=false;return true;
     }catch(const std::exception& e){error=QString::fromUtf8(e.what());d->failure=error;return false;}
+}
+
+bool NetRollbackSession::takeQuality(QJsonObject& output,bool realtime) {
+    if(!d->session)return false;
+    d->realtime=realtime;
+    if(!realtime)d->delay.suspend();
+    const qint64 now=d->qualityClock.elapsed(),interval=now-d->lastQualityMs;
+    if(interval<1000)return false;
+    Impl::Scope scope(d.get());
+    int ping=-1,jitter=0;bool allFresh=!d->remoteQuality.isEmpty(),newSample=false;
+    QJsonArray peers;
+    for(auto& peer:d->remoteQuality) {
+        GGPONetworkStats stats{};
+        const bool valid=ggpo_get_network_stats(d->session,peer.handle,&stats)==GGPO_OK &&
+            stats.network.quality_samples && stats.network.quality_age_ms>=0 &&
+            stats.network.quality_age_ms<=2500 && stats.network.ping>=0;
+        allFresh&=valid;
+        if(valid) {
+            if(peer.serial!=stats.network.quality_samples) {
+                peer.serial=stats.network.quality_samples;peer.estimate.sample(stats.network.ping);newSample=true;
+            }
+            ping=std::max(ping,peer.estimate.pingMs());jitter=std::max(jitter,peer.estimate.jitterMs());
+        }
+        peers.append(QJsonObject{{"id",QString::number(peer.id)},
+            {"pingMs",valid?peer.estimate.pingMs():-1},{"jitterMs",valid?peer.estimate.jitterMs():0}});
+    }
+    // Do not interpret a paused or CPU-starved emulator as a reason to add
+    // input latency. Severe links beyond GGPO's prediction window remain bounded.
+    const auto minimumProgress=quint64(std::ceil(d->host->fps()*double(interval)/2000.0));
+    const bool eligible=realtime && d->running && d->localHandle>=0 && d->localRole>0 && allFresh &&
+        d->frame-d->qualityFrame>=std::max<quint64>(1,minimumProgress);
+    if(!eligible)d->delay.suspend();
+    else if(newSample)d->delay.observe(ping,jitter,d->host->fps(),now,true,d->maxRollbackFrames<=2);
+    const int replayRate=int(std::lround(double(d->rollbackFrames)*1000.0/double(interval)));
+    output=QJsonObject{{"active",true},{"pingMs",ping},{"jitterMs",jitter},
+        {"delayFrames",d->localRole>0?d->delay.frames():-1},
+        {"rollbackFrames",replayRate},{"rollbackEvents",d->rollbackEvents},
+        {"maxRollbackFrames",d->maxRollbackFrames},{"peers",peers}};
+    d->lastQualityMs=now;d->qualityFrame=d->frame;
+    d->rollbackFrames=d->rollbackEvents=d->maxRollbackFrames=0;
+    return true;
 }

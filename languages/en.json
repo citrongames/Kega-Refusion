@@ -744,6 +744,14 @@
     "Link Cable доступен для картриджей Mega Drive без Sega CD и 32X.": "Link Cable is available for Mega Drive cartridges without Sega CD or 32X.",
     "Для Link Cable требуется обновлённое ядро.": "Link Cable requires an updated core.",
     "Не найден модуль второй консоли Link Cable: %1": "The second Link Cable console module is missing: %1",
-    "Не удалось загрузить ROM во вторую консоль.": "Could not load the ROM into the second console."
+    "Не удалось загрузить ROM во вторую консоль.": "Could not load the ROM into the second console.",
+    "Пинг игрового соединения (UDP), если он уже измерен на этом компьютере. Если игрового измерения нет, показан служебный пинг лобби (TCP).": "Gameplay ping (UDP), when measured on this computer. If no gameplay measurement is available, the lobby control connection ping (TCP) is shown.",
+    "У вас: пинг %1 · разброс %2\nВвод: %3 кадр. (авто) · Откаты: %4 кадр./с": "This PC: ping %1 · jitter %2\nInput: %3 frames (auto) · Rollback: %4 frames/s",
+    "Наибольшие пинг и разброс задержки среди активных игроков, измеренные этим компьютером. Задержка ввода выбирается автоматически; у зрителя собственного ввода нет. Откаты — повторно рассчитанные кадры в секунду, а не частота кадров игры.\nЗа последний интервал: %1 откатов; самый длинный — %2 кадр.": "The highest ping and jitter among active players, measured by this computer. Input delay is automatic; spectators have no local input. Rollback counts resimulated frames per second, not game FPS.\nLast interval: %1 rollback events; longest: %2 frames.",
+    "Качество связи появится после запуска игры": "Connection quality will appear during gameplay",
+    "Здесь появятся местные показатели игрового соединения и автоматической задержки ввода. Если игровое измерение недоступно, в таблице показан служебный пинг лобби (TCP).": "Local gameplay connection quality and automatic input delay will appear here. When gameplay measurements are unavailable, the table shows the lobby control connection ping (TCP).",
+    "Этот компьютер.": "This computer.",
+    "Пинг игрового соединения (UDP), измеренный на этом компьютере. Разброс задержки: %1 мс.": "Gameplay ping (UDP), measured on this computer. Jitter: %1 ms.",
+    "Служебный пинг лобби (TCP). Измерение игрового пинга сейчас недоступно.": "Lobby control connection ping (TCP). Gameplay ping measurement is currently unavailable."
   }
 }

@@ -1,0 +1,85 @@
+--- a/include/ggponet.h
++++ b/include/ggponet.h
+@@ -468,8 +468,9 @@
+ /*
+  * ggpo_set_frame_delay --
+  *
+- * Change the amount of frames ggpo will delay local input.  Must be called
+- * before the first call to ggpo_synchronize_input.
++ * Change the amount of frames ggpo will delay local input. Call outside rollback,
++ * before the next ggpo_add_local_input for this player. Increasing delay repeats
++ * queued input; decreasing delay drops subsequent captured input frames.
+  */
+ GGPO_API GGPOErrorCode __cdecl ggpo_set_frame_delay(GGPOSession *,
+                                                     GGPOPlayerHandle player,
+--- a/lib/ggpo/sync.h
++++ b/lib/ggpo/sync.h
+@@ -49,6 +49,7 @@
+    bool AddLocalInput(int queue, GameInput &input);
+    void AddRemoteInput(int queue, GameInput &input);
+    int GetConfirmedInputs(void *values, int size, int frame);
++   bool GetConfirmedInput(int queue, int frame, GameInput *input);
+    int SynchronizeInputs(void *values, int size);
+ 
+    void CheckSimulation(int timeout);
+--- a/lib/ggpo/sync.cpp
++++ b/lib/ggpo/sync.cpp
+@@ -79,6 +79,13 @@
+ Sync::AddRemoteInput(int queue, GameInput &input)
+ {
+    _input_queues[queue].AddInput(input);
++}
++
++bool
++Sync::GetConfirmedInput(int queue, int frame, GameInput *input)
++{
++   ASSERT(queue >= 0 && queue < _config.num_players);
++   return _input_queues[queue].GetConfirmedInput(frame, input);
+ }
+ 
+ int
+--- a/lib/ggpo/backends/p2p.cpp
++++ b/lib/ggpo/backends/p2p.cpp
+@@ -293,6 +293,10 @@
+ 
+    input.init(-1, (char *)values, size);
+ 
++   // Remember the last transmitted local frame before the input queue inserts
++   // any delay padding. A shrink can discard this capture (NullFrame).
++   const int previous_frame = _local_connect_status[queue].last_frame;
++
+    // Feed the input for the current frame into the synchronzation layer.
+    if (!_sync.AddLocalInput(queue, input)) {
+       return GGPO_ERRORCODE_PREDICTION_THRESHOLD;
+@@ -306,12 +310,25 @@
+       Log("setting local connect status for local queue %d to %d", queue, input.frame);
+       _local_connect_status[queue].last_frame = input.frame;
+ 
+-      // Send the input to all the remote players.
+-      for (int i = 0; i < _num_players; i++) {
+-         if (_endpoints[i].IsInitialized()) {
+-            _endpoints[i].SendInput(input);
+-         }
+-      }
++      // A runtime delay increase inserts confirmed copies into the local
++      // queue. Transmit those exact frames too, otherwise UDP sees a gap.
++      // Startup padding is zero input, not a copy of the first button press.
++      ASSERT(input.frame > previous_frame &&
++             input.frame - previous_frame <= INPUT_QUEUE_LENGTH);
++      const auto send_input = [this](GameInput &value) {
++         for (int i = 0; i < _num_players; i++) {
++            if (_endpoints[i].IsInitialized()) {
++               _endpoints[i].SendInput(value);
++            }
++         }
++      };
++      for (int frame = previous_frame + 1; frame < input.frame; frame++) {
++         GameInput padding;
++         ASSERT(_sync.GetConfirmedInput(queue, frame, &padding));
++         send_input(padding);
++      }
++      // Preserve the ordinary per-frame path: no queue lookup or extra copy.
++      send_input(input);
+    }
+ 
+    return GGPO_OK;

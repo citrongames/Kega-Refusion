@@ -2,6 +2,7 @@
 #include "core/MovieTape.h"
 #include <QByteArray>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QImage>
 #include <QString>
 #include <functional>
@@ -28,6 +29,8 @@ public:
     };
     void setHistoryEnabled(bool enabled);
     bool takeConfirmedHistory(RewindFrame& frame);
+    // At most one snapshot per second, using GGPO's existing UDP quality replies.
+    bool takeQuality(QJsonObject& quality,bool realtime);
     bool active() const;
     quint64 position() const;
 private:

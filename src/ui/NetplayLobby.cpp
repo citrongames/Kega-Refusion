@@ -22,6 +22,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalBlocker>
+#include <QShowEvent>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QToolButton>
@@ -163,10 +164,19 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     auto headingFont = participantsTitle_->font();
     headingFont.setBold(true);
     participantsTitle_->setFont(headingFont);
-    layout->addWidget(participantsTitle_);
+    auto* participantsHeading = new QHBoxLayout;
+    participantsHeading->addWidget(participantsTitle_,1);
+    qualitySummary_ = new QLabel(this);
+    qualitySummary_->setObjectName(QStringLiteral("netplayQuality"));
+    qualitySummary_->setTextFormat(Qt::PlainText);
+    qualitySummary_->setAlignment(Qt::AlignRight|Qt::AlignVCenter);
+    participantsHeading->addWidget(qualitySummary_);
+    layout->addLayout(participantsHeading);
     participants_ = new QTableWidget(0, 4, this);
     participants_->setObjectName(QStringLiteral("netplayParticipants"));
     participants_->setHorizontalHeaderLabels({t("Имя"), t("Роль"), t("Готовность"), t("Пинг")});
+    participants_->horizontalHeaderItem(3)->setToolTip(
+        t("Пинг игрового соединения (UDP), если он уже измерен на этом компьютере. Если игрового измерения нет, показан служебный пинг лобби (TCP)."));
     participants_->horizontalHeaderItem(1)->setToolTip(
         t("Участник управляет назначенным ему портом с помощью своего первого контроллера."));
     participants_->verticalHeader()->hide();
@@ -423,6 +433,7 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
     retryAddress_->setEnabled(retryAddress);
 
     updateParticipants(state);
+    updateQualitySummary();
 
     const QJsonObject rom = state.value(QStringLiteral("rom")).toObject();
     const QString fileName = rom.value(QStringLiteral("filename")).toString();
@@ -497,14 +508,77 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
             participants_->removeCellWidget(row, 1);
         }
         setCell(participants_, row, 2, readinessName(peer.value(QStringLiteral("readiness")).toString()));
-        const int ping = peer.value(QStringLiteral("pingMs")).toInt(-1);
-        setCell(participants_, row, 3, ping < 0 ? QStringLiteral("—") : t("%1 мс").arg(ping));
         if (!selection.isEmpty() && id == selection) selectedRow = row;
     }
     if (selectedRow >= 0 && participants_->currentRow() != selectedRow)
         participants_->selectRow(selectedRow);
     else if (selectedRow < 0)
         participants_->clearSelection();
+    updateParticipantPings();
+}
+
+void NetplayLobby::setNetworkQuality(const QJsonObject& quality) {
+    if(networkQuality_==quality)return;
+    networkQuality_=quality;qualityPings_.clear();
+    if(quality.value(QStringLiteral("active")).toBool()) {
+        const auto peers=quality.value(QStringLiteral("peers")).toArray();
+        for(int i=0;i<qMin(peers.size(),32);++i) {
+            const auto peer=peers[i].toObject();const auto id=peer.value(QStringLiteral("id")).toString();
+            const int ping=peer.value(QStringLiteral("pingMs")).toInt(-1);
+            if(!id.isEmpty() && ping>=0)qualityPings_.insert(id,{ping,qMax(0,peer.value(QStringLiteral("jitterMs")).toInt())});
+        }
+    }
+    if(!isVisible())return; // Cache the latest sample while the modeless lobby is closed.
+    updateQualitySummary();updateParticipantPings();
+}
+
+void NetplayLobby::updateQualitySummary() {
+    const bool active=state_.value(QStringLiteral("active")).toBool();
+    qualitySummary_->setVisible(active);
+    if(!active)return;
+    QString text,tooltip;
+    if(networkQuality_.value(QStringLiteral("active")).toBool()) {
+        const int ping=networkQuality_.value(QStringLiteral("pingMs")).toInt(-1);
+        const int delay=networkQuality_.value(QStringLiteral("delayFrames")).toInt(-1);
+        const auto value=[](int number){return number<0?QStringLiteral("—"):QString::number(number);};
+        text=t("У вас: пинг %1 · разброс %2\nВвод: %3 кадр. (авто) · Откаты: %4 кадр./с")
+            .arg(ping<0?QStringLiteral("—"):t("%1 мс").arg(ping),
+                 ping<0?QStringLiteral("—"):t("%1 мс").arg(qMax(0,networkQuality_.value(QStringLiteral("jitterMs")).toInt())),
+                 value(delay),value(qMax(0,networkQuality_.value(QStringLiteral("rollbackFrames")).toInt())));
+        tooltip=t("Наибольшие пинг и разброс задержки среди активных игроков, измеренные этим компьютером. Задержка ввода выбирается автоматически; у зрителя собственного ввода нет. Откаты — повторно рассчитанные кадры в секунду, а не частота кадров игры.\nЗа последний интервал: %1 откатов; самый длинный — %2 кадр.")
+            .arg(qMax(0,networkQuality_.value(QStringLiteral("rollbackEvents")).toInt()))
+            .arg(qMax(0,networkQuality_.value(QStringLiteral("maxRollbackFrames")).toInt()));
+    } else {
+        text=t("Качество связи появится после запуска игры");
+        tooltip=t("Здесь появятся местные показатели игрового соединения и автоматической задержки ввода. Если игровое измерение недоступно, в таблице показан служебный пинг лобби (TCP).");
+    }
+    if(qualitySummary_->text()!=text)qualitySummary_->setText(text);
+    if(qualitySummary_->toolTip()!=tooltip)qualitySummary_->setToolTip(tooltip);
+}
+
+void NetplayLobby::updateParticipantPings() {
+    const auto entries=state_.value(QStringLiteral("participants")).toArray();
+    const int count=qMin(entries.size(),participants_->rowCount());
+    const QSignalBlocker blocker(participants_);
+    for(int row=0;row<count;++row) {
+        const auto peer=entries[row].toObject();const auto id=peer.value(QStringLiteral("id")).toString();
+        const auto measured=qualityPings_.constFind(id);
+        int ping=peer.value(QStringLiteral("pingMs")).toInt(-1);QString tooltip;
+        if(peer.value(QStringLiteral("local")).toBool()) {
+            ping=-1;tooltip=t("Этот компьютер.");
+        } else if(measured!=qualityPings_.cend()) {
+            ping=measured->first;
+            tooltip=t("Пинг игрового соединения (UDP), измеренный на этом компьютере. Разброс задержки: %1 мс.").arg(measured->second);
+        } else tooltip=t("Служебный пинг лобби (TCP). Измерение игрового пинга сейчас недоступно.");
+        setCell(participants_,row,3,ping<0?QStringLiteral("—"):t("%1 мс").arg(ping));
+        auto* cell=participants_->item(row,3);
+        if(cell->toolTip()!=tooltip)cell->setToolTip(tooltip);
+    }
+}
+
+void NetplayLobby::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    updateQualitySummary();updateParticipantPings();
 }
 
 QString NetplayLobby::selectedPeerId() const {

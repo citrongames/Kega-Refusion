@@ -448,6 +448,7 @@ void EmulationSession::run() {
     pacer.reset(nowNs());
     auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
     NetRollbackSession networkTimeline;
+    bool networkQualityVisible=false;
     QJsonArray networkRoster;
     bool networkStepAnnounced=false, frameRequested=false;
     int networkMode=0, loadedArchiveIndex=-1;
@@ -1174,6 +1175,16 @@ void EmulationSession::run() {
                 emit networkResyncRequested();
             }
         }
+        if(networkMode && networkTimeline.active()) {
+            QJsonObject quality;
+            const bool realtime=networkReady && !paused && !networkWaiting_.load() &&
+                !rewind_.load() && !networkRemoteRewinding && !fastForward_.load();
+            if(networkTimeline.takeQuality(quality,realtime) && !networkQualityPending_.exchange(true)) {
+                networkQualityVisible=true;emit networkQualityChanged(quality);
+            }
+        } else if(networkQualityVisible && !networkQualityPending_.exchange(true)) {
+            networkQualityVisible=false;emit networkQualityChanged(QJsonObject{{"active",false}});
+        }
         if(networkMode && (networkWaiting_.load() || (networkMode==2 && !networkReady))) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2)); continue;
         }
@@ -1362,6 +1373,7 @@ void EmulationSession::run() {
     achievements.unloadGame();
     host.captureAchievementProgress = {}; host.restoreAchievementProgress = {};
     networkTimeline.stop();
+    if(networkQualityVisible)emit networkQualityChanged(QJsonObject{{"active",false}});
     host.unload();
     loaded_.store(false);
 }
