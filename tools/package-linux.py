@@ -26,7 +26,6 @@ PLUGIN_FILES = (
     "wayland-decoration-client/libbradient.so",
     "tls/libqopensslbackend.so",
     "tls/libqcertonlybackend.so",
-    "multimedia/libffmpegmediaplugin.so",
     "imageformats/libqjpeg.so",
     "imageformats/libqsvg.so",
     "imageformats/libqgif.so",
@@ -55,7 +54,7 @@ def dependencies(binary: Path) -> dict[str, Path]:
     for line in output.splitlines():
         if "not found" in line:
             raise RuntimeError(f"Missing dependency of {binary}: {line.strip()}")
-        match = re.match(r"\s*(\S+)\s+=>\s+(/\S+)", line)
+        match = re.match(r"\s*(\S+)\s+=>\s+(/.+?)\s+\(0x[0-9a-fA-F]+\)\s*$", line)
         if match:
             name, source = match.groups()
             path = Path(source)
@@ -169,6 +168,7 @@ Windows и Linux x86_64 используют общий контракт сет�
 """
     (stage / "ЗАПУСК-LINUX.txt").write_text(instruction, encoding="utf-8")
     notice = stage / "licenses"
+    shutil.copytree(root / "build/deps/video-minimal/linux/share/kegarefusion-ffmpeg", notice / "ffmpeg")
     for source, name in (
         (root / "THIRD_PARTY.md", "THIRD_PARTY.md"),
         (root / "third_party/libco/LICENSE.txt", "libco-LICENSE.txt"),
@@ -181,7 +181,6 @@ Windows и Linux x86_64 используют общий контракт сет�
         (root / "third_party/Wayland-Protocols-LICENSE.txt", "Wayland-Protocols-LICENSE.txt"),
         (Path("/usr/share/doc/libqt6core6t64/copyright"), "Qt-copyright.txt"),
         (Path("/usr/share/doc/libssl3t64/copyright"), "OpenSSL-copyright.txt"),
-        (Path("/usr/share/doc/libavcodec62/copyright"), "FFmpeg-copyright.txt"),
         (Path("/usr/share/common-licenses/LGPL-3"), "LGPL-3.txt"),
         (Path("/usr/share/common-licenses/GPL-2"), "GPL-2.txt"),
     ):

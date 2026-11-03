@@ -312,3 +312,19 @@ Measured sizes exclude user data and the other platform's archive:
 - Main further opportunity: a purpose-built FFmpeg with PNG/AAC encoders and MOV muxing. About116.69 MiB of existing Linux libraries are exclusive to the full FFmpeg graph, including libraries that need replacement. This is NOT a promised saving; a minimal replacement must be built and measured. VideoRecorder directly requires FFmpeg even without the Qt plugin.
 - ICU data (about31.58 MiB) is a real QtCore dependency. Qt UI/network/audio/graphics, SDL controllers and OpenSSL/TLS remain required. Both core modules stay physically separate for Link Cable; hardlink deduplication could merge the loaded modules. Embedded controller PNGs total roughly12.6 MiB; optimizing these is a separate resource-quality task.
 - User-supplied Super Eagle GLSL/preset files are included unchanged in external `shaders/super-eagle`, with attribution and GPL text. First custom-shader selection defaults to the packaged shaders folder. A focused `shader_tests --external-preset` run compiled both passes and rendered successfully through llvmpipe OpenGL4.5. Archive/deployment checks confirmed all example files. Original user-supplied testbuild/super-eagle files were preserved.
+
+
+## 0.21.1 — minimal FFmpeg runtime — 2026-11-03
+
+Both platforms now use checksum-pinned FFmpeg 7.1.2 with PNG/AAC encoders and MOV muxing, including upstream MOV packet/parser dependencies. No decoding, demuxing, protocols, network, devices or filters. NASM and runtime CPU dispatch remain enabled; baseline x86-64, LGPL-2.1-or-later. Three runtime libraries total about 2.1 MiB per platform. Linux shared objects have verified literal `$ORIGIN` RUNPATH.
+
+| Package | Before (MiB) | After (MiB) |
+|---|---:|---:|
+| Windows runtime/documents | 100.72 | 81.41 |
+| Linux extracted | 293.49 | 162.09 |
+| Linux gzip archive | 120.23 | 67.96 |
+
+- Removed Qt multimedia playback plugins and their exclusive runtime dependencies. Isolated silent native audio probes on current Windows and WSL Linux passed before/after: same device inventory/default output, 44.1/48 kHz PCM consumed, volume/suspend/resume/reset/reopen functional, no media plugin loaded in fallback. This is audio-output validation, not a Windows 10 compatibility test.
+- Linux `video_recording_tests` passed once against minimal FFmpeg: exact RGB round trip, AAC sound, PAL input-recording export, raw pixels despite Blargg, live stepping and cancellation. Windows `--encode-only` generated 65 RGB frames plus AAC; external FFmpeg decoding confirmed every pixel and a non-silent audio track. No desktop or interactive Windows gameplay automation.
+- Both Release application builds passed. Packaged Windows files match staging byte-for-byte, with no leftover root DLLs. Linux app and both cores retain identical allocated sections after package stripping; isolated offscreen archive startup exited 0. Archive excludes Qt multimedia plugins, full FFmpeg and QtQuick. Packaging dependency parsing now handles spaces in source paths.
+- Compatibility answer derives from Qt 6.10 requirements and renderer code: Windows 10 1809+ x64/Windows 11, desktop OpenGL 2.1 (WGL on Windows, Qt X11/Wayland on Linux). No specific GPU minimum or Windows 10 runtime test is claimed. Linux package is built against glibc 2.43.

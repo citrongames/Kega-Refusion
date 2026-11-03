@@ -109,11 +109,16 @@ def main() -> None:
         Path("plugins/tls/qopensslbackend.dll"): qt_root / "plugins/tls/qopensslbackend.dll",
         Path("libcrypto-3-x64.dll"): openssl_root / "libcrypto-3-x64.dll",
         Path("libssl-3-x64.dll"): openssl_root / "libssl-3-x64.dll",
-        Path("plugins/multimedia/ffmpegmediaplugin.dll"): qt_root / "plugins/multimedia/ffmpegmediaplugin.dll",
-        Path("plugins/multimedia/windowsmediaplugin.dll"): qt_root / "plugins/multimedia/windowsmediaplugin.dll",
     }
 
     runtime = {path.name.lower(): path for path in (qt_root / "bin").glob("*.dll")}
+    video_root = root / "build/deps/video-minimal/windows"
+    # Application recording uses our small encoder/muxer build, not Qt's general media stack.
+    for name in ("avcodec-61.dll", "avformat-61.dll", "avutil-59.dll"):
+        library = video_root / "bin" / name
+        if not library.is_file():
+            raise SystemExit(f"Missing minimal FFmpeg runtime: {library}")
+        runtime[name] = library
     # Prefer the exact compiler runtime. GCC 13.2 imports nanosleep64, which is
     # absent from the older libwinpthread DLL included with Qt's GCC 13.1 kit.
     for name in ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"):
@@ -162,6 +167,7 @@ def main() -> None:
 
     notices = stage / "licenses"
     notices.mkdir()
+    shutil.copytree(video_root / "share/kegarefusion-ffmpeg", notices / "ffmpeg")
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
     shutil.copy2(root / "third_party/libco/LICENSE.txt", notices / "libco-LICENSE.txt")
@@ -187,7 +193,6 @@ def main() -> None:
 
     for source, name in (
         (Path("/usr/share/common-licenses/LGPL-3"), "Qt-LGPL-3.txt"),
-        (Path("/usr/share/common-licenses/LGPL-2.1"), "FFmpeg-LGPL-2.1.txt"),
     ):
         if source.is_file():
             shutil.copy2(source, notices / name)
@@ -202,6 +207,19 @@ def main() -> None:
             if target.is_file() and filecmp.cmp(source, target, shallow=False):
                 continue
             shutil.copy2(source, target)
+    # Retire only known components previously shipped by this packager.
+    # Native QAudioSink/device enumeration does not require a media playback plugin.
+    for relative in ("plugins/multimedia/ffmpegmediaplugin.dll",
+                     "plugins/multimedia/windowsmediaplugin.dll", "swscale-8.dll",
+                     "swresample-5.dll", "licenses/FFmpeg-LGPL-2.1.txt"):
+        target = destination / relative
+        if target.is_symlink() or not target.resolve().is_relative_to(destination):
+            raise SystemExit(f"Refusing to remove unsafe retired component: {target}")
+        if target.is_file() and not (stage / relative).exists():
+            target.unlink()
+    media_directory = destination / "plugins/multimedia"
+    if media_directory.is_dir() and not any(media_directory.iterdir()):
+        media_directory.rmdir()
     generated_qt_conf = destination / "qt.conf"
     if generated_qt_conf.is_file() and generated_qt_conf.read_bytes() == b"[Paths]\nPlugins = plugins\n":
         generated_qt_conf.unlink()

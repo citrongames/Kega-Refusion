@@ -114,7 +114,7 @@ QByteArray makeInputRom() {
     return rom;
 }
 
-void writerRoundTrip(const QString& dir) {
+void writerRoundTrip(const QString& dir, bool encodeOnly = false) {
     VideoRecorder recorder;QString error;
     const QString path=dir+"/цветной тест.mov";
     require(recorder.start(path,error),qPrintable(error));
@@ -135,6 +135,12 @@ void writerRoundTrip(const QString& dir) {
     recorder.finish();waitFor([&]{return recorder.completed();});
     const auto result=recorder.result();require(result.error.isEmpty(),qPrintable(result.error));
     require(result.frames==65 && result.paths.size()==1,"wrong encoded frame count");
+    if (encodeOnly) {
+        QFile reference(dir+"/expected.rgb");
+        require(reference.open(QIODevice::WriteOnly) && reference.write(expected)==expected.size(), "reference write failed");
+        std::printf("Encoded 65 native RGB frames and AAC sound for external verification\n");
+        return;
+    }
     require(decode(path)==expected,"video pixels changed during lossless encoding");
     checkAudio(path);
     const auto streams=probe(path).value("streams").toArray();
@@ -200,7 +206,11 @@ void sessionExport(const QString& core,const QString& dir) {
 }
 int main(int argc,char**argv) {
     QCoreApplication app(argc,argv);
-    try {require(argc==2,"core path required");QTemporaryDir dir;require(dir.isValid(),"temporary directory failed");
+    try {
+        if (argc==3 && QString::fromLocal8Bit(argv[1])=="--encode-only") {
+            writerRoundTrip(QString::fromLocal8Bit(argv[2]), true); return 0;
+        }
+        require(argc==2,"core path required");QTemporaryDir dir;require(dir.isValid(),"temporary directory failed");
         writerRoundTrip(dir.path());sessionExport(QString::fromLocal8Bit(argv[1]),dir.path());return 0;
     } catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}
 }

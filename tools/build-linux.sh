@@ -2,6 +2,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 python3 "$root/tools/prepare-archive.py" --platform linux
+python3 "$root/tools/prepare-video.py" --platform linux
 "$root/tools/build-core.sh" linux
 cmake -S "$root" -B "$root/build/linux" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \

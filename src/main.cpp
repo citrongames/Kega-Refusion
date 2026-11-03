@@ -50,7 +50,12 @@ void configurePluginPaths() {
     if (directory.isEmpty()) return;
     QStringList paths;
     const QString bundled = QDir(directory).filePath(QStringLiteral("plugins"));
-    if (QDir(bundled).exists()) paths.append(bundled);
+    if (QDir(bundled).exists()) {
+        // A deployed package is self-contained. System Qt multimedia plugins
+        // can depend on a different/full FFmpeg and must not be mixed into it.
+        QCoreApplication::setLibraryPaths({bundled});
+        return;
+    }
     const QString installed = QLibraryInfo::path(QLibraryInfo::PluginsPath);
     if (!installed.isEmpty() && !paths.contains(installed)) paths.append(installed);
     for (const QString& path : QCoreApplication::libraryPaths())
