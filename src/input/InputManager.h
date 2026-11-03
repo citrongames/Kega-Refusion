@@ -36,6 +36,7 @@ struct PlayerMapping {
     QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key
     QMap<int,QMap<int,int>> mouse; // controller type -> target -> Qt::MouseButton (0 = unbound)
     int deadzonePercent = 25;
+    int analogSensitivity = 100; // MD Mouse stick speed, percent (25..400).
 };
 class InputManager final : public QObject {
     Q_OBJECT
@@ -53,8 +54,12 @@ public:
                                     ControllerType type = ControllerType::Pad);
     static QString targetName(ConsoleProfile profile, int target,
                               ControllerType type = ControllerType::Pad);
+    bool jcart() const;
+    unsigned jcartPlayerBase() const;
+    void setJCart(bool enabled); // transient cartridge hardware, never persisted
     ControllerAdapter adapter() const;
     ControllerAdapter adapter(ConsoleProfile profile) const;
+    bool adapterConnection(ConsoleProfile profile, unsigned player) const;
     void setAdapter(ConsoleProfile profile, ControllerAdapter adapter);
     void setProfile(ConsoleProfile profile);
     void setMovieControllers(const QByteArray& controllersJson);
@@ -81,12 +86,15 @@ public:
 signals:
     void devicesChanged();
     void adapterChanged(int adapter);
+    void jcartChanged(bool enabled);
     void maskChanged(unsigned player, unsigned mask);
     void connectionChanged(unsigned player, bool connected);
     void controllerTypeChanged(unsigned player, bool sixButton);
     void deviceTypeChanged(unsigned player, int type);
     void configurationChanged();
     void backgroundGamepadChanged(bool enabled);
+    void mouseMotion(unsigned player, double dx, double dy); // relative core pixels from a stick
+    void paddleMoved(unsigned player, int position); // signed absolute X, -32768..32767
     void aimMoved(unsigned player, double dx, double dy); // screen fractions, includes elapsed time
     void commandChanged(int command, bool pressed);
     void captureReady(); // all inputs released; waiting for the new binding

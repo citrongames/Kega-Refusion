@@ -38,6 +38,9 @@ private:
     ConsoleProfile selectedProfile() const;
     int selectedPlayer() const;
     ControllerAdapter selectedAdapter() const;
+    bool selectedJCart() const;
+    unsigned selectedJCartBase() const;
+    bool selectedJCartPlayer(int player) const;
     PlayerMapping displayMapping() const;
     int draftKey() const;
     PlayerMapping& draft();
@@ -77,6 +80,9 @@ private:
     QLabel* aimSourceLabel_ = nullptr;
     QComboBox* aimSourceBox_ = nullptr;
     QLabel* aimHint_ = nullptr;
+    QLabel* analogSensitivityLabel_ = nullptr;
+    QSlider* analogSensitivitySlider_ = nullptr;
+    QLabel* analogSensitivityValue_ = nullptr;
     QLabel* controllerTypeLabel_ = nullptr;
     QComboBox* controllerTypeBox_ = nullptr;
     QSlider* deadzoneSlider_ = nullptr;
@@ -93,6 +99,8 @@ private:
     QPushButton* clearButton_ = nullptr;
     QMap<int, PlayerMapping> drafts_;
     QMap<int, ControllerAdapter> adapterDrafts_;
+    QMap<int, bool> ordinaryConnectionDrafts_;
+    QMap<int, bool> adapterConnectionDrafts_;
     QSet<int> dirtyAdapters_;
     QSet<int> dirty_;
     QSet<int> captureKeysDown_;

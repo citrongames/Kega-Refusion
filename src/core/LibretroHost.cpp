@@ -32,6 +32,10 @@ namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
 constexpr qsizetype maxAchievementProgressSize = 2 * 1024 * 1024;
+bool mdControllerHardware(unsigned system) { return system == 0x80 || system == 0x84; }
+bool smsControllerHardware(unsigned system) {
+    return system == 0x10 || system == 0x20 || system == 0x21 || system == 0x81;
+}
 const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
 const QByteArray stateMagic("KRSTATE1", 8);
@@ -153,6 +157,9 @@ bool LibretroHost::initialize(QString& error) {
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
     api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
     api_->multitap = reinterpret_cast<decltype(api_->multitap)>(library_.resolve("retro_kegarefusion_multitap"));
+    api_->configure_controllers = reinterpret_cast<decltype(api_->configure_controllers)>(library_.resolve("retro_kegarefusion_controllers"));
+    api_->input_map = reinterpret_cast<decltype(api_->input_map)>(library_.resolve("retro_kegarefusion_input_map"));
+    api_->jcart = reinterpret_cast<decltype(api_->jcart)>(library_.resolve("retro_kegarefusion_jcart"));
     api_->debug_gain = reinterpret_cast<decltype(api_->debug_gain)>(library_.resolve("retro_kegarefusion_debug_gain"));
     api_->debug_capabilities = reinterpret_cast<decltype(api_->debug_capabilities)>(library_.resolve("retro_kegarefusion_debug_capabilities"));
     api_->native_video_size = reinterpret_cast<decltype(api_->native_video_size)>(library_.resolve("retro_kegarefusion_native_video_size"));
@@ -878,7 +885,7 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
 void LibretroHost::setButtons(unsigned port, unsigned mask) {
     if (linkPeer_ && port == 1) { Activation scope(linkPeer_.get()); linkPeer_->setButtons(0,mask); return; }
     if (port >= buttons_.size()) return;
-    if (controllerKinds_[port] == ControllerType::Pad && !controllerSixButton_[port])
+    if (controllerKind(port) == ControllerType::Pad && !controllerSixButton_[port])
         mask &= ~((1u << 2) | (1u << 9) | (1u << 10) | (1u << 11)); // Mode/X/Y/Z.
     buttons_[port] = controllerConnected_[port] ? mask : 0u;
 }
@@ -904,7 +911,7 @@ bool LibretroHost::setControllerSixButton(unsigned port, bool sixButton) {
     return true;
 }
 bool LibretroHost::setControllerKind(unsigned player, ControllerType type) {
-    if (player >= controllerKinds_.size() || int(type) < 0 || int(type) > int(ControllerType::Justifier) ||
+    if (player >= controllerKinds_.size() || int(type) < 0 || int(type) > int(ControllerType::Paddle) ||
         (player == 0 && (type == ControllerType::Menacer || type == ControllerType::Justifier)) ||
         (player == 2 && type != ControllerType::Justifier && type != ControllerType::Pad) ||
         (player >= 3 && type != ControllerType::Pad) ||
@@ -918,20 +925,55 @@ void LibretroHost::setGunAim(unsigned player, int x, int y, bool offscreen) {
     if (player < gunAim_.size()) gunAim_[player] = {int16_t(std::clamp(x,-32767,32767)),
         int16_t(std::clamp(y,-32767,32767)),offscreen};
 }
+void LibretroHost::setPointer(unsigned player, int x, int y) {
+    if (player < gunAim_.size()) gunAim_[player] = {int16_t(std::clamp(x,-32768,32767)),
+        int16_t(std::clamp(y,-32768,32767)),false};
+}
+bool LibretroHost::hasJCart() const {
+    return loaded_ && !linkRequested_ && api_->system_hw &&
+        mdControllerHardware(api_->system_hw()) && api_->jcart && api_->jcart();
+}
+unsigned LibretroHost::jcartPlayerBase() const {
+    const auto adapter = controllerAdapter();
+    if (adapter != ControllerAdapter::None) return adapterPlayerCount(adapter);
+    return controllerConnected_[1] && controllerConnected_[2] && controllerKinds_[1] == ControllerType::Justifier &&
+        controllerKinds_[2] == ControllerType::Justifier ? 3 : 2;
+}
+ControllerType LibretroHost::controllerKind(unsigned player) const {
+    if (player >= controllerKinds_.size()) return ControllerType::Pad;
+    if (linkRequested_ || linkParent_ || controllerAdapter() != ControllerAdapter::None ||
+        (hasJCart() && player >= jcartPlayerBase() && player < jcartPlayerBase()+2)) return ControllerType::Pad;
+    if (!loaded_) return controllerKinds_[player];
+    const unsigned hardware=api_->system_hw?api_->system_hw():0;
+    const bool md=mdControllerHardware(hardware),sms=smsControllerHardware(hardware);
+    if (player == 2) return md && controllerConnected_[1] && controllerConnected_[2] &&
+        controllerKinds_[1] == ControllerType::Justifier && controllerKinds_[2] == ControllerType::Justifier
+        ? ControllerType::Justifier : ControllerType::Pad;
+    if (player >= 3) return ControllerType::Pad;
+    const auto kind=controllerKinds_[player];
+    if (md) return kind==ControllerType::Mouse ||
+        (player==1 && (kind==ControllerType::Menacer || kind==ControllerType::Justifier))
+        ? kind : ControllerType::Pad;
+    if (sms) return kind==ControllerType::LightPhaser || kind==ControllerType::Paddle
+        ? kind : ControllerType::Pad;
+    return ControllerType::Pad;
+}
 ControllerAdapter LibretroHost::controllerAdapter() const {
     if (linkRequested_ || linkParent_) return ControllerAdapter::None;
     if (!loaded_) return adapter_;
-    const bool sms = isMasterSystem();
-    const bool md = api_->system_hw && (api_->system_hw() & 0x81u) == 0x80u;
-    return (isMasterTap(adapter_) ? sms : md) ? adapter_ : ControllerAdapter::None;
+    if (hasJCart() && adapterPlayerCount(adapter_) + 2 > MaxControllerPlayers) return ControllerAdapter::None;
+    const unsigned hardware=api_->system_hw?api_->system_hw():0;
+    return (isMasterTap(adapter_) ? smsControllerHardware(hardware) : mdControllerHardware(hardware))
+        ? adapter_ : ControllerAdapter::None;
 }
 unsigned LibretroHost::controllerPlayerCount() const {
+    if (hasJCart()) return jcartPlayerBase()+2;
     const auto adapter = controllerAdapter();
     if (adapter != ControllerAdapter::None) return adapterPlayerCount(adapter);
     // The chained second Justifier is a third logical input, still on port B.
     if (!linkRequested_ && controllerConnected_[1] && controllerConnected_[2] &&
         controllerKinds_[1] == ControllerType::Justifier && controllerKinds_[2] == ControllerType::Justifier &&
-        (!loaded_ || (api_->system_hw && (api_->system_hw() & 0x81u) == 0x80u))) return 3;
+        (!loaded_ || (api_->system_hw && mdControllerHardware(api_->system_hw())))) return 3;
     return 2;
 }
 bool LibretroHost::setControllerAdapter(ControllerAdapter adapter, QString& error) {
@@ -945,8 +987,9 @@ bool LibretroHost::setControllerAdapter(ControllerAdapter adapter, QString& erro
 }
 void LibretroHost::applyControllerPorts(bool force) {
     if (!loaded_) return;
-    const bool sms = contentExtension_ == "sms";
-    const bool md = !sms && contentExtension_ != "gg" && contentExtension_ != "sg";
+    const unsigned hardware=api_->system_hw?api_->system_hw():0;
+    const bool sms=smsControllerHardware(hardware);
+    const bool md=mdControllerHardware(hardware);
     if (linkRequested_ || linkParent_) {
         callbackPlayers_.fill(-1); callbackPlayers_[0] = 0;
         const unsigned pad = controllerSixButton_[0] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1) : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,0);
@@ -955,6 +998,39 @@ void LibretroHost::applyControllerPorts(bool force) {
         return;
     }
     const auto adapter = controllerAdapter();
+    const bool extended = hasJCart() || adapter != ControllerAdapter::None ||
+        controllerKind(0) == ControllerType::Mouse || controllerKind(1) == ControllerType::Mouse ||
+        controllerKind(0) == ControllerType::Paddle || controllerKind(1) == ControllerType::Paddle;
+    if (extended && api_->configure_controllers && api_->input_map) {
+        unsigned connected=0, six=0, kinds=0;
+        for(unsigned player=0;player<MaxControllerPlayers;++player) {
+            if(controllerConnected_[player])connected|=1u<<player;
+            if(controllerSixButton_[player])six|=1u<<player;
+            auto kind=controllerKind(player);
+            if ((sms && (kind==ControllerType::Mouse || kind==ControllerType::Menacer || kind==ControllerType::Justifier)) ||
+                (md && (kind==ControllerType::Paddle || kind==ControllerType::LightPhaser))) kind=ControllerType::Pad;
+            kinds|=unsigned(kind)<<(player*3);
+        }
+        bool configured=true;
+        if(force || !appliedExtended_ || appliedAdapter_!=adapter || appliedConnected_!=connected || appliedSixButton_!=six || appliedKinds_!=kinds) {
+            configured=api_->configure_controllers(unsigned(adapter),connected,six,kinds);
+            if(configured) {
+                appliedExtended_=true;appliedAdapter_=adapter;appliedConnected_=connected;appliedSixButton_=six;appliedKinds_=kinds;
+                controllerDevices_.fill(~0u);
+            }
+        }
+        if(configured) {
+            const auto mapping=api_->input_map();
+            for(unsigned callback=0;callback<MaxControllerPlayers;++callback) {
+                const unsigned owner=(mapping>>(callback*4))&15;
+                callbackPlayers_[callback]=owner<MaxControllerPlayers?int(owner):-1;
+            }
+            return;
+        }
+        // A rejected topology must not reuse the previous core callback map.
+        force=true;
+    }
+    if(appliedExtended_){force=true;appliedExtended_=false;}
     if (adapter != ControllerAdapter::None && api_->multitap) {
         unsigned connected = 0, six = 0, callback = 0;
         callbackPlayers_.fill(-1);
@@ -982,7 +1058,7 @@ void LibretroHost::applyControllerPorts(bool force) {
             : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)) : RETRO_DEVICE_JOYPAD;
     };
     for (unsigned port=0;port<2;++port) if (controllerConnected_[port]) {
-        const auto kind = controllerKinds_[port];
+        const auto kind = controllerKind(port);
         if (md && port == 1 && (kind == ControllerType::Menacer || kind == ControllerType::Justifier)) {
             devices[port] = kind == ControllerType::Menacer
                 ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 1)
@@ -1518,7 +1594,7 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
     for (size_t i = 0; i < controllerKinds_.size(); ++i)
         controllers.append(QJsonObject{{QStringLiteral("connected"), controllerConnected_[i]},
             {QStringLiteral("sixButton"), controllerSixButton_[i]},
-            {QStringLiteral("kind"), int(controllerKinds_[i])}});
+            {QStringLiteral("kind"), int(controllerKind(unsigned(i)))}});
     QJsonArray cheatsJson;
     for (const auto& entry : cheats())
         cheatsJson.append(QJsonObject{{QStringLiteral("code"),entry.code},
@@ -1536,6 +1612,8 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         {QStringLiteral("frameRate"),fps()},
         {QStringLiteral("controllers"),controllers},
         {QStringLiteral("adapter"),int(controllerAdapter())},
+        {QStringLiteral("jcart"),hasJCart()},
+        {QStringLiteral("jcartBase"),hasJCart()?int(jcartPlayerBase()):0},
         {QStringLiteral("playerCount"),int(controllerPlayerCount())},
         {QStringLiteral("cheats"),cheatsJson},
         {QStringLiteral("bios"),movieBiosFingerprints()}};
@@ -1698,8 +1776,8 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         const auto kindValue = object.value(QStringLiteral("kind"));
         if (!value.isObject() || !object.value(QStringLiteral("connected")).isBool() ||
             !object.value(QStringLiteral("sixButton")).isBool() || !kindValue.isDouble() ||
-            kindValue.toInt(-1) < 0 || kindValue.toInt(-1) > int(ControllerType::Justifier) ||
-            (i == 0 && kindValue.toInt() >= int(ControllerType::Menacer)) ||
+            kindValue.toInt(-1) < 0 || kindValue.toInt(-1) > int(ControllerType::Paddle) ||
+            (i == 0 && (kindValue.toInt() == int(ControllerType::Menacer) || kindValue.toInt() == int(ControllerType::Justifier))) ||
             (i == 2 && kindValue.toInt() != int(ControllerType::Pad) &&
              kindValue.toInt() != int(ControllerType::Justifier)) ||
             (i >= 3 && kindValue.toInt() != int(ControllerType::Pad))) {
@@ -1708,6 +1786,60 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         connected[size_t(i)] = object.value(QStringLiteral("connected")).toBool();
         sixButton[size_t(i)] = object.value(QStringLiteral("sixButton")).toBool();
         kinds[size_t(i)] = ControllerType(kindValue.toInt());
+    }
+    // Older recordings have no topology metadata. New recordings and network
+    // snapshots must match the loaded cartridge and its actual console ports.
+    const bool topologyMetadata=configuration.contains(QStringLiteral("jcart")) ||
+        configuration.contains(QStringLiteral("jcartBase"));
+    if(!topologyMetadata && api_->jcart && api_->jcart()) {
+        // Legacy recordings never described the cartridge sockets. Do not
+        // reinterpret a saved third-gun or multitap preference as J-Cart input.
+        const bool legacyChain=!adapterValue && connected[1] && connected[2] &&
+            kinds[1]==ControllerType::Justifier && kinds[2]==ControllerType::Justifier;
+        const unsigned base=adapterValue ? adapterPlayerCount(ControllerAdapter(adapterValue)) :
+            legacyChain ? 3u : 2u;
+        if(base+1<MaxControllerPlayers) {
+            connected[base]=false;
+            connected[base+1]=false;
+        }
+    }
+    if(topologyMetadata) {
+        const auto jcartValue=configuration.value(QStringLiteral("jcart"));
+        const auto baseValue=configuration.value(QStringLiteral("jcartBase"));
+        const auto countValue=configuration.value(QStringLiteral("playerCount"));
+        const auto adapterField=configuration.value(QStringLiteral("adapter"));
+        const auto linkValue=configuration.value(QStringLiteral("linkCable"));
+        const bool linked=linkValue.toBool();
+        const unsigned hardware=api_->system_hw?api_->system_hw():0;
+        const bool md=mdControllerHardware(hardware),sms=smsControllerHardware(hardware);
+        const bool actualJcart=!linked && api_->jcart && api_->jcart();
+        const bool recordedJcart=jcartValue.toBool();
+        const bool adapterSupported=adapterValue==0 ||
+            (isMasterTap(ControllerAdapter(adapterValue)) ? sms : md);
+        const bool chain=adapterValue==0 && md && connected[1] && connected[2] &&
+            kinds[1]==ControllerType::Justifier && kinds[2]==ControllerType::Justifier;
+        const int base=adapterValue ? int(adapterPlayerCount(ControllerAdapter(adapterValue))) :
+            chain ? 3 : 2;
+        const int count=linked ? 2 : base+(recordedJcart?2:0);
+        bool valid=jcartValue.isBool() && baseValue.isDouble() && countValue.isDouble() &&
+            adapterField.isDouble() && linkValue.isBool() && adapterSupported &&
+            recordedJcart==actualJcart && baseValue.toInt(-1)==(recordedJcart?base:0) &&
+            countValue.toInt(-1)==count && count<=int(MaxControllerPlayers);
+        for(int player=0;valid && player<controllers.size();++player) {
+            const auto kind=kinds[size_t(player)];
+            if(adapterValue || linked || player>=count) valid=kind==ControllerType::Pad;
+            else if(player==2 && chain) valid=kind==ControllerType::Justifier;
+            else if(player>=2) valid=kind==ControllerType::Pad;
+            else if(md) valid=kind==ControllerType::Pad || kind==ControllerType::Mouse ||
+                (player==1 && (kind==ControllerType::Menacer || kind==ControllerType::Justifier));
+            else if(sms) valid=kind==ControllerType::Pad || kind==ControllerType::LightPhaser ||
+                kind==ControllerType::Paddle;
+            else valid=kind==ControllerType::Pad;
+        }
+        if(!valid) {
+            error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи."));
+            return false;
+        }
     }
     const auto cheatArray = configuration.value(QStringLiteral("cheats")).toArray();
     if (cheatArray.size() > Cheats::MaxCodes) { error = Localization::text(QStringLiteral("Слишком много читов в записи.")); return false; }
@@ -2144,6 +2276,20 @@ int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsig
         default: return 0;
         }
     }
+    if (baseDevice == RETRO_DEVICE_MOUSE && unsigned(owner) < active_->gunAim_.size()) {
+        const auto& position=active_->gunAim_[owner];
+        switch(id) {
+        case RETRO_DEVICE_ID_MOUSE_X:return position.x;
+        case RETRO_DEVICE_ID_MOUSE_Y:return position.y;
+        case RETRO_DEVICE_ID_MOUSE_LEFT:return !!(mask&(1u<<1));
+        case RETRO_DEVICE_ID_MOUSE_RIGHT:return !!(mask&1u);
+        case RETRO_DEVICE_ID_MOUSE_WHEELDOWN:return !!(mask&(1u<<8));
+        case RETRO_DEVICE_ID_MOUSE_MIDDLE:return !!(mask&(1u<<3));
+        default:return 0;
+        }
+    }
+    if (baseDevice == RETRO_DEVICE_ANALOG && unsigned(owner)<active_->gunAim_.size())
+        return id==RETRO_DEVICE_ID_ANALOG_X?active_->gunAim_[owner].x:0;
     if (baseDevice != RETRO_DEVICE_JOYPAD) return 0;
     if (port == 0 && active_->contentExtension_ == "sms")
         mask |= (active_->buttons_[0] | active_->buttons_[1]) & (1u << RETRO_DEVICE_ID_JOYPAD_START);

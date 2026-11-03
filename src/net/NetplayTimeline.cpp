@@ -43,27 +43,44 @@ unsigned NetplayTimeline::localInputSource(int role,const QJsonObject& configura
     const unsigned target=unsigned(role-1);
     if(target>=unsigned(controllers.size()))return 0;
     const int kind=controllers[int(target)].toObject().value("kind").toInt(-1);
-    if(kind<=int(ControllerType::Pad) || kind>int(ControllerType::Justifier))return 0;
+    if(kind<=int(ControllerType::Pad) || kind>int(ControllerType::Paddle))return 0;
     for(unsigned source=0;source<MaxGunPlayers && source<unsigned(controllers.size());++source) {
         const auto device=controllers[int(source)].toObject();
         if(device.value("connected").toBool() && device.value("kind").toInt(-1)==kind)return source;
     }
     return target;
 }
-MovieInput NetplayTimeline::merge(const QList<QPair<int,MovieInput>>& inputs) {
+MovieInput NetplayTimeline::merge(const QList<QPair<int,MovieInput>>& inputs,unsigned relativeRolesMask) {
     MovieInput result; result.aim.fill(quint64(1)<<32);
+    std::array<int,MaxGunPlayers> relativeX{},relativeY{};
     for (const auto& p:inputs) {
         if (p.first<1 || p.first>int(MaxControllerPlayers)) continue;
         const int port=p.first-1;
-        // Each participant uses their local first controller for the assigned role.
+        // Each participant's selected local device is encoded into input slot zero.
         result.buttons[port] |= p.second.buttons[0];
-        // Stable peer-id order resolves simultaneous aiming, without averaging away targets.
-        if (port<int(MaxGunPlayers) && !(p.second.aim[0]&(quint64(1)<<32))) result.aim[port]=p.second.aim[0];
+        if (port>=int(MaxGunPlayers)) continue;
+        if (relativeRolesMask & (1u<<port)) {
+            relativeX[port]+=qint16(p.second.aim[0]);
+            relativeY[port]+=qint16(p.second.aim[0]>>16);
+        } else if (!(p.second.aim[0]&(quint64(1)<<32))) {
+            // Stable peer-id order resolves simultaneous absolute aiming.
+            result.aim[port]=p.second.aim[0];
+        }
+    }
+    for (unsigned port=0;port<MaxGunPlayers;++port) if(relativeRolesMask & (1u<<port)) {
+        const auto x=quint16(qint16(qBound(-255,relativeX[port],255)));
+        const auto y=quint16(qint16(qBound(-255,relativeY[port],255)));
+        result.aim[port]=x | (quint64(y)<<16);
     }
     for (auto& b:result.buttons) b=neutral(b);
     return result;
 }
 void NetplayTimeline::apply(LibretroHost& h,const MovieInput& in) {
     for (unsigned p=0;p<MaxControllerPlayers;++p) h.setButtons(p,in.buttons[p]);
-    for (unsigned p=0;p<MaxGunPlayers;++p) h.setGunAim(p,qint16(in.aim[p]),qint16(in.aim[p]>>16),bool(in.aim[p]&(quint64(1)<<32)));
+    for (unsigned p=0;p<MaxGunPlayers;++p) {
+        const int x=qint16(in.aim[p]),y=qint16(in.aim[p]>>16);
+        const auto kind=h.controllerKind(p);
+        if(kind==ControllerType::Mouse || kind==ControllerType::Paddle) h.setPointer(p,x,y);
+        else h.setGunAim(p,x,y,bool(in.aim[p]&(quint64(1)<<32)));
+    }
 }

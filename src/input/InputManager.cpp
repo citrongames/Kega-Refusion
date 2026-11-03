@@ -28,10 +28,14 @@ constexpr int sgTargets[] = {4, 5, 6, 7, 0, 8};
 constexpr int phaserTargets[] = {1, 2};
 constexpr int menacerTargets[] = {1, 0, 8, 3, 2};
 constexpr int justifierTargets[] = {1, 3, 2};
+constexpr int mouseTargets[] = {1, 0, 8, 3};
+constexpr int paddleTargets[] = {0};
 ControllerType validControllerType(ConsoleProfile profile, ControllerType type) {
     if (profile == ConsoleProfile::MegaDrive &&
-        (type == ControllerType::Menacer || type == ControllerType::Justifier)) return type;
-    if (profile == ConsoleProfile::MasterSystem && type == ControllerType::LightPhaser) return type;
+        (type == ControllerType::Menacer || type == ControllerType::Justifier ||
+         type == ControllerType::Mouse)) return type;
+    if (profile == ConsoleProfile::MasterSystem &&
+        (type == ControllerType::LightPhaser || type == ControllerType::Paddle)) return type;
     return ControllerType::Pad;
 }
 struct TargetRange {
@@ -46,6 +50,8 @@ TargetRange gameTargetRange(ConsoleProfile profile, bool sixButton = true,
     case ControllerType::LightPhaser: return {phaserTargets, 2};
     case ControllerType::Menacer: return {menacerTargets, 5};
     case ControllerType::Justifier: return {justifierTargets, 3};
+    case ControllerType::Mouse: return {mouseTargets, 4};
+    case ControllerType::Paddle: return {paddleTargets, 1};
     case ControllerType::Pad: break;
     }
     if (profile == ConsoleProfile::MegaDrive)
@@ -143,7 +149,8 @@ QString adapterSetting(ConsoleProfile profile) {
     return QStringLiteral("input/%1/adapter").arg(profileId(profile));
 }
 ControllerType slotControllerType(ConsoleProfile profile, int player, ControllerType type) {
-    if (profile == ConsoleProfile::MegaDrive && player == 0) return ControllerType::Pad;
+    if (profile == ConsoleProfile::MegaDrive && player == 0)
+        return type == ControllerType::Mouse ? type : ControllerType::Pad;
     if (player == 2) return profile == ConsoleProfile::MegaDrive
         ? ControllerType::Justifier : ControllerType::Pad;
     if (player >= 3) return ControllerType::Pad;
@@ -221,12 +228,35 @@ struct InputManager::Impl {
     std::array<ControllerAdapter, 4> adapters{};
     std::array<std::array<bool, playerCount>, 4> adapterConnections{};
     ControllerAdapter movieAdapter = ControllerAdapter::None;
+    bool jcartActive = false;
+    bool movieJCart = false;
+    unsigned movieJCartBase = 0;
+    bool effectiveJCart() const {
+        if (profile != ConsoleProfile::MegaDrive) return false;
+        return movieControllersActive && profile == movieProfile ? movieJCart : jcartActive;
+    }
     ControllerAdapter effectiveAdapter() const {
-        return movieControllersActive && profile == movieProfile
-            ? movieAdapter : adapters[profileIndex(profile)];
+        if (movieControllersActive && profile == movieProfile) return movieAdapter;
+        const ControllerAdapter selected = adapters[profileIndex(profile)];
+        return effectiveJCart() && adapterPlayerCount(selected) == MaxControllerPlayers
+            ? ControllerAdapter::None : selected;
+    }
+    unsigned effectiveJCartBase() const {
+        if (!effectiveJCart()) return 0;
+        if (movieControllersActive && profile == movieProfile) return movieJCartBase;
+        if (effectiveAdapter() != ControllerAdapter::None)
+            return adapterPlayerCount(effectiveAdapter());
+        const auto& first = mappings[profileIndex(profile)][1];
+        const auto& second = mappings[profileIndex(profile)][2];
+        return first.connected && first.controllerType == ControllerType::Justifier &&
+               second.connected ? 3u : 2u;
+    }
+    bool jcartPlayer(int player) const {
+        const unsigned base = effectiveJCartBase();
+        return base && player >= int(base) && player < int(base + 2);
     }
     ControllerType effectiveType(int player) const {
-        return effectiveAdapter() != ControllerAdapter::None
+        return effectiveAdapter() != ControllerAdapter::None || jcartPlayer(player)
             ? ControllerType::Pad : effective(player).controllerType;
     }
     ControllerType inputSourceType(int player) const {
@@ -263,6 +293,8 @@ struct InputManager::Impl {
     int captureInstance = -1, capturePlayer = -1, neutralPolls = 0;
     QElapsedTimer captureTimer;
     QElapsedTimer aimTimer;
+    std::array<int, playerCount> paddlePositions{};
+    std::array<bool, playerCount> paddlePositionValid{};
     QVector<int> neutralAxes;
 
     explicit Impl(InputManager* parent, QString path) : owner(parent), settingsPath(std::move(path)) {
@@ -294,6 +326,7 @@ struct InputManager::Impl {
                 ? AimSource::LeftStick : AimSource::Mouse;
             m.showCrosshair = settings.value(prefix + "showCrosshair", true).toBool();
             m.deadzonePercent = std::clamp(settings.value(prefix + "deadzone", m.deadzonePercent).toInt(), 5, 60);
+            m.analogSensitivity = std::clamp(settings.value(prefix + "analogSensitivity", 100).toInt(), 25, 400);
             for (int target = 0; target < targetCount; ++target) {
                 const QString key = prefix + QStringLiteral("pad/%1").arg(target);
                 if (settings.contains(key)) {
@@ -304,7 +337,8 @@ struct InputManager::Impl {
                 if (gameplayTarget(target) && settings.contains(keyKey)) m.keyboard[target] = storedKeyboardKey(settings.value(keyKey).toInt());
             }
             for (ControllerType type : {ControllerType::LightPhaser, ControllerType::Menacer,
-                                        ControllerType::Justifier}) {
+                                        ControllerType::Justifier, ControllerType::Mouse,
+                                        ControllerType::Paddle}) {
                 if (validControllerType(ConsoleProfile(p), type) != type) continue;
                 for (int target : gameTargetRange(ConsoleProfile(p), true, type)) {
                     const QString key = prefix + QStringLiteral("mouse/%1/%2").arg(int(type)).arg(target);
@@ -322,7 +356,7 @@ struct InputManager::Impl {
             }
         }
         auto& mdPortA = mappings[profileIndex(ConsoleProfile::MegaDrive)][0];
-        if (mdPortA.controllerType != ControllerType::Pad) {
+        if (isLightgun(mdPortA.controllerType)) {
             legacyPortOneGun = true;
             auto& mdPortB = mappings[profileIndex(ConsoleProfile::MegaDrive)][1];
             const auto defaultB = InputManager::defaultMapping(ConsoleProfile::MegaDrive, 1);
@@ -335,6 +369,7 @@ struct InputManager::Impl {
                 mdPortB.showCrosshair == defaultB.showCrosshair &&
                 mdPortB.deviceKey == defaultB.deviceKey &&
                 mdPortB.deadzonePercent == defaultB.deadzonePercent &&
+                mdPortB.analogSensitivity == defaultB.analogSensitivity &&
                 mdPortB.pad == defaultB.pad && mdPortB.keyboard == defaultB.keyboard &&
                 mdPortB.mouse == defaultB.mouse;
             if (portBIsDefault) { mdPortB = mdPortA; legacyGunMoved = true; }
@@ -349,6 +384,7 @@ struct InputManager::Impl {
                     chained.showCrosshair == defaultChained.showCrosshair &&
                     chained.deviceKey == defaultChained.deviceKey &&
                     chained.deadzonePercent == defaultChained.deadzonePercent &&
+                    chained.analogSensitivity == defaultChained.analogSensitivity &&
                     chained.pad == defaultChained.pad && chained.keyboard == defaultChained.keyboard &&
                     chained.mouse == defaultChained.mouse) {
                     chained = mdPortA;
@@ -358,11 +394,13 @@ struct InputManager::Impl {
             mdPortA.controllerType = ControllerType::Pad;
             mdPortA.connected = false; // A gun migration must not create an implicit port-A pad.
         }
-        for (int p = 0; p < 4; ++p) {
-            auto& chained = mappings[p][2];
-            chained.controllerType = slotControllerType(ConsoleProfile(p), 2, chained.controllerType);
-            if (p != profileIndex(ConsoleProfile::MegaDrive)) chained.connected = false;
-        }
+        for (int p = 0; p < 4; ++p)
+            for (int player = 0; player < playerCount; ++player) {
+                auto& slot = mappings[p][player];
+                slot.controllerType = slotControllerType(ConsoleProfile(p), player, slot.controllerType);
+                if (player == 2 && p != profileIndex(ConsoleProfile::MegaDrive))
+                    slot.connected = false;
+            }
         SDL_SetMainReady(); // Qt owns main(), including in SDL's Windows builds.
         if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) == 0) {
             sdlReady = true;
@@ -386,6 +424,11 @@ struct InputManager::Impl {
         return nullptr;
     }
     bool connected(int player) const {
+        if (jcartPlayer(player)) {
+            const bool recorded = movieControllersActive && profile == movieProfile;
+            return recorded ? effective(player).connected
+                : adapterConnections[profileIndex(profile)][player];
+        }
         if (effectiveAdapter() != ControllerAdapter::None) {
             const bool recorded = movieControllersActive && profile == movieProfile;
             return player < int(adapterPlayerCount(effectiveAdapter())) &&
@@ -520,25 +563,51 @@ struct InputManager::Impl {
                       deadzone, held);
     }
     void pollAim(const std::array<Device*, playerCount>& assigned) {
-        // Only poll() advances aim: key events and settings recomputations cannot
-        // multiply movement. Reuse its device assignments; pad-only input has no
-        // clock reads or extra SDL axis calls.
-        bool needed = false;
-        if ((enabled || backgroundGamepadActive) && !capture) {
-            for (unsigned player = 0; player < playerCount; ++player) {
-                const auto& mapping = effective(int(player));
-                needed |= inputSourceConnected(int(player)) && inputSourceType(int(player)) != ControllerType::Pad &&
-                          mapping.aimSource == AimSource::LeftStick && assigned[player];
+        // Only poll() advances analog input. Key events and settings changes
+        // cannot multiply motion. Use the same device assignment as pad input.
+        const bool allowed = (enabled || backgroundGamepadActive) && !capture;
+        bool timedMotionNeeded = false;
+        for (int player = 0; player < playerCount; ++player) {
+            const auto type = inputSourceType(player);
+            const auto& mapping = effective(player);
+            const auto* device = assigned[player];
+            const bool stick = allowed && inputSourceConnected(player) &&
+                mapping.aimSource == AimSource::LeftStick && device;
+            if (stick && type == ControllerType::Paddle) {
+                int raw;
+                if (device->controller)
+                    raw = SDL_GameControllerGetAxis(device->controller, SDL_CONTROLLER_AXIS_LEFTX);
+                else if (SDL_JoystickNumAxes(device->joystick) > 0)
+                    raw = SDL_JoystickGetAxis(device->joystick, 0);
+                else {
+                    paddlePositionValid[player] = false;
+                    continue;
+                }
+                const int threshold = 32767 * mapping.deadzonePercent / 100;
+                const int magnitude = std::abs(raw);
+                const int position = magnitude <= threshold ? 0 :
+                    (raw < 0 ? -1 : 1) * std::min(32767,
+                        (magnitude - threshold) * 32767 / (32767 - threshold));
+                if (!paddlePositionValid[player] || paddlePositions[player] != position) {
+                    paddlePositions[player] = position;
+                    paddlePositionValid[player] = true;
+                    emit owner->paddleMoved(unsigned(player), position);
+                }
+            } else {
+                paddlePositionValid[player] = false;
             }
+            timedMotionNeeded |= stick && (isLightgun(type) || type == ControllerType::Mouse);
         }
-        if (!needed) { aimTimer.invalidate(); return; }
+        if (!timedMotionNeeded) { aimTimer.invalidate(); return; }
         if (!aimTimer.isValid()) { aimTimer.start(); return; }
         const double seconds = std::min(aimTimer.nsecsElapsed() * 1e-9, 0.032);
         aimTimer.restart();
-        for (unsigned player = 0; player < playerCount; ++player) {
-            const auto& mapping = effective(int(player));
+        for (int player = 0; player < playerCount; ++player) {
+            const auto type = inputSourceType(player);
+            if (!isLightgun(type) && type != ControllerType::Mouse) continue;
+            const auto& mapping = effective(player);
             const auto* device = assigned[player];
-            if (!inputSourceConnected(int(player)) || inputSourceType(int(player)) == ControllerType::Pad ||
+            if (!allowed || !inputSourceConnected(player) ||
                 mapping.aimSource != AimSource::LeftStick || !device) continue;
             double x, y;
             if (device->controller) {
@@ -552,10 +621,19 @@ struct InputManager::Impl {
             const double length = std::hypot(x, y);
             const double deadzone = mapping.deadzonePercent / 100.0;
             if (length <= deadzone) continue;
-            constexpr double screenFractionsPerSecond = 0.65;
-            const double distance = (std::min(length, 1.0) - deadzone) / (1.0 - deadzone) *
-                                    screenFractionsPerSecond * seconds;
-            emit owner->aimMoved(player, x / length * distance, y / length * distance);
+            const double strength = (std::min(length, 1.0) - deadzone) / (1.0 - deadzone);
+            if (type == ControllerType::Mouse) {
+                constexpr double corePixelsPerSecond = 300.0;
+                const double distance = strength * corePixelsPerSecond *
+                    mapping.analogSensitivity / 100.0 * seconds;
+                emit owner->mouseMotion(unsigned(player),
+                                        x / length * distance, y / length * distance);
+            } else {
+                constexpr double screenFractionsPerSecond = 0.65;
+                const double distance = strength * screenFractionsPerSecond * seconds;
+                emit owner->aimMoved(unsigned(player),
+                                     x / length * distance, y / length * distance);
+            }
         }
     }
     unsigned padMask(int player, Device* device) {
@@ -696,8 +774,14 @@ PlayerMapping InputManager::mapping(ConsoleProfile profile, int player) const {
     if (d->movieControllersActive && profile == d->movieProfile)
         return d->movieMappings[player];
     PlayerMapping result = ordinaryMapping(profile, player);
-    if (d->adapters[profileIndex(profile)] != ControllerAdapter::None)
+    const bool activeProfile = profile == d->profile;
+    const ControllerAdapter activeAdapter = activeProfile ? d->effectiveAdapter()
+        : d->adapters[profileIndex(profile)];
+    if (activeAdapter != ControllerAdapter::None ||
+        (activeProfile && d->jcartPlayer(player)))
         result.connected = d->adapterConnections[profileIndex(profile)][player];
+    if (activeProfile && d->jcartPlayer(player))
+        result.controllerType = ControllerType::Pad;
     return result;
 }
 PlayerMapping InputManager::ordinaryMapping(ConsoleProfile profile, int player) const {
@@ -705,8 +789,10 @@ PlayerMapping InputManager::ordinaryMapping(ConsoleProfile profile, int player) 
 }
 void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMapping& value) {
     if (!validPlayer(player)) return;
+    const unsigned oldJCartBase = d->effectiveJCartBase();
     auto m = value;
     m.deadzonePercent = std::clamp(m.deadzonePercent, 5, 60);
+    m.analogSensitivity = std::clamp(m.analogSensitivity, 25, 400);
     m.controllerType = slotControllerType(profile, player, m.controllerType);
     if (player == 2 && profile != ConsoleProfile::MegaDrive) m.connected = false;
     if (m.aimSource != AimSource::LeftStick) m.aimSource = AimSource::Mouse;
@@ -731,7 +817,10 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (profile == d->profile && (previous.sixButton != m.sixButton || previous.controllerType != m.controllerType))
         d->keys.clear(); // Release keys hidden by a type change, including their later key-up.
     d->aimTimer.invalidate();
-    const bool tapActive = d->adapters[profileIndex(profile)] != ControllerAdapter::None;
+    d->paddlePositionValid.fill(false);
+    const bool tapActive = (profile == d->profile ? d->effectiveAdapter()
+        : d->adapters[profileIndex(profile)]) != ControllerAdapter::None ||
+        (profile == d->profile && d->jcartPlayer(player));
     if (tapActive && !(d->movieControllersActive && profile == d->movieProfile)) {
         d->adapterConnections[profileIndex(profile)][player] = value.connected;
         m.connected = previous.connected; // Keep the ordinary port and chained gun state.
@@ -751,6 +840,8 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (m.showCrosshair) settings.remove(prefix + "showCrosshair");
     else settings.setValue(prefix + "showCrosshair", false);
     settings.setValue(prefix + "deadzone", m.deadzonePercent);
+    if (m.analogSensitivity == 100) settings.remove(prefix + "analogSensitivity");
+    else settings.setValue(prefix + "analogSensitivity", m.analogSensitivity);
     for (int target = 0; target < targetCount; ++target) {
         const QString key = prefix + QStringLiteral("pad/%1").arg(target);
         if (m.pad.value(target) == defaults.pad.value(target)) settings.remove(key);
@@ -760,7 +851,8 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
         else settings.setValue(keyKey, m.keyboard.value(target, 0));
     }
     for (ControllerType type : {ControllerType::LightPhaser, ControllerType::Menacer,
-                                ControllerType::Justifier}) {
+                                ControllerType::Justifier, ControllerType::Mouse,
+                                ControllerType::Paddle}) {
         if (validControllerType(profile, type) != type) continue;
         for (int target : gameTargetRange(profile, true, type)) {
             const QString key = prefix + QStringLiteral("mouse/%1/%2").arg(int(type)).arg(target);
@@ -771,10 +863,19 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     }
     settings.sync();
     if (profile == d->profile) {
-        emit connectionChanged(unsigned(player), d->connected(player));
-        if (player == 1) emit connectionChanged(2, d->connected(2));
-        emit controllerTypeChanged(unsigned(player), d->effective(player).sixButton);
-        emit deviceTypeChanged(unsigned(player), int(d->effectiveType(player)));
+        if (oldJCartBase != d->effectiveJCartBase()) {
+            emit jcartChanged(d->effectiveJCart());
+            for (unsigned slot = 0; slot < playerCount; ++slot) {
+                emit connectionChanged(slot, d->connected(int(slot)));
+                emit controllerTypeChanged(slot, d->effective(int(slot)).sixButton);
+                emit deviceTypeChanged(slot, int(d->effectiveType(int(slot))));
+            }
+        } else {
+            emit connectionChanged(unsigned(player), d->connected(player));
+            if (player == 1) emit connectionChanged(2, d->connected(2));
+            emit controllerTypeChanged(unsigned(player), d->effective(player).sixButton);
+            emit deviceTypeChanged(unsigned(player), int(d->effectiveType(player)));
+        }
         emit configurationChanged();
     }
     d->axisHeld = {};
@@ -794,7 +895,13 @@ PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
         m.mouse[int(ControllerType::LightPhaser)][1] = int(Qt::LeftButton);
         m.mouse[int(ControllerType::LightPhaser)][2] = int(Qt::RightButton);
     }
+    if (profile == ConsoleProfile::MasterSystem)
+        m.mouse[int(ControllerType::Paddle)][0] = int(Qt::LeftButton);
     if (profile == ConsoleProfile::MegaDrive) {
+        auto& mouse = m.mouse[int(ControllerType::Mouse)];
+        mouse[1] = int(Qt::LeftButton);
+        mouse[0] = int(Qt::RightButton);
+        mouse[8] = int(Qt::MiddleButton);
         auto& menacer = m.mouse[int(ControllerType::Menacer)];
         menacer[1] = int(Qt::LeftButton);
         menacer[0] = int(Qt::RightButton);
@@ -861,7 +968,9 @@ QVector<int> InputManager::gameTargets(ConsoleProfile profile, bool sixButton, C
     return QVector<int>(targets.begin(), targets.end());
 }
 QString InputManager::targetName(ConsoleProfile profile, int target, ControllerType type) {
-    if (validControllerType(profile, type) != ControllerType::Pad) {
+    if (type == ControllerType::Paddle && target == 0)
+        return Localization::text(QStringLiteral("Кнопка"));
+    if (isLightgun(validControllerType(profile, type))) {
         if (target == 1) return Localization::text(QStringLiteral("Курок"));
         if (target == 2) return Localization::text(QStringLiteral("Перезарядка"));
         if (target == 0) return Localization::text(QStringLiteral("Кнопка 2"));
@@ -896,17 +1005,46 @@ QString InputManager::targetName(ConsoleProfile profile, int target, ControllerT
     default: return Localization::text(QStringLiteral("Кнопка %1")).arg(target);
     }
 }
+bool InputManager::jcart() const { return d->effectiveJCart(); }
+unsigned InputManager::jcartPlayerBase() const { return d->effectiveJCartBase(); }
+void InputManager::setJCart(bool enabled) {
+    if (d->jcartActive == enabled) return;
+    const ControllerAdapter oldAdapter = d->effectiveAdapter();
+    d->jcartActive = enabled;
+    if (d->profile != ConsoleProfile::MegaDrive ||
+        (d->movieControllersActive && d->movieProfile == d->profile)) return;
+    d->keys.clear();
+    d->axisHeld = {};
+    d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
+    if (d->effectiveAdapter() != oldAdapter)
+        emit adapterChanged(int(d->effectiveAdapter()));
+    emit jcartChanged(enabled);
+    for (unsigned player = 0; player < playerCount; ++player) {
+        emit connectionChanged(player, d->connected(int(player)));
+        emit controllerTypeChanged(player, d->effective(int(player)).sixButton);
+        emit deviceTypeChanged(player, int(d->effectiveType(int(player))));
+    }
+    emit configurationChanged();
+    d->recompute();
+}
 ControllerAdapter InputManager::adapter() const {
     return d->effectiveAdapter();
 }
 ControllerAdapter InputManager::adapter(ConsoleProfile profile) const {
-    return d->movieControllersActive && profile == d->movieProfile
-        ? d->movieAdapter : d->adapters[profileIndex(profile)];
+    return profile == d->profile ? d->effectiveAdapter()
+        : d->adapters[profileIndex(profile)];
 }
+bool InputManager::adapterConnection(ConsoleProfile profile, unsigned player) const {
+    return player < playerCount &&
+        d->adapterConnections[profileIndex(profile)][player];
+}
+
 void InputManager::setAdapter(ConsoleProfile profile, ControllerAdapter requested) {
     const ControllerAdapter selected = allowedAdapter(profile, requested);
     const int p = profileIndex(profile);
     if (d->adapters[p] == selected) return;
+    const ControllerAdapter oldEffective = d->effectiveAdapter();
     d->adapters[p] = selected;
     QSettings settings(d->settingsPath, QSettings::IniFormat);
     settings.setValue(adapterSetting(profile), int(selected));
@@ -916,7 +1054,9 @@ void InputManager::setAdapter(ConsoleProfile profile, ControllerAdapter requeste
     d->keys.clear();
     d->axisHeld = {};
     d->aimTimer.invalidate();
-    emit adapterChanged(int(selected));
+    d->paddlePositionValid.fill(false);
+    if (d->effectiveAdapter() != oldEffective)
+        emit adapterChanged(int(d->effectiveAdapter()));
     for (unsigned player = 0; player < playerCount; ++player) {
         emit connectionChanged(player, d->connected(int(player)));
         emit controllerTypeChanged(player, d->effective(int(player)).sixButton);
@@ -927,8 +1067,11 @@ void InputManager::setAdapter(ConsoleProfile profile, ControllerAdapter requeste
 }
 void InputManager::setProfile(ConsoleProfile profile) {
     if (d->profile == profile) return;
+    const bool oldJCart = d->effectiveJCart();
     d->profile = profile; d->axisHeld = {}; d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
     emit adapterChanged(int(d->effectiveAdapter()));
+    if (oldJCart != d->effectiveJCart()) emit jcartChanged(d->effectiveJCart());
     for (unsigned player = 0; player < playerCount; ++player) {
         const auto& mapping = d->effective(int(player));
         emit connectionChanged(player, d->connected(player));
@@ -940,6 +1083,8 @@ void InputManager::setProfile(ConsoleProfile profile) {
 }
 void InputManager::setMovieControllers(const QByteArray& controllersJson) {
     const ControllerAdapter previousAdapter = d->effectiveAdapter();
+    const bool previousJCart = d->effectiveJCart();
+    const unsigned previousJCartBase = d->effectiveJCartBase();
     if (controllersJson.isEmpty()) {
         if (!d->movieControllersActive) return;
         d->movieControllersActive = false;
@@ -947,6 +1092,8 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
         const QJsonDocument document = QJsonDocument::fromJson(controllersJson);
         QJsonArray controllers;
         ControllerAdapter recordedAdapter = ControllerAdapter::None;
+        bool recordedJCart = false;
+        unsigned recordedJCartBase = 0;
         int count = 3;
         if (document.isArray()) {
             controllers = document.array(); // Legacy recordings have three ports.
@@ -962,6 +1109,26 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
             if (allowedAdapter(d->profile, recordedAdapter) != recordedAdapter) {
                 qWarning("Ignoring unsupported movie controller adapter");
                 return;
+            }
+            const QJsonValue jcartValue = object.value(QStringLiteral("jcart"));
+            if (!jcartValue.isUndefined() && !jcartValue.isBool()) {
+                qWarning("Ignoring invalid movie J-Cart configuration");
+                return;
+            }
+            recordedJCart = jcartValue.toBool();
+            if (recordedJCart) {
+                const QJsonValue baseValue = object.value(QStringLiteral("jcartBase"));
+                const int base = baseValue.toInt(-1);
+                if (d->profile != ConsoleProfile::MegaDrive || !baseValue.isDouble() ||
+                    base < 2 || base > 6 ||
+                    (recordedAdapter == ControllerAdapter::None && base != 2 && base != 3) ||
+                    (recordedAdapter != ControllerAdapter::None &&
+                     (adapterPlayerCount(recordedAdapter) == MaxControllerPlayers ||
+                      base != int(adapterPlayerCount(recordedAdapter))))) {
+                    qWarning("Ignoring invalid movie J-Cart configuration");
+                    return;
+                }
+                recordedJCartBase = unsigned(base);
             }
             controllers = object.value(QStringLiteral("controllers")).toArray();
             count = playerCount;
@@ -984,7 +1151,7 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
             const QJsonValue sixButton = object.value(QStringLiteral("sixButton"));
             const QJsonValue kind = object.value(QStringLiteral("kind"));
             if (!connected.isBool() || !sixButton.isBool() || !kind.isDouble() ||
-                kind.toInt(-1) < 0 || kind.toInt(-1) > int(ControllerType::Justifier)) {
+                kind.toInt(-1) < 0 || kind.toInt(-1) > int(ControllerType::Paddle)) {
                 qWarning("Ignoring invalid movie controller configuration");
                 return;
             }
@@ -993,8 +1160,24 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
             next[player].controllerType = slotControllerType(d->profile, player,
                 static_cast<ControllerType>(kind.toInt()));
         }
+        // v1 recordings describe only three ports. Leave their unrecorded
+        // extra slots disconnected even if the user's local adapter bank is enabled.
+        for (int player = count; player < playerCount; ++player) {
+            next[player].connected = false;
+            next[player].controllerType = ControllerType::Pad;
+        }
+        if (recordedJCart && recordedAdapter == ControllerAdapter::None) {
+            const bool chained = next[1].connected &&
+                next[1].controllerType == ControllerType::Justifier &&
+                next[2].connected && next[2].controllerType == ControllerType::Justifier;
+            if (recordedJCartBase != (chained ? 3u : 2u)) {
+                qWarning("Ignoring inconsistent movie J-Cart base");
+                return;
+            }
+        }
         bool unchanged = d->movieControllersActive && d->movieProfile == d->profile &&
-                         d->movieAdapter == recordedAdapter;
+                         d->movieAdapter == recordedAdapter && d->movieJCart == recordedJCart &&
+                         d->movieJCartBase == recordedJCartBase;
         for (int player = 0; player < playerCount && unchanged; ++player) {
             const auto& previous = d->movieMappings[player];
             const auto& current = next[player];
@@ -1006,14 +1189,20 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
         if (unchanged) return;
         d->movieProfile = d->profile;
         d->movieAdapter = recordedAdapter;
+        d->movieJCart = recordedJCart;
+        d->movieJCartBase = recordedJCartBase;
         d->movieMappings = std::move(next);
         d->movieControllersActive = true;
     }
     d->keys.clear();
     d->axisHeld = {};
     d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
     if (d->effectiveAdapter() != previousAdapter)
         emit adapterChanged(int(d->effectiveAdapter()));
+    if (d->effectiveJCart() != previousJCart ||
+        d->effectiveJCartBase() != previousJCartBase)
+        emit jcartChanged(d->effectiveJCart());
     for (unsigned player = 0; player < playerCount; ++player) {
         emit connectionChanged(player, d->connected(int(player)));
         emit controllerTypeChanged(player, d->effective(int(player)).sixButton);
@@ -1065,6 +1254,7 @@ void InputManager::setBackgroundGamepadActive(bool active) {
     if (d->backgroundGamepadActive == active) return;
     d->backgroundGamepadActive = active;
     d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
     d->recompute();
 }
 void InputManager::setNetworkInputSourceEnabled(bool enabled) {
@@ -1072,12 +1262,14 @@ void InputManager::setNetworkInputSourceEnabled(bool enabled) {
     d->networkInputSourceEnabled = enabled;
     d->axisHeld[0].fill(false);
     d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
     d->recompute();
 }
 void InputManager::setEnabled(bool enabled) {
     if (d->enabled == enabled) return;
     d->enabled = enabled;
     d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
     if (!enabled) d->keys.clear();
     d->commandBlocked.fill(true);
     d->recompute();
@@ -1161,6 +1353,7 @@ void InputManager::beginCapture(const QString& deviceKey, int player) {
     }
     d->captureTimer.start();
     d->aimTimer.invalidate();
+    d->paddlePositionValid.fill(false);
     d->recompute();
 }
 void InputManager::cancelCapture() { d->cancelCapture(); }

@@ -10,7 +10,7 @@ public:
     static QByteArray inputBytes(const MovieInput&);
     static bool parseInput(const QByteArray&,MovieInput&);
     static QByteArray frameBytes(quint64 epoch,quint64 frame,const MovieInput&,const QByteArray& digest={});
-    static MovieInput merge(const QList<QPair<int,MovieInput>>& inputs);
+    static MovieInput merge(const QList<QPair<int,MovieInput>>& inputs,unsigned relativeRolesMask=0);
     static unsigned localInputSource(int role, const QJsonObject& configuration);
     static void apply(LibretroHost&,const MovieInput&);
 };

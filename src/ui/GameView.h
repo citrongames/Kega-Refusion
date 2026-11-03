@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ShaderPipeline.h"
+#include "input/ControllerType.h"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -64,6 +65,8 @@ public:
     void setCrosshairVisible(unsigned player, bool visible);
     void setLightgunAim(unsigned player, QPointF normalized, bool offscreen = false);
     void setMouseGunPlayer(int player); // -1 disables mouse aim; 0/1 select console ports; 2 selects the chained second Justifier.
+    void setAnalogMousePlayer(int player, ControllerType type); // -1 disables desktop pointer input.
+    void resetAnalogPointer();
     void setLightgunInputEnabled(bool enabled);
 
 signals:
@@ -72,8 +75,11 @@ signals:
     void achievementPopupStarted(bool sound);
     void achievementBadgeRequested(const QString& url);
     void gunAimChanged(unsigned player, double x, double y, bool offscreen);
-    // Raw Qt::MouseButton mask; the input layer maps buttons for each gun device.
+    // Raw Qt::MouseButton mask; the input layer maps buttons for each device.
     void gunButtonsChanged(unsigned player, unsigned qtButtons);
+    void analogMouseMotion(unsigned player, double dx, double dy);
+    void analogPaddleMoved(unsigned player, int position);
+    void analogPointerReset();
 
 protected:
     bool event(QEvent* event) override;
@@ -98,6 +104,9 @@ private:
     bool mouseGunAvailable() const;
     void updateMouseAim(const QPointF& position);
     void clearMouseGun();
+    bool analogMouseAvailable() const;
+    void updateAnalogPointer(const QPointF& position);
+    void clearAnalogMouse();
     ShaderView* shaderView_ = nullptr;
     ShaderPreset shaderPreset_;
     bool gpuFailed_ = false;
@@ -156,6 +165,13 @@ private:
     GunState guns_[kGunSlots];
     int mouseGunPlayer_ = -1;
     unsigned mouseGunButtons_ = 0;
+    int analogMousePlayer_ = -1;
+    ControllerType analogMouseType_ = ControllerType::Pad;
+    unsigned analogMouseButtons_ = 0;
+    QPointF analogLastPosition_;
+    bool analogBaselineValid_ = false;
+    bool analogPaddlePositionValid_ = false;
+    int analogPaddlePosition_ = 0;
     bool lightgunInputEnabled_ = false;
     bool loading_ = false;
     QString loadingFileName_;

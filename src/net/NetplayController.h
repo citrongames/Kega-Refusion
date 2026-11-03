@@ -70,6 +70,8 @@ private:
     QByteArray rosterBytes_, lastLobbyBytes_;
     QJsonObject networkQuality_;
     QJsonArray roleKinds_;
+    bool jcart_=false;
+    int jcartBase_=0;
     NetAddressDiscovery* addressDiscovery_=nullptr;
     QByteArray invitationKey_;
     QString invitationPassword_,lanInvite_,addressStatus_,connectionId_;

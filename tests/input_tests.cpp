@@ -9,9 +9,11 @@
 #include <QSet>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QThread>
 #include <SDL.h>
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 
@@ -939,6 +941,165 @@ void testNetworkInputSource() {
             "transient network input source was persisted");
 }
 
+void testAnalogControllers() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "analog settings directory");
+    const QString path = temp.filePath("settings.ini");
+    InputManager manager(path);
+    auto mouse = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mouse.controllerType = ControllerType::Mouse;
+    mouse.deviceKey = "none";
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mouse);
+    require(manager.controllerType(0) == ControllerType::Mouse &&
+            InputManager::gameTargets(ConsoleProfile::MegaDrive, true, ControllerType::Mouse)
+                == QVector<int>({1, 0, 8, 3}),
+            "MD Mouse on physical port A was not available");
+    require(manager.mouseButtonMask(0, unsigned(Qt::LeftButton)) == (1u << 1) &&
+            manager.mouseButtonMask(0, unsigned(Qt::RightButton)) == 1u &&
+            manager.mouseButtonMask(0, unsigned(Qt::MiddleButton)) == (1u << 8),
+            "MD Mouse button defaults are incorrect");
+    require(!manager.keyEvent(Qt::Key_Up, true), "MD Mouse accepted pad directions");
+    auto invalid = manager.mapping(ConsoleProfile::MegaDrive, 2);
+    invalid.controllerType = ControllerType::Mouse;
+    manager.setMapping(ConsoleProfile::MegaDrive, 2, invalid);
+    require(manager.mapping(ConsoleProfile::MegaDrive, 2).controllerType == ControllerType::Justifier,
+            "MD Mouse was accepted behind the physical ports");
+
+    VirtualPad mouseStick(SDL_JOYSTICK_TYPE_UNKNOWN);
+    manager.poll();
+    mouse = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mouse.deviceKey = keyForId(manager.devices(), mouseStick.id);
+    mouse.aimSource = AimSource::LeftStick;
+    mouse.analogSensitivity = 400;
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mouse);
+    double mouseDx = 0, mouseDy = 0;
+    QObject::connect(&manager, &InputManager::mouseMotion, &manager,
+                     [&](unsigned player, double dx, double dy) {
+                         if (player == 0) { mouseDx += dx; mouseDy += dy; }
+                     });
+    mouseStick.axis(0, 32767);
+    manager.poll();
+    QThread::msleep(20);
+    manager.poll();
+    require(mouseDx > 0 && std::abs(mouseDy) < 0.01,
+            "MD Mouse stick did not emit relative motion");
+    {
+        InputManager reopened(path);
+        require(reopened.mapping(ConsoleProfile::MegaDrive, 0).controllerType == ControllerType::Mouse &&
+                reopened.mapping(ConsoleProfile::MegaDrive, 0).analogSensitivity == 400,
+                "MD Mouse type or sensitivity did not persist");
+    }
+
+    VirtualPad paddleStick(SDL_JOYSTICK_TYPE_UNKNOWN);
+    manager.poll();
+    auto paddle = manager.mapping(ConsoleProfile::MasterSystem, 0);
+    paddle.controllerType = ControllerType::Paddle;
+    paddle.aimSource = AimSource::LeftStick;
+    paddle.deviceKey = keyForId(manager.devices(), paddleStick.id);
+    manager.setMapping(ConsoleProfile::MasterSystem, 0, paddle);
+    manager.setProfile(ConsoleProfile::MasterSystem);
+    require(manager.controllerType(0) == ControllerType::Paddle &&
+            InputManager::gameTargets(ConsoleProfile::MasterSystem, true, ControllerType::Paddle)
+                == QVector<int>({0}),
+            "SMS Paddle target or physical type is incorrect");
+    int paddlePosition = 999999, paddleChanges = 0;
+    QObject::connect(&manager, &InputManager::paddleMoved, &manager,
+                     [&](unsigned player, int position) {
+                         if (player == 0) { paddlePosition = position; ++paddleChanges; }
+                     });
+    manager.poll();
+    require(paddlePosition == 0, "centered Paddle did not emit its initial position");
+    paddleStick.axis(0, 32767);
+    manager.poll();
+    require(paddlePosition > 30000, "Paddle stick did not reach its right edge");
+    const int unchanged = paddleChanges;
+    manager.poll();
+    require(paddleChanges == unchanged, "unchanged Paddle position emitted repeatedly");
+    paddleStick.axis(0, -32768);
+    manager.poll();
+    require(paddlePosition < -30000, "Paddle stick did not reach its left edge");
+    manager.setEnabled(false);
+    paddleStick.axis(0, 0);
+    manager.poll();
+    require(paddlePosition < -30000, "disabled Paddle continued to update");
+    manager.setEnabled(true);
+    manager.poll();
+    require(paddlePosition == 0, "Paddle did not resume after input was reenabled");
+    paddle.aimSource = AimSource::Mouse;
+    paddle.deviceKey = "none";
+    manager.setMapping(ConsoleProfile::MasterSystem, 0, paddle);
+    require(manager.mouseButtonMask(0, unsigned(Qt::LeftButton)) == 1u,
+            "Paddle mouse action did not map to joypad B");
+    auto invalidPaddle = manager.mapping(ConsoleProfile::MasterSystem, 2);
+    invalidPaddle.controllerType = ControllerType::Paddle;
+    manager.setMapping(ConsoleProfile::MasterSystem, 2, invalidPaddle);
+    require(manager.mapping(ConsoleProfile::MasterSystem, 2).controllerType == ControllerType::Pad,
+            "Paddle was accepted behind physical ports");
+}
+
+void testJCartTopology() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "J-Cart settings directory");
+    const QString path = temp.filePath("settings.ini");
+    InputManager manager(path);
+    require(!manager.jcart() && manager.jcartPlayerBase() == 0, "J-Cart enabled by default");
+    manager.setJCart(true);
+    require(manager.jcart() && manager.jcartPlayerBase() == 2 &&
+            manager.isConnected(2) && manager.isConnected(3) &&
+            manager.controllerType(2) == ControllerType::Pad &&
+            !manager.isConnected(4), "ordinary J-Cart pads did not append at P3/P4");
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::TeamPlayerPort1);
+    require(manager.jcartPlayerBase() == 5 && manager.isConnected(5) &&
+            manager.isConnected(6) && !manager.isConnected(7),
+            "single Team Player plus J-Cart did not expose seven roles");
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::FourWayPlay);
+    require(manager.jcartPlayerBase() == 4 && manager.isConnected(4) &&
+            manager.isConnected(5) && !manager.isConnected(6),
+            "4 Way Play plus J-Cart did not expose six roles");
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::TeamPlayerBoth);
+    require(manager.adapter() == ControllerAdapter::None &&
+            manager.jcartPlayerBase() == 2 && manager.isConnected(3) &&
+            !manager.isConnected(7),
+            "dual Team Player was not suppressed while J-Cart is active");
+    manager.setJCart(false);
+    require(!manager.jcart() && manager.adapter() == ControllerAdapter::TeamPlayerBoth &&
+            manager.isConnected(7), "stored dual adapter was not restored after J-Cart");
+
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::None);
+    auto parent = manager.mapping(ConsoleProfile::MegaDrive, 1);
+    parent.connected = true;
+    parent.controllerType = ControllerType::Justifier;
+    manager.setMapping(ConsoleProfile::MegaDrive, 1, parent);
+    auto chain = manager.mapping(ConsoleProfile::MegaDrive, 2);
+    chain.connected = true;
+    manager.setMapping(ConsoleProfile::MegaDrive, 2, chain);
+    manager.setJCart(true);
+    require(manager.jcartPlayerBase() == 3 && manager.isConnected(2) &&
+            manager.controllerType(2) == ControllerType::Justifier &&
+            manager.isConnected(3) && manager.isConnected(4),
+            "J-Cart did not append after chained Justifier");
+
+    QJsonArray recorded;
+    for (int player = 0; player < int(MaxControllerPlayers); ++player)
+        recorded.append(QJsonObject{{"connected", player < 5}, {"sixButton", true},
+                                    {"kind", int(player == 1 || player == 2
+                                        ? ControllerType::Justifier : ControllerType::Pad)}});
+    const QByteArray snapshot = QJsonDocument(QJsonObject{
+        {"adapter", 0}, {"jcart", true}, {"jcartBase", 3},
+        {"controllers", recorded}}).toJson(QJsonDocument::Compact);
+    manager.setJCart(false);
+    manager.setMovieControllers(snapshot);
+    require(manager.jcart() && manager.jcartPlayerBase() == 3 &&
+            manager.controllerType(3) == ControllerType::Pad && manager.isConnected(4),
+            "recorded J-Cart topology was not restored");
+    manager.setMovieControllers({});
+    require(!manager.jcart() && manager.jcartPlayerBase() == 0,
+            "ending recorded J-Cart override did not restore local topology");
+    InputManager reopened(path);
+    require(!reopened.jcart() && reopened.jcartPlayerBase() == 0,
+            "transient J-Cart hardware was persisted");
+}
+
 void testBackgroundGamepad() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create background gamepad settings directory");
@@ -992,6 +1153,16 @@ int main(int argc, char** argv) {
             testPhysicalKeyboard();
             testKeyboardSettingsMigration();
             std::puts("physical keyboard and reserved hotkey tests passed");
+            return 0;
+        }
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--analog")) {
+            testAnalogControllers();
+            std::puts("analog input tests passed");
+            return 0;
+        }
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--jcart")) {
+            testJCartTopology();
+            std::puts("J-Cart topology tests passed");
             return 0;
         }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--multitap")) {

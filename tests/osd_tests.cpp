@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QMouseEvent>
+#include <QVector>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -119,6 +121,74 @@ void testGameBorders() {
     require(image.pixelColor(320, 0) == Qt::black &&
             image.pixelColor(320, 719) == Qt::black,
             "letterbox fields around loaded game are not black");
+}
+
+void testAnalogPointerEvents() {
+    GameView view;
+    view.resize(640, 480);
+    QImage frame(640, 480, QImage::Format_RGB32);
+    frame.fill(Qt::black);
+    VideoFrameGeometry::setNativeSize(frame, QSize(320, 240));
+    view.setFrame(frame, 4.0 / 3.0);
+    view.setAspectMode(GameView::AspectMode::Stretch);
+    require(!render(view).isNull(), "analog pointer fixture did not render");
+    view.setLightgunInputEnabled(true);
+
+    struct Motion { unsigned player; double x, y; };
+    QVector<Motion> motions;
+    QVector<int> buttons;
+    QVector<int> paddle;
+    bool correctPlayer = true;
+    int gunAims = 0;
+    QObject::connect(&view, &GameView::analogMouseMotion, &view,
+                     [&](unsigned player, double x, double y) { motions.append({player, x, y}); });
+    QObject::connect(&view, &GameView::analogPaddleMoved, &view,
+                     [&](unsigned player, int position) {
+                         correctPlayer &= player == 0;
+                         paddle.append(position);
+                     });
+    QObject::connect(&view, &GameView::gunButtonsChanged, &view,
+                     [&](unsigned player, unsigned mask) {
+                         correctPlayer &= player == 0;
+                         buttons.append(int(mask));
+                     });
+    QObject::connect(&view, &GameView::gunAimChanged, &view,
+                     [&](unsigned, double, double, bool) { ++gunAims; });
+    const auto mouse = [&view](QEvent::Type type, QPointF position,
+                               Qt::MouseButton button = Qt::NoButton,
+                               Qt::MouseButtons held = Qt::NoButton) {
+        QMouseEvent event(type, position, position, button, held, Qt::NoModifier);
+        QApplication::sendEvent(&view, &event);
+    };
+
+    view.setAnalogMousePlayer(0, ControllerType::Mouse);
+    mouse(QEvent::MouseMove, QPointF(100, 100));
+    require(motions.isEmpty(), "first MD Mouse move jumped instead of setting a baseline");
+    mouse(QEvent::MouseMove, QPointF(104, 106));
+    require(motions.size() == 1 && motions[0].player == 0 &&
+            motions[0].x == 2.0 && motions[0].y == 3.0,
+            "MD Mouse movement did not scale to native game pixels");
+    mouse(QEvent::MouseButtonPress, QPointF(104, 106), Qt::LeftButton, Qt::LeftButton);
+    require(buttons.size() == 1 && buttons[0] == int(Qt::LeftButton),
+            "MD Mouse left button was not forwarded");
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(&view, &leave);
+    require(buttons.size() == 2 && buttons.last() == 0,
+            "leaving the game did not release the MD Mouse button");
+    mouse(QEvent::MouseMove, QPointF(200, 200));
+    require(motions.size() == 1, "returning to the game reused a stale mouse baseline");
+    mouse(QEvent::MouseMove, QPointF(202, 198));
+    require(motions.size() == 2 && motions.last().x == 1.0 &&
+            motions.last().y == -1.0, "MD Mouse motion after re-entry is incorrect");
+
+    view.setAnalogMousePlayer(0, ControllerType::Paddle);
+    mouse(QEvent::MouseMove, QPointF(0, 120));
+    mouse(QEvent::MouseMove, QPointF(639, 120));
+    require(paddle.size() == 2 && paddle[0] == -32768 &&
+            paddle[1] >= 32600 && paddle[1] <= 32767,
+            "Paddle did not follow the displayed rectangle to both horizontal extremes");
+    require(correctPlayer, "analog pointer events used the wrong player");
+    require(gunAims == 0, "analog pointer movement entered the lightgun aim path");
 }
 
 void testCleanScreenshot() {
@@ -627,6 +697,10 @@ void testAchievementPopup(bool positionsOnly = false) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--pointer-only"))) {
+            testAnalogPointerEvents();
+            std::puts("MD Mouse and Paddle pointer events passed"); return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--readiness-only"))) {
             testReadinessWaiting();
             std::puts("player readiness waiting OSD, release, connection priority and disabled OSD passed");return 0;
@@ -675,6 +749,7 @@ int main(int argc, char** argv) {
         testFpsOverlays();
         testReadinessWaiting();
         testGameBorders();
+        testAnalogPointerEvents();
         testCleanScreenshot();
         testFilteredSquarePixels();
         testUpperLeftBounds();

@@ -110,6 +110,8 @@ void ControllerDiagram::updateIllustration() {
     case ControllerType::LightPhaser: path = QStringLiteral(":/controllers/phaser.png"); break;
     case ControllerType::Menacer: path = QStringLiteral(":/controllers/menacer.png"); break;
     case ControllerType::Justifier: path = QStringLiteral(":/controllers/justifier.png"); break;
+    case ControllerType::Mouse: path = QStringLiteral(":/controllers/mouse.png"); break;
+    case ControllerType::Paddle: path = QStringLiteral(":/controllers/paddle.png"); break;
     case ControllerType::Pad: break;
     }
     if (controllerType_ == ControllerType::Pad) switch (profile_) {
@@ -224,6 +226,18 @@ void ControllerDiagram::rebuildTargets() {
         addArea(1, trigger);
         break;
     }
+    case ControllerType::Mouse:
+        // Button faces in the 1536x1024 MD Mouse image.
+        addEllipse(1, QPointF(598, 320), 65, 108);
+        addEllipse(0, QPointF(768, 297), 66, 107);
+        addEllipse(8, QPointF(937, 323), 66, 108);
+        addEllipse(3, QPointF(765, 769), 78, 44);
+        break;
+    case ControllerType::Paddle:
+        // Both physical buttons are electrically the same action.
+        addEllipse(0, QPointF(1237, 674), 92, 94);
+        addEllipse(0, QPointF(1261, 245), 90, 46);
+        break;
     case ControllerType::Pad: break;
     }
     if (controllerType_ == ControllerType::Pad) switch (profile_) {
@@ -375,6 +389,8 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
     case ControllerType::LightPhaser: name += QStringLiteral(" · Light Phaser"); break;
     case ControllerType::Menacer: name += QStringLiteral(" · Menacer"); break;
     case ControllerType::Justifier: name += QStringLiteral(" · Justifier"); break;
+    case ControllerType::Mouse: name += QStringLiteral(" · MD Mouse"); break;
+    case ControllerType::Paddle: name += QStringLiteral(" · SMS Paddle"); break;
     }
     painter.drawText(QRectF(8, 4, width() - 16, 26), Qt::AlignCenter, name);
 

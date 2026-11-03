@@ -111,13 +111,16 @@ public:
     ControllerAdapter controllerAdapter() const;
     ControllerAdapter requestedControllerAdapter() const { return adapter_; }
     unsigned controllerPlayerCount() const;
+    bool hasJCart() const;
+    unsigned jcartPlayerBase() const;
     bool setControllerConnected(unsigned port, bool connected);
     bool controllerConnected(unsigned port) const;
     bool setControllerSixButton(unsigned port, bool sixButton);
     bool controllerSixButton(unsigned port) const;
     bool setControllerKind(unsigned player, ControllerType type);
-    ControllerType controllerKind(unsigned player) const { return player < controllerKinds_.size() ? controllerKinds_[player] : ControllerType::Pad; }
+    ControllerType controllerKind(unsigned player) const;
     void setGunAim(unsigned player, int x, int y, bool offscreen);
+    void setPointer(unsigned player, int x, int y);
     bool loaded() const { return loaded_; }
     double fps() const { return av_.timing.fps; }
     int sampleRate() const { return int(av_.timing.sample_rate); }
@@ -216,6 +219,8 @@ private:
     std::array<bool,MaxControllerPlayers> controllerConnected_{{true,false,false}};
     std::array<bool,MaxControllerPlayers> controllerSixButton_{{true,true,true,true,true,true,true,true}};
     ControllerAdapter adapter_ = ControllerAdapter::None, preMovieAdapter_ = ControllerAdapter::None;
+    unsigned appliedKinds_ = ~0u;
+    bool appliedExtended_ = false;
     ControllerAdapter appliedAdapter_ = ControllerAdapter::None;
     unsigned appliedConnected_ = 0, appliedSixButton_ = 0;
     std::array<unsigned,2> controllerDevices_{{~0u,~0u}};

@@ -4,6 +4,7 @@
 #include "NetInterfaces.h"
 #include "core/EmulationSession.h"
 #include "input/ControllerTopology.h"
+#include "input/ControllerType.h"
 #include "ui/NetplayLobby.h"
 #include "i18n/Localization.h"
 #include <QSettings>
@@ -41,8 +42,16 @@ QJsonObject snapshotMetadata(const QByteArray& bytes) {
 QString manifestId(const QByteArray& bytes) { const auto m=NetFileTransfer::Manifest::fromBytes(bytes); return m?QString::fromLatin1(m->id.toHex()):QString(); }
 bool validRoleKinds(const QJsonArray& kinds) {
     if(kinds.size()>int(MaxControllerPlayers))return false;
-    for(const auto& value:kinds)if(!value.isDouble() || value.toInt(-1)<0 || value.toInt(-1)>3)return false;
+    for(const auto& value:kinds)if(!value.isDouble() || value.toInt(-1)<0 || value.toInt(-1)>int(ControllerType::Paddle))return false;
     return true;
+}
+bool validJCartMetadata(const QJsonObject& data,int count) {
+    const auto present=data.value("jcart");
+    if(!present.isUndefined() && !present.isBool())return false;
+    const auto base=data.value("jcartBase");
+    if(!base.isUndefined() && (!base.isDouble() || base.toInt(-1)<0))return false;
+    if(!present.toBool())return base.isUndefined() || base.toInt()==0;
+    return base.isDouble() && base.toInt()>=2 && base.toInt()+2==count;
 }
 QJsonArray roleKindsFromConfiguration(const QJsonObject& configuration) {
     QJsonArray kinds;
@@ -56,7 +65,9 @@ bool validSnapshotRoster(const QJsonObject& metadata,quint64 localId) {
     const auto config=metadata.value("configuration").toObject();
     const int count=config.value("linkCable").toBool()?2:config.value("playerCount").toInt(-1);
     const auto roster=metadata.value("roster").toArray();
-    if(count<2 || count>int(MaxControllerPlayers) || roster.isEmpty() || roster.size()>32)return false;
+    if(count<2 || count>int(MaxControllerPlayers) ||
+       !validJCartMetadata(config,config.value("playerCount").toInt(-1)) ||
+       roster.isEmpty() || roster.size()>32)return false;
     bool host=false,local=false;
     QSet<quint64> ids;
     for(const auto& item:roster) {
@@ -276,8 +287,14 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         snapshotRequested_=false;
         const auto metadata=snapshotMetadata(state);
         if(metadata.isEmpty()||metadata.value("configuration").toObject().value("linkCable").toBool()!=linkCable_)return;
-        const auto kinds=roleKindsFromConfiguration(metadata.value("configuration").toObject());
-        if(kinds!=roleKinds_){roleKinds_=kinds;announceContent();}
+        const auto configuration=metadata.value("configuration").toObject();
+        const auto kinds=roleKindsFromConfiguration(configuration);
+        const bool jcart=configuration.value("jcart").toBool();
+        const int jcartBase=jcart?configuration.value("jcartBase").toInt():0;
+        if(validJCartMetadata(configuration,configuration.value("playerCount").toInt(-1)) &&
+           (kinds!=roleKinds_ || jcart!=jcart_ || jcartBase!=jcartBase_)) {
+            roleKinds_=kinds;jcart_=jcart;jcartBase_=jcartBase;announceContent();
+        }
         hostEpoch_=metadata.value("epoch").toString().toULongLong();
         readyPeers_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();
         for(auto it=participants_.begin();it!=participants_.end();++it)if(it.key()&&it->value("matched").toBool()&&udpReadyPeers_.contains(it.key())&&!disconnectedAt_.contains(it.key())) {
@@ -321,7 +338,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         if(!active_)return;
         networkQuality_={};lobby_->setNetworkQuality({});
         gameReady_=false;gamePath_=path;sourceArchiveIndex_=index;files_->requestCancel();
-        if(hosting_)roleKinds_ = {};
+        if(hosting_){roleKinds_ = {};jcart_=false;jcartBase_=0;}
         // Preserve verification only for the explicitly completed download.
         if(path!=downloadedPath_)localManifest_.clear();
         incomingSnapshot_.clear();incomingSize_=0;pendingIncomingEpoch_=0;
@@ -332,7 +349,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(&session_,&EmulationSession::gameLoaded,this,[this](const QString& path,double,const QString& name){gamePath_=path;gameName_=name;onGameLoaded(path);});
     connect(&session_,&EmulationSession::gameClosed,this,[this]{
         networkQuality_={};lobby_->setNetworkQuality({});
-        gamePath_.clear();gameName_.clear();localManifest_.clear();gameReady_=false;roleKinds_ = {};
+        gamePath_.clear();gameName_.clear();localManifest_.clear();gameReady_=false;roleKinds_ = {};jcart_=false;jcartBase_=0;
         if(active_&&hosting_){manifest_.clear();readyPeers_.clear();announceContent();}
         refreshLobby();
     });
@@ -384,7 +401,7 @@ void NetplayController::startHost(quint16 port,const QString& address,const QStr
         transport_.stop();emit notice(error);QMessageBox::warning(lobby_,t("Онлайн"),error);return;
     }
     rosterBytes_.clear();lastLobbyBytes_.clear();udpReadyPeers_.clear();
-    active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=true;linkCable_=false;roleKinds_ = {};
+    active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=true;linkCable_=false;roleKinds_ = {};jcart_=false;jcartBase_=0;
     controllerAdapter_=session_.controllerAdapter();
     playerCount_=int(session_.controllerPlayerCount());
     if(!validControllerAdapter(controllerAdapter_) || playerCount_<2 || playerCount_>int(MaxControllerPlayers)) {controllerAdapter_=0;playerCount_=2;}
@@ -414,7 +431,7 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
     joinInvite_=invitation;joinPassword_=options.password;
     if(!transport_.join(options,&error)){QMessageBox::warning(lobby_,t("Онлайн"),error);return;}
     active_=true;hosting_=false;remoteGameOpen_=false;localRole_=0;localId_=0;allowDownloads_=false;gameReady_=false;linkCable_=false;
-    playerCount_=2;controllerAdapter_=0;roleKinds_ = {};
+    playerCount_=2;controllerAdapter_=0;roleKinds_ = {};jcart_=false;jcartBase_=0;
     storageId_=QString::fromLatin1(options.inviteSecret.left(16).toHex());
     session_.setNetworkMode(2,storageId_);session_.setNetworkRole(0);
     inputTimer_.start();status_=t("Подключение…");emit activeChanged(true);showLobby();
@@ -422,7 +439,7 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
 void NetplayController::leaveSession(){
     if(!active_)return;
     networkQuality_={};lobby_->setNetworkQuality({});
-    roleKinds_ = {};
+    roleKinds_ = {};jcart_=false;jcartBase_=0;
     stopping_=true;active_=false;connectionLost_=remoteConnectionWaiting_=remoteReadinessWaiting_=false;
     addressPending_=false;automaticAddress_=false;addressRetry_=false;addressDiscovery_->cancel();
     invitationKey_.clear();invitationPassword_.clear();lanInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
@@ -471,7 +488,7 @@ void NetplayController::applyLinkCableConfiguration(bool enabled){
 }
 void NetplayController::announceContent(){
     if(!hosting_)return;
-    const QJsonObject o{{"name",gameName_},{"open",!gamePath_.isEmpty()},{"manifest",QString::fromLatin1(manifest_.toBase64())},{"downloads",allowDownloads_},{"linkCable",linkCable_},{"playerCount",activePlayerCount()},{"roleKinds",roleKinds_}};
+    const QJsonObject o{{"name",gameName_},{"open",!gamePath_.isEmpty()},{"manifest",QString::fromLatin1(manifest_.toBase64())},{"downloads",allowDownloads_},{"linkCable",linkCable_},{"playerCount",activePlayerCount()},{"roleKinds",roleKinds_},{"jcart",jcart_&&!linkCable_},{"jcartBase",linkCable_?0:jcartBase_}};
     transport_.broadcast(MessageKind::Content,json(o));
 }
 void NetplayController::compareContent(){
@@ -584,7 +601,9 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     if(kind==MessageKind::Content&&!hosting_){
         const auto o=QJsonDocument::fromJson(b).object();
         const int count=o.value("playerCount").toInt(-1);if(count<2 || count>int(MaxControllerPlayers))return;
-        const auto kinds=o.value("roleKinds").toArray();if(!validRoleKinds(kinds))return;roleKinds_=kinds;
+        const auto kinds=o.value("roleKinds").toArray();
+        if(!validRoleKinds(kinds) || !validJCartMetadata(o,count))return;
+        roleKinds_=kinds;jcart_=o.value("jcart").toBool();jcartBase_=jcart_?o.value("jcartBase").toInt():0;
         gameName_=o.value("name").toString().left(512);allowDownloads_=o.value("downloads").toBool();
         applyLinkCableConfiguration(o.value("linkCable").toBool());playerCount_=count;
         const auto next=QByteArray::fromBase64(o.value("manifest").toString().toLatin1());
@@ -654,7 +673,8 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
     } else if(op=="lobby"){
         const int count=o.value("playerCount").toInt(-1);
         if(count<2 || count>int(MaxControllerPlayers))return;
-        const auto kinds=o.value("roleKinds").toArray();if(!validRoleKinds(kinds))return;
+        const auto kinds=o.value("roleKinds").toArray();
+        if(!validRoleKinds(kinds) || !validJCartMetadata(o,count))return;
         const int available=o.value("linkCable").toBool()?2:count;
         const auto array=o.value("participants").toArray();if(array.size()>32)return;
         QSet<quint64> ids;
@@ -670,7 +690,8 @@ void NetplayController::receive(quint64 peer,MessageKind kind,const QByteArray& 
         remoteReadinessWaiting_=o.value("readinessWaiting").toBool();
         allowCommands_=o.value("allowCommands").toBool();
         applyLinkCableConfiguration(o.value("linkCable").toBool());
-        playerCount_=count;roleKinds_=kinds;
+        playerCount_=count;roleKinds_=kinds;jcart_=o.value("jcart").toBool();
+        jcartBase_=jcart_?o.value("jcartBase").toInt():0;
         participants_.clear();for(const auto& value:array){auto participant=value.toObject();const auto id=participant.value("id").toString().toULongLong();participant.insert("local",id==localId_);participants_.insert(id,participant);}
         localRole_=roleValue(participants_.value(localId_).value("role").toString());session_.setNetworkRole(localRole_);refreshLobby();
     }
@@ -682,7 +703,7 @@ void NetplayController::refreshLobby(){
     if(readinessWaiting!=readinessWaiting_){readinessWaiting_=readinessWaiting;emit readinessWaitingChanged(readinessWaiting);}
     QJsonArray list;auto ids=participants_.keys();std::sort(ids.begin(),ids.end());for(auto id:ids)list.append(participants_.value(id));
     if(hosting_) {
-        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"linkCable",linkCable_},{"playerCount",activePlayerCount()},{"roleKinds",roleKinds_},{"connectionWaiting",waiting},{"readinessWaiting",readinessWaiting}});
+        const auto bytes=json({{"op","lobby"},{"participants",list},{"allowCommands",allowCommands_},{"linkCable",linkCable_},{"playerCount",activePlayerCount()},{"roleKinds",roleKinds_},{"jcart",jcart_&&!linkCable_},{"jcartBase",linkCable_?0:jcartBase_},{"connectionWaiting",waiting},{"readinessWaiting",readinessWaiting}});
         if(bytes!=lastLobbyBytes_){lastLobbyBytes_=bytes;transport_.broadcast(MessageKind::Control,bytes);}
     }
     QString romStatus=gameReady_?QStringLiteral("matched"):localManifest_.isEmpty()?QStringLiteral("missing"):QStringLiteral("verifying");
@@ -691,7 +712,7 @@ void NetplayController::refreshLobby(){
     QJsonObject rom{{"filename",gameName_},{"status",romStatus},{"progress",transferTotal_?double(transferDone_)*100.0/double(transferTotal_):0},
         {"canSelect",active_},{"canDownload",active_&&!hosting_&&allowDownloads_&&!manifest_.isEmpty()&&!downloading_},{"canCancel",downloading_}};
     lobby_->setLobbyState({{"active",active_},{"host",hosting_},{"connectionWaiting",waiting},{"status",status_},{"invite",invite_},{"inviteWithPassword",inviteWithPassword_},{"lanInvite",lanInvite_},{"addressStatus",addressStatus_},{"addressRetry",addressRetry_},{"connections",connections_},{"selectedConnectionId",connectionId_},
-        {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_},{"linkCable",linkCable_},{"playerCount",activePlayerCount()},{"roleKinds",roleKinds_}});
+        {"participants",list},{"rom",rom},{"allowCommands",allowCommands_},{"allowDownloads",allowDownloads_},{"linkCable",linkCable_},{"playerCount",activePlayerCount()},{"roleKinds",roleKinds_},{"jcart",jcart_&&!linkCable_},{"jcartBase",linkCable_?0:jcartBase_}});
 }
 
 int NetplayController::activePlayerCount() const {
@@ -718,7 +739,8 @@ void NetplayController::setControllerTopology(int adapter,unsigned count) {
     if(active_ && !hosting_)return;
     if(!validControllerAdapter(adapter) || count<2 || count>MaxControllerPlayers)return;
     if(controllerAdapter_==adapter && playerCount_==int(count))return;
-    if(controllerAdapter_!=adapter)roleKinds_ = {};
+    if(controllerAdapter_!=adapter){roleKinds_ = {};jcart_=false;jcartBase_=0;}
+    if(jcart_ && jcartBase_+2!=int(count)){jcart_=false;jcartBase_=0;}
     controllerAdapter_=adapter;playerCount_=int(count);
     if(active_ && hosting_) {normalizeRoles();announceContent();}
 }

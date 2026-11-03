@@ -154,7 +154,7 @@ void EmulationSession::setControllerSixButton(unsigned port, bool sixButton) {
 }
 void EmulationSession::setControllerKind(unsigned player, ControllerType type) {
     if (networkMode_.load() == 2) return; // Host snapshots own hardware; local bindings do not send it back.
-    if (player < MaxControllerPlayers && int(type) >= 0 && int(type) <= int(ControllerType::Justifier))
+    if (player < MaxControllerPlayers && int(type) >= 0 && int(type) <= int(ControllerType::Paddle))
         enqueue({Type::ControllerKind,{},int(player) | (int(type) << 3)});
 }
 void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) {
@@ -208,7 +208,30 @@ void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
     if (pressed) buttons_[port].fetch_or(1u << id); else buttons_[port].fetch_and(~(1u << id));
 }
 void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < MaxControllerPlayers) buttons_[port].store(mask & 0xffffu); }
-void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store(0); }
+void EmulationSession::releaseButtons() {
+    for (auto& mask : buttons_) mask.store(0);
+    clearMouseMotion();
+}
+void EmulationSession::clearMouseMotion() {
+    for (auto& motion : mouseMotion_) {
+        auto previous=motion.load();
+        while(!motion.compare_exchange_weak(previous,((previous>>32)+1)<<32)) {}
+    }
+}
+void EmulationSession::addMouseMotion(unsigned player,int dx,int dy) {
+    if(player>=3)return;
+    auto& motion=mouseMotion_[player];
+    auto previous=motion.load();
+    for (;;) {
+        const int x=std::clamp(int(qint16(previous))+std::clamp(dx,-32767,32767),-32767,32767);
+        const int y=std::clamp(int(qint16(previous>>16))+std::clamp(dy,-32767,32767),-32767,32767);
+        const quint64 next=(previous&0xffffffff00000000ULL)|quint16(qint16(x))|(quint64(quint16(qint16(y)))<<16);
+        if(motion.compare_exchange_weak(previous,next))break;
+    }
+}
+void EmulationSession::setPaddlePosition(unsigned player,int position) {
+    if(player<3)gunPositions_[player].store(quint16(qint16(std::clamp(position,-32768,32767))));
+}
 void EmulationSession::setFastForward(bool enabled) {
     if (networkMode_.load()) {
         if (networkFastRequested_.exchange(enabled) != enabled) enqueue({Type::NetFast,{},enabled?1:0});
@@ -273,7 +296,7 @@ void EmulationSession::applyNetworkCommand(const QByteArray& bytes) {
     if (c.type==Type::Region && (v<0 || v>3)) return;
     if (c.type==Type::Filter && (v<0 || v>4)) return;
     if ((c.type==Type::ControllerType || c.type==Type::Port) && (v<0 || v>15)) return;
-    if (c.type==Type::ControllerKind && (v<0 || v>31 || ((v&7)>=3 && (v>>3)!=0))) return;
+    if (c.type==Type::ControllerKind && (v<0 || v>47 || ((v&7)>=3 && (v>>3)!=0) || ((v&7)==2 && (v>>3)!=0 && (v>>3)!=3))) return;
     if (c.type==Type::Cheats) {
         const auto a=o.value("cheats").toArray(); if(a.size()>256) return;
         for (const auto& v:a) { const auto e=v.toObject();
@@ -424,13 +447,33 @@ void EmulationSession::run() {
     };
     auto nextAchievementIdle = Clock::now();
     bool lastAchievementBackground = false;
+    std::array<quint64,3> mouseSnapshots{};
     auto liveInput = [&] {
         MovieInput input;
         for (unsigned player = 0; player < MaxControllerPlayers; ++player)
             input.buttons[player] = quint16(buttons_[player].load());
-        for (unsigned player = 0; player < MaxGunPlayers; ++player)
-            input.aim[player] = gunPositions_[player].load();
+        for (unsigned player = 0; player < MaxGunPlayers; ++player) {
+            if(host.controllerKind(player)==ControllerType::Mouse) {
+                const auto pending=mouseSnapshots[player]=mouseMotion_[player].load();
+                input.aim[player] = quint16(qint16(std::clamp(int(qint16(pending)),-255,255))) |
+                    (quint64(quint16(qint16(std::clamp(int(qint16(pending>>16)),-255,255))))<<16);
+            }
+            else input.aim[player] = gunPositions_[player].load();
+        }
         return input;
+    };
+    auto consumeMouseInput = [&](const MovieInput& input) {
+        for(unsigned player=0;player<MaxGunPlayers;++player) if(host.controllerKind(player)==ControllerType::Mouse) {
+            auto& motion=mouseMotion_[player];
+            auto previous=motion.load();
+            // A focus/topology reset invalidates this sample; never subtract it from new input.
+            while((previous>>32)==(mouseSnapshots[player]>>32)) {
+                const int x=std::clamp(int(qint16(previous))-int(qint16(input.aim[player])),-32767,32767);
+                const int y=std::clamp(int(qint16(previous>>16))-int(qint16(input.aim[player]>>16)),-32767,32767);
+                const quint64 next=(previous&0xffffffff00000000ULL)|quint16(qint16(x))|(quint64(quint16(qint16(y)))<<16);
+                if(motion.compare_exchange_weak(previous,next))break;
+            }
+        }
     };
     auto cheatStatus = [&] {
         emit cheatsChanged(host.cheats(),int(host.cheatPlatform()),host.cheatsSupported(),host.cheatSupportText());
@@ -577,7 +620,9 @@ void EmulationSession::run() {
         if(networkMode) {
             MovieInput input;
             if(!networkReady)return false;
-            const auto result=networkTimeline.beforeFrame(liveInput(),input,error);
+            const auto local=liveInput();
+            const auto result=networkTimeline.beforeFrame(local,input,error);
+            if(networkTimeline.localInputConsumed())consumeMouseInput(local);
             if(result==NetRollbackSession::Wait) {std::this_thread::sleep_for(std::chrono::milliseconds(1));return false;}
             if(result==NetRollbackSession::Failed) {
                 networkReady=false;
@@ -591,7 +636,8 @@ void EmulationSession::run() {
 #endif
             NetplayTimeline::apply(host,input); return true;
         }
-        if (movie.beforeFrame(liveInput(), error)) return true;
+        const auto local=liveInput();
+        if (movie.beforeFrame(local, error)) {consumeMouseInput(local);return true;}
         paused = true; frameAdvanceHeld_.store(false);
         clearAudio(); emit pausedChanged(true);
         if (movie.recording() && !error.isEmpty()) {
@@ -862,7 +908,7 @@ void EmulationSession::run() {
                                 fastForwardFactor_.store(std::clamp(meta.value("factor").toInt(4),0,32));
                                 networkSlots=unsigned(meta.value("slots").toInt())&0x3ff;
                                 emit pausedChanged(paused);emit stateSlotsChanged(-1,networkSlots);
-                                emit movieHardwareChanged(QJsonDocument(QJsonObject{{"adapter",config.value("adapter")},{"controllers",config.value("controllers")}}).toJson(QJsonDocument::Compact));
+                                emit movieHardwareChanged(QJsonDocument(QJsonObject{{"adapter",config.value("adapter")},{"controllers",config.value("controllers")},{"jcart",config.value("jcart")},{"jcartBase",config.value("jcartBase")}}).toJson(QJsonDocument::Compact));
                                 clearHistory(); clearAudio(); pacer.reset(nowNs()); cheatStatus(); discStatus();
                                 QByteArray preview=QByteArray::fromBase64(meta.value("image").toString().toLatin1());
                                 if(!preview.isEmpty()) {
@@ -1230,6 +1276,8 @@ void EmulationSession::run() {
             }
         }
         if (!pending.empty()) {
+            const bool jcart=host.hasJCart();
+            if(jcart_.exchange(jcart)!=jcart)emit jcartChanged(jcart);
             const auto effectiveAdapter = int(host.controllerAdapter());
             const auto playerCount = host.controllerPlayerCount();
             if (controllerAdapter_.exchange(effectiveAdapter) != effectiveAdapter || controllerPlayerCount_.load() != playerCount) {

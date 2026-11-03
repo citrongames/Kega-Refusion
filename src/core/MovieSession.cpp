@@ -50,7 +50,9 @@ void applyInput(LibretroHost& host, const MovieInput& input) {
         host.setButtons(p, input.buttons[p]);
     for (unsigned p = 0; p < input.aim.size(); ++p) {
         const quint64 aim = input.aim[p];
-        host.setGunAim(p, qint16(aim & 0xffff), qint16((aim >> 16) & 0xffff), bool((aim >> 32) & 1));
+        if(host.controllerKind(p)==ControllerType::Mouse || host.controllerKind(p)==ControllerType::Paddle)
+            host.setPointer(p,qint16(aim),qint16(aim>>16));
+        else host.setGunAim(p, qint16(aim & 0xffff), qint16((aim >> 16) & 0xffff), bool((aim >> 32) & 1));
     }
 }
 }
@@ -173,6 +175,8 @@ QByteArray MovieSession::controllers() const {
         return QJsonDocument(controllers).toJson(QJsonDocument::Compact);
     QJsonObject topology;
     topology.insert(QStringLiteral("adapter"), metadata.value(QStringLiteral("adapter")).toInt());
+    topology.insert(QStringLiteral("jcart"), metadata.value(QStringLiteral("jcart")).toBool());
+    topology.insert(QStringLiteral("jcartBase"), metadata.value(QStringLiteral("jcartBase")).toInt());
     topology.insert(QStringLiteral("controllers"), controllers);
     return QJsonDocument(topology).toJson(QJsonDocument::Compact);
 }

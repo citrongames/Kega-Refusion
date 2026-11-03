@@ -22,6 +22,7 @@ public:
     void receive(quint64 peer, const QByteArray& packet);
     bool idle(QString& error);
     Result beforeFrame(const MovieInput& local, MovieInput& merged, QString& error);
+    bool localInputConsumed() const;
     bool afterFrame(QString& error);
     struct RewindFrame {
         QByteArray state; QImage image; double aspect=1;

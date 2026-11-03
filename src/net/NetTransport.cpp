@@ -37,7 +37,7 @@ constexpr int kMaxFramesPerSecond = 4096;
 constexpr int kMaxBytesPerSecond = 128 * 1024 * 1024;
 constexpr int kDeadLinkMs = 5000;
 constexpr int kMaxBufferedBytes = 512 * 1024;
-constexpr int kProtocol = 4;
+constexpr int kProtocol = 5;
 constexpr int kHandshakeMs = 10000;
 constexpr quint8 kInternalKind = 0;
 

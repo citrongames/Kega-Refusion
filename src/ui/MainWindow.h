@@ -66,6 +66,8 @@ private:
     void updateGunConfiguration();
     void updateGunPresentation();
     void updateGunAim(unsigned player, QPointF position, bool offscreen);
+    void deliverMouseMotion(unsigned player, double dx, double dy);
+    void resetAnalogMotion();
     bool applyShaderPreset(const QString& path);
     void editShaderParameters();
     void updateShaderActions();
@@ -126,6 +128,9 @@ private:
     std::array<unsigned,MaxControllerPlayers> padMasks_{};
     std::array<unsigned,3> gunMasks_{};
     std::array<QPointF,3> gunAims_{{QPointF(.5,.5),QPointF(.5,.5),QPointF(.5,.5)}};
+    std::array<QPointF,3> mouseMotionRemainder_{};
+    std::array<ControllerType,3> presentedControllerKinds_{};
+    std::array<bool,3> presentedControllerConnected_{};
     QAction* fastForwardAction_ = nullptr;
     QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;

@@ -60,6 +60,10 @@ public:
         require(c.participants_.isEmpty(),"role above advertised controller capacity accepted");
         c.receive(0,kega::net::MessageKind::Control,malformed("player2",9));
         require(c.participants_.isEmpty(),"invalid network controller capacity accepted");
+        c.receive(0,kega::net::MessageKind::Control,
+            QJsonDocument(QJsonObject{{"op","lobby"},{"playerCount",5},{"jcart",true},{"jcartBase",2},
+                {"participants",QJsonArray{QJsonObject{{"id","5"},{"role","player5"}}}}}).toJson(QJsonDocument::Compact));
+        require(c.participants_.isEmpty(),"inconsistent J-Cart role map accepted");
         c.receive(0,kega::net::MessageKind::Control,malformed("player5",5));
         require(c.localRole_==5 && c.playerCount_==5,"expanded host role was not applied");
         c.leaveSession();
@@ -754,6 +758,28 @@ void verifyGunRoleLabels() {
     combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
     require(combo && combo->itemText(2).contains("Menacer") && combo->itemText(2).contains("2"),
             "Menacer port label missing after kind update");
+    state.insert("roleKinds",QJsonArray{4,5});
+    lobby.setLobbyState(state);
+    combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
+    require(combo && combo->itemText(1).contains("MD Mouse") &&
+            combo->itemText(1).contains("1") && combo->itemText(2).contains("SMS Paddle") &&
+            combo->itemText(2).contains("2"),"mouse and paddle port labels missing");
+    state.insert("playerCount",4);
+    state.insert("jcart",true);state.insert("jcartBase",2);
+    state.insert("roleKinds",QJsonArray{0,0,0,0});
+    lobby.setLobbyState(state);
+    combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
+    require(combo && combo->itemText(3).contains("J-Cart") &&
+            combo->itemText(3).contains("1") && combo->itemText(4).contains("J-Cart") &&
+            combo->itemText(4).contains("2"),"ordinary-port J-Cart role labels missing");
+    state.insert("playerCount",7);
+    state.insert("jcartBase",5);
+    state.insert("roleKinds",QJsonArray{0,0,0,0,0,0,0});
+    lobby.setLobbyState(state);
+    combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
+    require(combo && !combo->itemText(5).contains("J-Cart") &&
+            combo->itemText(6).contains("J-Cart") && combo->itemText(7).contains("J-Cart"),
+            "single-adapter J-Cart role labels missing");
 }
 
 void verifyMultitapFrames() {
@@ -768,6 +794,10 @@ void verifyMultitapFrames() {
     const auto phaser=device(ControllerType::LightPhaser,true);
     const auto menacer=device(ControllerType::Menacer,true);
     const auto justifier=device(ControllerType::Justifier,true);
+    const auto mouse=device(ControllerType::Mouse,true);
+    const auto paddle=device(ControllerType::Paddle,true);
+    const auto mdMouse=config(0,QJsonArray{pad,mouse,pad});
+    const auto smsPaddle=config(0,QJsonArray{paddle,paddle,pad});
     const auto smsBoth=config(0,QJsonArray{phaser,phaser,pad});
     const auto smsSecond=config(0,QJsonArray{pad,phaser,pad});
     const auto mdMenacer=config(0,QJsonArray{pad,menacer,pad});
@@ -782,15 +812,21 @@ void verifyMultitapFrames() {
             NetplayTimeline::localInputSource(3,mdJustifiers)==1 &&
             NetplayTimeline::localInputSource(3,mdSecondOnly)==2 &&
             NetplayTimeline::localInputSource(4,adapter)==0 &&
-            NetplayTimeline::localInputSource(2,config(0,QJsonArray{pad,pad,pad}))==0,
-            "gun source must use first connected matching local gun; pads use local P1");
+            NetplayTimeline::localInputSource(2,config(0,QJsonArray{pad,pad,pad}))==0 &&
+            NetplayTimeline::localInputSource(2,mdMouse)==1 &&
+            NetplayTimeline::localInputSource(2,smsPaddle)==0,
+            "pointer source must use first connected matching local device; pads use local P1");
     MovieInput first; first.buttons[0]=0x01;first.aim[0]=0x00010002;
     MovieInput another; another.buttons[0]=0x04;another.aim.fill(quint64(1)<<32);
     MovieInput fourth; fourth.buttons[0]=0x08;
+    MovieInput sixth; sixth.buttons[0]=0x20;
+    MovieInput seventh; seventh.buttons[0]=0x40;
     MovieInput eighth; eighth.buttons[0]=0x10;
-    const auto merged=NetplayTimeline::merge({{3,first},{3,another},{4,fourth},{8,eighth},{9,first},{0,first}});
+    const auto merged=NetplayTimeline::merge({{3,first},{3,another},{4,fourth},{6,sixth},{7,seventh},
+                                              {8,eighth},{9,first},{0,first}});
     require(merged.buttons[0]==0 && merged.buttons[2]==5 && merged.buttons[3]==8 &&
-            merged.buttons[7]==16 && merged.aim[2]==first.aim[0],"P3/P4/P8 role merging failed");
+            merged.buttons[5]==32 && merged.buttons[6]==64 && merged.buttons[7]==16 &&
+            merged.aim[2]==first.aim[0],"P3/P4/J-Cart P6/P7/P8 role merging failed");
     const auto bytes=NetplayTimeline::inputBytes(merged);
     require(bytes.size()==40 && qFromBigEndian<quint16>(bytes.constData()+4)==5 &&
             qFromBigEndian<quint16>(bytes.constData()+14)==16,"canonical 40-byte input layout failed");
@@ -802,6 +838,28 @@ void verifyMultitapFrames() {
     require(NetplayTimeline::frameBytes(1,2,merged).size()==56 &&
             NetplayTimeline::frameBytes(1,2,merged,QByteArray(32,'x')).size()==88,
             "network frame layout failed");
+    const auto relative=[](int x,int y) {
+        return quint64(quint16(qint16(x))) | (quint64(quint16(qint16(y)))<<16);
+    };
+    MovieInput mouseA;mouseA.buttons[0]=0x02;mouseA.aim[0]=relative(200,-120);
+    MovieInput mouseB;mouseB.buttons[0]=0x01;mouseB.aim[0]=relative(100,-200);
+    MovieInput paddleA;paddleA.buttons[0]=0x01;paddleA.aim[0]=relative(197,0);
+    MovieInput paddleB;paddleB.buttons[0]=0x08;paddleB.aim[0]=relative(42,0);
+    const auto pointer=NetplayTimeline::merge({{1,mouseA},{1,mouseB},{2,paddleA},{2,paddleB}},1u);
+    require(pointer.buttons[0]==0x03 && pointer.buttons[1]==0x09 &&
+            qint16(pointer.aim[0])==255 && qint16(pointer.aim[0]>>16)==-255 &&
+            pointer.aim[1]==paddleB.aim[0],
+            "relative mouse sum or absolute paddle priority failed");
+    MovieInput mouseC;mouseC.aim[0]=relative(-200,200);
+    const auto cancellation=NetplayTimeline::merge({{1,mouseA},{1,mouseA},{1,mouseC}},1u);
+    require(qint16(cancellation.aim[0])==200 && qint16(cancellation.aim[0]>>16)==-40,
+            "mouse deltas were clamped before all peers were summed");
+    const auto neutralMouse=NetplayTimeline::merge({},1u);
+    require(neutralMouse.aim[0]==0 && neutralMouse.aim[1]==(quint64(1)<<32),
+            "missing relative input must have neutral movement");
+    const auto pointerBytes=NetplayTimeline::inputBytes(pointer);
+    require(NetplayTimeline::parseInput(pointerBytes,parsed) && parsed==pointer,
+            "mouse and paddle pointer frame failed to round-trip");
 }
 
 int main(int argc,char** argv){

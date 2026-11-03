@@ -229,16 +229,21 @@ QImage GameView::captureGameImage() {
 }
 
 void GameView::setFrame(const QImage& frame, double aspectRatio) {
+    const QSize previousNative = VideoFrameGeometry::nativeSize(frame_);
+    const double previousAspect = aspectRatio_;
     frame_ = frame;
-    if (frame_.isNull()) clearMouseGun();
+    if (frame_.isNull()) { clearMouseGun(); clearAnalogMouse(); }
     ++frameCount_;
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
         aspectRatio_ = aspectRatio;
+    if (previousNative != VideoFrameGeometry::nativeSize(frame_) ||
+        previousAspect != aspectRatio_) resetAnalogPointer();
     repaintView();
 }
 
 void GameView::clearGame() {
     setLightgunInputEnabled(false);
+    setAnalogMousePlayer(-1, ControllerType::Pad);
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
     notices_.clear(); stateSlots_.expiresAt = 0; clearAchievementNotices(); osdTimer_.stop();
     movieMode_ = 0; movieFrame_ = movieLength_ = 0;
@@ -253,7 +258,7 @@ void GameView::setLoading(bool loading, const QString& fileName) {
     const QString name = loading ? fileName.left(220) : QString();
     if (loading_ == loading && loadingFileName_ == name) return;
     loading_ = loading;
-    if (loading_) { clearMouseGun(); clearAchievementNotices(); }
+    if (loading_) { clearMouseGun(); clearAnalogMouse(); clearAchievementNotices(); }
     loadingFileName_ = name;
     repaintView();
     if (loading && isVisible()) {
@@ -266,11 +271,13 @@ void GameView::setLoading(bool loading, const QString& fileName) {
 
 void GameView::setAspectMode(AspectMode mode) {
     aspectMode_ = mode;
+    resetAnalogPointer();
     repaintView();
 }
 
 void GameView::setIntegerScaling(bool enabled) {
     integerScaling_ = enabled;
+    resetAnalogPointer();
     repaintView();
 }
 
@@ -810,10 +817,71 @@ void GameView::setMouseGunPlayer(int player) {
     mouseGunPlayer_ = player;
 }
 
+void GameView::setAnalogMousePlayer(int player, ControllerType type) {
+    if (player < -1 || player >= int(kGunSlots) ||
+        (player >= 0 && !isAnalogController(type))) return;
+    if (analogMousePlayer_ == player && analogMouseType_ == type) return;
+    clearAnalogMouse();
+    analogMousePlayer_ = player;
+    analogMouseType_ = player >= 0 ? type : ControllerType::Pad;
+}
+
+void GameView::resetAnalogPointer() {
+    analogBaselineValid_ = false;
+    analogPaddlePositionValid_ = false;
+    emit analogPointerReset();
+}
+
 void GameView::setLightgunInputEnabled(bool enabled) {
     if (lightgunInputEnabled_ == enabled) return;
     lightgunInputEnabled_ = enabled;
-    if (!enabled) clearMouseGun();
+    if (!enabled) { clearMouseGun(); clearAnalogMouse(); }
+}
+
+bool GameView::analogMouseAvailable() const {
+    return lightgunInputEnabled_ && analogMousePlayer_ >= 0 &&
+           analogMousePlayer_ < int(kGunSlots) && isAnalogController(analogMouseType_) &&
+           !frame_.isNull() && !loading_;
+}
+
+void GameView::updateAnalogPointer(const QPointF& position) {
+    if (!analogMouseAvailable()) return;
+    const QRectF game = gameRect();
+    if (game.isEmpty() || !game.contains(position)) {
+        if (analogBaselineValid_ || analogPaddlePositionValid_)
+            resetAnalogPointer();
+        return;
+    }
+    const unsigned player = unsigned(analogMousePlayer_);
+    if (analogMouseType_ == ControllerType::Paddle) {
+        const double normalized = (position.x() - game.left()) / game.width();
+        const int value = std::clamp(int(std::lround(normalized * 65535.0 - 32768.0)),
+                                     -32768, 32767);
+        if (!analogPaddlePositionValid_ || analogPaddlePosition_ != value) {
+            analogPaddlePosition_ = value;
+            analogPaddlePositionValid_ = true;
+            emit analogPaddleMoved(player, value);
+        }
+        return;
+    }
+    if (analogBaselineValid_) {
+        const QSize native = VideoFrameGeometry::nativeSize(frame_);
+        const QPointF delta = position - analogLastPosition_;
+        const double dx = delta.x() * native.width() / game.width();
+        const double dy = delta.y() * native.height() / game.height();
+        if (dx != 0.0 || dy != 0.0) emit analogMouseMotion(player, dx, dy);
+    }
+    analogLastPosition_ = position;
+    analogBaselineValid_ = true;
+}
+
+void GameView::clearAnalogMouse() {
+    if (analogMousePlayer_ >= 0 && analogMousePlayer_ < int(kGunSlots) &&
+        analogMouseButtons_) {
+        analogMouseButtons_ = 0;
+        emit gunButtonsChanged(unsigned(analogMousePlayer_), 0);
+    }
+    resetAnalogPointer();
 }
 
 bool GameView::mouseGunAvailable() const {
@@ -859,18 +927,25 @@ void GameView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    if (mouseGunAvailable()) {
-        const unsigned bit = unsigned(event->button()) & unsigned(Qt::LeftButton | Qt::RightButton |
-            Qt::MiddleButton | Qt::BackButton | Qt::ForwardButton);
-        if (bit) {
-            updateMouseAim(event->position());
-            if (!(mouseGunButtons_ & bit)) {
-                mouseGunButtons_ |= bit;
-                emit gunButtonsChanged(unsigned(mouseGunPlayer_), mouseGunButtons_);
-            }
-            event->accept();
-            return;
+    const unsigned bit = unsigned(event->button()) & unsigned(Qt::LeftButton | Qt::RightButton |
+        Qt::MiddleButton | Qt::BackButton | Qt::ForwardButton);
+    if (mouseGunAvailable() && bit) {
+        updateMouseAim(event->position());
+        if (!(mouseGunButtons_ & bit)) {
+            mouseGunButtons_ |= bit;
+            emit gunButtonsChanged(unsigned(mouseGunPlayer_), mouseGunButtons_);
         }
+        event->accept();
+        return;
+    }
+    if (analogMouseAvailable() && bit && gameRect().contains(event->position())) {
+        updateAnalogPointer(event->position());
+        if (!(analogMouseButtons_ & bit)) {
+            analogMouseButtons_ |= bit;
+            emit gunButtonsChanged(unsigned(analogMousePlayer_), analogMouseButtons_);
+        }
+        event->accept();
+        return;
     }
     QWidget::mousePressEvent(event);
 }
@@ -885,21 +960,32 @@ void GameView::mouseReleaseEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    if (analogMousePlayer_ >= 0 && analogMousePlayer_ < int(kGunSlots) &&
+        bit && (analogMouseButtons_ & bit)) {
+        analogMouseButtons_ &= ~bit;
+        if (analogMouseAvailable()) updateAnalogPointer(event->position());
+        emit gunButtonsChanged(unsigned(analogMousePlayer_), analogMouseButtons_);
+        event->accept();
+        return;
+    }
     QWidget::mouseReleaseEvent(event);
 }
 
 void GameView::mouseMoveEvent(QMouseEvent* event) {
     if (mouseGunAvailable()) updateMouseAim(event->position());
+    if (analogMouseAvailable()) updateAnalogPointer(event->position());
     QWidget::mouseMoveEvent(event);
 }
 
 void GameView::leaveEvent(QEvent* event) {
     clearMouseGun();
+    clearAnalogMouse();
     QWidget::leaveEvent(event);
 }
 
 void GameView::focusOutEvent(QFocusEvent* event) {
     clearMouseGun();
+    clearAnalogMouse();
     QWidget::focusOutEvent(event);
 }
 
@@ -1054,8 +1140,11 @@ void GameView::ensureGpu() {
 }
 
 bool GameView::event(QEvent* event) {
-    if (event->type() == QEvent::DevicePixelRatioChange && !achievementQueue_.isEmpty())
-        rebuildAchievementPixmap();
+    if (event->type() == QEvent::Enter) resetAnalogPointer();
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        resetAnalogPointer();
+        if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();
+    }
     return QWidget::event(event);
 }
 
@@ -1067,6 +1156,7 @@ void GameView::showEvent(QShowEvent* event) {
 
 void GameView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    resetAnalogPointer();
     if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();
     if (shaderView_) shaderView_->setGeometry(rect());
 }

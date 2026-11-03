@@ -1,0 +1,61 @@
+{
+  "mode": "OpenAI built-in image_gen",
+  "canvas": "1536x1024 RGBA transparent PNG",
+  "assets": [
+    {
+      "file": "assets/controllers/md3.png",
+      "prompt": "Remove only the centered SEGA wordmark; preserve Mega Drive Control Pad, Trigger, Start and A/B/C labels, controls and exact layout.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/md6.png",
+      "prompt": "Remove only the SEGA wordmark; preserve Mode, Start, A/B/C/X/Y/Z labels, buttons, D-pad and exact layout.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/sms.png",
+      "prompt": "Remove only the SEGA wordmark and registered mark; preserve red trim, 1, 2 and Start labels, D-pad and controls.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/sg1000.png",
+      "prompt": "Remove only the blue SEGA wordmark; preserve SJ-150 model text, nameplate, D-pad and two buttons.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/gg.png",
+      "prompt": "Remove only the SEGA wordmark; preserve GAME GEAR name, display, Start, 1 and 2 labels and controls.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/phaser.png",
+      "prompt": "Remove only the SEGA wordmark; preserve LIGHT PHASER nameplate and complete pistol geometry.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/menacer.png",
+      "prompt": "Remove only the SEGA wordmark; preserve MENACER product name, red muzzle and trigger, and full geometry.",
+      "input": "existing local asset"
+    },
+    {
+      "file": "assets/controllers/mouse.png",
+      "prompt": "Generate a centered top-view North American Genesis Mega Mouse MK-1645: black oval body, cable above, three separate A/B/C action buttons and one distinct Start button, no scroll wheel or logo, transparent background, clean vector-like illustration.",
+      "input": null
+    },
+    {
+      "file": "assets/controllers/paddle.png",
+      "prompt": "Generate a centered Japanese HPD-200 Paddle Control: cream rectangular body, large black dial on left, one round face button at right and a second electrically parallel button on upper edge, cable above, no SEGA logo, transparent background, clean vector-like illustration.",
+      "input": null
+    }
+  ],
+  "references": {
+    "mega_mouse": [
+      "https://www.scribd.com/document/678939776/Mega-Mouse",
+      "https://www.sega.jp/history/hard/megadrive/devices.html"
+    ],
+    "paddle": [
+      "https://www.sega.jp/fb/segahard/mk3/controller.html",
+      "https://www.smspower.org/Development/Paddle"
+    ]
+  }
+}

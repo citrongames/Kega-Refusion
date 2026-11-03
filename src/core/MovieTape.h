@@ -10,6 +10,7 @@
 
 // One canonical poll of all logical controller players. Aim uses signed 16-bit X
 // in bits 0..15, signed 16-bit Y in bits 16..31, and offscreen in bit 32.
+// Mouse uses relative X/Y per frame; Paddle uses absolute X. Their bit32 is zero.
 struct MovieInput {
     std::array<quint16, MaxControllerPlayers> buttons{};
     std::array<quint64, MaxGunPlayers> aim{};

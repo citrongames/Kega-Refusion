@@ -51,6 +51,9 @@ public:
     void setControllerSixButton(unsigned port, bool sixButton);
     void setControllerKind(unsigned player, ControllerType type);
     void setGunAim(unsigned player, int x, int y, bool offscreen);
+    void addMouseMotion(unsigned player, int dx, int dy);
+    void clearMouseMotion();
+    void setPaddlePosition(unsigned player, int position);
     void advanceFrame();
     void setFrameAdvanceHeld(bool held);
     void startMovieRecording(const QString& path);
@@ -128,6 +131,7 @@ signals:
     void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length, double fps);
     void controllerTopologyChanged(int adapter, unsigned playerCount);
     void networkRoleChanged(int role);
+    void jcartChanged(bool enabled);
     void movieHardwareChanged(const QByteArray& controllersJson);
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
@@ -192,5 +196,8 @@ private:
     std::atomic<int> controllerAdapter_{0};
     std::atomic<unsigned> controllerPlayerCount_{2};
     std::atomic<unsigned> buttons_[MaxControllerPlayers]{};
+    // Packed pending X/Y and reset generation; sampled only when a frame accepts input.
+    std::array<std::atomic<quint64>,3> mouseMotion_{};
+    std::atomic_bool jcart_{false};
     std::atomic<quint64> gunPositions_[3]{{quint64(1)<<32},{quint64(1)<<32},{quint64(1)<<32}};
 };

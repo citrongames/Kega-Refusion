@@ -27,6 +27,9 @@ struct LibretroHost::Api {
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
     void (*debug_backdrop)(uint32_t) = nullptr;
     bool (*multitap)(unsigned, unsigned, unsigned) = nullptr;
+    bool (*configure_controllers)(unsigned,unsigned,unsigned,uint32_t) = nullptr;
+    uint32_t (*input_map)() = nullptr;
+    bool (*jcart)() = nullptr;
     void (*debug_gain)(unsigned,unsigned) = nullptr;
     void (*debug_capabilities)(uint32_t*,uint64_t*) = nullptr;
     bool (*native_video_size)(unsigned*,unsigned*) = nullptr;

@@ -1,0 +1,565 @@
+--- a/core/input_hw/input.c
++++ b/core/input_hw/input.c
+@@ -50,6 +50,7 @@
+ #include "graphic_board.h"
+ 
+ t_input input;
++uint8 kegarefusion_jcart_slots[2] = {5,6};
+ int old_system[2] = {-1,-1};
+ 
+ 
+@@ -356,9 +357,28 @@
+   /* J-CART */
+   if (cart.special & HW_J_CART)
+   {
+-    /* two additional gamepads */
+-    for (i=5; i<7; i++)
+-    {
++    /* Keep the original slots when available. A port-B adapter and a paired
++       Justifier reserve these slots, so place cartridge pads in unused slots.
++       This map is derived from topology, never serialized as process state. */
++    unsigned used = 0, slot, n;
++    unsigned a = input.system[0], b = input.system[1];
++    if (a == SYSTEM_TEAMPLAYER || a == SYSTEM_MASTERTAP || a == SYSTEM_WAYPLAY) used |= 0x0f;
++    else if (a != NO_SYSTEM) used |= 0x01;
++    if (b == SYSTEM_TEAMPLAYER || b == SYSTEM_MASTERTAP) used |= 0xf0;
++    else if (b == SYSTEM_JUSTIFIER) used |= 0x30;
++    else if (b != NO_SYSTEM && b != SYSTEM_WAYPLAY) used |= 0x10;
++    for (n=0; n<2; ++n)
++    {
++      slot = 5+n;
++      if (used & (1u << slot))
++        for (slot=0; slot<MAX_DEVICES && (used & (1u << slot)); ++slot) {}
++      kegarefusion_jcart_slots[n] = slot < MAX_DEVICES ? slot : 0xff;
++      if (slot < MAX_DEVICES) used |= 1u << slot;
++    }
++    for (unsigned jc=0; jc<2; ++jc)
++    {
++      i = kegarefusion_jcart_slots[jc];
++      if (i >= MAX_DEVICES) continue;
+       if (player < MAX_INPUTS)
+       {
+         /* only allow 3-buttons or 6-buttons control pad */
+@@ -378,8 +398,12 @@
+ 
+ void input_reset(void)
+ {
++  /* Clear inactive protocol state too, so prior games cannot affect snapshot hashes. */
++  static const uint8 empty[64] = {0};
++  int i;
++  gamepad_kr_load(empty);teamplayer_kr_load(empty);mouse_kr_load(empty);
++  paddle_kr_load(empty);lightgun_kr_load(empty);
+   /* Reset input devices */
+-  int i;
+   for (i=0; i<MAX_DEVICES; i++)
+   {
+     switch (input.dev[i])
+@@ -495,3 +519,32 @@
+     }
+   }
+ }
++
++/* Optional fixed-size peripheral trailer. Old snapshots retain reset defaults. */
++static uint32 input_kr_hash(const uint8 *p)
++{
++  unsigned i; uint32 h=2166136261u;
++  for(i=0;i<KR_INPUT_STATE_SIZE-4;++i) h=(h^p[i])*16777619u;
++  return h;
++}
++int input_kr_valid(const uint8 *p)
++{
++  uint32 h;
++  if(memcmp(p,"KRINP001",8))return 1;
++  h=input_kr_hash(p);p+=KR_INPUT_STATE_SIZE-4;
++  return h==((uint32)p[0]|((uint32)p[1]<<8)|((uint32)p[2]<<16)|((uint32)p[3]<<24));
++}
++void input_kr_save(uint8 *p)
++{
++  uint32 h; unsigned i;
++  memset(p,0,KR_INPUT_STATE_SIZE);memcpy(p,"KRINP001",8);
++  gamepad_kr_save(p+8);teamplayer_kr_save(p+72);mouse_kr_save(p+76);
++  paddle_kr_save(p+84);lightgun_kr_save(p+88);
++  h=input_kr_hash(p);for(i=0;i<4;++i)p[KR_INPUT_STATE_SIZE-4+i]=(uint8)(h>>(i*8));
++}
++void input_kr_load(const uint8 *p)
++{
++  if(memcmp(p,"KRINP001",8))return;
++  gamepad_kr_load(p+8);teamplayer_kr_load(p+72);mouse_kr_load(p+76);
++  paddle_kr_load(p+84);lightgun_kr_load(p+88);
++}
+--- a/core/input_hw/gamepad.c
++++ b/core/input_hw/gamepad.c
+@@ -294,14 +294,16 @@
+ unsigned int jcart_read(unsigned int address)
+ {
+    /* D6 returns TH state, D14 is fixed low (fixes Micro Machines 2) */
+-   return (gamepad_read(5) | ((gamepad_read(6) & 0x3F) << 8));
++   unsigned first = kegarefusion_jcart_slots[0], second = kegarefusion_jcart_slots[1];
++   return ((first < MAX_DEVICES && input.dev[first] != NO_DEVICE ? gamepad_read(first) : 0x7f) |
++       ((second < MAX_DEVICES && input.dev[second] != NO_DEVICE ? gamepad_read(second) & 0x3f : 0x3f) << 8));
+ }
+ 
+ void jcart_write(unsigned int address, unsigned int data)
+ {
+   data = (data & 0x01) << 6;
+-  gamepad_write(5, data, 0x40);
+-  gamepad_write(6, data, 0x40);
++  if (kegarefusion_jcart_slots[0] < MAX_DEVICES) gamepad_write(kegarefusion_jcart_slots[0], data, 0x40);
++  if (kegarefusion_jcart_slots[1] < MAX_DEVICES) gamepad_write(kegarefusion_jcart_slots[1], data, 0x40);
+ }
+ 
+ 
+@@ -348,3 +350,14 @@
+   /* update internal state */
+   flipflop[1].Latch = data;
+ }
++
++void gamepad_kr_save(uint8 *p)
++{
++  int i,j; for(i=0;i<MAX_DEVICES;++i) { *p++=gamepad[i].State; *p++=gamepad[i].Counter; *p++=gamepad[i].Timeout; for(j=0;j<4;++j)*p++=(uint8)(gamepad[i].Latency>>(j*8)); }
++  for(i=0;i<2;++i) { *p++=flipflop[i].Latch; *p++=flipflop[i].Counter; } *p++=latch;
++}
++void gamepad_kr_load(const uint8 *p)
++{
++  int i,j; for(i=0;i<MAX_DEVICES;++i) { gamepad[i].State=*p++; gamepad[i].Counter=*p++; gamepad[i].Timeout=*p++; gamepad[i].Latency=0; for(j=0;j<4;++j)gamepad[i].Latency|=(uint32)(*p++)<<(j*8); }
++  for(i=0;i<2;++i) { flipflop[i].Latch=*p++; flipflop[i].Counter=*p++; } latch=*p++;
++}
+--- a/core/input_hw/gamepad.h
++++ b/core/input_hw/gamepad.h
+@@ -40,6 +40,8 @@
+ #ifndef _GAMEPAD_H_
+ #define _GAMEPAD_H_
+ 
++extern uint8 kegarefusion_jcart_slots[2];
++
+ /* Function prototypes */
+ extern void gamepad_reset(int port);
+ extern void gamepad_refresh(int port);
+@@ -59,4 +61,7 @@
+ extern void mastertap_1_write(unsigned char data, unsigned char mask);
+ extern void mastertap_2_write(unsigned char data, unsigned char mask);
+ 
++extern void gamepad_kr_save(uint8 *p);
++extern void gamepad_kr_load(const uint8 *p);
++
+ #endif
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3497,6 +3497,95 @@
+    return true;
+ }
+ 
++
++/* Frontend logical order is port A, port B, then the cartridge ports. The
++ * legacy libretro polling loop visits physical slots in ascending order. */
++extern uint8 kegarefusion_jcart_slots[2];
++static uint32 kegarefusion_input_map = 0xffffffffu;
++RETRO_API bool retro_kegarefusion_jcart(void) { return (cart.special & HW_J_CART) != 0; }
++RETRO_API uint32 retro_kegarefusion_input_map(void) { return kegarefusion_input_map; }
++
++RETRO_API bool retro_kegarefusion_controllers(unsigned mode, unsigned connected, unsigned six, uint32 kinds)
++{
++   unsigned physical[8], logical[8], slots=0, base=2, i, port, packed=0;
++   unsigned types[2] = {kinds & 7, (kinds >> 3) & 7};
++   int md = (system_hw == SYSTEM_MD || system_hw == SYSTEM_MCD);
++   int sms = (system_hw == SYSTEM_SMS || system_hw == SYSTEM_SMS2 || system_hw == SYSTEM_MARKIII || system_hw == SYSTEM_PBC);
++   int jc = md && (cart.special & HW_J_CART);
++   int chain = !mode && (connected & 2) && types[1] == 3 && ((kinds >> 6) & 7) == 3 && (connected & 4);
++   if (mode > 7 || (!md && !sms)) return false;
++   /* Reject impossible configurations before changing the active ports. */
++   if (mode)
++   {
++      int master = mode >= 5;
++      unsigned place = master ? mode-4 : mode;
++      unsigned count = mode == 4 ? 4 : place == 3 ? 8 : 5;
++      if ((master ? !sms : !md) || count + (jc ? 2 : 0) > MAX_INPUTS) return false;
++   }
++   else for (port=0;port<2;++port)
++   {
++      unsigned kind=types[port];
++      if (kind>5 || (kind==1 && !sms) || ((kind==2 || kind==3) && (!md || port!=1)) ||
++          (kind==4 && !md) || (kind==5 && !sms)) return false;
++   }
++   for (i=0; i<8; ++i) { physical[i]=0xff; logical[i]=0xff; config.input[i].padtype=NO_DEVICE; }
++   if (mode)
++   {
++      int master = mode >= 5;
++      unsigned place = master ? mode-4 : mode;
++      if (master ? !sms : !md) return false;
++      base = mode == 4 ? 4 : place == 3 ? 8 : 5;
++      if (base + (jc ? 2 : 0) > MAX_INPUTS) return false;
++      if (mode == 4)
++      {
++         input.system[0]=input.system[1]=SYSTEM_WAYPLAY;
++         for (i=0;i<4;++i) physical[slots++]=i;
++      }
++      else
++      {
++         input.system[0]=place==2 ? SYSTEM_GAMEPAD : master ? SYSTEM_MASTERTAP : SYSTEM_TEAMPLAYER;
++         input.system[1]=place==1 ? SYSTEM_GAMEPAD : master ? SYSTEM_MASTERTAP : SYSTEM_TEAMPLAYER;
++         for(port=0;port<2;++port)
++            for(i=0;i<(input.system[port]==SYSTEM_GAMEPAD?1u:4u);++i) physical[slots++]=port*4+i;
++      }
++      for(i=0;i<slots;++i) logical[i]=i;
++   }
++   else
++   {
++      if (chain) base=3;
++      for(port=0;port<2;++port)
++      {
++         unsigned kind=types[port];
++         if (kind>5 || (kind==1 && !sms) || ((kind==2 || kind==3) && (!md || port!=1)) ||
++             (kind==4 && !md) || (kind==5 && !sms)) return false;
++         if (!(connected & (1u<<port))) { input.system[port]=NO_SYSTEM; continue; }
++         input.system[port] = kind==1 ? SYSTEM_LIGHTPHASER : kind==2 ? SYSTEM_MENACER :
++             kind==3 ? SYSTEM_JUSTIFIER : kind==4 ? SYSTEM_MOUSE : kind==5 ? SYSTEM_PADDLE : SYSTEM_GAMEPAD;
++         physical[slots]=port*4;logical[slots++]=port;
++         if(kind==3) {physical[slots]=5;logical[slots++]=chain?2:0xff;}
++      }
++   }
++   for(i=0;i<slots;++i)
++      config.input[i].padtype = logical[i]>=8 || !(connected&(1u<<logical[i])) ? NO_DEVICE :
++         sms ? DEVICE_PAD2B : (six&(1u<<logical[i])) ? DEVICE_PAD6B : DEVICE_PAD3B;
++   if(jc) for(i=0;i<2;++i)
++      config.input[slots+i].padtype = !(connected&(1u<<(base+i))) ? NO_DEVICE :
++         (six&(1u<<(base+i))) ? DEVICE_PAD6B : DEVICE_PAD3B;
++   old_system[0]=input.system[0];old_system[1]=input.system[1];
++   io_init();
++   if(!mode && types[1]==3 && !chain) input.dev[5]=NO_DEVICE;
++   if(jc) for(i=0;i<2;++i) {physical[slots]=kegarefusion_jcart_slots[i];logical[slots++]=base+i;}
++   kegarefusion_input_map=0xffffffffu;
++   for(port=0;port<MAX_DEVICES;++port) if(input.dev[port]!=NO_DEVICE)
++      for(i=0;i<slots;++i) if(physical[i]==port && logical[i]<8)
++      {
++         kegarefusion_input_map = (kegarefusion_input_map & ~(15u<<(packed*4))) | (logical[i]<<(packed*4));
++         ++packed;break;
++      }
++   input_reset();
++   return true;
++}
++
+ size_t retro_serialize_size(void) {
+ #ifdef KEGAREFUSION_32X
+    if (kegarefusion_32x_attached) return STATE_SIZE + kegarefusion_32x_state_size();
+@@ -3702,12 +3791,12 @@
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+-      return "kegarefusion-recording-v2-sms-codemasters-v1";
+-   if (md_cart_sonic6_active) return "kegarefusion-recording-v2-sonic6-v1";
+-   if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v2-sdk99-hardware-v1";
+-   if (md_cart_poker_compat_active) return "kegarefusion-recording-v2-poker-hardware-v1";
+-   if (md_cart_barver_compat_active) return "kegarefusion-recording-v2-barver-hardware-v1";
+-   return md_cart_aq93c_active ? "kegarefusion-recording-v2-aq93c-v1" : "kegarefusion-recording-v2";
++      return "kegarefusion-recording-v3-peripherals-v1-sms-codemasters-v1";
++   if (md_cart_sonic6_active) return "kegarefusion-recording-v3-peripherals-v1-sonic6-v1";
++   if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
++   if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
++   if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
++   return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
+ }
+ 
+ /* Network snapshots use the native GPX state, so restrict the contract to the
+@@ -3726,13 +3815,13 @@
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+-      return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1";
+-   if (md_cart_sonic6_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
+-   if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+-   if (md_cart_poker_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
+-   if (md_cart_barver_compat_active) return "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
+-   return md_cart_aq93c_active ? "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+-          "kegarefusion-network-state-v2-gpx-f27655b-x64le-32x-wire-v1";
++      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1";
++   if (md_cart_sonic6_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
++   if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
++   if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
++   if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
++   return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
++          "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
+ #else
+    return NULL;
+ #endif
+--- a/core/input_hw/mouse.c
++++ b/core/input_hw/mouse.c
+@@ -44,25 +44,26 @@
+   uint8 Counter;
+   uint8 Wait;
+   uint8 Port;
+-} mouse;
++} mice[2];
+ 
+ void mouse_reset(int port)
+ {
++  const int index = port >> 2;
+   input.analog[port][0] = 0;
+   input.analog[port][1] = 0;
+-  mouse.State = 0x60;
+-  mouse.Counter = 0;
+-  mouse.Wait = 0;
+-  mouse.Port = port;
++  mice[index].State = 0x60;
++  mice[index].Counter = 0;
++  mice[index].Wait = 0;
++  mice[index].Port = port;
+ }
+ 
+-unsigned char mouse_read(void)
++static unsigned char mouse_read(int index)
+ {
+   unsigned int temp = 0x00;
+-  int x = input.analog[mouse.Port][0];
+-  int y = input.analog[mouse.Port][1];
++  int x = input.analog[mice[index].Port][0];
++  int y = input.analog[mice[index].Port][1];
+ 
+-  switch (mouse.Counter)
++  switch (mice[index].Counter)
+   {
+     case 0: /* initial */
+       temp = 0x00;
+@@ -90,7 +91,7 @@
+       break;
+ 
+     case 5: /* START, A, B, C buttons state (active high) */
+-      temp = (input.pad[mouse.Port] >> 4) & 0x0F;
++      temp = (input.pad[mice[index].Port] >> 4) & 0x0F;
+       break;
+ 
+     case 6: /* X Axis MSB */
+@@ -111,49 +112,63 @@
+   }
+ 
+   /* TL = busy status */
+-  if (mouse.Wait)
++  if (mice[index].Wait)
+   {
+     /* wait before acknowledging handshake request */
+-    mouse.Wait--; 
++    mice[index].Wait--;
+ 
+     /* TL = !TR (handshake in progress) */
+-    temp |= (~mouse.State & 0x20) >> 1;;
++    temp |= (~mice[index].State & 0x20) >> 1;;
+   }
+   else
+   {
+     /* TL = TR (handshake completed) */
+-    temp |= (mouse.State & 0x20) >> 1;
++    temp |= (mice[index].State & 0x20) >> 1;
+   }
+ 
+   return temp;
+ }
+ 
+-void mouse_write(unsigned char data, unsigned char mask)
++static void mouse_write(int index, unsigned char data, unsigned char mask)
+ {
+   /* update bits set as output only */
+-  data = (mouse.State & ~mask) | (data & mask);
++  data = (mice[index].State & ~mask) | (data & mask);
+ 
+   /* TR transition */
+-  if ((mouse.State ^ data) & 0x20)
++  if ((mice[index].State ^ data) & 0x20)
+   {
+     /* check if acquisition is started */
+-    if ((mouse.Counter > 0) && (mouse.Counter < 9))
++    if ((mice[index].Counter > 0) && (mice[index].Counter < 9))
+     {
+       /* increment phase */
+-      mouse.Counter++;
++      mice[index].Counter++;
+     }
+ 
+     /* TL handshake latency (fix buggy mouse routine in Cannon Fodder, Shangai 2, Wacky World, Star Blade, ...) */
+-    mouse.Wait = 2;
++    mice[index].Wait = 2;
+   }
+ 
+   /* TH transition  */
+-  if ((mouse.State ^ data) & 0x40)
++  if ((mice[index].State ^ data) & 0x40)
+   {
+     /* start (TH=1->0) or stop (TH=0->1) data acquisition */
+-    mouse.Counter = (mouse.State >> 6) & 1;
++    mice[index].Counter = (mice[index].State >> 6) & 1;
+   }
+ 
+   /* update internal state */
+-  mouse.State = data;
++  mice[index].State = data;
+ }
++
++unsigned char mouse_1_read(void) { return mouse_read(0); }
++unsigned char mouse_2_read(void) { return mouse_read(1); }
++void mouse_1_write(unsigned char data, unsigned char mask) { mouse_write(0,data,mask); }
++void mouse_2_write(unsigned char data, unsigned char mask) { mouse_write(1,data,mask); }
++
++void mouse_kr_save(uint8 *p)
++{
++  int i; for(i=0;i<2;++i) { *p++=mice[i].State; *p++=mice[i].Counter; *p++=mice[i].Wait; *p++=mice[i].Port; }
++}
++void mouse_kr_load(const uint8 *p)
++{
++  int i; for(i=0;i<2;++i) { mice[i].State=*p++; mice[i].Counter=*p++; mice[i].Wait=*p++; mice[i].Port=*p++; }
++}
+--- a/core/input_hw/mouse.h
++++ b/core/input_hw/mouse.h
+@@ -41,7 +41,12 @@
+ 
+ /* Function prototypes */
+ extern void mouse_reset(int port);
+-extern unsigned char mouse_read(void);
+-extern void mouse_write(unsigned char data, unsigned char mask);
++extern unsigned char mouse_1_read(void);
++extern unsigned char mouse_2_read(void);
++extern void mouse_1_write(unsigned char data, unsigned char mask);
++extern void mouse_2_write(unsigned char data, unsigned char mask);
++
++extern void mouse_kr_save(uint8 *p);
++extern void mouse_kr_load(const uint8 *p);
+ 
+ #endif
+--- a/core/input_hw/paddle.c
++++ b/core/input_hw/paddle.c
+@@ -117,3 +117,12 @@
+ {
+   paddle_write(1, data, mask);
+ }
++
++void paddle_kr_save(uint8 *p)
++{
++  int i; for(i=0;i<2;++i) { *p++=paddle[i].State; *p++=paddle[i].Counter; }
++}
++void paddle_kr_load(const uint8 *p)
++{
++  int i; for(i=0;i<2;++i) { paddle[i].State=*p++; paddle[i].Counter=*p++; }
++}
+--- a/core/input_hw/paddle.h
++++ b/core/input_hw/paddle.h
+@@ -46,4 +46,7 @@
+ extern void paddle_1_write(unsigned char data, unsigned char mask);
+ extern void paddle_2_write(unsigned char data, unsigned char mask);
+ 
++extern void paddle_kr_save(uint8 *p);
++extern void paddle_kr_load(const uint8 *p);
++
+ #endif
+--- a/core/input_hw/teamplayer.c
++++ b/core/input_hw/teamplayer.c
+@@ -175,3 +175,12 @@
+ {
+   teamplayer_write(1, data, mask);
+ }
++
++void teamplayer_kr_save(uint8 *p)
++{
++  int i; for(i=0;i<2;++i) { *p++=teamplayer[i].State; *p++=teamplayer[i].Counter; }
++}
++void teamplayer_kr_load(const uint8 *p)
++{
++  int i; for(i=0;i<2;++i) { teamplayer[i].State=*p++; teamplayer[i].Counter=*p++; }
++}
+--- a/core/input_hw/teamplayer.h
++++ b/core/input_hw/teamplayer.h
+@@ -47,4 +47,7 @@
+ extern void teamplayer_1_write(unsigned char data, unsigned char mask);
+ extern void teamplayer_2_write(unsigned char data, unsigned char mask);
+ 
++extern void teamplayer_kr_save(uint8 *p);
++extern void teamplayer_kr_load(const uint8 *p);
++
+ #endif
+--- a/core/input_hw/lightgun.c
++++ b/core/input_hw/lightgun.c
+@@ -263,3 +263,12 @@
+   /* update internal state */
+   lightgun.State = data;
+ }
++
++void lightgun_kr_save(uint8 *p)
++{
++  *p++=lightgun.State; *p++=lightgun.Port;
++}
++void lightgun_kr_load(const uint8 *p)
++{
++  lightgun.State=*p++; lightgun.Port=*p++;
++}
+--- a/core/input_hw/lightgun.h
++++ b/core/input_hw/lightgun.h
+@@ -48,4 +48,7 @@
+ extern unsigned char justifier_read(void);
+ extern void justifier_write(unsigned char data, unsigned char mask);
+ 
++extern void lightgun_kr_save(uint8 *p);
++extern void lightgun_kr_load(const uint8 *p);
++
+ #endif
+--- a/core/input_hw/input.h
++++ b/core/input_hw/input.h
+@@ -170,4 +170,9 @@
+ extern void input_refresh(void);
+ extern void input_end_frame(unsigned int cycles);
+ 
++#define KR_INPUT_STATE_SIZE 128
++extern int input_kr_valid(const uint8 *p);
++extern void input_kr_save(uint8 *p);
++extern void input_kr_load(const uint8 *p);
++
+ #endif
+--- a/core/io_ctrl.c
++++ b/core/io_ctrl.c
+@@ -156,8 +156,8 @@
+ 
+     case SYSTEM_MOUSE:
+     {
+-      port[0].data_w = mouse_write;
+-      port[0].data_r = mouse_read;
++      port[0].data_w = mouse_1_write;
++      port[0].data_r = mouse_1_read;
+       break;
+     }
+ 
+@@ -250,8 +250,8 @@
+ 
+     case SYSTEM_MOUSE:
+     {
+-      port[1].data_w = mouse_write;
+-      port[1].data_r = mouse_read;
++      port[1].data_w = mouse_2_write;
++      port[1].data_r = mouse_2_read;
+       break;
+     }
+ 
+--- a/core/state.c
++++ b/core/state.c
+@@ -63,6 +63,8 @@
+   /* Validate the optional cartridge trailer before resetting any machine state. */
+   if ((md_cart_aq93c_active || md_cart_sonic6_active) &&
+       !md_cart_compat_state_valid(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE)) return 0;
++
++  if (!input_kr_valid(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE)) return 0;
+ 
+   /* reset system */
+   reset_do_not_clear_buffers = fast_savestates;
+@@ -188,6 +190,8 @@
+   if (md_cart_aq93c_active || md_cart_sonic6_active)
+     md_cart_compat_state_load(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE);
+ 
++  input_kr_load(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE);
++
+   return bufferptr;
+ }
+ 
+@@ -290,6 +294,9 @@
+     md_cart_compat_state_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE);
+   }
+ 
++  if (bufferptr > STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE) return 0;
++  input_kr_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE);
++
+   /* return total size */
+   return bufferptr;
+ }

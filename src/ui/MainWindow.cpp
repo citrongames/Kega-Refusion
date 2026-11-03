@@ -9,6 +9,7 @@
 #include "NetplaySettingsPage.h"
 #include "net/NetplayController.h"
 #include "net/NetplayTimeline.h"
+#include <algorithm>
 #include <cmath>
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
@@ -29,7 +30,7 @@
 #include <QImageWriter>
 #include <QIcon>
 #include <QJsonArray>
-#include <QJsonArray>
+#include <QJsonObject>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QFormLayout>
@@ -198,6 +199,19 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         session_.setControllerSixButton(port, input_->sixButton(port));
     }
     connect(input_, &InputManager::configurationChanged, this, &MainWindow::updateGunConfiguration);
+    connect(&session_, &EmulationSession::jcartChanged, input_, &InputManager::setJCart);
+    connect(input_, &InputManager::mouseMotion, this, &MainWindow::deliverMouseMotion);
+    connect(input_, &InputManager::paddleMoved, this, [this](unsigned player, int position) {
+        session_.setPaddlePosition(player, position);
+    });
+    connect(view_, &GameView::analogMouseMotion, this, &MainWindow::deliverMouseMotion);
+    connect(view_, &GameView::analogPaddleMoved, this, [this](unsigned player, int position) {
+        session_.setPaddlePosition(player, position);
+    });
+    connect(view_, &GameView::analogPointerReset, this, [this] {
+        mouseMotionRemainder_.fill(QPointF());
+        session_.clearMouseMotion();
+    });
     connect(input_, &InputManager::aimMoved, this, [this](unsigned player, double dx, double dy) {
         if (player >= 3 || input_->aimWithMouse(player)) return;
         updateGunAim(player,gunAims_[player] + QPointF(dx,dy),false);
@@ -2065,8 +2079,28 @@ void MainWindow::editCheats() {
     updateInputEnabled();
 }
 
+void MainWindow::deliverMouseMotion(unsigned player, double dx, double dy) {
+    if (player >= MaxGunPlayers || !input_->isConnected(player) ||
+        input_->controllerType(player) != ControllerType::Mouse ||
+        !std::isfinite(dx) || !std::isfinite(dy)) return;
+    const QPointF total = mouseMotionRemainder_[player] + QPointF(dx, dy);
+    const double boundedX = std::clamp(total.x(), -32767.999, 32767.999);
+    const double boundedY = std::clamp(total.y(), -32767.999, 32767.999);
+    const int wholeX = int(std::trunc(boundedX));
+    const int wholeY = int(std::trunc(boundedY));
+    mouseMotionRemainder_[player] = QPointF(boundedX - wholeX, boundedY - wholeY);
+    if (wholeX || wholeY) session_.addMouseMotion(player, wholeX, wholeY);
+}
+
+void MainWindow::resetAnalogMotion() {
+    mouseMotionRemainder_.fill(QPointF());
+    session_.clearMouseMotion();
+    view_->resetAnalogPointer();
+}
+
 void MainWindow::updateGunAim(unsigned player, QPointF position, bool offscreen) {
-    if (player >= 3 || !input_->isConnected(player) || input_->controllerType(player) == ControllerType::Pad) return;
+    if (player >= MaxGunPlayers || !input_->isConnected(player) ||
+        !isLightgun(input_->controllerType(player))) return;
     offscreen = offscreen || position.x() < 0 || position.x() > 1 || position.y() < 0 || position.y() > 1;
     position.setX(qBound(0.0,position.x(),1.0));
     position.setY(qBound(0.0,position.y(),1.0));
@@ -2083,39 +2117,69 @@ void MainWindow::updateGunConfiguration() {
 }
 
 void MainWindow::updateGunPresentation() {
+    resetAnalogMotion();
     const bool online = netplay_ && netplay_->active();
     const int localRole = session_.networkRole();
     unsigned source = 0;
     bool gunRole = false;
+    bool analogRole = false;
     if (online) {
         QJsonArray controllers;
-        for (unsigned player=0;player<MaxControllerPlayers;++player)
-            controllers.append(QJsonObject{{"connected",input_->isConnected(player)},
-                                           {"kind",int(input_->controllerType(player))}});
-        const QJsonObject hardware{{"adapter",int(input_->adapter())},{"controllers",controllers}};
-        source = NetplayTimeline::localInputSource(localRole,hardware);
-        gunRole = localRole >= 1 && localRole <= int(MaxGunPlayers) &&
-                  input_->isConnected(unsigned(localRole-1)) &&
-                  input_->controllerType(unsigned(localRole-1)) != ControllerType::Pad;
+        for (unsigned player = 0; player < MaxControllerPlayers; ++player)
+            controllers.append(QJsonObject{{"connected", input_->isConnected(player)},
+                                           {"kind", int(input_->controllerType(player))}});
+        const QJsonObject hardware{{"adapter", int(input_->adapter())},
+                                   {"jcart", input_->jcart()},
+                                   {"jcartBase", int(input_->jcartPlayerBase())},
+                                   {"controllers", controllers}};
+        source = NetplayTimeline::localInputSource(localRole, hardware);
+        if (localRole >= 1 && localRole <= int(MaxGunPlayers)) {
+            const unsigned target = unsigned(localRole - 1);
+            const ControllerType kind = input_->controllerType(target);
+            gunRole = input_->isConnected(target) && isLightgun(kind);
+            analogRole = input_->isConnected(target) && isAnalogController(kind);
+        }
     }
-    input_->setNetworkInputSourceEnabled(online && localRole > 0 && !gunRole);
-    int mousePlayer = -1;
-    for (unsigned player=0;player<3;++player) {
-        const bool gun = input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad &&
+    input_->setNetworkInputSourceEnabled(online && localRole > 0 && !gunRole && !analogRole);
+    int mouseGunPlayer = -1;
+    int analogMousePlayer = -1;
+    ControllerType analogMouseType = ControllerType::Pad;
+    for (unsigned player = 0; player < MaxGunPlayers; ++player) {
+        const ControllerType kind = input_->controllerType(player);
+        const bool connected = input_->isConnected(player);
+        const bool gun = connected && isLightgun(kind) &&
                          (!online || (gunRole && player == source));
-        view_->setCrosshairVisible(player,input_->mapping(input_->profile(),int(player)).showCrosshair);
+        const bool analog = connected && isAnalogController(kind) &&
+                            (!online || (analogRole && player == source));
+        view_->setCrosshairVisible(player, input_->mapping(input_->profile(), int(player)).showCrosshair);
         const unsigned gunNumber = online && gunRole
-            ? unsigned(input_->profile() == ConsoleProfile::MegaDrive ? localRole-1 : localRole)
+            ? unsigned(input_->profile() == ConsoleProfile::MegaDrive ? localRole - 1 : localRole)
             : (input_->profile() == ConsoleProfile::MegaDrive ? player : player + 1);
-        view_->setLightgunEnabled(player,gun,gunNumber);
-        if (gun && input_->aimWithMouse(player) && mousePlayer < 0) mousePlayer = int(player);
+        view_->setLightgunEnabled(player, gun, gunNumber);
+        if (gun && input_->aimWithMouse(player) && mouseGunPlayer < 0)
+            mouseGunPlayer = int(player);
+        if (analog && input_->aimWithMouse(player) && analogMousePlayer < 0) {
+            analogMousePlayer = int(player);
+            analogMouseType = kind;
+        }
     }
-    view_->setMouseGunPlayer(mousePlayer);
-    for (unsigned player=0;player<3;++player) {
-        gunAims_[player] = QPointF(.5,.5);
-        if (input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad)
-            updateGunAim(player,gunAims_[player],input_->aimWithMouse(player));
-        else session_.setGunAim(player,0,0,true);
+    view_->setMouseGunPlayer(mouseGunPlayer);
+    view_->setAnalogMousePlayer(analogMousePlayer, analogMouseType);
+    for (unsigned player = 0; player < MaxGunPlayers; ++player) {
+        const ControllerType kind = input_->controllerType(player);
+        const bool connected = input_->isConnected(player);
+        gunAims_[player] = QPointF(.5, .5);
+        if (connected && isLightgun(kind)) {
+            updateGunAim(player, gunAims_[player], input_->aimWithMouse(player));
+        } else if (connected && kind == ControllerType::Paddle) {
+            if (presentedControllerKinds_[player] != ControllerType::Paddle ||
+                !presentedControllerConnected_[player])
+                session_.setPaddlePosition(player, 0);
+        } else if (!connected || kind != ControllerType::Mouse) {
+            session_.setGunAim(player, 0, 0, true);
+        }
+        presentedControllerKinds_[player] = kind;
+        presentedControllerConnected_[player] = connected;
     }
 }
 
@@ -2216,6 +2280,7 @@ void MainWindow::setFrameAdvanceSource(bool keyboard, bool pressed) {
 
 void MainWindow::releaseInput() {
     view_->setLightgunInputEnabled(false);
+    resetAnalogMotion();
     fastForwardHeld_ = false;
     fastForwardPadHeld_ = false;
     frameAdvanceHeld_ = frameAdvancePadHeld_ = false;

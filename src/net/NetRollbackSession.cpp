@@ -6,6 +6,7 @@
 #include <cmath>
 #include "core/LibretroHost.h"
 #include "input/ControllerTopology.h"
+#include "input/ControllerType.h"
 #include <ggponet.h>
 #include <kega_ggpo_transport.h>
 #include <QHostAddress>
@@ -46,7 +47,8 @@ struct NetRollbackSession::Impl {
     GGPOSession* session = nullptr;
     GGPOPlayerHandle localHandle = -1;
     int localRole=0;
-    unsigned localInputSource=0;
+    unsigned localInputSource=0,relativeRolesMask=0;
+    bool localInputIsRelative=false,lastLocalInputConsumed=false;
     quint64 epoch = 0, localId = 0, frame = 0;
     QVector<Peer> peers, players;
     QList<QPair<int,MovieInput>> contributions;
@@ -118,7 +120,7 @@ struct NetRollbackSession::Impl {
         if(disconnected) throw std::runtime_error("GGPO participant disconnected");
         for(int i=0;i<players.size();++i)
             contributions[i]={players[i].role,decodeInput(values.data()+i*InputSize)};
-        return NetplayTimeline::merge(contributions);
+        return NetplayTimeline::merge(contributions,relativeRolesMask);
     }
     static bool advance(int) {
         auto& self=*current;
@@ -246,9 +248,15 @@ bool NetRollbackSession::start(LibretroHost& host,quint64 epoch,const QJsonArray
                 GGPOPlayerHandle handle=-1;if(!d->check(ggpo_add_player(d->session,&player,&handle),error)){stop();return false;}
             }
         }
-        // Pads use local P1. A gun role uses the first connected local gun of
-        // the matching kind, so a remote second Justifier can use its primary mouse.
+        // Pads use local P1; pointer roles use the first connected local device
+        // of the matching kind, including a remote second Justifier.
         d->localInputSource=NetplayTimeline::localInputSource(d->localRole,configuration);
+        const auto controllers=configuration.value("controllers").toArray();
+        for(int role=1;role<=int(MaxGunPlayers) && role<=controllers.size();++role)
+            if(controllers[role-1].toObject().value("kind").toInt(-1)==int(ControllerType::Mouse))
+                d->relativeRolesMask|=1u<<(role-1);
+        d->localInputIsRelative=d->localRole>0 &&
+            (d->relativeRolesMask & (1u<<(d->localRole-1)));
         ggpo_set_disconnect_timeout(d->session,15000);ggpo_set_disconnect_notify_start(d->session,3000);
         return true;
     } catch(const std::exception& e) {kega_ggpo_set_transport(nullptr);error=QString::fromUtf8(e.what());stop();return false;}
@@ -267,6 +275,7 @@ bool NetRollbackSession::idle(QString& error) {
     catch(const std::exception& e){error=QString::fromUtf8(e.what());d->failure=error;return false;}
 }
 NetRollbackSession::Result NetRollbackSession::beforeFrame(const MovieInput& local,MovieInput& merged,QString& error) {
+    d->lastLocalInputConsumed=false;
     if(!d->session)return Wait;
     if(!d->failure.isEmpty()){error=d->failure;return Failed;}
     if(!d->running)return Wait;
@@ -278,7 +287,9 @@ NetRollbackSession::Result NetRollbackSession::beforeFrame(const MovieInput& loc
             int nextDelay=d->realtime?d->delay.pending():previousDelay;
             // GGPO drops one captured input when reducing delay by one. Only
             // drop a duplicate, including pointer aim, never a fresh button edge.
-            if(nextDelay<previousDelay && (!d->havePreviousInput || bytes!=d->previousInput))
+            if(nextDelay<previousDelay &&
+               (!d->havePreviousInput || bytes!=d->previousInput ||
+                (d->localInputIsRelative && (local.aim[d->localInputSource]&0xffffffffu))))
                 nextDelay=previousDelay;
             if(nextDelay!=previousDelay && !d->check(ggpo_set_frame_delay(d->session,d->localHandle,nextDelay),error))return Failed;
             const auto result=ggpo_add_local_input(d->session,d->localHandle,bytes.data(),bytes.size());
@@ -289,6 +300,7 @@ NetRollbackSession::Result NetRollbackSession::beforeFrame(const MovieInput& loc
                 return Wait;
             }
             if(!d->check(result,error))return Failed;
+            d->lastLocalInputConsumed=true;
             if(nextDelay!=previousDelay)d->delay.applied(nextDelay,d->qualityClock.elapsed());
             d->previousInput=bytes;d->havePreviousInput=true;
             d->localQueued=true;
@@ -299,9 +311,10 @@ NetRollbackSession::Result NetRollbackSession::beforeFrame(const MovieInput& loc
         if(!d->check(result,error))return Failed;
         if(disconnected){error=QStringLiteral("GGPO participant disconnected");return Failed;}
         for(int i=0;i<d->players.size();++i)d->contributions[i]={d->players[i].role,decodeInput(values.data()+i*InputSize)};
-        merged=NetplayTimeline::merge(d->contributions);return Run;
+        merged=NetplayTimeline::merge(d->contributions,d->relativeRolesMask);return Run;
     }catch(const std::exception& e){error=QString::fromUtf8(e.what());d->failure=error;return Failed;}
 }
+bool NetRollbackSession::localInputConsumed() const {return d->lastLocalInputConsumed;}
 bool NetRollbackSession::afterFrame(QString& error) {
     if(!d->session)return false;
     Impl::Scope scope(d.get());
