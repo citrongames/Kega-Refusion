@@ -2,6 +2,10 @@
 #include "i18n/Localization.h"
 #include "input/InputManager.h"
 #include "ui/MainWindow.h"
+#include "ui/AudioOutput.h"
+#include <QComboBox>
+#include <QDialog>
+#include <QTimer>
 
 #include <QAction>
 #include <QApplication>
@@ -57,13 +61,15 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
     try {
-        require(argc == 3, "project root and core library arguments are required");
+        require(argc == 3 || (argc == 4 && app.arguments().last() == "--audio-profiles"), "project root and core library arguments are required");
         QTemporaryDir data;
         require(data.isValid(), "temporary directory unavailable");
         {
             QSettings settings(data.filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
             settings.setValue(QStringLiteral("ui/language"), QStringLiteral("en"));
             settings.setValue(QStringLiteral("achievements/enabled"), false);
+            if (app.arguments().contains(QStringLiteral("--audio-profiles")))
+                settings.setValue(QStringLiteral("emulation/pauseOnFocusLoss"), false);
             settings.sync();
         }
         Localization::initialize(QString::fromLocal8Bit(argv[1]), data.path());
@@ -114,6 +120,47 @@ int main(int argc, char** argv) {
         waitFor([&] { return loaded == 1 || errors; }, "fixture did not load");
         require(!errors && videoStart->isEnabled() && videoExport->isEnabled() &&
                 !videoStop->isEnabled(), "video controls did not follow game loading");
+
+        if (app.arguments().contains(QStringLiteral("--audio-profiles"))) {
+            auto* audio = window.findChild<AudioOutput*>();
+            auto* settingsAction = window.findChild<QAction*>(QStringLiteral("emulatorSettingsAction"));
+            require(audio && settingsAction && audio->latencyProfile() == AudioQueue::LatencyProfile::Normal,
+                    "normal default/settings unavailable");
+            int frames = 0;
+            qint64 activeTarget = 0;
+            QObject::connect(&session, &EmulationSession::videoFrame, &app,
+                             [&](const QImage&, double) { ++frames; });
+            QObject::connect(audio, &AudioOutput::clockFeedback, &app,
+                             [&](qint64, qint64 target, bool available) { activeTarget = available ? target : 0; });
+            for (const int value : {1, 2, 0}) {
+                bool changed = false, restored = false;
+                const int previous = int(audio->latencyProfile());
+                QTimer::singleShot(0, &window, [&] {
+                    auto* dialog = window.findChild<QDialog*>(QStringLiteral("emulatorSettingsDialog"));
+                    auto* combo = dialog ? dialog->findChild<QComboBox*>(QStringLiteral("audioLatencyProfile")) : nullptr;
+                    if (combo) {
+                        restored = combo->currentData().toInt() == previous;
+                        combo->setCurrentIndex(combo->findData(value));
+                        changed = int(audio->latencyProfile()) == value;
+                    }
+                    if (dialog) dialog->reject(); // Immediate preference survives closing.
+                });
+                settingsAction->trigger();
+                require(changed && restored, "settings did not apply/restore latency immediately");
+                QSettings stored(data.filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
+                require(stored.value(QStringLiteral("audio/latencyProfile")).toInt() == value,
+                        "latency preference not saved");
+                const int before = frames;
+                session.setBackgroundPaused(false);
+                waitFor([&] { return frames > before + 8 &&
+                    activeTarget == AudioQueue::timing(AudioQueue::normalizeProfile(value)).target; },
+                    "real core/audio did not resume with selected latency");
+                require(loaded == 1 && !errors, "profile reopened/failed the game");
+            }
+            session.shutdown();
+            std::puts("Audio profiles: real core/native audio continue; settings apply immediately and restore on reopen");
+            return 0;
+        }
 
         // The core stores every slot, while InputManager gates disconnected
         // adapter slots. Echoing this snapshot used to issue a forbidden edit.

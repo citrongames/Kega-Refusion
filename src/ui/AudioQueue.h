@@ -13,9 +13,32 @@ public:
     static constexpr qint64 PrefillUsecs = 30000;
     static constexpr qint64 MaximumUsecs = 60000;
 
+    enum class LatencyProfile { Normal = 0, Low = 1, Stable = 2 };
+    struct Timing { qint64 target, prefill, maximum, device; };
+    static constexpr LatencyProfile normalizeProfile(int value) {
+        return value == 1 ? LatencyProfile::Low : value == 2 ? LatencyProfile::Stable
+                                                         : LatencyProfile::Normal;
+    }
+    static constexpr Timing timing(LatencyProfile profile) {
+        switch (profile) {
+        case LatencyProfile::Low: return {20000, 15000, 40000, 20000};
+        case LatencyProfile::Stable: return {70000, 60000, 120000, 80000};
+        default: return {TargetUsecs, PrefillUsecs, MaximumUsecs, 40000};
+        }
+    }
+    LatencyProfile latencyProfile() const { return profile_; }
+    Timing timing() const { return timing(profile_); }
+    void setLatencyProfile(LatencyProfile profile) {
+        profile = normalizeProfile(int(profile));
+        if (profile == profile_) return;
+        profile_ = profile;
+        capacity_ = bytesForUsecs(timing().maximum);
+        clear();
+    }
+
     void setSampleRate(int rate) {
         sampleRate_ = rate;
-        capacity_ = bytesForUsecs(MaximumUsecs);
+        capacity_ = bytesForUsecs(timing().maximum);
         clear();
     }
 
@@ -82,6 +105,7 @@ public:
     }
 
 private:
+    LatencyProfile profile_ = LatencyProfile::Normal;
     QByteArray bytes_;
     int sampleRate_ = 0;
     qint64 capacity_ = 0;

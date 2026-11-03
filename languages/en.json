@@ -998,6 +998,11 @@
     "Не удалось записать пакет видео": "Cannot write recording packet",
     "Не удалось завершить запись видео.": "Cannot finish video recording.",
     "Не удалось подготовить исходные кадры для записи видео.": "Could not prepare the original frames for video recording.",
-    "Слишком много изменений видеоформата. Начните новую видеозапись.": "Too many video format changes. Start a new video recording."
+    "Слишком много изменений видеоформата. Начните новую видеозапись.": "Too many video format changes. Start a new video recording.",
+    "Низкая задержка": "Low latency",
+    "Обычный": "Normal",
+    "Повышенная устойчивость": "More stable",
+    "Задержка звука:": "Audio latency:",
+    "Применяется сразу, без перезапуска игры. Если слышен треск, выберите повышенную устойчивость. Фактическая задержка также зависит от устройства вывода.": "Applied immediately without restarting the game. If you hear crackling, select More stable. Actual latency also depends on the output device."
   }
 }

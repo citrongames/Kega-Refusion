@@ -92,13 +92,37 @@ void resetAndRates() {
             "unavailable/invalid rate failed to disable buffering");
 }
 
+void profileChanges() {
+    AudioQueue queue;
+    require(queue.latencyProfile() == AudioQueue::LatencyProfile::Normal, "default profile changed");
+    queue.setSampleRate(48000);
+    for (const int value : {2, 1, 0, 2, 1}) {
+        queue.append(frames(48000));
+        queue.writeTo(1, [](const char*, qint64 n) { return n; });
+        const auto profile = AudioQueue::normalizeProfile(value);
+        queue.setLatencyProfile(profile);
+        require(queue.empty(), "profile change retained old/partial PCM");
+        require(queue.capacity() == queue.bytesForUsecs(queue.timing().maximum), "profile capacity stale");
+        queue.append(frames(48000));
+        require(queue.size() <= queue.capacity(), "profile queue exceeds bound");
+        const auto size = queue.size();
+        queue.setLatencyProfile(profile);
+        require(queue.size() == size, "unchanged profile cleared PCM");
+        queue.setSampleRate(44100);
+        require(queue.latencyProfile() == profile && queue.empty(), "sample rate discarded profile");
+    }
+    require(AudioQueue::normalizeProfile(99) == AudioQueue::LatencyProfile::Normal, "invalid profile lacks fallback");
+}
+
 void sustainedProducerAndStalls() {
     // 30 seconds at 50/60Hz and several sample rates, with an actual fractional
     // number of samples/frame. Simulate a device consuming every millisecond,
     // then a stopped device and recovery to prove boundedness and fresh reset.
+    for (const auto profile : {AudioQueue::LatencyProfile::Low, AudioQueue::LatencyProfile::Normal, AudioQueue::LatencyProfile::Stable})
     for (const int rate : {32000, 44100, 48000}) {
         for (const int fps : {50, 60}) {
             AudioQueue queue;
+            queue.setLatencyProfile(profile);
             queue.setSampleRate(rate);
             qint64 fraction = 0, produced = 0, consumed = 0, sampleClock = 0;
             int nextFrame = 0;
@@ -113,7 +137,7 @@ void sustainedProducerAndStalls() {
                             "nominal sample rate drift dropped complete PCM chunks");
                     ++nextFrame;
                 }
-                if (!started && queue.durationUsecs() >= AudioQueue::PrefillUsecs) started = true;
+                if (!started && queue.durationUsecs() >= queue.timing().prefill) started = true;
                 if (started) {
                     sampleClock += rate;
                     const qint64 due = sampleClock / 1000 * 4;
@@ -130,7 +154,7 @@ void sustainedProducerAndStalls() {
 
             for (int frame = 0; frame < fps * 30; ++frame) {
                 queue.append(QByteArray((rate / fps) * 4, 's'));
-                require(queue.durationUsecs() <= AudioQueue::MaximumUsecs,
+                require(queue.durationUsecs() <= queue.timing().maximum,
                         "stopped device accumulated unbounded latency");
             }
             queue.clear();
@@ -153,6 +177,7 @@ int main() {
         partialWrites();
         boundedOverflow();
         resetAndRates();
+        profileChanges();
         sustainedProducerAndStalls();
         std::puts("audio queue tests passed: partial writes, bounds, alignment, rates, stalls and reset");
         return 0;

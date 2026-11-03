@@ -179,6 +179,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         if (!loading_ && !session_.hasGame()) openGameDialog();
     });
     audio_ = new AudioOutput(this);
+    audio_->setLatencyProfile(AudioQueue::normalizeProfile(
+        settings_.value(QStringLiteral("audio/latencyProfile"), 0).toInt()));
     audio_->setOutputDeviceId(settings_.value(QStringLiteral("audio/outputDeviceId")).toByteArray());
     input_ = new InputManager(settings_.fileName(), this);
     connect(audio_, &AudioOutput::unavailable, this, [](const QString& text) {
@@ -1918,6 +1920,24 @@ void MainWindow::editSettings(int initialPage) {
         "После подключения выбор восстановится.")), &dialog);
     outputHelp->setWordWrap(true);
     sound->addRow(outputHelp);
+    auto* latencyProfile = new QComboBox(&dialog);
+    latencyProfile->setObjectName(QStringLiteral("audioLatencyProfile"));
+    latencyProfile->addItem(Localization::text(QStringLiteral("Низкая задержка")), 1);
+    latencyProfile->addItem(Localization::text(QStringLiteral("Обычный")), 0);
+    latencyProfile->addItem(Localization::text(QStringLiteral("Повышенная устойчивость")), 2);
+    latencyProfile->setCurrentIndex(latencyProfile->findData(int(audio_->latencyProfile())));
+    sound->addRow(Localization::text(QStringLiteral("Задержка звука:")), latencyProfile);
+    auto* latencyHelp = new QLabel(Localization::text(QStringLiteral(
+        "Применяется сразу, без перезапуска игры. Если слышен треск, выберите повышенную устойчивость. "
+        "Фактическая задержка также зависит от устройства вывода.")), &dialog);
+    latencyHelp->setWordWrap(true);
+    sound->addRow(latencyHelp);
+    connect(latencyProfile, &QComboBox::currentIndexChanged, &dialog, [this, latencyProfile] {
+        const auto profile = AudioQueue::normalizeProfile(latencyProfile->currentData().toInt());
+        if (profile == audio_->latencyProfile()) return;
+        audio_->setLatencyProfile(profile);
+        settings_.setValue(QStringLiteral("audio/latencyProfile"), int(profile));
+    });
     auto* smsFmBox = new QCheckBox(Localization::text(QStringLiteral("FM-синтезатор (Master System)")), &dialog);
     smsFmBox->setObjectName(QStringLiteral("smsFmEnabled"));
     smsFmBox->setChecked(smsFmEnabled_);

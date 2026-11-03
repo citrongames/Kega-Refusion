@@ -33,6 +33,9 @@ public:
 
     // Selection and device discovery stay on the GUI thread. An empty ID
     // follows the system default; a missing explicit ID is kept for reconnect.
+    // GUI thread; changing this resets only audio, never the emulated session.
+    AudioQueue::LatencyProfile latencyProfile() const { return queue_.latencyProfile(); }
+    void setLatencyProfile(AudioQueue::LatencyProfile profile);
     QByteArray outputDeviceId() const { return outputDeviceId_; }
     void setOutputDeviceId(const QByteArray& id);
 
@@ -48,7 +51,8 @@ private:
     void refreshOutputDevice();
     void requestPumpLocked();
     void pump();
-    bool configure(int sampleRate);
+    bool configure(int sampleRate, qint64 deviceUsecs);
+    void invalidateLocked();
     void releaseSink();
     void fail(const QString& message);
     void feedback(std::uint64_t generation, bool available, qint64 deviceBytes = 0);

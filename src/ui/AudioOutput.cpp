@@ -94,7 +94,7 @@ void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
         resetPending_ = true;
         retryResetPending_ = true;
         ++generation_;
-        emit clockFeedback(0, AudioQueue::TargetUsecs, false);
+        emit clockFeedback(0, queue_.timing().target, false);
     }
     // Overflow already drops stale whole frames while preserving a partial
     // device write. Keep the live sink: reopening it can take longer than this
@@ -180,6 +180,18 @@ void AudioOutput::playAchievementSound() {
 void AudioOutput::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_) return;
+    invalidateLocked();
+}
+
+void AudioOutput::setLatencyProfile(AudioQueue::LatencyProfile profile) {
+    profile = AudioQueue::normalizeProfile(int(profile));
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (closing_ || profile == queue_.latencyProfile()) return;
+    queue_.setLatencyProfile(profile);
+    invalidateLocked();
+}
+
+void AudioOutput::invalidateLocked() {
     queue_.clear();
     chimeActive_ = false;
     sinkReady_ = false;
@@ -188,7 +200,7 @@ void AudioOutput::clear() {
     ++generation_;
     // Serialize invalidation with publishing feedback. No feedback from the
     // previous game/state may become authoritative after this reset.
-    emit clockFeedback(0, AudioQueue::TargetUsecs, false);
+    emit clockFeedback(0, queue_.timing().target, false);
     requestPumpLocked();
 }
 
@@ -217,7 +229,7 @@ void AudioOutput::fail(const QString& message) {
     std::uint64_t generation;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        queue_.keepNewest(queue_.bytesForUsecs(AudioQueue::TargetUsecs));
+        queue_.keepNewest(queue_.bytesForUsecs(queue_.timing().target));
         generation = generation_;
     }
     feedback(generation, false);
@@ -227,7 +239,7 @@ void AudioOutput::fail(const QString& message) {
     }
 }
 
-bool AudioOutput::configure(int sampleRate) {
+bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
     releaseSink();
     const QAudioDevice device = outputDevice_;
     if (device.isNull()) {
@@ -247,7 +259,7 @@ bool AudioOutput::configure(int sampleRate) {
     sink_ = new QAudioSink(device, format, this);
     // Backends may choose another size. All occupancy measurements below use
     // the actual bufferSize() after start(), never this requested value.
-    sink_->setBufferSize(qMax<qint64>(AudioQueue::FrameBytes, qint64(sampleRate) * 4 * 40 / 1000));
+    sink_->setBufferSize(qMax<qint64>(AudioQueue::FrameBytes, qint64(sampleRate) * AudioQueue::FrameBytes * deviceUsecs / 1000000));
     sink_->setVolume(muted_ ? 0.0 : volume_ / 100.0);
     const std::uint64_t sinkGeneration = sinkGeneration_;
     connect(sink_, &QAudioSink::stateChanged, this, [this, sinkGeneration](SinkState state) {
@@ -270,7 +282,7 @@ void AudioOutput::feedback(std::uint64_t generation, bool available, qint64 devi
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_ || generation != generation_ || resetPending_) return;
     emit clockFeedback(available ? queue_.usecsForBytes(queue_.size() + deviceBytes) : 0,
-                       AudioQueue::TargetUsecs, available);
+                       queue_.timing().target, available);
 }
 
 void AudioOutput::pump() {
@@ -279,6 +291,7 @@ void AudioOutput::pump() {
     bool reset;
     bool resetRetry;
     qint64 pendingUsecs;
+    AudioQueue::Timing timing;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (closing_) return;
@@ -287,6 +300,7 @@ void AudioOutput::pump() {
         reset = std::exchange(resetPending_, false);
         resetRetry = std::exchange(retryResetPending_, false);
         pendingUsecs = queue_.durationUsecs();
+        timing = queue_.timing();
     }
     if (reset) {
         releaseSink();
@@ -300,13 +314,12 @@ void AudioOutput::pump() {
     if (!pumpTimer_.isActive()) pumpTimer_.start();
 
     if (!sink_) {
-        // Two ordinary video frames provide a small scheduling cushion before
-        // the first sample, without filling a 100ms device buffer.
-        if (pendingUsecs < AudioQueue::PrefillUsecs || clock_.elapsed() < retryAtMs_) {
+        // Wait for this profile's scheduling cushion, not a full device buffer.
+        if (pendingUsecs < timing.prefill || clock_.elapsed() < retryAtMs_) {
             feedback(generation, false);
             return;
         }
-        if (!configure(rate)) return;
+        if (!configure(rate, timing.device)) return;
     }
     if (sampleRate_ != rate) return;
     if (sink_->state() == SinkState::StoppedState || sink_->state() == SinkState::SuspendedState) {
@@ -317,7 +330,7 @@ void AudioOutput::pump() {
     qint64 deviceBytes = qMax<qint64>(0, sink_->bufferSize() - sink_->bytesFree());
     if (wroteSamples_ && sink_->state() == SinkState::IdleState && deviceBytes == 0)
         prefilling_ = true;
-    if (prefilling_ && pendingUsecs < AudioQueue::PrefillUsecs) {
+    if (prefilling_ && pendingUsecs < timing.prefill) {
         feedback(generation, false);
         // Once input has ended, there is no reason to poll an empty device.
         if (pendingUsecs == 0 && deviceBytes == 0) {
@@ -334,7 +347,7 @@ void AudioOutput::pump() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (generation != generation_ || resetPending_) return;
-        const qint64 highWater = queue_.bytesForUsecs(40000);
+        const qint64 highWater = queue_.bytesForUsecs(timing.device);
         const qint64 writable = qMin<qint64>(sink_->bytesFree(), qMax<qint64>(0, highWater - deviceBytes));
         result = queue_.writeTo(writable,
             [this](const char* data, qint64 size) { return stream_->write(data, size); });

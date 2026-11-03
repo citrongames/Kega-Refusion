@@ -333,3 +333,11 @@ Both platforms now use checksum-pinned FFmpeg 7.1.2 with PNG/AAC encoders and MO
 ## Settings master volume — 2026-11-03
 
 Added a 0–100% master-volume slider to Settings / Sound with a numeric percentage. It mirrors the existing menu slider bidirectionally, reusing immediate output/OSD updates and the existing 400 ms coalesced, changed-only preference save. Connections belong to the dialog widgets and are removed when it closes. Existing Russian/English Volume label is reused. Windows and Linux Release builds passed; Windows deployment matches staging. This small UI-only change was checked by code review/build, without repeating audio or core suites.
+
+
+## Live audio latency profiles — 2026-11-03
+
+- Normal preserves the original target/prefill/queue/device policy exactly and is default. Low and Stable adjust the software cap, prefill, device write high-water mark and clock feedback target together. GUI selection applies immediately; only the audio sink/PCM queue reset, with existing coalesced wake and generation guards. No core/timing/recording contract changes.
+- `audio_queue_tests` passed: all three profiles at 32/44.1/48 kHz and 50/60 Hz, sustained fractional PCM, stalls, bounded overflow, partial-write alignment, rate/profile switches and unchanged-profile no-op. `audio_output_tests` passed: correct new clock targets, one invalidation per actual change and one queued wake for a burst of changes.
+- `video_ui_tests --audio-profiles` passed with the real core and an original 68000 fixture, offscreen Qt and native audio fallback. Each profile selected through settings immediately changed audio, persisted through dialog rejection/reopening, and resumed frames/native audio with the new target without reloading the ROM. Initial test was held by focus-loss pausing of the invisible window; that preference is disabled only for this fixture. No application workaround was introduced.
+- Linux and Windows Release builds passed. No broad core/gameplay suites or Windows desktop automation were used.

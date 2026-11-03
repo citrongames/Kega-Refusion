@@ -146,7 +146,7 @@ In 0.8.2 crosshairs use color without numeric labels. A per-system/input-slot sh
 
 ## Deferred UI improvements (user decision, 2026-11-02)
 
-After movie recording: configurable keyboard command shortcuts (keep digits 0–9 for slots), a Video section consolidating filters/shaders/scaling/aspect, and audio latency presets. These are explicitly deferred, not part of the movie implementation.
+After movie recording: configurable keyboard command shortcuts (keep digits 0–9 for slots), a Video section consolidating filters/shaders/scaling/aspect, and audio latency presets. These were deferred from the movie implementation; audio latency presets are now implemented (see below).
 
 ## Input movies (0.10.0)
 
@@ -225,3 +225,10 @@ Authoritative nonempty controller snapshots update UI input mappings without ech
 ## Release packaging
 
 Both platform build scripts select CMake Release. Packaging strips non-runtime symbol/debug sections from staged copies of the application, cores and runtime libraries; development originals remain intact. PE files carrying Authenticode signatures are preserved unchanged. Neither the core implementations nor the dependency/plugin set is reduced. Link Cable's second module remains a separate physical file for loader isolation.
+
+
+### Live audio latency profiles
+
+The frontend owns three local profiles; they do not change core sample rate, emulated hardware, recording/state compatibility, or peers' audio. Timing tuples (microseconds: combined queue target / prefill / software queue cap / requested device buffer and write high-water mark): Low 20000/15000/40000/20000, Normal 35000/30000/60000/40000, Stable 70000/60000/120000/80000. Normal exactly preserves the previous constants and is the fallback for invalid preferences. These values are buffering policy, not a promise of measured hardware latency.
+
+`audio/latencyProfile` stores Normal=0, Low=1, Stable=2. Settings applies changes immediately, like master volume. Under the existing PCM mutex a change clears old/partial PCM, cancels a chime, invalidates clock feedback with the new target and queues a coalesced pump. The GUI thread resets/reopens only QAudioSink on the next PCM; paused/no-game switching leaves no sink running. Sample-rate/device changes retain the profile; repeated identical selections do nothing. Actual device buffer occupancy still comes from Qt rather than the requested size. No additional periodic work or per-frame allocations are introduced.

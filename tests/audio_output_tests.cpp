@@ -32,11 +32,12 @@ int main(int argc, char** argv) {
         audio.installEventFilter(&wakes);
         std::atomic<int> invalidations{0};
         std::atomic<int> activeFeedback{0};
+        std::atomic<qint64> expectedTarget{AudioQueue::TargetUsecs};
         std::atomic<bool> producerInvalidation{false};
         const auto guiThread = std::this_thread::get_id();
         QObject::connect(&audio, &AudioOutput::clockFeedback, &app,
             [&](qint64, qint64 target, bool available) {
-                if (target != AudioQueue::TargetUsecs) ++activeFeedback;
+                if (target != expectedTarget.load()) ++activeFeedback;
                 if (available) ++activeFeedback;
                 else {
                     ++invalidations;
@@ -89,6 +90,22 @@ int main(int argc, char** argv) {
         audio.setOutputDeviceId({});
         require(audio.outputDeviceId().isEmpty() && invalidations == beforeDeviceRefresh,
                 "returning to the same system output unnecessarily reset audio");
+
+        // Switching repeatedly before the GUI pump runs must coalesce, publish
+        // only the current clock target and leave no old PCM to open a device.
+        const int beforeProfiles = invalidations.load(), beforeWakes = wakes.count;
+        for (const int value : {1, 2, 0, 1}) {
+            const auto profile = AudioQueue::normalizeProfile(value);
+            expectedTarget = AudioQueue::timing(profile).target;
+            audio.setLatencyProfile(profile);
+            const int changes = invalidations.load();
+            audio.setLatencyProfile(profile);
+            require(invalidations == changes, "same latency profile reset audio");
+        }
+        require(invalidations == beforeProfiles + 4, "profile did not invalidate clock once");
+        QCoreApplication::sendPostedEvents(&audio, QEvent::MetaCall);
+        require(wakes.count == beforeWakes + 1 && activeFeedback == 0,
+                "profile switches spammed wakes or published stale target/audio");
 
         // QObject destruction removes a pending coalesced wake safely.
         {
