@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameView.h"
+#include "ControlsPage.h"
 #include "input/ControllerTopology.h"
 #include "../core/Cheats.h"
 #include "../core/Achievements.h"
@@ -61,7 +62,7 @@ private:
     void saveScreenshot();
     void updateRecentMenu();
     void updateDiscMenu();
-    void editSettings(int initialPage = 0);
+    void editSettings(int initialPage = -1);
     void editControls();
     void editCheats();
     void showCheatSearch();
@@ -88,6 +89,9 @@ private:
 
     EmulationSession& session_;
     QSettings settings_;
+    int settingsPage_ = 0;
+    ControlsPage::ViewState controlsViewState_;
+    bool hasControlsViewState_ = false;
     QString dataPath_;
     GameView* view_ = nullptr;
     AudioOutput* audio_ = nullptr;

@@ -290,13 +290,14 @@ struct InputManager::Impl {
     bool legacyGunMovedToChain = false;
     std::array<bool, targetCount - 16> commands{};
     std::array<bool, targetCount - 16> commandBlocked{};
-    bool capture = false, captureArmed = false;
-    int captureInstance = -1, capturePlayer = -1, neutralPolls = 0;
+    bool capture = false;
+    int captureInstance = -1, capturePlayer = -1;
     QElapsedTimer captureTimer;
     QElapsedTimer aimTimer;
     std::array<int, playerCount> paddlePositions{};
     std::array<bool, playerCount> paddlePositionValid{};
-    QVector<int> neutralAxes;
+    QVector<int> neutralAxes, captureAxesStart;
+    QVector<quint8> captureButtonsBlocked, captureHatsBlocked, captureAxisNeutralPolls;
 
     explicit Impl(InputManager* parent, QString path) : owner(parent), settingsPath(std::move(path)) {
         commandBlocked.fill(true);
@@ -694,60 +695,55 @@ struct InputManager::Impl {
     }
     void cancelCapture() {
         if (!capture) return;
-        capture = false; captureArmed = false; captureInstance = -1; capturePlayer = -1;
+        capture = false; captureInstance = -1; capturePlayer = -1;
         emit owner->captureCancelled();
         recompute();
-    }
-    bool captureNeutral(Device* device) const {
-        SDL_Joystick* joy = device->joystick;
-        for (int i = 0; i < SDL_JoystickNumButtons(joy); ++i)
-            if (SDL_JoystickGetButton(joy, i)) return false;
-        for (int i = 0; i < SDL_JoystickNumHats(joy); ++i)
-            if (SDL_JoystickGetHat(joy, i) != SDL_HAT_CENTERED) return false;
-        for (int i = 0; i < SDL_JoystickNumAxes(joy); ++i) {
-            const int value = SDL_JoystickGetAxis(joy, i);
-            const int neutral = i < neutralAxes.size() ? neutralAxes[i] : 0;
-            if (std::abs(value - neutral) > 8000) return false;
-        }
-        return true;
     }
     void updateCapture() {
         if (!capture) return;
         if (captureTimer.elapsed() >= captureMilliseconds) { cancelCapture(); return; }
         Device* device = findById(captureInstance);
         if (!device) { cancelCapture(); return; }
-        if (!captureArmed) {
-            neutralPolls = captureNeutral(device) ? neutralPolls + 1 : 0;
-            if (neutralPolls >= 2) {
-                // A wizard immediately re-arms while the previous input is
-                // still held. Keep the last verified neutral for that device.
-                device->captureNeutralAxes = neutralAxes;
-                captureArmed = true;
-                emit owner->captureReady();
-            }
-            return;
-        }
         SDL_Joystick* joy = device->joystick;
         PadBinding found;
-        for (int i = 0; i < SDL_JoystickNumButtons(joy); ++i)
-            if (SDL_JoystickGetButton(joy, i)) { found = button(i); break; }
-        if (found.kind == PadBinding::None) for (int i = 0; i < SDL_JoystickNumHats(joy); ++i) {
-            const Uint8 value = SDL_JoystickGetHat(joy, i);
+        // Each physical input arms independently. A held/drifting axis must
+        // never stop a fresh button or hat press from being assigned.
+        for (int i = 0; i < captureButtonsBlocked.size(); ++i) {
+            const bool down = SDL_JoystickGetButton(joy,i);
+            if (!down) captureButtonsBlocked[i] = 0;
+            else if (!captureButtonsBlocked[i]) { found = button(i); break; }
+        }
+        if (found.kind == PadBinding::None) for (int i = 0; i < captureHatsBlocked.size(); ++i) {
+            const Uint8 current = SDL_JoystickGetHat(joy,i);
+            captureHatsBlocked[i] &= current;
+            const Uint8 fresh = current & ~captureHatsBlocked[i];
             for (const int direction : {SDL_HAT_UP, SDL_HAT_DOWN, SDL_HAT_LEFT, SDL_HAT_RIGHT})
-                if (value & direction) { found = hat(i, direction); break; }
+                if (fresh & direction) { found = hat(i,direction); break; }
             if (found.kind != PadBinding::None) break;
         }
-        if (found.kind == PadBinding::None) for (int i = 0; i < SDL_JoystickNumAxes(joy); ++i) {
-            const int value = SDL_JoystickGetAxis(joy, i);
-            const int neutral = i < neutralAxes.size() ? neutralAxes[i] : 0;
-            if (std::abs(value - neutral) >= captureAxisThreshold &&
+        if (found.kind == PadBinding::None) for (int i = 0; i < neutralAxes.size(); ++i) {
+            const int value = SDL_JoystickGetAxis(joy,i);
+            const int neutral = neutralAxes[i];
+            auto& neutralPolls = captureAxisNeutralPolls[i];
+            if (neutralPolls < 2) {
+                if (std::abs(value-neutral) <= 8000) ++neutralPolls;
+                else neutralPolls = 0;
+                // A deliberate Up -> Down movement can cross the center
+                // between polls. This applies only to centered axes, not a
+                // trigger returning to its released negative endpoint.
+                const int start = captureAxesStart[i];
+                if (std::abs(neutral) <= 8000 && std::abs(start) >= captureAxisThreshold &&
+                    std::abs(value) >= captureAxisThreshold && ((start < 0) != (value < 0)))
+                    neutralPolls = 2;
+            }
+            if (neutralPolls >= 2 && std::abs(value-neutral) >= captureAxisThreshold &&
                 std::abs(value) >= captureAxisThreshold) {
-                found = axis(i, value > 0 ? 1 : -1);
+                found = axis(i,value > 0 ? 1 : -1);
                 break;
             }
         }
         if (found.kind != PadBinding::None) {
-            capture = false; captureArmed = false; captureInstance = -1; capturePlayer = -1;
+            capture = false; captureInstance = -1; capturePlayer = -1;
             emit owner->bindingCaptured(found);
             recompute();
         }
@@ -946,6 +942,40 @@ PlayerMapping InputManager::defaultMapping(ConsoleProfile profile, int player) {
     }
     return m;
 }
+bool InputManager::capturedBindingConflicts(ConsoleProfile profile, const QString& deviceKey, int target,
+                                           const PadBinding& configured, const PadBinding& captured) const {
+    if (configured.kind == PadBinding::None || captured.kind == PadBinding::None) return false;
+    if (configured.kind != PadBinding::Automatic) return configured == captured;
+    const auto* device = d->findByKey(deviceKey);
+    if (!device || target >= 16) return false;
+    if (!device->controller) {
+        const auto physical = rawDefault(profile == ConsoleProfile::MasterSystem && target == 1 ? 0 : target);
+        return physical == captured || (target >= 4 && target <= 7 &&
+            captured == axis(target <= 5 ? 1 : 0,dpadDirection(target)));
+    }
+    const auto matches = [&captured](const SDL_GameControllerButtonBind& binding) {
+        switch (binding.bindType) {
+        case SDL_CONTROLLER_BINDTYPE_BUTTON:
+            return captured.kind == PadBinding::Button && captured.index == binding.value.button;
+        case SDL_CONTROLLER_BINDTYPE_HAT:
+            return captured.kind == PadBinding::Hat && captured.index == binding.value.hat.hat &&
+                   (captured.direction & binding.value.hat.hat_mask);
+        case SDL_CONTROLLER_BINDTYPE_AXIS:
+            return captured.kind == PadBinding::Axis && captured.index == binding.value.axis;
+        default: return false;
+        }
+    };
+    const auto logical = controllerButton(profile,target);
+    if (logical != SDL_CONTROLLER_BUTTON_INVALID &&
+        matches(SDL_GameControllerGetBindForButton(device->controller,logical)) &&
+        SDL_GameControllerGetButton(device->controller,logical)) return true;
+    if (target < 4 || target > 7) return false;
+    const auto logicalAxis = target <= 5 ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_LEFTX;
+    // Read the mapped sign at the captured edge: SDL may invert/split an axis.
+    return matches(SDL_GameControllerGetBindForAxis(device->controller,logicalAxis)) &&
+        int(SDL_GameControllerGetAxis(device->controller,logicalAxis)) * dpadDirection(target) >= captureAxisThreshold;
+}
+
 QString InputManager::bindingName(const PadBinding& binding) {
     switch (binding.kind) {
     case PadBinding::Button: return Localization::text(QStringLiteral("Кнопка %1")).arg(binding.index + 1);
@@ -1337,16 +1367,16 @@ bool InputManager::keyEvent(int key, bool pressed) {
 void InputManager::releaseKeyboard() { d->keys.clear(); d->recompute(); }
 void InputManager::beginCapture(const QString& deviceKey, int player) {
     // Replacing an in-progress capture is a re-arm, not a cancellation event.
-    d->capture = false; d->captureArmed = false;
+    d->capture = false;
     if (!validPlayer(player)) { emit captureCancelled(); return; }
     d->refreshDevices();
     Impl::Device* device = nullptr;
     if (deviceKey == "auto") device = d->assignments()[player];
     else device = d->findByKey(deviceKey);
     if (!device) { emit captureCancelled(); return; }
-    d->capture = true; d->captureArmed = false; d->captureInstance = device->instanceId;
+    d->capture = true; d->captureInstance = device->instanceId;
     d->commandBlocked.fill(true);
-    d->capturePlayer = player; d->neutralPolls = 0;
+    d->capturePlayer = player;
     d->neutralAxes = device->captureNeutralAxes;
     if (d->neutralAxes.size() != SDL_JoystickNumAxes(device->joystick)) {
         d->neutralAxes.clear();
@@ -1361,10 +1391,26 @@ void InputManager::beginCapture(const QString& deviceKey, int player) {
             d->neutralAxes.push_back(initial);
         }
     }
+    device->captureNeutralAxes = d->neutralAxes;
+    auto* joystick = device->joystick;
+    d->captureButtonsBlocked.resize(qMax(0,SDL_JoystickNumButtons(joystick)));
+    for (int i=0;i<d->captureButtonsBlocked.size();++i)
+        d->captureButtonsBlocked[i] = SDL_JoystickGetButton(joystick,i) != 0;
+    d->captureHatsBlocked.resize(qMax(0,SDL_JoystickNumHats(joystick)));
+    for (int i=0;i<d->captureHatsBlocked.size();++i)
+        d->captureHatsBlocked[i] = SDL_JoystickGetHat(joystick,i);
+    d->captureAxesStart.resize(d->neutralAxes.size());
+    d->captureAxisNeutralPolls.resize(d->neutralAxes.size());
+    for (int i=0;i<d->neutralAxes.size();++i) {
+        const int value=SDL_JoystickGetAxis(joystick,i);
+        d->captureAxesStart[i]=value;
+        d->captureAxisNeutralPolls[i]=std::abs(value-d->neutralAxes[i]) <= 8000 ? 2 : 0;
+    }
     d->captureTimer.start();
     d->aimTimer.invalidate();
     d->paddlePositionValid.fill(false);
     d->recompute();
+    emit captureReady();
 }
 void InputManager::cancelCapture() { d->cancelCapture(); }
 bool InputManager::capturing() const { return d->capture; }

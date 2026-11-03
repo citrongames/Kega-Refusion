@@ -26,10 +26,12 @@ public:
 
 signals:
     void targetClicked(int target);
+    void targetDoubleClicked(int target);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
     struct TargetArea {
@@ -50,6 +52,7 @@ private:
     QRectF extraButtonArea(int target) const;
     QRectF reloadArea() const;
     QTransform drawingTransform() const;
+    int targetAt(const QPointF& point) const;
 
     ConsoleProfile profile_ = ConsoleProfile::MegaDrive;
     bool sixButton_ = true;

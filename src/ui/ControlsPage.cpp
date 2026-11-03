@@ -18,8 +18,8 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTableWidget>
+#include <QTabBar>
 #include <QToolButton>
-#include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -121,8 +121,8 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     mainLayout->setSpacing(5);
 
     auto* scope = new QGridLayout;
-    scope->setHorizontalSpacing(9);
-    scope->setVerticalSpacing(4);
+    scope->setHorizontalSpacing(12);
+    scope->setVerticalSpacing(2);
     profileBox_ = new QComboBox(this);
     profileBox_->setObjectName(QStringLiteral("profileBox"));
     for (ConsoleProfile profile : {ConsoleProfile::MegaDrive,
@@ -151,62 +151,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     scope->addWidget(new QLabel(Localization::text(QStringLiteral("Система")), this), 0, 0);
     scope->addWidget(profileBox_, 1, 0);
-    scope->addWidget(new QLabel(Localization::text(QStringLiteral("Игрок / порт")), this), 0, 1);
-    scope->addWidget(playerBox_, 1, 1);
-    scope->addWidget(adapterLabel_, 0, 2);
-    scope->addWidget(adapterBox_, 1, 2);
-    scope->addWidget(new QLabel(Localization::text(QStringLiteral("Геймпад")), this), 2, 0);
-    scope->addWidget(deviceBox_, 3, 0);
-    scope->addWidget(new QLabel(Localization::text(QStringLiteral("Мёртвая зона")), this), 2, 1);
-    auto* deadzoneRow = new QHBoxLayout;
-    deadzoneRow->setContentsMargins(0, 0, 0, 0);
-    deadzoneRow->addWidget(deadzoneSlider_);
-    deadzoneRow->addWidget(deadzoneValue_);
-    scope->addLayout(deadzoneRow, 3, 1);
+    scope->addWidget(adapterLabel_, 0, 1);
+    scope->addWidget(adapterBox_, 1, 1);
     scope->setColumnStretch(0, 1);
     scope->setColumnStretch(1, 1);
-    controllerTypeLabel_ = new QLabel(Localization::text(QStringLiteral("Тип геймпада")), this);
-    controllerTypeBox_ = new QComboBox(this);
-    controllerTypeBox_->setObjectName(QStringLiteral("controllerTypeBox"));
-    controllerTypeBox_->addItem(Localization::text(QStringLiteral("3 кнопки")), false);
-    controllerTypeBox_->addItem(Localization::text(QStringLiteral("6 кнопок")), true);
-    auto* controllerTypeRow = new QHBoxLayout;
-    controllerTypeRow->addWidget(controllerTypeLabel_);
-    controllerTypeRow->addWidget(controllerTypeBox_);
-    controllerTypeRow->addStretch(1);
-    scope->addLayout(controllerTypeRow, 5, 1);
-    deviceTypeLabel_ = new QLabel(Localization::text(QStringLiteral("Контроллер")), this);
-    deviceTypeBox_ = new QComboBox(this);
-    deviceTypeBox_->setObjectName(QStringLiteral("deviceTypeBox"));
-    scope->addWidget(deviceTypeLabel_, 4, 0);
-    scope->addWidget(deviceTypeBox_, 5, 0);
-    secondJustifierBox_ = new QCheckBox(Localization::text(QStringLiteral("Второй пистолет")), this);
-    secondJustifierBox_->setObjectName(QStringLiteral("secondJustifierBox"));
-    scope->addWidget(secondJustifierBox_, 6, 0);
-    aimSourceLabel_ = new QLabel(Localization::text(QStringLiteral("Прицеливание")), this);
-    aimSourceBox_ = new QComboBox(this);
-    aimSourceBox_->setObjectName(QStringLiteral("aimSourceBox"));
-    aimSourceBox_->addItem(Localization::text(QStringLiteral("Мышь")), int(AimSource::Mouse));
-    aimSourceBox_->addItem(Localization::text(QStringLiteral("Левый стик")), int(AimSource::LeftStick));
-    auto* aimRow = new QHBoxLayout;
-    aimRow->addWidget(aimSourceLabel_);
-    aimRow->addWidget(aimSourceBox_);
-    aimRow->addStretch(1);
-    scope->addLayout(aimRow, 6, 1);
-    showCrosshairBox_ = new QCheckBox(Localization::text(QStringLiteral("Показывать прицел")), this);
-    showCrosshairBox_->setObjectName(QStringLiteral("showCrosshairBox"));
-    scope->addWidget(showCrosshairBox_, 7, 0);
-    analogSensitivityLabel_ = new QLabel(Localization::text(QStringLiteral("Скорость стика")), this);
-    analogSensitivitySlider_ = new QSlider(Qt::Horizontal, this);
-    analogSensitivitySlider_->setRange(25, 400);
-    analogSensitivitySlider_->setObjectName(QStringLiteral("analogSensitivitySlider"));
-    analogSensitivityValue_ = new QLabel(this);
-    auto* sensitivityRow = new QHBoxLayout;
-    sensitivityRow->setContentsMargins(0, 0, 0, 0);
-    sensitivityRow->addWidget(analogSensitivityLabel_);
-    sensitivityRow->addWidget(analogSensitivitySlider_, 1);
-    sensitivityRow->addWidget(analogSensitivityValue_);
-    scope->addLayout(sensitivityRow, 7, 1);
     mainLayout->addLayout(scope);
     mouseCaptureBox_ = new QCheckBox(Localization::text(QStringLiteral("Захватывать мышь")), this);
     mouseCaptureBox_->setObjectName(QStringLiteral("mouseCaptureBox"));
@@ -220,16 +168,76 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     inputOptions->addStretch(1);
     mainLayout->addLayout(inputOptions);
 
-    tabs_ = new QTabWidget(this);
+    tabs_ = new QTabBar(this);
     tabs_->setObjectName(QStringLiteral("mappingTabs"));
-    auto* gamePage = new QWidget(tabs_);
-    auto* gameLayout = new QHBoxLayout(gamePage);
-    gameLayout->setContentsMargins(4, 4, 4, 4);
+    tabs_->setExpanding(false);
+    tabs_->setUsesScrollButtons(true);
+    mainLayout->addWidget(tabs_);
+
+    gamePage_ = new QWidget(this);
+    auto* gamePageLayout = new QVBoxLayout(gamePage_);
+    gamePageLayout->setContentsMargins(0, 0, 0, 0);
+    gamePageLayout->setSpacing(5);
+    auto* gameOptions = new QGridLayout;
+    gameOptions->setHorizontalSpacing(10);
+    gameOptions->setVerticalSpacing(2);
+    auto* deadzoneRow = new QHBoxLayout;
+    deadzoneRow->setContentsMargins(0, 0, 0, 0);
+    deadzoneRow->addWidget(deadzoneSlider_);
+    deadzoneRow->addWidget(deadzoneValue_);
+    gameOptions->addWidget(new QLabel(Localization::text(QStringLiteral("Геймпад")), gamePage_), 2, 0);
+    gameOptions->addWidget(deviceBox_, 3, 0);
+    gameOptions->addWidget(new QLabel(Localization::text(QStringLiteral("Мёртвая зона")), gamePage_), 2, 1);
+    gameOptions->addLayout(deadzoneRow, 3, 1);
+    controllerTypeLabel_ = new QLabel(Localization::text(QStringLiteral("Тип геймпада")), this);
+    controllerTypeBox_ = new QComboBox(this);
+    controllerTypeBox_->setObjectName(QStringLiteral("controllerTypeBox"));
+    controllerTypeBox_->addItem(Localization::text(QStringLiteral("3 кнопки")), false);
+    controllerTypeBox_->addItem(Localization::text(QStringLiteral("6 кнопок")), true);
+    gameOptions->addWidget(controllerTypeLabel_, 0, 1);
+    gameOptions->addWidget(controllerTypeBox_, 1, 1);
+    deviceTypeLabel_ = new QLabel(Localization::text(QStringLiteral("Контроллер")), this);
+    deviceTypeBox_ = new QComboBox(this);
+    deviceTypeBox_->setObjectName(QStringLiteral("deviceTypeBox"));
+    gameOptions->addWidget(deviceTypeLabel_, 0, 0);
+    gameOptions->addWidget(deviceTypeBox_, 1, 0);
+    secondJustifierBox_ = new QCheckBox(Localization::text(QStringLiteral("Второй пистолет")), this);
+    secondJustifierBox_->setObjectName(QStringLiteral("secondJustifierBox"));
+    gameOptions->addWidget(secondJustifierBox_, 1, 2);
+    aimSourceLabel_ = new QLabel(Localization::text(QStringLiteral("Прицеливание")), this);
+    aimSourceBox_ = new QComboBox(this);
+    aimSourceBox_->setObjectName(QStringLiteral("aimSourceBox"));
+    aimSourceBox_->addItem(Localization::text(QStringLiteral("Мышь")), int(AimSource::Mouse));
+    aimSourceBox_->addItem(Localization::text(QStringLiteral("Левый стик")), int(AimSource::LeftStick));
+    gameOptions->addWidget(aimSourceLabel_, 0, 1);
+    gameOptions->addWidget(aimSourceBox_, 1, 1);
+    showCrosshairBox_ = new QCheckBox(Localization::text(QStringLiteral("Показывать прицел")), this);
+    showCrosshairBox_->setObjectName(QStringLiteral("showCrosshairBox"));
+    gameOptions->addWidget(showCrosshairBox_, 3, 2);
+    analogSensitivityLabel_ = new QLabel(Localization::text(QStringLiteral("Скорость стика")), this);
+    analogSensitivitySlider_ = new QSlider(Qt::Horizontal, this);
+    analogSensitivitySlider_->setRange(25, 400);
+    analogSensitivitySlider_->setObjectName(QStringLiteral("analogSensitivitySlider"));
+    analogSensitivityValue_ = new QLabel(this);
+    auto* sensitivityRow = new QHBoxLayout;
+    sensitivityRow->setContentsMargins(0, 0, 0, 0);
+    sensitivityRow->addWidget(analogSensitivityLabel_);
+    sensitivityRow->addWidget(analogSensitivitySlider_, 1);
+    sensitivityRow->addWidget(analogSensitivityValue_);
+    gameOptions->addLayout(sensitivityRow, 3, 2);
+    gameOptions->setColumnStretch(0, 2);
+    gameOptions->setColumnStretch(1, 2);
+    gameOptions->setColumnStretch(2, 1);
+    gamePageLayout->addLayout(gameOptions);
+
+    auto* gameLayout = new QHBoxLayout;
+    gameLayout->setContentsMargins(0, 0, 0, 0);
     gameLayout->setSpacing(8);
-    diagram_ = new ControllerDiagram(gamePage);
+    diagram_ = new ControllerDiagram(gamePage_);
     diagram_->setMinimumSize(240, 210);
     gameLayout->addWidget(diagram_, 4);
-    gameTable_ = new QTableWidget(gamePage);
+    gameTable_ = new QTableWidget(gamePage_);
+    gameTable_->setObjectName(QStringLiteral("gameMappingTable"));
     gameTable_->setColumnCount(4);
     gameTable_->setHorizontalHeaderLabels(
         {Localization::text(QStringLiteral("Кнопка")), Localization::text(QStringLiteral("Клавиатура")),
@@ -246,11 +254,19 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     gameTable_->horizontalHeader()->resizeSection(3, 112);
     gameTable_->setAlternatingRowColors(true);
     gameLayout->addWidget(gameTable_, 5);
-    tabs_->addTab(gamePage, Localization::text(QStringLiteral("Кнопки игры")));
+    gamePageLayout->addLayout(gameLayout, 1);
+    mainLayout->addWidget(gamePage_, 1);
 
-    auto* commandPage = new QWidget(tabs_);
-    auto* commandLayout = new QVBoxLayout(commandPage);
-    commandTable_ = new QTableWidget(commandPage);
+    commandPage_ = new QWidget(this);
+    auto* commandLayout = new QVBoxLayout(commandPage_);
+    commandLayout->setContentsMargins(0, 0, 0, 0);
+    auto* commandSource = new QHBoxLayout;
+    commandSource->addWidget(new QLabel(Localization::text(QStringLiteral("Геймпад порта")), commandPage_));
+    commandSource->addWidget(playerBox_);
+    commandSource->addStretch(1);
+    commandLayout->addLayout(commandSource);
+    commandTable_ = new QTableWidget(commandPage_);
+    commandTable_->setObjectName(QStringLiteral("commandMappingTable"));
     commandTable_->setColumnCount(3);
     commandTable_->setHorizontalHeaderLabels(
         {Localization::text(QStringLiteral("Команда")), Localization::text(QStringLiteral("Клавиатура")),
@@ -265,8 +281,8 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     commandTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     commandTable_->setAlternatingRowColors(true);
     commandLayout->addWidget(commandTable_);
-    tabs_->addTab(commandPage, Localization::text(QStringLiteral("Команды")));
-    mainLayout->addWidget(tabs_, 1);
+    mainLayout->addWidget(commandPage_, 1);
+    commandPage_->hide();
 
     auto* actionRow = new QHBoxLayout;
     assignButton_ = new QPushButton(Localization::text(QStringLiteral("Назначить")), this);
@@ -286,7 +302,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     feedback_ = new QLabel(this);
     feedback_->setWordWrap(true);
-    feedback_->hide();
+    feedback_->setMinimumHeight(28);
     mainLayout->addWidget(feedback_);
 
     connect(profileBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -385,10 +401,19 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
         draft().analogSensitivity = value;
         dirty_.insert(draftKey());
     });
-    connect(tabs_, &QTabWidget::currentChanged, this, [this] {
+    connect(tabs_, &QTabBar::currentChanged, this, [this](int index) {
         stopCapture();
-        const auto& targets = tabs_->currentIndex() == 0
-            ? activeGameTargets() : commands;
+        if (index < 0) return;
+        if (!commandTabSelected()) {
+            const int playerIndex = playerBox_->findData(tabs_->tabData(index).toInt());
+            if (playerIndex >= 0 && playerIndex != playerBox_->currentIndex()) {
+                playerBox_->setCurrentIndex(playerIndex);
+                return;
+            }
+        }
+        gamePage_->setVisible(!commandTabSelected());
+        commandPage_->setVisible(commandTabSelected());
+        const auto& targets = commandTabSelected() ? commands : activeGameTargets();
         selectTarget(targets.isEmpty() ? -1 : targets.first());
     });
     connect(gameTable_, &QTableWidget::itemSelectionChanged, this, [this] {
@@ -405,6 +430,22 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     });
     connect(diagram_, &ControllerDiagram::targetClicked,
             this, &ControlsPage::selectTarget);
+    connect(diagram_, &ControllerDiagram::targetDoubleClicked, this, [this](int target) {
+        stopCapture();
+        beginCaptureFor(target);
+    });
+    connect(gameTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (const auto* item = gameTable_->item(row, 0)) {
+            stopCapture();
+            beginCaptureFor(item->data(Qt::UserRole).toInt());
+        }
+    });
+    connect(commandTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (const auto* item = commandTable_->item(row, 0)) {
+            stopCapture();
+            beginCaptureFor(item->data(Qt::UserRole).toInt());
+        }
+    });
     connect(assignButton_, &QPushButton::clicked, this, [this] {
         stopCapture();
         if (selectedTarget_ >= 0)
@@ -474,6 +515,25 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 ControlsPage::~ControlsPage() {
     qApp->removeEventFilter(this);
     stopCapture();
+}
+
+ControlsPage::ViewState ControlsPage::viewState() const {
+    return {int(selectedProfile()), selectedPlayer(), commandTabSelected()};
+}
+
+void ControlsPage::setViewState(const ViewState& state) {
+    stopCapture();
+    const int profileIndex = profileBox_->findData(state.profile);
+    if (profileIndex >= 0) profileBox_->setCurrentIndex(profileIndex);
+    const int playerIndex = playerBox_->findData(state.player);
+    if (playerIndex >= 0) playerBox_->setCurrentIndex(playerIndex);
+    refreshContents();
+    tabs_->setCurrentIndex(state.commands ? tabs_->count() - 1 : playerBox_->currentIndex());
+}
+
+void ControlsPage::setExternalFeedback(bool external) {
+    externalFeedback_ = external;
+    feedback_->setVisible(!externalFeedback_);
 }
 
 void ControlsPage::cancelCapture() {
@@ -552,7 +612,12 @@ QVector<int> ControlsPage::activeGameTargets() {
     return InputManager::gameTargets(selectedProfile(), mapping.sixButton, mapping.controllerType);
 }
 
+bool ControlsPage::commandTabSelected() const {
+    return tabs_->count() > 0 && tabs_->currentIndex() == tabs_->count() - 1;
+}
+
 void ControlsPage::refreshPlayerChoices() {
+    const bool wasCommand = commandTabSelected();
     const int current = selectedPlayer();
     const ControllerAdapter adapter = selectedAdapter();
     const QSignalBlocker blocker(playerBox_);
@@ -570,7 +635,8 @@ void ControlsPage::refreshPlayerChoices() {
         const bool pair = selectedProfile() == ConsoleProfile::MegaDrive &&
             parent.connected && parent.controllerType == ControllerType::Justifier && secondary.connected;
         playerBox_->addItem(Localization::text(QStringLiteral("Порт 1")), 0);
-        playerBox_->addItem(Localization::text(QStringLiteral("Порт 2")), 1);
+        if (selectedProfile() != ConsoleProfile::GameGear)
+            playerBox_->addItem(Localization::text(QStringLiteral("Порт 2")), 1);
         if (pair) playerBox_->addItem(Localization::text(QStringLiteral("Второй пистолет")), 2);
     }
     const unsigned base = selectedJCartBase();
@@ -579,6 +645,16 @@ void ControlsPage::refreshPlayerChoices() {
             .arg(extra + 1).arg(base + extra + 1), int(base + extra));
     const int found = playerBox_->findData(current);
     playerBox_->setCurrentIndex(found >= 0 ? found : 0);
+    const QSignalBlocker tabBlocker(tabs_);
+    while (tabs_->count() > 0) tabs_->removeTab(tabs_->count() - 1);
+    for (int index = 0; index < playerBox_->count(); ++index) {
+        const int tab = tabs_->addTab(playerBox_->itemText(index));
+        tabs_->setTabData(tab, playerBox_->itemData(index));
+    }
+    tabs_->addTab(Localization::text(QStringLiteral("Команды")));
+    tabs_->setCurrentIndex(wasCommand ? tabs_->count() - 1 : playerBox_->currentIndex());
+    gamePage_->setVisible(!wasCommand);
+    commandPage_->setVisible(wasCommand);
 }
 
 QString ControlsPage::captureDeviceKey() {
@@ -741,8 +817,7 @@ void ControlsPage::refreshContents() {
     fillGameTable();
     fillCommandTable();
     refreshing_ = false;
-    const auto& targets = tabs_->currentIndex() == 0
-        ? activeGameTargets() : commands;
+    const auto& targets = commandTabSelected() ? commands : activeGameTargets();
     selectTarget(targets.isEmpty() ? -1 : targets.first());
 }
 
@@ -757,8 +832,13 @@ void ControlsPage::fillGameTable() {
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target, mapping.controllerType), target));
         auto* keyEdit = new PhysicalKeySequenceEdit(gameTable_);
-        if (auto* line = keyEdit->findChild<QLineEdit*>())
+        keyEdit->setProperty("bindingTarget", target);
+        keyEdit->installEventFilter(this);
+        if (auto* line = keyEdit->findChild<QLineEdit*>()) {
             line->setPlaceholderText(Localization::text(QStringLiteral("Нажмите клавишу")));
+            line->setProperty("bindingTarget", target);
+            line->installEventFilter(this);
+        }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         keyEdit->setMaximumSequenceLength(1);
 #endif
@@ -800,7 +880,27 @@ void ControlsPage::fillGameTable() {
             connect(mouseBox, qOverload<int>(&QComboBox::currentIndexChanged), this,
                     [this, target, type, mouseBox] {
                         if (refreshing_) return;
-                        draft().mouse[type][target] = mouseBox->currentData().toInt();
+                        auto& buttons = draft().mouse[type];
+                        const int button = mouseBox->currentData().toInt();
+                        if (button) {
+                            const auto targets = activeGameTargets();
+                            for (auto it = buttons.begin(); it != buttons.end(); ++it) {
+                                if (it.key() == target || !targets.contains(it.key()) || it.value() != button)
+                                    continue;
+                                it.value() = 0;
+                                for (int row = 0; row < gameTable_->rowCount(); ++row) {
+                                    const auto* item = gameTable_->item(row, 0);
+                                    if (!item || item->data(Qt::UserRole).toInt() != it.key()) continue;
+                                    auto* previous = qobject_cast<QComboBox*>(gameTable_->cellWidget(row, 3));
+                                    if (previous) {
+                                        const QSignalBlocker blocker(previous);
+                                        previous->setCurrentIndex(previous->findData(0));
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        buttons[target] = button;
                         dirty_.insert(draftKey());
                     });
         }
@@ -821,12 +921,14 @@ void ControlsPage::fillCommandTable() {
 }
 
 void ControlsPage::selectTarget(int target) {
+    if (captureTarget_ >= 0 && captureTarget_ != target)
+        stopCapture();
     selectedTarget_ = target;
     if (target >= 0 && target < 16)
         diagram_->setSelectedTarget(target);
     else
         diagram_->setSelectedTarget(-1);
-    QTableWidget* table = tabs_->currentIndex() == 0 ? gameTable_ : commandTable_;
+    QTableWidget* table = commandTabSelected() ? commandTable_ : gameTable_;
     for (int row = 0; row < table->rowCount(); ++row) {
         const auto* item = table->item(row, 0);
         if (item && item->data(Qt::UserRole).toInt() == target) {
@@ -849,9 +951,21 @@ void ControlsPage::refreshPadCell(int target) {
     }
 }
 
+void ControlsPage::refreshKeyboardCell(int target) {
+    for (int row = 0; row < gameTable_->rowCount(); ++row) {
+        const auto* item = gameTable_->item(row, 0);
+        if (!item || item->data(Qt::UserRole).toInt() != target) continue;
+        auto* editor = gameTable_->cellWidget(row, 1)->findChild<QKeySequenceEdit*>();
+        const QSignalBlocker blocker(editor);
+        const int key = draft().keyboard.value(target, 0);
+        editor->setKeySequence(key ? QKeySequence(key) : QKeySequence());
+        return;
+    }
+}
+
 void ControlsPage::updateActionButtons() {
     if (!assignButton_) return;
-    const bool gamePage = tabs_->currentIndex() == 0;
+    const bool gamePage = !commandTabSelected();
     const bool targetSelected = selectedTarget_ >= 0;
     const bool deviceSelected = draft().deviceKey != QStringLiteral("none");
     // Keyboard setup does not require a physical pad or an enabled console port.
@@ -863,12 +977,13 @@ void ControlsPage::updateActionButtons() {
 
 void ControlsPage::setFeedback(const QString& message, bool warning) {
     feedback_->setText(message);
-    feedback_->setVisible(!message.isEmpty());
+    feedback_->setVisible(!externalFeedback_);
     emit feedbackChanged(message, warning);
     const QColor color = warning
         ? (palette().color(QPalette::Base).lightness() < 128
                ? QColor(245, 144, 122) : QColor(164, 48, 40))
-        : palette().color(QPalette::Text);
+        : (palette().color(QPalette::Base).lightness() < 128
+               ? QColor(116, 222, 153) : QColor(29, 127, 65));
     feedback_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
 }
 
@@ -877,7 +992,7 @@ void ControlsPage::selectFailure(int profile, int player, bool commandTab) {
     if (profileIndex >= 0) profileBox_->setCurrentIndex(profileIndex);
     const int playerIndex = playerBox_->findData(player);
     if (playerIndex >= 0) playerBox_->setCurrentIndex(playerIndex);
-    tabs_->setCurrentIndex(commandTab ? 1 : 0);
+    tabs_->setCurrentIndex(commandTab ? tabs_->count() - 1 : playerBox_->currentIndex());
 }
 
 bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
@@ -892,16 +1007,6 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
         error = Localization::text(QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift."));
     else if (reservedKey(key))
         error = Localization::text(QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8, F12 и точка зарезервированы."));
-    else if (key) {
-        const PlayerMapping& mapping = draft();
-        const auto targets = activeGameTargets();
-        for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
-            if (it.key() != target && targets.contains(it.key()) && it.value() == key) {
-                error = Localization::text(QStringLiteral("Эта клавиша уже назначена другой кнопке."));
-                break;
-            }
-        }
-    }
     if (!error.isEmpty()) {
         auto* editor = qobject_cast<QKeySequenceEdit*>(sender());
         if (editor) {
@@ -912,7 +1017,16 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
         setFeedback(error, true);
         return false;
     }
-    draft().keyboard[target] = key;
+    PlayerMapping& mapping = draft();
+    if (key) {
+        const auto targets = activeGameTargets();
+        for (auto it = mapping.keyboard.begin(); it != mapping.keyboard.end(); ++it) {
+            if (it.key() == target || !targets.contains(it.key()) || it.value() != key) continue;
+            it.value() = 0;
+            refreshKeyboardCell(it.key());
+        }
+    }
+    mapping.keyboard[target] = key;
     dirty_.insert(draftKey());
     setFeedback(key
         ? Localization::text(QStringLiteral("Клавиша назначена."))
@@ -938,8 +1052,8 @@ void ControlsPage::beginCaptureFor(int target) {
         ? InputManager::targetName(selectedProfile(), target, displayMapping().controllerType)
         : commandName(target);
     setFeedback((target < 16
-        ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Перед назначением геймпада отпустите его кнопки и стики. Esc — отмена."))
-        : Localization::text(QStringLiteral("Назначение «%1»: отпустите кнопки и стики геймпада, затем нажмите нужную кнопку. Esc — отмена."))).arg(label));
+        ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
+        : Localization::text(QStringLiteral("Назначение «%1»: нажмите кнопку геймпада. Esc — отмена."))).arg(label));
     if (padPresent)
         input_.beginCapture(deviceKey, selectedPlayer());
     updateActionButtons();
@@ -947,8 +1061,7 @@ void ControlsPage::beginCaptureFor(int target) {
 
 void ControlsPage::startSequence() {
     stopCapture();
-    sequence_ = tabs_->currentIndex() == 0
-        ? activeGameTargets() : commands;
+    sequence_ = commandTabSelected() ? commands : activeGameTargets();
     sequenceIndex_ = 0;
     if (!sequence_.isEmpty())
         beginCaptureFor(sequence_.first());
@@ -979,12 +1092,14 @@ void ControlsPage::skipCapture() {
 }
 
 void ControlsPage::stopCapture() {
+    const bool hadPending = captureTarget_ >= 0 || !sequence_.isEmpty();
     captureTarget_ = -1;
     sequence_.clear();
     sequenceIndex_ = 0;
     skipping_ = false;
     if (input_.capturing())
         input_.cancelCapture();
+    if (hadPending) setFeedback(QString());
     updateActionButtons();
 }
 
@@ -992,26 +1107,19 @@ void ControlsPage::onCaptured(const PadBinding& binding) {
     if (captureTarget_ < 0) return;
     const int target = captureTarget_;
     captureTarget_ = -1;
-    const PlayerMapping& current = draft();
+    PlayerMapping& current = draft();
     const auto targets = activeGameTargets();
-    for (auto it = current.pad.cbegin(); it != current.pad.cend(); ++it) {
+    const QString deviceKey = captureDeviceKey();
+    for (auto it = current.pad.begin(); it != current.pad.end(); ++it) {
         if ((it.key() >= 16 || targets.contains(it.key())) &&
             it.key() != target && it.value().kind != PadBinding::None &&
-            it.value().kind != PadBinding::Automatic &&
-            it.value() == binding) {
-            setFeedback(Localization::text(QStringLiteral("Этот элемент геймпада уже назначен. "
-                                       "Выберите другой или пропустите.")), true);
-            if (!sequence_.isEmpty()) {
-                QTimer::singleShot(0, this, [this, target] {
-                    if (!sequence_.isEmpty())
-                        beginCaptureFor(target);
-                });
-            }
-            updateActionButtons();
-            return;
+            input_.capturedBindingConflicts(selectedProfile(), deviceKey,
+                                            it.key(), it.value(), binding)) {
+            it.value() = PadBinding{};
+            refreshPadCell(it.key());
         }
     }
-    draft().pad[target] = binding;
+    current.pad[target] = binding;
     dirty_.insert(draftKey());
     refreshPadCell(target);
     if (sequence_.isEmpty()) {
@@ -1194,6 +1302,15 @@ bool ControlsPage::apply() {
 }
 
 bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonDblClick &&
+        watched->property("bindingTarget").isValid()) {
+        auto* widget = qobject_cast<QWidget*>(watched);
+        if (!isVisible() || !widget || widget->window() != window())
+            return QWidget::eventFilter(watched, event);
+        stopCapture();
+        beginCaptureFor(watched->property("bindingTarget").toInt());
+        return true;
+    }
     // Release remembered keys if focus leaves the application before key-up.
     if (event->type() == QEvent::ApplicationDeactivate) {
         captureKeysDown_.clear();

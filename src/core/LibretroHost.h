@@ -79,6 +79,7 @@ public:
     QByteArray netplayDigest() const;
     static QByteArray unpackNetworkState(const QByteArray& packed);
     bool setNetplayStorage(const QString& scope, QString& error);
+    void deferNetplayStorageClear();
     bool unserialize(const QByteArray& state);
     unsigned occupiedStateSlots() const;
     QByteArray captureRewindState() const;
@@ -193,6 +194,7 @@ private:
     QLibrary library_;
     std::unique_ptr<Api> api_;
     QString netplaySaveRoot_;
+    bool clearNetplayStorageOnUnload_ = false;
     QString storageRoot() const { return netplaySaveRoot_.isEmpty() ? dataPath_ : netplaySaveRoot_; }
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
     QString movieCompatibilityWarning_;

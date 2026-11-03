@@ -254,7 +254,7 @@
     "Включить достижения": "Enable achievements",
     "Влево": "Left",
     "Внешний адрес определён автоматически. Для подключения нужен доступ к TCP-порту %1.": "Public address detected automatically. TCP port %1 must be reachable for others to connect.",
-    "Вниз": "Log in to RetroAchievements",
+    "Вниз": "Down",
     "Войдите в RetroAchievements": "Login to RetroAchievements",
     "Войдите в RetroAchievements в настройках.": "Log in to RetroAchievements in Settings.",
     "Войдите в RetroAchievements.": "Log in to RetroAchievements.",
@@ -932,6 +932,8 @@
     "Файл сохранения не найден: %1": "Save file not found: %1",
     "Файл сохранения записи не найден: %1": "Recording save file not found: %1",
     "Не удалось прочитать сохранение: %1": "Could not read save: %1",
-    "Сохранение в файл доступно только хосту онлайн-сессии.": "Saving to a file is available only to the online session host."
+    "Сохранение в файл доступно только хосту онлайн-сессии.": "Saving to a file is available only to the online session host.",
+    "Геймпад порта": "Port gamepad",
+    "Дважды нажмите кнопку для назначения": "Double-click a button to assign"
   }
 }

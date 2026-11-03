@@ -15,7 +15,7 @@ constexpr int Right = 7;
 constexpr qreal ImageWidth = 1536;
 constexpr qreal ImageHeight = 1024;
 const QColor accent(64, 180, 198);
-const QColor selected(239, 184, 73);
+const QColor selected(215, 62, 56);
 
 QPainterPath ellipse(QPointF center, qreal rx, qreal ry) {
     QPainterPath path;
@@ -500,45 +500,49 @@ void ControllerDiagram::paintEvent(QPaintEvent*) {
     painter.setFont(hint);
     painter.drawText(QRect(8, height() - 24, width() - 16, 18), Qt::AlignCenter,
                      controllerType_ == ControllerType::Pad || !areas_.isEmpty()
-                         ? Localization::text(QStringLiteral("Нажмите кнопку на рисунке для выбора"))
+                         ? Localization::text(QStringLiteral("Дважды нажмите кнопку для назначения"))
                          : Localization::text(QStringLiteral("Выберите кнопку в таблице")));
 }
 
-void ControllerDiagram::mousePressEvent(QMouseEvent* event) {
-    if (event->button() != Qt::LeftButton) {
-        QWidget::mousePressEvent(event);
-        return;
-    }
+int ControllerDiagram::targetAt(const QPointF& point) const {
     if (profile_ == ConsoleProfile::MasterSystem && controllerType_ == ControllerType::Pad && targets_.contains(3) &&
-        consolePauseArea().contains(event->position())) {
-        emit targetClicked(3);
-        event->accept();
-        return;
-    }
-    if (reloadArea().contains(event->position())) {
-        emit targetClicked(2);
-        event->accept();
-        return;
-    }
+        consolePauseArea().contains(point)) return 3;
+    if (reloadArea().contains(point)) return 2;
     if (controllerType_ == ControllerType::Menacer) {
         for (int target : {0, 8, 3}) {
-            if (extraButtonArea(target).contains(event->position())) {
-                emit targetClicked(target);
-                event->accept();
-                return;
-            }
+            if (extraButtonArea(target).contains(point)) return target;
         }
     }
     bool invertible = false;
-    const QPointF point = drawingTransform().inverted(&invertible).map(event->position());
+    const QPointF local = drawingTransform().inverted(&invertible).map(point);
     if (invertible && !illustration_.isNull()) {
         for (const auto& area : areas_) {
-            if (area.hit.contains(point)) {
-                emit targetClicked(area.target);
-                event->accept();
-                return;
-            }
+            if (area.hit.contains(local)) return area.target;
+        }
+    }
+    return -1;
+}
+
+void ControllerDiagram::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const int target = targetAt(event->position());
+        if (target >= 0) {
+            emit targetClicked(target);
+            event->accept();
+            return;
         }
     }
     QWidget::mousePressEvent(event);
+}
+
+void ControllerDiagram::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const int target = targetAt(event->position());
+        if (target >= 0) {
+            emit targetDoubleClicked(target);
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
 }

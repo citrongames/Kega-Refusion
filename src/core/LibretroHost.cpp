@@ -579,6 +579,12 @@ void LibretroHost::unload() {
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
     batterySave_.clear(); cheats_.clear(); movieCheats_.clear(); movieCheatsActive_ = false; activeCheatCodes_.clear();
+    if (clearNetplayStorageOnUnload_) {
+        // The scoped RAM and the core's own unload writer have finished.
+        netplaySaveRoot_.clear();
+        savePath_ = QDir::toNativeSeparators(dataPath_ + QStringLiteral("/saves")).toUtf8();
+        clearNetplayStorageOnUnload_ = false;
+    }
 }
 bool LibretroHost::frameInputPolled() const {
     if (linkPeer_ && linkPresentationRole_==2) return linkPeer_->frameInputPolled();
@@ -1174,7 +1180,15 @@ QByteArray LibretroHost::unpackNetworkState(const QByteArray& packed) {
         reinterpret_cast<const Bytef*>(packed.constData()+4),uLong(packed.size()-4))!=Z_OK||actual!=length)return {};
     return result;
 }
+void LibretroHost::deferNetplayStorageClear() {
+    clearNetplayStorageOnUnload_ = !netplaySaveRoot_.isEmpty();
+}
 bool LibretroHost::setNetplayStorage(const QString& scope,QString& error) {
+    // Never move live online battery bytes into the ordinary save directory.
+    if (scope.isEmpty() && clearNetplayStorageOnUnload_ && loaded_) {
+        error.clear();
+        return true;
+    }
     if (!scope.isEmpty() && (scope.size()!=32 || QByteArray::fromHex(scope.toLatin1()).toHex()!=scope.toLatin1())) {
         error=QStringLiteral("Invalid network storage identity"); return false;
     }
@@ -1198,8 +1212,11 @@ bool LibretroHost::setNetplayStorage(const QString& scope,QString& error) {
             if(!hardReset(rollbackError,false)||!restoreMovieState(state,rollbackError))unload();
             error=originalError;
         }
-        moviePlayback_=playback;return ok;
+        moviePlayback_=playback;
+        if (ok) clearNetplayStorageOnUnload_ = false;
+        return ok;
     }
+    clearNetplayStorageOnUnload_ = false;
     return true;
 }
 QByteArray LibretroHost::serialize() const {

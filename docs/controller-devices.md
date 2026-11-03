@@ -45,3 +45,23 @@ J-Cart включается автоматически по распознанн
 Захват на Windows/X11 использует Qt grab и возврат скрытого указателя в центр; на Wayland — стандартные relative-pointer и pointer-constraints с отдельным указателем на публичном Qt native display/seat, без частного ABI Qt. После освобождения накопленное движение и нажатия сбрасываются. Отключённая галочка возвращает прежний свободный режим. При отсутствии поддержки захвата оконной системой выводится краткое сообщение. Для сборки Wayland backend нужны wayland-client, wayland-protocols и wayland-scanner; бинарный Linux-архив собран с ними.
 
 Проверки 0.19.1: `osd_tests --pointer-only` — свободный/захваченный ввод Mouse, Paddle и пистолета, активационный клик, кнопки, Esc, потеря фокуса, выход указателя, крайние координаты; `debug_menu_tests ROOT --controls-layout` — настоящее окно настроек, отсутствие прокрутки и постоянно видимая ошибка применения с выбором конфликтующего порта. Обе проверки выполнены через Qt offscreen, без захвата Windows рабочего стола. Windows и Linux собраны; нативный захват на живом Wayland compositor отдельно не проверялся.
+
+
+## Controls usability (0.20.2)
+
+Settings present the system and adapter first, input capture/background preferences next,
+then tabs for the available logical ports with Commands last. The commands page identifies
+which port's physical-pad commands are being edited. The settings section and controls
+profile/port/tab selection survive closing the dialog in memory only, and reset on app exit.
+Draft binding changes still require OK; Cancel does not save mappings.
+
+Double-clicking a diagram button or mapping row starts capture. Selection is red and the
+visible footer shows capture feedback in green, errors in red. Reassignment replaces the
+conflicting binding within the edited player and profile, including automatic pad mappings
+and command bindings; other players can still intentionally share a keyboard/gamepad.
+
+Capture arms each physical control independently. Inputs already held at entry are ignored
+until released; a held or drifting axis no longer blocks a new button. A centered stick can
+move directly from one extreme to its opposite between polls without losing that wizard
+step. Axis state is sampled only by the existing capture polling and vectors are reused;
+there are no new timers, file writes or allocations in normal gameplay.

@@ -49,6 +49,9 @@ public:
     void setMapping(ConsoleProfile profile, int player, const PlayerMapping& mapping);
     static PlayerMapping defaultMapping(ConsoleProfile profile, int player);
     static QString bindingName(const PadBinding& binding);
+    // Compare at capture time, including the selected device's automatic mapping.
+    bool capturedBindingConflicts(ConsoleProfile profile, const QString& deviceKey, int target,
+                                  const PadBinding& configured, const PadBinding& captured) const;
     static QString profileName(ConsoleProfile profile);
     static QVector<int> gameTargets(ConsoleProfile profile, bool sixButton = true,
                                     ControllerType type = ControllerType::Pad);
@@ -81,7 +84,7 @@ public:
     static bool reservedKeyboardKey(int key);
     bool keyEvent(int key, bool pressed);
     void releaseKeyboard();
-    void beginCapture(const QString& deviceKey, int player); // wait for neutral before accepting
+    void beginCapture(const QString& deviceKey, int player); // arm each input independently; ignore a previously held input
     void cancelCapture();
     bool capturing() const;
     void poll(); // timer calls it; explicit for deterministic virtual joystick tests
@@ -100,7 +103,7 @@ signals:
     void paddleMoved(unsigned player, int position); // signed absolute X, -32768..32767
     void aimMoved(unsigned player, double dx, double dy); // screen fractions, includes elapsed time
     void commandChanged(int command, bool pressed);
-    void captureReady(); // all inputs released; waiting for the new binding
+    void captureReady(); // ready for a fresh input; other held controls do not block it
     void bindingCaptured(const PadBinding& binding);
     void captureCancelled();
     void notification(const QString& message);

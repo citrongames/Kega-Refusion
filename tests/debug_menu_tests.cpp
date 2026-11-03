@@ -1,8 +1,12 @@
 #include "core/EmulationSession.h"
 #include "i18n/Localization.h"
 #include "ui/DebugDialogs.h"
+#include "ui/ControlsPage.h"
+#include "ui/ControllerDiagram.h"
 #include "ui/MainWindow.h"
+#include "input/InputManager.h"
 #include "input/ControllerType.h"
+#include "input/ControllerTopology.h"
 
 #include <QAction>
 #include <QApplication>
@@ -12,7 +16,9 @@
 #include <QDialogButtonBox>
 #include <QColor>
 #include <QDir>
+#include <QFileInfo>
 #include <QKeyEvent>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -24,8 +30,9 @@
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTableWidget>
-#include <QTabWidget>
+#include <QTabBar>
 #include <QTimer>
+#include <SDL.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -42,6 +49,25 @@ template<class T> T* child(QObject& parent, const char* name) {
     return found;
 }
 
+struct VirtualControlsPad {
+    int index = -1;
+    SDL_Joystick* joystick = nullptr;
+    VirtualControlsPad() {
+        index = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_UNKNOWN, 2, 12, 1);
+        require(index >= 0, "virtual controls pad could not be attached");
+        joystick = SDL_JoystickOpen(index);
+        require(joystick != nullptr, "virtual controls pad could not be opened");
+    }
+    ~VirtualControlsPad() {
+        if (joystick) SDL_JoystickClose(joystick);
+        if (index >= 0) SDL_JoystickDetachVirtual(index);
+    }
+    void button(int button, bool pressed) {
+        require(SDL_JoystickSetVirtualButton(joystick, button, pressed ? 1 : 0) == 0,
+                "virtual controls button update failed");
+    }
+};
+
 void press(QWidget& target, int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
            bool repeat = false) {
     QKeyEvent event(QEvent::KeyPress, key, modifiers, QString(), repeat);
@@ -49,6 +75,10 @@ void press(QWidget& target, int key, Qt::KeyboardModifiers modifiers = Qt::NoMod
 }
 
 void testControlsLayout(MainWindow& window) {
+    VirtualControlsPad pad;
+    auto* input = window.findChild<InputManager*>();
+    require(input != nullptr, "window input manager is missing");
+    input->poll();
     QString failure;
     bool inspected = false;
     QTimer::singleShot(0, &window, [&] {
@@ -72,10 +102,16 @@ void testControlsLayout(MainWindow& window) {
         auto* profile = dialog->findChild<QComboBox*>(QStringLiteral("profileBox"));
         auto* player = dialog->findChild<QComboBox*>(QStringLiteral("playerBox"));
         auto* type = dialog->findChild<QComboBox*>(QStringLiteral("deviceTypeBox"));
-        auto* tabs = dialog->findChild<QTabWidget*>(QStringLiteral("mappingTabs"));
+        auto* tabs = dialog->findChild<QTabBar*>(QStringLiteral("mappingTabs"));
+        auto* adapter = dialog->findChild<QComboBox*>(QStringLiteral("adapterBox"));
+        auto* controls = dialog->findChild<ControlsPage*>();
+        auto* diagram = dialog->findChild<ControllerDiagram*>();
+        auto* gameTable = dialog->findChild<QTableWidget*>(QStringLiteral("gameMappingTable"));
+        auto* commandTable = dialog->findChild<QTableWidget*>(QStringLiteral("commandMappingTable"));
         auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("settingsButtons"));
         auto* error = dialog->findChild<QLabel*>(QStringLiteral("settingsValidationError"));
-        if (!viewport || !profile || !player || !type || !tabs || !buttons || !error) {
+        if (!viewport || !profile || !player || !type || !tabs || !adapter || !controls ||
+            !diagram || !gameTable || !commandTable || !buttons || !error) {
             check(false, QStringLiteral("Controls page or settings footer is missing"));
             finish();
             return;
@@ -99,20 +135,97 @@ void testControlsLayout(MainWindow& window) {
             QApplication::processEvents();
         };
         outerFits(QStringLiteral("default six-button pad"));
-        auto* gameTable = tabs->widget(0)->findChild<QTableWidget*>();
+        check(tabs->count() == 3 && tabs->currentIndex() == 0,
+              QStringLiteral("port and command tabs are missing"));
         check(gameTable && gameTable->verticalScrollBar()->maximum() == 0,
               QStringLiteral("default six-button pad button table scrolls"));
 
+        const auto rowFor = [](QTableWidget* table, int target) {
+            for (int row = 0; row < table->rowCount(); ++row)
+                if (table->item(row, 0)->data(Qt::UserRole).toInt() == target) return row;
+            return -1;
+        };
+        const int first = rowFor(gameTable, 0);
+        const int second = rowFor(gameTable, 1);
+        check(first >= 0 && second >= 0, QStringLiteral("gameplay targets are missing"));
+        if (first >= 0 && second >= 0) {
+            auto* oldKey = gameTable->cellWidget(first, 1)->findChild<QKeySequenceEdit*>();
+            auto* newKey = gameTable->cellWidget(second, 1)->findChild<QKeySequenceEdit*>();
+            newKey->setKeySequence(QKeySequence(Qt::Key_X));
+            check(oldKey->keySequence().isEmpty() &&
+                  newKey->keySequence() == QKeySequence(Qt::Key_X),
+                  QStringLiteral("new keyboard binding did not clear the previous target"));
+        }
+
+        tabs->setCurrentIndex(1);
+        QApplication::processEvents();
+        check(player->currentData().toInt() == 1, QStringLiteral("second port tab did not select player"));
+        choose(type, int(ControllerType::Pad), QStringLiteral("MD port 2 pad"));
+        const QString preview = qEnvironmentVariable("KEGA_CONTROLS_PREVIEW");
+        if (!preview.isEmpty()) {
+            QDir().mkpath(QFileInfo(preview).absolutePath());
+            check(dialog->grab().save(preview + QStringLiteral("_port2.png")),
+                  QStringLiteral("port 2 preview could not be saved"));
+        }
+        if (first >= 0 && second >= 0) {
+            gameTable->cellDoubleClicked(first, 0);
+            QApplication::processEvents();
+            check(input->capturing() && error->isVisible() && !error->text().isEmpty(),
+                  QStringLiteral("double-click did not show capture waiting footer"));
+            check(error->styleSheet().contains(QStringLiteral("#18783c")) ||
+                  error->styleSheet().contains(QStringLiteral("#70d993")),
+                  QStringLiteral("capture waiting footer is not green"));
+            if (!preview.isEmpty())
+                check(dialog->grab().save(preview + QStringLiteral("_waiting.png")),
+                      QStringLiteral("waiting preview could not be saved"));
+            pad.button(10, true); input->poll();
+            pad.button(10, false); input->poll();
+            diagram->targetDoubleClicked(1);
+            pad.button(10, true); input->poll();
+            pad.button(10, false); input->poll();
+            check(gameTable->item(first, 2)->text() == QStringLiteral("—") &&
+                  gameTable->item(second, 2)->text() != QStringLiteral("—"),
+                  QStringLiteral("diagram double-click or latest-wins pad binding failed"));
+            tabs->setCurrentIndex(tabs->count() - 1);
+            QApplication::processEvents();
+            check(player->isVisible() && player->currentData().toInt() == 1,
+                  QStringLiteral("command pad source is unclear"));
+            commandTable->cellDoubleClicked(0, 0);
+            pad.button(10, true); input->poll();
+            pad.button(10, false); input->poll();
+            check(commandTable->item(0, 2)->text() != QStringLiteral("—") &&
+                  gameTable->item(second, 2)->text() == QStringLiteral("—"),
+                  QStringLiteral("command binding did not take the pad control from gameplay"));
+            tabs->setCurrentIndex(0);
+            QApplication::processEvents();
+        }
+
         choose(type, int(ControllerType::Mouse), QStringLiteral("MD Mouse"));
         outerFits(QStringLiteral("MD Mouse"));
-        choose(player, 1, QStringLiteral("MD port 2"));
+        if (first >= 0 && second >= 0) {
+            auto* previous = qobject_cast<QComboBox*>(gameTable->cellWidget(first, 3));
+            auto* moved = qobject_cast<QComboBox*>(gameTable->cellWidget(second, 3));
+            if (previous && moved) {
+                moved->setCurrentIndex(moved->findData(int(Qt::RightButton)));
+                check(previous->currentData().toInt() == 0,
+                      QStringLiteral("new mouse binding did not clear the previous target"));
+            }
+        }
+        tabs->setCurrentIndex(1);
+        QApplication::processEvents();
+        check(player->currentData().toInt() == 1, QStringLiteral("second port tab did not select player"));
         choose(type, int(ControllerType::Menacer), QStringLiteral("Menacer"));
         outerFits(QStringLiteral("Menacer"));
         choose(type, int(ControllerType::Justifier), QStringLiteral("Justifier"));
         outerFits(QStringLiteral("Justifier"));
         choose(type, int(ControllerType::Menacer), QStringLiteral("Menacer"));
+        choose(adapter, int(ControllerAdapter::TeamPlayerPort1), QStringLiteral("Team Player port 1"));
+        check(tabs->count() == int(adapterPlayerCount(ControllerAdapter::TeamPlayerPort1)) + 1,
+              QStringLiteral("adapter did not expand port tabs"));
+        choose(adapter, int(ControllerAdapter::None), QStringLiteral("no adapter"));
         choose(profile, 1, QStringLiteral("Master System"));
-        choose(player, 0, QStringLiteral("SMS port 1"));
+        tabs->setCurrentIndex(0);
+        QApplication::processEvents();
         choose(type, int(ControllerType::Paddle), QStringLiteral("SMS Paddle"));
         outerFits(QStringLiteral("SMS Paddle"));
         choose(type, int(ControllerType::LightPhaser), QStringLiteral("Light Phaser"));
@@ -124,10 +237,30 @@ void testControlsLayout(MainWindow& window) {
               QStringLiteral("invalid controls did not show the sticky validation footer"));
         check(profile->currentData().toInt() == 0 && player->currentData().toInt() == 1,
               QStringLiteral("validation did not select the conflicting MD port"));
+        tabs->setCurrentIndex(tabs->count() - 1);
+        QApplication::processEvents();
         finish();
     });
     child<QAction>(window, "emulatorSettingsAction")->trigger();
     require(inspected, "settings layout inspection did not run");
+    bool reopened = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("emulatorSettingsDialog"));
+        auto* controls = dialog ? dialog->findChild<ControlsPage*>() : nullptr;
+        if (!dialog || !controls) {
+            if (failure.isEmpty()) failure = QStringLiteral("settings did not reopen on controls");
+        } else {
+            const auto state = controls->viewState();
+            if (state.profile != 0 || state.player != 1 || !state.commands)
+                if (failure.isEmpty()) failure = QStringLiteral("controls view selection was not restored");
+            if (input->mapping(ConsoleProfile::MegaDrive, 1).controllerType != ControllerType::Pad)
+                if (failure.isEmpty()) failure = QStringLiteral("cancel committed a controller draft");
+            dialog->reject();
+        }
+        reopened = true;
+    });
+    child<QAction>(window, "emulatorSettingsAction")->trigger();
+    require(reopened, "settings reopen inspection did not run");
     require(failure.isEmpty(), qPrintable(failure));
 }
 }

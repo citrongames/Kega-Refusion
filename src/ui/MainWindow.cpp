@@ -1986,25 +1986,34 @@ void MainWindow::editSettings(int initialPage) {
     ControlsPage* controls = nullptr;
     connect(navigation, &QListWidget::currentRowChanged, &dialog,
             [this, pages, controlsViewport, controlsError, &controls, &biosCreated, createBiosPage](int row) {
-        if (pages->currentIndex() == kControlsSettingsPage && row != kControlsSettingsPage && controls)
+        if (pages->currentIndex() == kControlsSettingsPage && row != kControlsSettingsPage && controls) {
             controls->cancelCapture();
+            controlsError->clear();
+        }
         if (row == kBiosSettingsPage && !biosCreated) {
             createBiosPage();
             biosCreated = true;
         }
         if (row == kControlsSettingsPage && !controls) {
             controls = new ControlsPage(*input_, controlsViewport);
+            controls->setExternalFeedback(true);
+            if (hasControlsViewState_) controls->setViewState(controlsViewState_);
             connect(controls, &ControlsPage::feedbackChanged, controlsError,
-                    [controlsError](const QString& message, bool error) {
-                controlsError->setText(error ? message : QString());
-                controlsError->setVisible(error && !message.isEmpty());
+                    [controlsError, pages](const QString& message, bool error) {
+                const bool dark = controlsError->palette().color(QPalette::Window).lightness() < 128;
+                const QColor color = error ? (dark ? QColor("#f08c82") : QColor("#a43028"))
+                                           : (dark ? QColor("#70d993") : QColor("#18783c"));
+                controlsError->setStyleSheet(QStringLiteral("color: %1; font-weight: 600;").arg(color.name()));
+                controlsError->setText(message);
+                controlsError->setVisible(pages->currentIndex() == kControlsSettingsPage && !message.isEmpty());
             });
             controls->setTopologyLocked(movieMode_ != 0 || moviePending_ || session_.networkClient() || session_.networkLinkCable());
             controlsViewport->setWidget(controls);
         }
         pages->setCurrentIndex(row);
+        controlsError->setVisible(row == kControlsSettingsPage && !controlsError->text().isEmpty());
     });
-    navigation->setCurrentRow(qBound(0, initialPage, kNetplaySettingsPage));
+    navigation->setCurrentRow(qBound(0, initialPage < 0 ? settingsPage_ : initialPage, kNetplaySettingsPage));
     layout->addWidget(controlsError);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
@@ -2020,7 +2029,13 @@ void MainWindow::editSettings(int initialPage) {
     });
     layout->addWidget(buttons);
 
-    if (dialog.exec() == QDialog::Accepted) {
+    const int result = dialog.exec();
+    settingsPage_ = navigation->currentRow();
+    if (controls) {
+        controlsViewState_ = controls->viewState();
+        hasControlsViewState_ = true;
+    }
+    if (result == QDialog::Accepted) {
         const QString selectedNickname = netplaySettings->nickname();
         if (!selectedNickname.isEmpty() && selectedNickname != netplay_->nickname())
             netplay_->setNickname(selectedNickname);

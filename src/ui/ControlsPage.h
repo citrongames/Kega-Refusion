@@ -16,14 +16,22 @@ class QLabel;
 class QPushButton;
 class QSlider;
 class QTableWidget;
-class QTabWidget;
+class QTabBar;
 class ControllerDiagram;
 
 class ControlsPage final : public QWidget {
     Q_OBJECT
 public:
+    struct ViewState {
+        int profile = 0;
+        int player = 0;
+        bool commands = false;
+    };
     explicit ControlsPage(InputManager& input, QWidget* parent = nullptr);
     ~ControlsPage() override;
+    ViewState viewState() const;
+    void setViewState(const ViewState& state);
+    void setExternalFeedback(bool external);
     bool apply();
     void setHardwareConfigurationLocked(bool locked);
     void setTopologyLocked(bool locked);
@@ -49,6 +57,7 @@ private:
     PlayerMapping& draft();
     QVector<int> activeGameTargets();
     void refreshPlayerChoices();
+    bool commandTabSelected() const;
     QString captureDeviceKey();
     void refreshDevices();
     void refreshContents();
@@ -56,6 +65,7 @@ private:
     void fillCommandTable();
     void selectTarget(int target);
     void refreshPadCell(int target);
+    void refreshKeyboardCell(int target);
     void updateActionButtons();
     void setFeedback(const QString& message, bool warning = false);
     void selectFailure(int profile, int player, bool commandTab = false);
@@ -91,7 +101,9 @@ private:
     QSlider* deadzoneSlider_ = nullptr;
     QLabel* deadzoneValue_ = nullptr;
     QLabel* feedback_ = nullptr;
-    QTabWidget* tabs_ = nullptr;
+    QTabBar* tabs_ = nullptr;
+    QWidget* gamePage_ = nullptr;
+    QWidget* commandPage_ = nullptr;
     QTableWidget* gameTable_ = nullptr;
     QTableWidget* commandTable_ = nullptr;
     ControllerDiagram* diagram_ = nullptr;
@@ -113,4 +125,5 @@ private:
     int selectedTarget_ = -1;
     bool refreshing_ = false;
     bool skipping_ = false;
+    bool externalFeedback_ = false;
 };

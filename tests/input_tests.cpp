@@ -398,6 +398,67 @@ void testSequentialAxisCapture() {
     }
 }
 
+void testIndependentCapture() {
+    for (const auto type : {SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_JOYSTICK_TYPE_UNKNOWN}) {
+        QTemporaryDir temp;
+        require(temp.isValid(), "independent capture directory");
+        InputManager manager(temp.filePath("settings.ini"));
+        VirtualPad pad(type);
+        manager.poll();
+        const auto key=keyForId(manager.devices(),pad.id);
+        QVector<PadBinding> captured;
+        QObject::connect(&manager,&InputManager::bindingCaptured,&manager,
+                         [&](const PadBinding& value) { captured.append(value); });
+        // Configuring the second logical port must accept a button even when
+        // another button, a hat and an analog axis remain held.
+        pad.axis(1,-32768); pad.button(0,true); pad.hat(SDL_HAT_UP);
+        manager.poll(); manager.beginCapture(key,1);
+        for (int i=0;i<4;++i) manager.poll();
+        require(captured.isEmpty(), "capture accepted an input already held at entry");
+        pad.button(7,true); manager.poll();
+        require(captured.size()==1 && captured.back()==PadBinding{PadBinding::Button,7,0},
+                "held axis/button/hat blocked a fresh second-player button");
+        manager.beginCapture(key,1); manager.poll();
+        pad.button(8,true); manager.poll();
+        require(captured.size()==2 && captured.back()==PadBinding{PadBinding::Button,8,0},
+                "previous wizard button blocked a different fresh button");
+        pad.button(0,false);pad.button(7,false);pad.button(8,false);
+        pad.hat(SDL_HAT_CENTERED);pad.axis(1,0);manager.poll();
+        manager.beginCapture(key,1);pad.axis(1,-32768);manager.poll();
+        require(captured.size()==3 && captured.back()==PadBinding{PadBinding::Axis,1,-1},
+                "centered axis did not bind Up");
+        manager.beginCapture(key,1);manager.poll();manager.poll();
+        require(captured.size()==3,"wizard rebound the previous held axis direction");
+        pad.axis(1,32767);manager.poll();
+        require(captured.size()==4 && captured.back()==PadBinding{PadBinding::Axis,1,1},
+                "direct Up-to-Down movement was lost between polls");
+        pad.axis(1,0);pad.axis(0,12000);pad.hat(SDL_HAT_LEFT);manager.poll();
+        manager.beginCapture(key,1);manager.poll();
+        pad.hat(SDL_HAT_RIGHT);manager.poll();
+        require(captured.size()==5 && captured.back()==PadBinding{PadBinding::Hat,0,SDL_HAT_RIGHT},
+                "drifting stick or held hat blocked a new hat direction");
+        manager.beginCapture(key,1);manager.poll();
+        pad.button(9,true);manager.poll();
+        require(captured.size()==6 && captured.back()==PadBinding{PadBinding::Button,9,0},
+                "drifting stick blocked button capture");
+        pad.button(0,true); manager.poll();
+        const PadBinding autoB{PadBinding::Automatic,0,0};
+        require(manager.capturedBindingConflicts(ConsoleProfile::MegaDrive,key,0,autoB,
+                                                {PadBinding::Button,0,0}),
+                "automatic face-button conflict was not detected");
+        require(!manager.capturedBindingConflicts(ConsoleProfile::MegaDrive,key,0,autoB,
+                                                 {PadBinding::Button,1,0}),
+                "unrelated automatic face button was removed");
+        pad.axis(1,-32768);manager.poll();
+        require(manager.capturedBindingConflicts(ConsoleProfile::MegaDrive,key,4,
+                    {PadBinding::Automatic,4,0},{PadBinding::Axis,1,-1}),
+                "automatic stick direction conflict was not detected");
+        require(!manager.capturedBindingConflicts(ConsoleProfile::MegaDrive,key,5,
+                    {PadBinding::Automatic,5,0},{PadBinding::Axis,1,-1}),
+                "automatic opposite direction was incorrectly removed");
+    }
+}
+
 void testRewindCommand() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create rewind command settings directory");
@@ -1149,6 +1210,11 @@ void testBackgroundGamepad() {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--capture")) {
+            testInput(); testSequentialAxisCapture(); testIndependentCapture();
+            std::puts("capture held inputs, independent buttons, triggers and sequential axes passed");
+            return 0;
+        }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--keyboard")) {
             testPhysicalKeyboard();
             testKeyboardSettingsMigration();
@@ -1187,6 +1253,7 @@ int main(int argc, char** argv) {
         }
         testInput();
         testSequentialAxisCapture();
+        testIndependentCapture();
         testRewindCommand();
         testHardResetCommand();
         testReservedRewindKey();

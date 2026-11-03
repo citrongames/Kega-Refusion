@@ -11,6 +11,7 @@
 #include <QSettings>
 #include <QProcess>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -149,6 +150,7 @@ public:
     static void linkCable(NetplayController& c,bool enabled){c.lobby_->linkCableRequested(enabled);}
     static bool linked(NetplayController& c){return c.linkCable_;}
     static bool active(NetplayController& c){return c.active_;}
+    static QString storageId(NetplayController& c){return c.storageId_;}
     static void spectate(NetplayController& c,quint64 id){c.transport_.setRole(id,kega::net::Role::Spectator);}
     static bool kick(NetplayController& c,quint64 id){return c.transport_.kick(id,false,false);}
     static kega::net::NetTransport& transport(NetplayController& c){return c.transport_;}
@@ -566,7 +568,7 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
             std::fprintf(stderr,"moderation client launch failed: %s\n",qPrintable(client.errorString()));
             host.kill();host.waitForFinished();return 1;
         }
-        const bool hostDone=host.waitForFinished(25000),clientDone=client.waitForFinished(5000);
+        const bool hostDone=host.waitForFinished(28000),clientDone=client.waitForFinished(5000);
         const auto hostError=host.readAllStandardError(),clientError=client.readAllStandardError();
         if(!hostDone){host.kill();host.waitForFinished();}
         if(!clientDone){client.kill();client.waitForFinished();}
@@ -594,9 +596,12 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
         Localization::text(QStringLiteral("Хост заблокировал ваши дальнейшие подключения.")),
         Localization::text(QStringLiteral("Хост закрыл сеанс."))};
     bool failed=false,created=false,actionSent=false,reportReceived=false,terminal=false,reported=false;
+    bool offlineStateRequested=false,invalidLoadRequested=false,invalidLoadFailed=false;
+    bool soloLoadRequested=false,soloStateRequested=false;
     int round=0,frames=0,actionFrame=0,resyncs=0,resyncAtFinal=0,connections=0,connectionsAtFinal=0;
+    int hostGameCloses=0,framesBeforeInvalidLoad=0;
     int finalSignals=0,transportFinals=0,roundConnections=0,hostContinuations=0;
-    QString lastCause,lastMessage;
+    QString lastCause,lastMessage,hostScope,currentGamePath;
     QElapsedTimer finalWait,actionWait;
     const auto check=[&](bool condition,const char* reason) {
         if(condition)return true;
@@ -629,7 +634,11 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
     };
     QObject::connect(&watcher,&QFileSystemWatcher::directoryChanged,&app,[&](const QString&){readRoundMarker();});
     QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& error) {
+        if(hosting && invalidLoadRequested && !invalidLoadFailed) {invalidLoadFailed=true;return;}
         std::fprintf(stderr,"moderation core error: %s\n",qPrintable(error));failed=true;app.exit(1);
+    });
+    QObject::connect(&session,&EmulationSession::gameClosed,&app,[&] {
+        if(hosting)++hostGameCloses;
     });
     QObject::connect(&session,&EmulationSession::networkSnapshotApplied,&app,[&](bool ok,const QString& error) {
         if(!ok){std::fprintf(stderr,"moderation snapshot error: %s\n",qPrintable(error));failed=true;app.exit(1);}
@@ -638,9 +647,11 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
     QObject::connect(&session,&EmulationSession::videoFrameReady,&app,[&] {
         QImage image;double aspect;session.takeVideoFrame(image,aspect);++frames;
     });
-    QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&](const QString&,double,const QString&) {
+    QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&](const QString& path,double,const QString&) {
+        currentGamePath=path;
         if(!hosting||created)return;
         created=true;NetplayScenario::create(controller);
+        hostScope=NetplayScenario::storageId(controller);
         const QString invitation=NetplayScenario::invitation(controller);
         if(!check(!invitation.isEmpty(),"host invitation unavailable"))return;
         write(root+"/invite",invitation.toUtf8());std::puts("READY");std::fflush(stdout);
@@ -671,7 +682,7 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
                     actionSent=true;actionFrame=frames;actionWait.start();
                 } else if(const auto peer=NetplayScenario::ready(controller)) {
                     actionSent=true;actionFrame=frames;actionWait.start();
-                    if(round==5)controller.leaveSession();
+                    if(round==5) {session.setPaused(true);controller.leaveSession();}
                     else NetplayScenario::moderate(controller,peer,round);
                 }
             }
@@ -692,7 +703,34 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
                 if(!check(controller.bannedPeers().isEmpty(),"fixture ban was not removed"))return;
             }
             if(round==5) {
-                if(check(hostContinuations==5,"not every kick/ban/rejection retained host progress"))app.exit(0);
+                if(!check(hostContinuations==5,"not every kick/ban/rejection retained host progress") ||
+                   !check(NetplayScenario::finalState(controller) && !session.networkActive() &&
+                          session.hasGame() && frames-actionFrame>=8,
+                          "host leave did not retain and advance the loaded game offline"))return;
+                const QString networkState=data+"/netplay/sessions/"+hostScope+"/states/host.slot9.krs";
+                const QString soloHostState=data+"/states/host.slot9.krs";
+                if(!offlineStateRequested) {session.saveState(9);offlineStateRequested=true;return;}
+                if(!QFile::exists(networkState))return;
+                if(!check(!QFile::exists(soloHostState),"offline continuation wrote a network state into solo storage"))return;
+                if(!invalidLoadRequested) {
+                    framesBeforeInvalidLoad=frames;
+                    invalidLoadRequested=true;session.loadGame(root+"/missing.md");return;
+                }
+                if(!invalidLoadFailed)return;
+                if(!soloLoadRequested) {
+                    if(!check(session.hasGame() && hostGameCloses==0 &&
+                              currentGamePath==QFileInfo(root+"/host.md").absoluteFilePath(),
+                              "invalid replacement ROM unloaded the offline host game"))return;
+                    // The error signal can arrive before four further video frames.
+                    // The scenario deadline still fails a genuinely stalled host.
+                    if(frames-framesBeforeInvalidLoad<4)return;
+                }
+                if(!soloLoadRequested) {session.loadGame(root+"/client.md");soloLoadRequested=true;return;}
+                if(currentGamePath!=QFileInfo(root+"/client.md").absoluteFilePath())return;
+                if(!soloStateRequested) {session.saveState(9);soloStateRequested=true;return;}
+                if(!QFile::exists(data+"/states/client.slot9.krs"))return;
+                if(check(QFile::exists(networkState) && hostGameCloses==0,
+                         "changing the offline game lost its network state or emitted gameClosed"))app.exit(0);
                 return;
             }
             ++round;actionSent=reportReceived=false;
@@ -720,7 +758,7 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
         }
     });
     poll.start();
-    QTimer::singleShot(21000,&app,[&] {
+    QTimer::singleShot(24000,&app,[&] {
         std::fprintf(stderr,"moderation timeout role=%s round=%d action=%d report=%d terminal=%d finals=%d/%d frames=%d\n",
             hosting?"host":"client",round,actionSent,reportReceived,terminal,finalSignals,transportFinals,frames);
         app.exit(1);

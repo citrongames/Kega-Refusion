@@ -828,16 +828,28 @@ void EmulationSession::run() {
                 networkTimeline.stop();
                 if(movie.active() && !movie.finish(false,error)) {networkMode_.store(networkMode);emit networkModeFailed(error);break;}
                 if(command.value==0) {
-                    // Do not allow a later offline unload to write the online battery into solo saves.
-                    if(networkMode && host.loaded()) { host.unload(); loaded_.store(false); emit gameClosed(); }
+                    const bool keepHostGame=host.loaded() && networkMode==1;
                     if(!host.setLinkCableEnabled(false,error))emit actionNotice(error);
                     networkLinkCableRequested=false;
+                    if(!keepHostGame && networkMode && host.loaded()) {
+                        host.unload(); loaded_.store(false); emit gameClosed();
+                    }
                     {
                         std::lock_guard<std::mutex> lock(videoMutex_);
                         latestFrame_={};videoPending_=false;latestAspect_=4.0/3.0;
                     }
                     host.restoreMovieConfiguration(error);
-                    if(!host.setNetplayStorage({},error))emit errorOccurred(error);
+                    if(keepHostGame) {
+                        // Flushing or changing scope now would import the live online
+                        // battery into solo saves. Clear the scope after this game ends.
+                        host.deferNetplayStorageClear();
+                    } else {
+                        if(!host.setNetplayStorage({},error))emit errorOccurred(error);
+                    }
+                    releaseButtons();
+                    paused=false;emit pausedChanged(false);
+                    frameAdvanceHeld_.store(false);stepHeldLatched=false;
+                    rewindLatched=false;rewindStatus(false);emit rewindProgress(0,0);
                 } else if(!host.setNetplayStorage(command.path,error)) {
                     networkMode_.store(networkMode);loaded_.store(host.loaded());
                     if(!host.loaded())emit gameClosed();
