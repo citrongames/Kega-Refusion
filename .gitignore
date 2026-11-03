@@ -3,3 +3,7 @@
 /dist/
 /data/
 CMakeUserPresets.json
+
+# Local Python helper caches
+__pycache__/
+*.py[cod]
