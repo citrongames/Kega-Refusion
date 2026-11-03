@@ -792,6 +792,7 @@
     "Хост заблокировал ваши дальнейшие подключения.": "The host has banned you from future sessions.",
     "Хост закрыл сеанс.": "The host closed the session.",
     "Подключение отклонено: %1": "Connection rejected: %1",
-    "Хост отключил вас от сеанса.": "The host removed you from the session."
+    "Хост отключил вас от сеанса.": "The host removed you from the session.",
+    "Не удалось загрузить достижения. Игра продолжается.": "Could not load achievements. The game continues."
   }
 }

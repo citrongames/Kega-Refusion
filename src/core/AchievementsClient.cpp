@@ -176,6 +176,7 @@ struct AchievementsClient::Impl {
             if (impl->loginWithToken && (result == RC_INVALID_CREDENTIALS || result == RC_EXPIRED_TOKEN))
                 impl->removeCredentials();
             impl->publish();
+            if (!impl->wantedHash.isEmpty()) impl->notifyLoadFailure();
             return;
         }
         const rc_client_user_t* user = rc_client_get_user_info(client);
@@ -201,6 +202,7 @@ struct AchievementsClient::Impl {
             impl->gameHash.clear();
             impl->gameDigest.clear();
             impl->publish();
+            impl->notifyLoadFailure();
             return;
         }
         const rc_client_game_t* game = rc_client_get_game_info(client);
@@ -210,6 +212,7 @@ struct AchievementsClient::Impl {
             impl->gameDigest.clear();
             impl->state.status = Localization::text(QStringLiteral("Игра RetroAchievements не совпадает с запущенной системой"));
             impl->publish();
+            impl->notifyLoadFailure();
             return;
         }
         impl->gameHash = impl->wantedHash;
@@ -251,6 +254,7 @@ struct AchievementsClient::Impl {
         }
         impl->mediaHash.clear();
         impl->publish();
+        if (result != RC_OK && result != RC_HARDCORE_DISABLED) impl->notifyLoadFailure();
     }
 
     static void event(const rc_client_event_t* event, rc_client_t* client) {
@@ -305,6 +309,13 @@ struct AchievementsClient::Impl {
         default:
             break;
         }
+    }
+
+    void notifyLoadFailure() {
+        AchievementNotice notice;
+        notice.kind = AchievementNotice::LoadFailed;
+        notice.title = Localization::text(QStringLiteral("Не удалось загрузить достижения. Игра продолжается."));
+        sendNotice(notice);
     }
 
     void sendNotice(const AchievementNotice& value) {
@@ -370,6 +381,7 @@ struct AchievementsClient::Impl {
             loadTimer.elapsed() < 15000) return;
         shuttingDown = true;
         const bool loginTimedOut = loginHandle != nullptr;
+        const bool gameRequested = !wantedHash.isEmpty() || !mediaHash.isEmpty();
         if (loginHandle) rc_client_abort_async(client, loginHandle);
         if (loadHandle) rc_client_abort_async(client, loadHandle);
         if (mediaHandle) rc_client_abort_async(client, mediaHandle);
@@ -395,6 +407,7 @@ struct AchievementsClient::Impl {
         state.status = Localization::text(QStringLiteral("Время ожидания RetroAchievements истекло"));
         shuttingDown = false;
         publish();
+        if (gameRequested) notifyLoadFailure();
     }
 
     void startGameLoad() {

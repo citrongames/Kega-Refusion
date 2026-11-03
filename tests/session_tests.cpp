@@ -19,10 +19,11 @@ int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  try {
  const bool achievementsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--achievements");
+ const bool achievementLoadingOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--achievements-loading");
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || fastOnly || checksumOnly || portsOnly || achievementsOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  const auto path=temp.filePath("original.md");QFile file(path);require(file.open(QIODevice::WriteOnly) && file.write(rom)==rom.size(),"ROM fixture");file.close();
@@ -33,6 +34,89 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& s){++errors;std::fprintf(stderr,"%s\n",qPrintable(s));});
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
+ if(achievementLoadingOnly){
+  // The mock owns every RetroAchievements request: no real network or account data.
+  QByteArray secondRom=rom, thirdRom=rom;
+  secondRom[0x300]=char(1);thirdRom[0x300]=char(2);
+  const auto secondPath=temp.filePath("second.md"), thirdPath=temp.filePath("third.md");
+  for(const auto& fixture:{qMakePair(secondPath,secondRom),qMakePair(thirdPath,thirdRom)}){
+   QFile out(fixture.first);
+   require(out.open(QIODevice::WriteOnly) && out.write(fixture.second)==fixture.second.size(),"switch ROM fixture");
+  }
+  auto within=[&](const std::function<bool()>& predicate,const char* message,int limitMs=950){
+   QElapsedTimer timer;timer.start();
+   while(!predicate() && timer.elapsed()<limitMs){QCoreApplication::processEvents();QThread::msleep(2);}
+   require(predicate(),message);
+  };
+  int loadedGames=0,frameAtLoad=0,gameRequests=0,gameNotices=0,failedNotices=0;
+  quint64 loginRequest=0,gameRequest=0;
+  bool unexpectedRequest=false;
+  AchievementsState achievementState;
+  QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&](const QString&,double,const QString&){
+   ++loadedGames;frameAtLoad=frames.load();
+  });
+  QObject::connect(&session,&EmulationSession::achievementsChanged,&app,[&](const AchievementsState& state){achievementState=state;});
+  QObject::connect(&session,&EmulationSession::achievementNotice,&app,[&](const AchievementNotice& notice){
+   if(notice.kind==AchievementNotice::GameReady)++gameNotices;
+   if(notice.kind==AchievementNotice::LoadFailed)++failedNotices;
+  });
+  QObject::connect(&session,&EmulationSession::achievementHttpRequest,&app,[&](const AchievementHttpRequest& request){
+   const auto operation=QUrlQuery(QString::fromUtf8(request.postData)).queryItemValue("r");
+   if(operation=="login2") loginRequest=request.id;
+   else if(operation=="achievementsets"){gameRequest=request.id;++gameRequests;}
+   else if(operation=="startsession" || operation=="ping")
+    session.achievementResponse(request.id,200,R"({"Success":true})");
+   else unexpectedRequest=true;
+  });
+  session.configureAchievements(true,false);
+  session.loginAchievements("Fixture","TestPassword");
+  within([&]{return loginRequest!=0;},"mock login request missing");
+  session.loadGame(path);
+  within([&]{return loadedGames==1 && frames.load()>=frameAtLoad+5;},"ROM waited for login response");
+  require(achievementState.loading && gameNotices==0 && !paused,"login pending state disturbed game");
+  const int duringLogin=frames.load();
+  within([&]{return frames.load()>=duringLogin+5;},"frames stopped during pending login");
+  session.achievementResponse(loginRequest,200,
+   R"({"Success":true,"User":"Fixture","Token":"FixtureToken","Score":0,"SoftcoreScore":0,"Messages":0,"Permissions":1,"AccountType":"Registered"})");
+  within([&]{return gameRequests==1 && gameRequest!=0;},"mock game request missing");
+  require(achievementState.loading && gameNotices==0 && !paused,"game request paused ROM");
+  const int duringGameLoad=frames.load();
+  within([&]{return frames.load()>=duringGameLoad+5;},"frames stopped during pending game response");
+  session.achievementResponse(gameRequest,200,
+   R"({"Success":true,"GameId":1234,"Title":"Original Fixture","ConsoleId":1,"ImageIconUrl":"https://retroachievements.org/Images/112233.png","RichPresenceGameId":1234,"RichPresencePatch":"","Sets":[{"AchievementSetId":1111,"GameId":1234,"Title":null,"Type":"core","ImageIconUrl":"https://retroachievements.org/Images/112233.png","Achievements":[{"ID":5501,"Title":"Fixture","Description":"Synthetic condition","Flags":3,"Points":5,"MemAddr":"0xH0001=3","Author":"Fixture","BadgeName":"00234","Created":1367266583,"Modified":1376929305}],"Leaderboards":[]}]})");
+  within([&]{return gameNotices==1 && achievementState.gameId==1234 && !achievementState.loading;},
+         "delayed success did not produce one ready notice");
+  require(failedNotices==0 && !paused,"success disturbed game");
+
+  // A failed response while switching ROM must report once and leave emulation running.
+  gameRequest=0;session.loadGame(secondPath);
+  within([&]{return loadedGames==2 && gameRequests==2 && gameRequest!=0;},"second ROM or game request missing");
+  within([&]{return frames.load()>=frameAtLoad+5;},"second ROM waited for achievements");
+  session.achievementResponse(gameRequest,400,R"({"Success":false,"Error":"Synthetic failure"})");
+  within([&]{return failedNotices==1 && !achievementState.loading;},"HTTP failure notice missing or repeated");
+  const int afterFailure=frames.load();
+  within([&]{return frames.load()>=afterFailure+5;},"HTTP failure stopped frames");
+  require(gameNotices==1 && failedNotices==1 && !paused && actions==0,"HTTP failure reset or paused game");
+
+  // A request that never replies must time out while frames keep advancing.
+  gameRequest=0;session.loadGame(thirdPath);
+  within([&]{return loadedGames==3 && gameRequests==3 && gameRequest!=0;},"third ROM or game request missing");
+  within([&]{return frames.load()>=frameAtLoad+5;},"third ROM waited for achievements");
+  const int beforeTimeout=frames.load();
+  QElapsedTimer timeout;timeout.start();
+  while(failedNotices<2 && timeout.elapsed()<17500){QCoreApplication::processEvents();QThread::msleep(3);}
+  require(failedNotices==2 && !achievementState.loading,"unanswered request did not notify once at timeout");
+  require(frames.load()>=beforeTimeout+150 && gameNotices==1 && !paused && actions==0,
+          "unanswered request stalled or reset emulation");
+  session.achievementResponse(gameRequest,200,R"({"Success":true})");
+  QElapsedTimer settle;settle.start();
+  while(settle.elapsed()<80){QCoreApplication::processEvents();QThread::msleep(2);}
+  require(failedNotices==2 && gameNotices==1 && errors==0 && !unexpectedRequest,
+          "late response changed completed timeout or unexpected mock request");
+  session.shutdown();
+  std::puts("Achievement loading: ROMs run during pending login/game requests, success, HTTP failure and no-response timeout passed");
+  return 0;
+ }
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
  if(achievementsOnly){
   int requests=0, gameNotices=0;AchievementsState achievementState;bool hardcore=false;

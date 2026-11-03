@@ -1260,12 +1260,13 @@ void EmulationSession::run() {
             achievements.configure(achievementEnabled,false); achievements.refresh();
         }
         lastAchievementBackground = background;
-        const bool achievementLoading = achievementEnabled && achievements.loading();
-        const bool nowPaused = host.loaded() && (paused || background || achievementLoading);
+        // Achievement HTTP is asynchronous and must never gate gameplay.
+        // Its completion callback publishes GameReady only when data is usable.
+        const bool nowPaused = host.loaded() && (paused || background);
         if (nowPaused != effectivePaused) {
             effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); clearAudio(); pacer.reset(nowNs());
         }
-        const bool reverse = rewind_.load() && historyEnabled && host.loaded() && !background && !achievementLoading && !achievementHardcore && !optionsPending;
+        const bool reverse = rewind_.load() && historyEnabled && host.loaded() && !background && !achievementHardcore && !optionsPending;
         const bool metricsRunning = (performanceMetricsEnabled || gameFpsEnabled) &&
             host.loaded() && !nowPaused && !reverse && !networkRemoteRewinding;
         if (metricsRunning != metricsWindowRunning) {
@@ -1337,13 +1338,13 @@ void EmulationSession::run() {
             if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
             lastBatteryCheck = batteryNow;
         }
-        const bool stepHeld = networkMode!=2 && frameAdvanceHeld_.load() && host.loaded() && paused && !background && !achievementLoading && !achievementHardcore;
+        const bool stepHeld = networkMode!=2 && frameAdvanceHeld_.load() && host.loaded() && paused && !background && !achievementHardcore;
         if (stepHeld && !stepHeldLatched) nextHeldFrameNs = nowNs() + 350000000;
         if (stepHeld && stepHeldLatched && nowNs() >= nextHeldFrameNs) {
             frameRequested = true; nextHeldFrameNs = nowNs() + 33333333;
         }
         stepHeldLatched = stepHeld;
-        if (frameRequested && host.loaded() && paused && !background && !achievementLoading && !achievementHardcore && !networkRemoteRewinding) {
+        if (frameRequested && host.loaded() && paused && !background && !achievementHardcore && !networkRemoteRewinding) {
             if(networkMode==1 && !networkStepAnnounced) {
                 networkStepAnnounced=true;emit networkStepRequested(networkEpoch);
             }

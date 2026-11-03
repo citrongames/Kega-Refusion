@@ -12,6 +12,8 @@
 
 
 ## Resource discipline
+
+- Loading must acknowledge user actions immediately and keep the UI responsive. Never delay game start, frames or controls for optional network services such as achievements; report readiness/failure asynchronously, once, without a modal interruption.
 - Avoid unnecessary disk I/O: compare save data in memory, write only changes, coalesce bursts, and bound write frequency. Keep one previous battery-save backup beside the primary file.
 - Keep queues, caches, decoded media and rewind history bounded. Prefer streaming and reuse existing buffers; do not decode or retain entire media unnecessarily.
 - Do not add heavy work, file reads/writes, or avoidable allocations to per-frame/input/audio paths. Poll or recompute only when needed; measure concrete regressions.

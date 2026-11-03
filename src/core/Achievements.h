@@ -24,7 +24,7 @@ struct AchievementsState {
     QList<AchievementEntry> entries;
 };
 struct AchievementNotice {
-    enum Kind { GameReady, Unlocked, Completed } kind = Unlocked;
+    enum Kind { GameReady, Unlocked, Completed, LoadFailed } kind = Unlocked;
     QString title, description, badgeUrl;
     quint32 points = 0;
     double rarity = 0.0;

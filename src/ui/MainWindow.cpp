@@ -368,6 +368,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             [this](const AchievementNotice& notice) {
         if (!achievementNotifications_ || !osdAction_->isChecked() ||
             (notice.kind == AchievementNotice::Completed && !notice.hardcore)) return;
+        if (notice.kind == AchievementNotice::LoadFailed) {
+            view_->showOsd(notice.title, 3500, QStringLiteral("achievementLoadFailed"));
+            return;
+        }
         QString heading, title = notice.title;
         if (notice.kind == AchievementNotice::GameReady) {
             heading = Localization::text(QStringLiteral("ИГРА РАСПОЗНАНА"));

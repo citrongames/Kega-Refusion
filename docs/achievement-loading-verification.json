@@ -1,0 +1,35 @@
+{
+  "version": "0.17.1",
+  "date": "2026-11-03",
+  "cause": "EmulationSession treated achievement loading as an implicit pause, also disabling rewind/frame advance. This gate was introduced with achievements (6bad1233), not with the 0.17.0 diagnostic UI. Remote response latency became game-start latency on every ROM switch.",
+  "change": [
+    "Removed achievement HTTP loading from gameplay/pause/rewind/frame-step gates",
+    "GameReady notice remains emitted only by the successful validated game-data callback",
+    "Login/game/media errors and a 15-second no-response timeout produce one LoadFailed notice; frontend renders a 3.5-second OSD if notifications and OSD are enabled",
+    "No modal errors, no forced pause/reset on ordinary load failure; late timed-out responses are ignored",
+    "Recorded immediate feedback/non-blocking optional services rule in AGENTS.md"
+  ],
+  "validation": {
+    "linux": "Achievement loading: ROMs run during pending login/game requests, success, HTTP failure and no-response timeout passed",
+    "windows": "Achievement loading: ROMs run during pending login/game requests, success, HTTP failure and no-response timeout passed",
+    "network": "Entirely mocked, no live requests/accounts; original generated ROM fixtures",
+    "cases": [
+      "First ROM during pending login",
+      "Game frames while achievement set is pending",
+      "Delayed success sends one GameReady",
+      "Second ROM and HTTP400: frames continue and one LoadFailed",
+      "Third ROM and complete no-response: frames continue through real 15s timeout; one LoadFailed; late response ignored"
+    ]
+  },
+  "windows_native_load_benchmark": {
+    "games": [
+      "Link Dragon (Unl).md",
+      "Bomboy (unl).md"
+    ],
+    "data": "Isolated temporary data directory, no user saves/settings modified",
+    "csv": "iteration,load_ms,slots_ms,achievement_hash_ms,first_frame_ms\r\n0,93.904,1.359,0.458,2.304\r\n1,15.189,0.838,0.794,0.468\r\n2,6.809,0.742,0.355,0.247\r\n3,7.963,0.857,0.728,0.275",
+    "limits": "Measures host load, slot checks, game hash and first emulated frame; not click-to-display latency. First call includes DLL/core initialization. Four calls, alternating two ROMs."
+  },
+  "windows_exe_sha256": "1e04cbeed4b66f35721f8350897286429d1c2e549e47499c2ef6a08aef610ddd",
+  "linux_archive_sha256": "e067a4db30387df2dab07281489a855fe992586b86648a94f3c4acb932890b95"
+}
