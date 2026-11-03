@@ -27,6 +27,8 @@ typedef struct Kega32xPwm {
     Kega32xPwmState s;
     Kega32xPwmHost host;
     int32_t emitted[2];
+    unsigned debug_mask; /* presentation only; never serialized */
+    uint8_t debug_gain[2];
     unsigned advancing;
 } Kega32xPwm;
 /* Callbacks may enqueue FIFO data at their event timestamp; they must not run

@@ -5,6 +5,7 @@
 #include "../core/Achievements.h"
 #include <array>
 
+#include <QColor>
 #include <QMainWindow>
 #include <QSettings>
 #include <QStringList>
@@ -17,9 +18,12 @@ class QDragEnterEvent;
 class QDropEvent;
 class QMenu;
 class QTimer;
+class QSlider;
 class AudioOutput;
 class AchievementNetwork;
 class EmulationSession;
+class DebugGraphicsDialog;
+class DebugAudioDialog;
 class InputManager;
 class NetplayController;
 enum class ConsoleProfile;
@@ -44,6 +48,11 @@ protected:
 private:
     void buildMenus();
     void setSmsFmEnabled(bool enabled);
+    void flushVolumePreference();
+    void updateDebugDialogs();
+    void applyDebugMasks();
+    void showDebugGraphics();
+    void showDebugAudio();
     void openGameDialog();
     void setLoadingUi(bool loading, const QString& fileName = {});
     void saveScreenshot();
@@ -81,11 +90,16 @@ private:
     QAction* netplayLeaveAction_ = nullptr;
     ConsoleProfile activeInputProfile_{};
     QTimer* inputTimer_ = nullptr;
+    QTimer* volumeSaveTimer_ = nullptr;
     QMenu* recentMenu_ = nullptr;
     QMenu* movieMenu_ = nullptr;
     QMenu* regionMenu_ = nullptr;
-    QMenu* blarggMenu_ = nullptr;
     QMenu* discMenu_ = nullptr;
+    QMenu* debugMenu_ = nullptr;
+    QAction* debugGraphicsAction_ = nullptr;
+    QAction* debugAudioAction_ = nullptr;
+    DebugGraphicsDialog* debugGraphicsDialog_ = nullptr;
+    DebugAudioDialog* debugAudioDialog_ = nullptr;
     QAction* movieRecordAction_ = nullptr;
     QAction* movieResumeAction_ = nullptr;
     QAction* moviePlayAction_ = nullptr;
@@ -113,6 +127,7 @@ private:
     QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;
     QAction* hardResetAction_ = nullptr;
+    std::array<QAction*, 5> blarggActions_{};
     QAction* shaderOffAction_ = nullptr;
     QAction* shaderGdaptAction_ = nullptr;
     QAction* shaderCustomAction_ = nullptr;
@@ -125,6 +140,8 @@ private:
     QAction* gameFpsAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
+    QSlider* volumeSlider_ = nullptr;
+    int savedVolume_ = 80;
     QAction* smsFmAction_ = nullptr;
     QStringList recentPaths_;
     QStringList discPaths_;
@@ -138,6 +155,12 @@ private:
     int fastForwardFactor_ = 4;
     bool rewindEnabled_ = true;
     bool smsFmEnabled_ = true;
+    quint32 debugVideoAvailable_ = 0;
+    quint32 debugVideoDisabled_ = 0;
+    quint64 debugAudioAvailable_ = 0;
+    quint64 debugAudioDisabled_ = 0;
+    std::array<unsigned, 38> debugAudioGains_{};
+    QColor debugBackdropColor_{255, 0, 255};
     int region_ = 0, blarggFilter_ = 0;
     unsigned occupiedSlots_ = 0;
     bool pauseOnFocusLoss_ = true;

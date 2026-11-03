@@ -116,6 +116,26 @@ void EmulationSession::changeDisc(const QString& path) { enqueue({Type::Disc,pat
 void EmulationSession::selectDisc(int index) { enqueue({Type::DiscIndex,{},index}); }
 void EmulationSession::setDiscEjected(bool ejected) { enqueue({Type::Eject,{},ejected ? 1 : 0}); }
 void EmulationSession::setRegion(int region) { enqueue({Type::Region,{},region}); }
+void EmulationSession::setDebugMasks(quint32 video, quint64 audio) {
+    Command command{Type::DebugMasks,{},int(video & 63u)};
+    command.requestId = audio & ((quint64(1) << 38)-1); enqueue(std::move(command));
+}
+void EmulationSession::setDebugAudioGain(unsigned channel, unsigned percent) {
+    if (channel >= 38) return;
+    percent = std::min(percent,100u);
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Collapse slider motion before the next emulation boundary; never queue
+    // an unbounded stream, and never cross a load/close command boundary.
+    for (auto it=commands_.rbegin();it!=commands_.rend();++it) {
+        if (it->type==Type::Load || it->type==Type::Close) break;
+        if (it->type==Type::DebugGain && it->value==int(channel)) { it->requestId=percent;return; }
+    }
+    if (commands_.size()<2048) {
+        Command command{Type::DebugGain,{},int(channel)};command.requestId=percent;
+        commands_.push_back(std::move(command));
+    }
+}
+void EmulationSession::setDebugBackdrop(quint32 rgb) { enqueue({Type::DebugBackdrop,{},int(rgb & 0xffffff)}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
@@ -221,7 +241,7 @@ void EmulationSession::achievementResponse(quint64 id, int status, QByteArray bo
 bool EmulationSession::networkShared(Type t) {
     switch(t) {
     case Type::Close: case Type::Pause: case Type::Reset: case Type::HardReset:
-    case Type::Region: case Type::Filter: case Type::CdLoading: case Type::SpriteLimit:
+    case Type::Region: case Type::CdLoading: case Type::SpriteLimit:
     case Type::Checksum: case Type::Port: case Type::ControllerType: case Type::ControllerKind:
     case Type::FrameAdvance: case Type::Cheats: case Type::Save: case Type::Restore:
     case Type::DiscIndex: case Type::Eject: case Type::Expansions: case Type::NetFast: case Type::NetReverse: case Type::NetFactor: case Type::NetStepHold: return true;
@@ -357,6 +377,7 @@ void EmulationSession::run() {
             if (hardcore != achievementHardcore) {
                 if (hardcore && !achievementPolicyRejected) achievementResetRequested = true;
                 achievementHardcore = hardcore;
+                if (hardcore) host.setDebugMasks(0,host.debugAudioMask());
                 emit achievementsHardcoreChanged(hardcore);
             }
         },
@@ -424,6 +445,14 @@ void EmulationSession::run() {
     clearHistory();
     bool paused = false, effectivePaused = false, rewindLatched = false, rewinding = false;
     bool masterSystem = false;
+    LibretroHost::DebugCapabilities debugAvailable;
+    const auto updateDebugControls = [&] {
+        const auto available = host.debugCapabilities();
+        if (available.video != debugAvailable.video || available.audio != debugAvailable.audio) {
+            debugAvailable = available;
+            emit debugControlsChanged(available.video,available.audio);
+        }
+    };
     auto rewindStatus = [&](bool enabled) {
         if (rewinding != enabled) { rewinding = enabled; emit rewindingChanged(enabled); }
     };
@@ -682,7 +711,7 @@ void EmulationSession::run() {
                     blocked = host.controllerKind(unsigned(command.value & 3)) != ControllerType(command.value >> 2);
                     if (!blocked) continue;
                     break;
-                case Type::Reset: case Type::HardReset: case Type::Region: case Type::Filter:
+                case Type::Reset: case Type::HardReset: case Type::Region:
                 case Type::CdLoading: case Type::SpriteLimit: case Type::Checksum: case Type::Cheats:
                 case Type::Disc: case Type::DiscIndex: case Type::Eject: blocked = true; break;
                 default: break;
@@ -942,6 +971,7 @@ void EmulationSession::run() {
                 }
                 if (host.load(command.path,error,command.value,
                               command.archiveEntry ? &*command.archiveEntry : nullptr)) {
+                    debugAvailable = {}; emit debugControlsChanged(0,0);
                     host.setLinkPresentationRole(networkRole_.load());
                     loaded_.store(true); releaseButtons(); paused = false;
                     achievementSuppressed = networkMode!=0; configureAchievements();
@@ -1151,14 +1181,24 @@ void EmulationSession::run() {
                 slotStatus();
                 break;
             }
+            case Type::DebugMasks: {
+                const auto previousAudio = host.debugAudioMask();
+                host.setDebugMasks(achievementHardcore ? 0u : quint32(command.value),command.requestId);
+                if (host.debugAudioMask() != previousAudio) clearAudio();
+                break;
+            }
+            case Type::DebugBackdrop: host.setDebugBackdrop(quint32(command.value)); break;
+            case Type::DebugGain: host.setDebugAudioGain(unsigned(command.value),unsigned(command.requestId)); break;
             case Type::Slots: slotStatus(command.value); break;
             }
             switch(command.type) {
             case Type::Load: case Type::Close: case Type::HardReset: case Type::NetMode:
+            case Type::Region: case Type::NetLinkCable:
             case Type::NetReceiveState: case Type::MovieRecord: case Type::MoviePlay:
             case Type::MovieResume: case Type::MovieFork: case Type::MovieStop: case Type::MovieTakeOver: {
                 const bool sms=host.isMasterSystem();
                 if(sms!=masterSystem){masterSystem=sms;emit masterSystemChanged(sms);}
+                updateDebugControls();
                 break;
             }
             default:break;

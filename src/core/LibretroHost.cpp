@@ -150,6 +150,11 @@ bool LibretroHost::initialize(QString& error) {
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
     api_->input_polled = reinterpret_cast<decltype(api_->input_polled)>(library_.resolve("retro_kegarefusion_input_polled"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
+    api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
+    api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
+    api_->debug_gain = reinterpret_cast<decltype(api_->debug_gain)>(library_.resolve("retro_kegarefusion_debug_gain"));
+    api_->debug_capabilities = reinterpret_cast<decltype(api_->debug_capabilities)>(library_.resolve("retro_kegarefusion_debug_capabilities"));
+    api_->native_video_size = reinterpret_cast<decltype(api_->native_video_size)>(library_.resolve("retro_kegarefusion_native_video_size"));
     api_->get_cd_header = reinterpret_cast<decltype(api_->get_cd_header)>(library_.resolve("retro_kegarefusion_cd_header"));
     api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
     api_->cheat_set = reinterpret_cast<decltype(api_->cheat_set)>(library_.resolve("retro_cheat_set"));
@@ -313,6 +318,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         unload(); return false;
     }
     loaded_ = true;
+    setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
     if (!CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
     gamePath_ = QFileInfo(path).absoluteFilePath(); contentName_ = QFileInfo(path).fileName();
@@ -499,6 +505,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
+    setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
     gamePath_ = info.absoluteFilePath();
     if (api_->set_paprium_music && api_->paprium_active && api_->paprium_active())
@@ -523,6 +530,10 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
 }
 void LibretroHost::unload() {
     stopLinkedPair();
+    debugVideoMask_ = 0; debugAudioMask_ = 0;
+    for (unsigned channel=0; channel<debugAudioGains_.size(); ++channel)
+        setDebugAudioGain(channel,100);
+    if (initialized_ && api_->debug_masks) api_->debug_masks(0,0);
     resetAchievementMemory();
     achievementDescriptorCount_ = 0;
     achievementConsoleCache_ = 0;
@@ -583,6 +594,38 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
 void LibretroHost::reset() {
     if (linkPeer_) { resetLinkedPair(); return; }
     if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
+}
+LibretroHost::DebugCapabilities LibretroHost::debugCapabilities() const {
+    DebugCapabilities result;
+    if (loaded_ && api_->debug_capabilities && api_->debug_masks) {
+        uint32_t video = 0; uint64_t audio = 0;
+        api_->debug_capabilities(&video,&audio);
+        result.video = video; result.audio = audio;
+        if (hasCdHardware()) result.audio |= quint64(0x3ff) << 24;
+        if (api_->paprium_active && api_->paprium_active()) result.audio |= quint64(1) << 37;
+    }
+    return result;
+}
+void LibretroHost::setDebugMasks(quint32 video, quint64 audio) {
+    const auto available = debugCapabilities();
+    debugVideoMask_ = video & available.video;
+    debugAudioMask_ = audio & available.audio;
+    if (loaded_ && api_->debug_masks) api_->debug_masks(debugVideoMask_,debugAudioMask_);
+    if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->setDebugMasks(video,audio); }
+}
+void LibretroHost::setDebugAudioGain(unsigned channel, unsigned percent) {
+    if (channel >= debugAudioGains_.size()) return;
+    percent = std::min(percent,100u);
+    if (debugAudioGains_[channel] != percent) {
+        debugAudioGains_[channel] = quint8(percent);
+        if (initialized_ && api_->debug_gain) api_->debug_gain(channel,percent);
+    }
+    if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->setDebugAudioGain(channel,percent); }
+}
+void LibretroHost::setDebugBackdrop(quint32 rgb) {
+    debugBackdrop_ = rgb & 0xffffff;
+    if (initialized_ && api_->debug_backdrop) api_->debug_backdrop(debugBackdrop_);
+    if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->setDebugBackdrop(rgb); }
 }
 bool LibretroHost::isMasterSystem() const {
     if(!loaded_)return false;
@@ -653,6 +696,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     loaded_ = true;
+    setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
     if (!discs_.isEmpty() && !CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
     if (!discs_.isEmpty() && !registerDiscs(error)) { unload(); return false; }
@@ -826,7 +870,9 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     if (filter < 0 || filter >= int(values.size())) {
         error = Localization::text(QStringLiteral("Неверный фильтр Blargg.")); return false;
     }
-    return setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error);
+    if (!setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error)) return false;
+    localBlarggFilter_ = values[size_t(filter)];
+    return true;
 }
 void LibretroHost::setButtons(unsigned port, unsigned mask) {
     if (linkPeer_ && port == 1) { Activation scope(linkPeer_.get()); linkPeer_->setButtons(0,mask); return; }
@@ -1572,6 +1618,9 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         }
         current->second = value;
     }
+    // Output processing is a local preference, independent of the recorded
+    // hardware and of the remote host's display settings.
+    newOptions["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     if (changedOptions) {
         if (!movieCompatibilityWarning_.isEmpty()) movieCompatibilityWarning_ += QLatin1Char('\n');
         movieCompatibilityWarning_ += Localization::text(QStringLiteral(
@@ -1678,6 +1727,8 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
             preMovieOptionOverrides_[fm->first]=fm->second;
         }
     }
+    preMovieVariables_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
+    preMovieOptionOverrides_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     const bool optionChanged = variables_ != preMovieVariables_;
     variables_ = std::move(preMovieVariables_);
     optionOverrides_ = std::move(preMovieOptionOverrides_);
@@ -1961,27 +2012,38 @@ void LibretroHost::video(const void* data, unsigned width, unsigned height, size
         }
     }
     if (result.isNull()) return;
-    const auto filter = h->variables_.find("genesis_plus_gx_blargg_ntsc_filter");
-    if (filter != h->variables_.end() && filter->second != "disabled") {
-        // GPX update_viewport() filters the full viewport before removing the
-        // SMS left border. H40 uses 4->8 samples; H32/SMS/GG use 3->7. All
-        // native viewport widths (including overscan/GG crop) are multiples of 4.
-        const int full = int(h->av_.geometry.base_width);
-        const int crop = full - int(width);
-        int nativeFull = 0;
-        if (full > 0 && full % 8 == 0) {
-            const int minimum = full/8*4-1;
-            nativeFull = (minimum+3)/4*4;
-        } else if (full > 0 && full % 7 == 0) {
-            const int minimum = (full/7-1)*3;
-            const int candidate = (minimum+3)/4*4;
-            if (candidate <= minimum+2) nativeFull = candidate;
-        }
-        // GPX trims 20/40 filtered samples for the optional 8/16 native-pixel
-        // SMS border. Blargg leaves vertical/interlaced geometry unchanged.
-        if (nativeFull > 0 && crop >= 0 && crop <= 40 && crop % 20 == 0) {
-            const QSize native(nativeFull-crop*2/5,int(height));
-            if (VideoFrameGeometry::validSize(native)) VideoFrameGeometry::setNativeSize(result,native);
+    unsigned nativeWidth = 0, nativeHeight = 0;
+    const QSize reportedNative =
+        h->api_->native_video_size && h->api_->native_video_size(&nativeWidth, &nativeHeight)
+            ? QSize(int(nativeWidth), int(nativeHeight)) : QSize();
+    if (VideoFrameGeometry::validSize(reportedNative)) {
+        if (reportedNative != result.size())
+            VideoFrameGeometry::setNativeSize(result, reportedNative);
+    } else {
+        // Compatibility with older core binaries without the exact native-size
+        // getter. GPX filters before the optional SMS side-border crop.
+        const auto filter = h->variables_.find("genesis_plus_gx_blargg_ntsc_filter");
+        if (filter != h->variables_.end() && filter->second != "disabled") {
+            const int full = int(h->av_.geometry.base_width);
+            const int crop = full - int(width);
+            int nativeFull = 0;
+            if (h->api_->features && (h->api_->features() & 2u)) {
+                if (full > 0 && !(full & 1)) nativeFull = full / 2;
+            } else {
+                // The core's actual viewport widths, including GG crop and
+                // horizontal overscan. H40 uses 4->8; all others use 3->7.
+                for (const int candidate : {160, 256, 270, 284, 320, 334}) {
+                    const int filtered = candidate >= 320
+                        ? ((candidate - 3) / 4 + 1) * 8
+                        : (candidate / 3 + 1) * 7;
+                    if (filtered == full) { nativeFull = candidate; break; }
+                }
+            }
+            if (nativeFull > 0 && crop >= 0 && crop <= 40 && crop % 20 == 0) {
+                const QSize native(nativeFull - crop * 2 / 5, int(height));
+                if (VideoFrameGeometry::validSize(native) && native != result.size())
+                    VideoFrameGeometry::setNativeSize(result, native);
+            }
         }
     }
     h->frame_ = std::move(result);

@@ -577,6 +577,9 @@ void testLegacyKeyboardSettings() {
 }
 
 void testPhysicalKeyboard() {
+    for (int key : {Qt::Key_Plus,Qt::Key_Equal,Qt::Key_Minus})
+        require(InputManager::reservedKeyboardKey(key),"master volume key was not reserved");
+
     using Codes = KeyboardScanCodes;
     struct Key { int scan; int english; int russian; };
     const Key keys[] = {
@@ -813,6 +816,12 @@ void testBackgroundGamepad() {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     try {
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--keyboard")) {
+            testPhysicalKeyboard();
+            testKeyboardSettingsMigration();
+            std::puts("physical keyboard and reserved hotkey tests passed");
+            return 0;
+        }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--background")) {
             testBackgroundGamepad();
             std::puts("background gamepad tests passed");

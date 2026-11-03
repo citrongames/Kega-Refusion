@@ -19,6 +19,7 @@
 #undef fprintf
 #endif
 int kegarefusion_32x_attached;
+extern uint32_t kega_debug_video_mask;
 /* GPX may redraw the previous row or render the next one early. Keep three
    tagged rows, never a frame-sized copy or a queue of register writes. */
 typedef struct Gpx32xVideoRow {
@@ -521,7 +522,7 @@ static void video_decode(Gpx32xVideoRow *row)
     line.framebuffer=b->memory->framebuffer[row->bank];line.palette_bgr555=b->s.palette;
     line.line=(unsigned)row->logical&255;
     line.mode=(Kega32xVideoMode)(row->control&3);
-    if(!row->enabled || row->logical<0 || row->logical>=((row->control&0x40)?240:224))
+    if((kega_debug_video_mask & 32u) || !row->enabled || row->logical<0 || row->logical>=((row->control&0x40)?240:224))
         line.mode=KEGA32X_VIDEO_BLANK;
     line.priority_invert=row->control&0x80;line.pixel_shift=row->shift&1;
     if(kega32x_decode_line(&row->decoded,&line)==KEGA32X_VIDEO_OK)video_mix(row);

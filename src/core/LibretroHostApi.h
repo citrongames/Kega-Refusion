@@ -24,6 +24,11 @@ struct LibretroHost::Api {
     const char* (*network_state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
     unsigned (*system_hw)() = nullptr;
+    void (*debug_masks)(uint32_t,uint64_t) = nullptr;
+    void (*debug_backdrop)(uint32_t) = nullptr;
+    void (*debug_gain)(unsigned,unsigned) = nullptr;
+    void (*debug_capabilities)(uint32_t*,uint64_t*) = nullptr;
+    bool (*native_video_size)(unsigned*,unsigned*) = nullptr;
     bool (*input_polled)() = nullptr;
     bool (*get_cd_header)(void*, size_t) = nullptr;
     void (*invalidate_code)() = nullptr;

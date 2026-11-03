@@ -124,7 +124,7 @@ void kega32x_ntsc565_delete(Kega32xNtsc565 *filter) { free(filter); }
 
 size_t kega32x_ntsc565_output_width(size_t width)
 {
-    return width >= 4u && width <= KEGA32X_NTSC565_MAX_INPUT_WIDTH && !(width & 3u)
+    return width >= 4u && width <= KEGA32X_NTSC565_MAX_INPUT_WIDTH && !(width & 1u)
         ? width * 2u : 0u;
 }
 
@@ -179,10 +179,20 @@ Kega32xNtsc565Result kega32x_ntsc565_row(const Kega32xNtsc565 *filter,
         COLOR_IN(2, input[cursor++]); OUT(4); OUT(5);
         COLOR_IN(3, input[cursor++]); OUT(6); OUT(7);
     }
-    COLOR_IN(0, input[cursor]); OUT(0); OUT(1);
-    COLOR_IN(1, border); OUT(2); OUT(3);
-    COLOR_IN(2, border); OUT(4); OUT(5);
-    COLOR_IN(3, border); OUT(6); OUT(7);
+    COLOR_IN(0, input[cursor++]); OUT(0); OUT(1);
+    if (width & 2u) {
+        /* Horizontal overscan is 334 input pixels. Finish its two real
+         * pixels, then flush the same four-phase kernel at the border. */
+        COLOR_IN(1, input[cursor++]); OUT(2); OUT(3);
+        COLOR_IN(2, input[cursor]); OUT(4); OUT(5);
+        COLOR_IN(3, border); OUT(6); OUT(7);
+        COLOR_IN(0, border); OUT(0); OUT(1);
+        COLOR_IN(1, border); OUT(2); OUT(3);
+    } else {
+        COLOR_IN(1, border); OUT(2); OUT(3);
+        COLOR_IN(2, border); OUT(4); OUT(5);
+        COLOR_IN(3, border); OUT(6); OUT(7);
+    }
 #undef OUT
 #undef COLOR_IN
     return KEGA32X_NTSC565_OK;

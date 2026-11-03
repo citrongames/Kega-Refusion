@@ -86,13 +86,13 @@ static void test_colors_and_presets(Kega32xNtsc565 *filter)
 
 static void test_geometry_bounds_and_border(Kega32xNtsc565 *filter)
 {
-    uint16_t input[512], image[2052], before[2052], black_edge[640], red_edge[640];
+    uint16_t input[512], image[2052], before[2052], black_edge[640], red_edge[640], tail[668];
     uint16_t small[4] = {0xffff, 0xffff, 0xffff, 0xffff};
     size_t i;
     for (i = 0; i < 512; ++i) input[i] = 0xffff;
     for (i = 0; i < 2052; ++i) image[i] = 0x5aa5;
     require(KEGA32X_NTSC565_TABLE_BYTES == 8388608u, "kernel storage budget changed");
-    require(kega32x_ntsc565_output_width(320) == 640 && kega32x_ntsc565_output_width(348) == 696 &&
+    require(kega32x_ntsc565_output_width(320) == 640 && kega32x_ntsc565_output_width(334) == 668 &&
             kega32x_ntsc565_output_width(512) == 1024, "output geometry");
     require(!kega32x_ntsc565_output_width(0) && !kega32x_ntsc565_output_width(3) &&
             !kega32x_ntsc565_output_width(319) && !kega32x_ntsc565_output_width(516) &&
@@ -102,6 +102,16 @@ static void test_geometry_bounds_and_border(Kega32xNtsc565 *filter)
     for (i = 0; i < 642; ++i) require(image[i] == 0x5aa5, "preceding row overwritten");
     for (i = 642; i < 1282; ++i) require(image[i] == 0xffff, "pitched constant row changed");
     for (i = 1282; i < 2052; ++i) require(image[i] == 0x5aa5, "row padding or later row overwritten");
+    require(kega32x_ntsc565_row(filter, input, 334, 334, 0xffff, image, 2052, 670, 1) == KEGA32X_NTSC565_OK,
+            "334-pixel horizontal overscan row rejected");
+    for (i = 670; i < 1338; ++i) require(image[i] == 0xffff, "334-pixel filtered row corrupted");
+    for (i = 1338; i < 2052; ++i) require(image[i] == 0x5aa5, "334-pixel row overflowed");
+    input[332] = input[333] = 0;
+    require(kega32x_ntsc565_row(filter, input, 334, 334, 0xffff, tail, 668, 668, 0) == KEGA32X_NTSC565_OK,
+            "334-pixel two-pixel tail rejected");
+    require(memcmp(tail + 640, image + 670 + 640, 28 * sizeof(uint16_t)),
+            "334-pixel two-pixel tail was ignored");
+    input[332] = input[333] = 0xffff;
     require(kega32x_ntsc565_row(filter, small, 4, 4, 0xffff, image, 8, 8, 0) == KEGA32X_NTSC565_OK,
             "minimum width or exact input capacity failed");
     require(kega32x_ntsc565_row(filter, input, 512, 512, 0xffff, image, 1024, 1024, 0) == KEGA32X_NTSC565_OK,
@@ -117,7 +127,7 @@ static void test_geometry_bounds_and_border(Kega32xNtsc565 *filter)
     REJECT(kega32x_ntsc565_row(filter, input, 320, 512, 0, image, 2052, 640, SIZE_MAX));
     REJECT(kega32x_ntsc565_row(filter, input, 320, 512, 0, image, 2052, 0, 0));
     REJECT(kega32x_ntsc565_row(filter, input, 320, 512, 0, image, SIZE_MAX, 640, 0));
-    REJECT(kega32x_ntsc565_row(filter, input, 318, 512, 0, image, 2052, 640, 0));
+    REJECT(kega32x_ntsc565_row(filter, input, 319, 512, 0, image, 2052, 640, 0));
     REJECT(kega32x_ntsc565_row(NULL, input, 320, 512, 0, image, 2052, 640, 0));
     REJECT(kega32x_ntsc565_row(filter, NULL, 320, 512, 0, image, 2052, 640, 0));
     REJECT(kega32x_ntsc565_row(filter, image, 320, 2052, 0, image, 2052, 640, 0));

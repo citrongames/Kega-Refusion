@@ -30,6 +30,8 @@ static char error_str[1024];
 #define FASTCALL
 #define m68k_read_immediate_16(address) *(uint16 *)(m68k.memory_map[((address)>>16)&0xff].base + ((address)&0xffff))
 #define m68k_read_immediate_32(address) ((m68k_read_immediate_16(address)<<16) | m68k_read_immediate_16((address)+2))
+extern uint64_t kega_debug_audio_mask;
+extern uint8_t kega_debug_audio_gain[38];
 static paprium_music_callback music_callback;
 static void *music_user;
 extern T_SRAM sram;
@@ -365,8 +367,13 @@ static void punchium_music_player(int *out_l,int *out_r) {
     }
     const size_t index=(size_t)(position-punchium_track.cache_start)*2;
     const int volume=punchium_volume_table[(uint8)punchium_s.music_volume];
-    *out_l += (punchium_track.pcm[index]*volume)>>8;
-    *out_r += (punchium_track.pcm[index+1]*volume)>>8;
+    if (!(kega_debug_audio_mask & (UINT64_C(1) << 37))) {
+        int left=(punchium_track.pcm[index]*volume)>>8;
+        int right=(punchium_track.pcm[index+1]*volume)>>8;
+        int gain=kega_debug_audio_gain[37];
+        *out_l += gain==100 ? left : (left*gain)/100;
+        *out_r += gain==100 ? right : (right*gain)/100;
+    }
     /* Exact native-track-to-48 kHz phase; 48 kHz tracks need no conversion. */
     punchium_s.music_tick += punchium_track.sample_rate;
     if (punchium_s.music_tick >= 48000) { punchium_s.music_tick -= 48000; ++punchium_s.music_pos; }

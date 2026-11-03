@@ -39,8 +39,8 @@ Kega32xNtsc565Result kega32x_ntsc565_setup(Kega32xNtsc565 *, Kega32xNtsc565Prese
 void kega32x_ntsc565_delete(Kega32xNtsc565 *);
 
 /* The 32X uses MD/H40 chroma timing: 4 input -> 8 output pixels. Width must
- * be a multiple of 4 in [4,512]; otherwise zero is returned. Thus 320->640,
- * or 348->696 when the caller explicitly supplies MD overscan borders.
+ * be even in [4,512]; otherwise zero is returned. Thus 320->640, or 334->668
+ * with horizontal MD overscan borders. The two-pixel tail flushes at the border.
  * Native display aspect/width metadata must continue to describe the input
  * raster, not the horizontally oversampled filter output. H32 resampling is
  * the compositor/caller's policy, not performed by this filter. */

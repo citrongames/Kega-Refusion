@@ -30,6 +30,9 @@ public:
     void setDiscEjected(bool ejected);
     void setRegion(int region);
     void setBlarggFilter(int filter);
+    void setDebugMasks(quint32 video, quint64 audio);
+    void setDebugBackdrop(quint32 rgb);
+    void setDebugAudioGain(unsigned channel, unsigned percent);
     void setFastCdLoading(bool enabled);
     void setRemoveSpriteLimit(bool enabled);
     void setAutoFixChecksum(bool enabled);
@@ -125,6 +128,7 @@ signals:
     void gameLoaded(const QString& path, double fps, const QString& contentName);
     void gameClosed();
     void masterSystemChanged(bool masterSystem);
+    void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
     void discStateChanged(const QStringList& paths, int index, bool ejected);
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);
@@ -139,7 +143,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain};
     struct Command {
         Type type;
         QString path;

@@ -1,0 +1,47 @@
+{
+  "version": "0.17.0",
+  "date": "2026-11-03",
+  "scope": "Local video/audio diagnostics, modeless UI, exclusive Blargg shader menu, global master-volume keys and native video geometry",
+  "executed": {
+    "debug-test-final.log": "PASS: actual-core MD A/B/window/sprites, collision state invariance, custom backdrop, PSG mute/resume/volume, SMS capabilities, load/unload reset and local display choice across recording",
+    "menu-test-final.log": "debug UI tests passed: Blargg selection, live modeless dialogs, reset, volume hotkeys",
+    "fm-final.log": "PASS: MAME MD/SMS FM channel masks",
+    "fm-nuked-final.log": "PASS: Nuked MD/SMS FM channel masks",
+    "geometry-test.log": "native filtered video geometry passed",
+    "keyboard-final.log": "physical keyboard and reserved hotkey tests passed"
+  },
+  "windows_native_core": "debug_controls_tests passed: MD layers/backdrop/native-state invariance, PSG mute/resume and 50/0/100 percent, SMS load/unload, local Blargg across recording",
+  "fm_runtime": "MAME and Nuked: YM2612 channels 1-6, YM2413 melodic channels 1-9, own/other mask and unmute, representative 50%/100% gain",
+  "standalone_runtime": [
+    "32X PWM mask/gain50/unmute with unchanged hardware state",
+    "32X RGB565 NTSC filter 334-pixel tail/bounds"
+  ],
+  "inspection_only": [
+    "No-auto-pause for active modeless debug dialogs and child color picker, while ordinary modal/menu/application focus-loss pause remains",
+    "DAC, YM2413 rhythm, CD PCM/CDDA, Paprium output gain paths: syntax and code review, no ROM-specific runtime exercise",
+    "Geometry paths beyond MD H32/H40, SMS and GG runtime cases: code-path audit, no physical-console visual comparison"
+  ],
+  "limitations": [
+    "Broad input_tests stopped at a connection/profile assertion before the changed keyboard cases; no full-suite pass claimed. Isolated --keyboard checks passed.",
+    "Windows GUI was not driven; UI behavior checked offscreen on Linux."
+  ],
+  "resource_contract": [
+    "Fixed-size output caches; native hardware-state layouts unchanged",
+    "Per-channel slider commands coalesced in bounded queue",
+    "No debug settings persistence; masks/gains reset on game load; backdrop stays only for current application run",
+    "Master volume is normal global setting, saved after 400ms quiet period/on exit"
+  ],
+  "published_sha256": {
+    "windows_exe": "3fa18e4404a56a2aded951a272aabfd17042d68f087f7d9410902ce648d6b583",
+    "windows_core": "fc6883e0e905855f73846b7697189c478af561204498cc0560cd0a1c3207e600",
+    "windows_linkpeer": "fc6883e0e905855f73846b7697189c478af561204498cc0560cd0a1c3207e600",
+    "ru_catalog": "efeefe6baffcc2f2058e40f23329600751a4ab0a65b26307a7522456839a261c",
+    "en_catalog": "7ea7cfb30b11092638c5e8ed5f3144c720f10f9f8543f0249aca5dc50d5dc02c",
+    "linux_KegaRefusion": "33de3519a3e4f989552491ca40d5f679d82e93499496951dda8985e8e55fd9d0",
+    "linux_cores_genesis_plus_gx_libretro.so": "823a488a8f6c525b67cfaa4cbfb7b40f0b53275dd45bd7bcd46143092de4b06e",
+    "linux_cores_genesis_plus_gx_libretro_linkpeer.so": "823a488a8f6c525b67cfaa4cbfb7b40f0b53275dd45bd7bcd46143092de4b06e",
+    "linux_languages_ru.json": "efeefe6baffcc2f2058e40f23329600751a4ab0a65b26307a7522456839a261c",
+    "linux_languages_en.json": "7ea7cfb30b11092638c5e8ed5f3144c720f10f9f8543f0249aca5dc50d5dc02c",
+    "linux_archive": "6e1ec914326277d391b5c745680483b528042751209ca62a4dc5d1b7d80ad58c"
+  }
+}

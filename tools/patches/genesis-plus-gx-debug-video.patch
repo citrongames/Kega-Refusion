@@ -1,0 +1,329 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -48,6 +48,8 @@
+ #endif
+ 
+ extern int8 reset_do_not_clear_buffers;
++extern uint32_t kega_debug_video_mask;
++extern uint32_t kega_debug_backdrop;
+ 
+ #ifndef HAVE_NO_SPRITE_LIMIT
+ #define MAX_SPRITES_PER_LINE 20
+@@ -1532,6 +1534,19 @@
+ }
+ 
+ /* Mode 5 */
++/* Presentation only: window and plane A keep their own clipped regions. */
++static void debug_mask_plane_a(uint8 *pixels, int line)
++{
++  int x, left = 0, right = bitmap.viewport.w;
++  if (((reg[18] >> 7) & 1) != (line >= ((reg[18] & 0x1f) << 3)))
++  {
++    left = clip[1].enable ? clip[1].left << 4 : 0;
++    right = clip[1].enable ? clip[1].right << 4 : 0;
++  }
++  for (x = 0; x < bitmap.viewport.w; ++x)
++    if (kega_debug_video_mask & (1u << ((x >= left && x < right) ? 2 : 0))) pixels[x] = 0;
++}
++
+ #ifndef ALT_RENDERER
+ void render_bg_m5(int line)
+ {
+@@ -1680,6 +1695,11 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[1][0x20], line);
++    if (kega_debug_video_mask & 2u) memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++  }
+   /* Merge background layers */
+   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+ }
+@@ -1870,6 +1890,11 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[1][0x20], line);
++    if (kega_debug_video_mask & 2u) memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++  }
+   /* Merge background layers */
+   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+ }
+@@ -2159,6 +2184,11 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[1][0x20], line);
++    if (kega_debug_video_mask & 2u) memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++  }
+   /* Merge background layers */
+   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+ }
+@@ -2314,6 +2344,11 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[1][0x20], line >> 1);
++    if (kega_debug_video_mask & 2u) memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++  }
+   /* Merge background layers */
+   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+ }
+@@ -2507,6 +2542,11 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[1][0x20], line >> 1);
++    if (kega_debug_video_mask & 2u) memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++  }
+   /* Merge background layers */
+   merge(&linebuf[1][0x20], &linebuf[0][0x20], &linebuf[0][0x20], lut[(reg[12] & 0x08) >> 2], bitmap.viewport.w);
+ }
+@@ -2631,6 +2671,17 @@
+     {
+       atbuf = nt[column];
+       DRAW_COLUMN(atbuf, v_line)
++    }
++  }
++
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[0][0x20], line);
++    if (kega_debug_video_mask & 2u)
++    {
++      memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
++      merge(&linebuf[0][0x20], &linebuf[1][0x20], &linebuf[0][0x20], table, bitmap.viewport.w);
++      return;
+     }
+   }
+ 
+@@ -2815,6 +2866,17 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[0][0x20], line);
++    if (kega_debug_video_mask & 2u)
++    {
++      memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
++      merge(&linebuf[0][0x20], &linebuf[1][0x20], &linebuf[0][0x20], table, bitmap.viewport.w);
++      return;
++    }
++  }
++
+   /* Plane B horizontal scroll */
+ #ifdef LSB_FIRST
+   shift = (xscroll >> 16) & 0x0F;
+@@ -3056,6 +3118,17 @@
+     {
+       atbuf = nt[column];
+       DRAW_COLUMN(atbuf, v_line)
++    }
++  }
++
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[0][0x20], line);
++    if (kega_debug_video_mask & 2u)
++    {
++      memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
++      merge(&linebuf[0][0x20], &linebuf[1][0x20], &linebuf[0][0x20], table, bitmap.viewport.w);
++      return;
+     }
+   }
+ 
+@@ -3329,6 +3402,17 @@
+     }
+   }
+ 
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[0][0x20], line >> 1);
++    if (kega_debug_video_mask & 2u)
++    {
++      memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
++      merge(&linebuf[0][0x20], &linebuf[1][0x20], &linebuf[0][0x20], table, bitmap.viewport.w);
++      return;
++    }
++  }
++
+   /* Plane B scroll */
+ #ifdef LSB_FIRST
+   shift  = (xscroll >> 16) & 0x0F;
+@@ -3510,6 +3594,17 @@
+     {
+       atbuf = nt[column];
+       DRAW_COLUMN_IM2(atbuf, v_line)
++    }
++  }
++
++  if (kega_debug_video_mask & 7u)
++  {
++    debug_mask_plane_a(&linebuf[0][0x20], line >> 1);
++    if (kega_debug_video_mask & 2u)
++    {
++      memset(&linebuf[1][0x20], 0, bitmap.viewport.w);
++      merge(&linebuf[0][0x20], &linebuf[1][0x20], &linebuf[0][0x20], table, bitmap.viewport.w);
++      return;
+     }
+   }
+ 
+@@ -4877,8 +4972,19 @@
+     /* Render BG layer(s) */
+     render_bg(line);
+ 
+-    /* Render sprite layer */
+-    render_obj(line & 1);
++    if ((!(reg[1] & 4) || (system_hw & SYSTEM_PBC) != SYSTEM_MD) &&
++        (kega_debug_video_mask & (((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 1u : 16u)))
++      memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++
++    /* Preserve sprite collision/overflow. Copy only with sprites hidden. */
++    if (kega_debug_video_mask & 8u)
++    {
++      uint8 background[0x200];
++      memcpy(background, linebuf[0], sizeof(background));
++      render_obj(line & 1);
++      memcpy(linebuf[0], background, sizeof(background));
++    }
++    else render_obj(line & 1);
+ 
+     /* Left-most column blanking */
+     if (reg[0] & 0x20)
+@@ -4940,6 +5046,23 @@
+ 
+   /* Pixel line buffer */
+   uint8 *src = &linebuf[0][0x20 - bitmap.viewport.x];
++  PIXEL_OUT_T debug_palette[0x100];
++  const PIXEL_OUT_T *output_palette = pixel;
++  if (kega_debug_video_mask)
++  {
++    unsigned i;
++    const uint32_t rgb = kega_debug_backdrop;
++#if defined(USE_32BPP_RENDERING)
++    const PIXEL_OUT_T color = 0xff000000u | rgb;
++#elif defined(USE_15BPP_RENDERING)
++    const PIXEL_OUT_T color = ((rgb >> 9) & 0x7c00) | ((rgb >> 6) & 0x3e0) | ((rgb >> 3) & 31);
++#else
++    const PIXEL_OUT_T color = ((rgb >> 8) & 0xf800) | ((rgb >> 5) & 0x7e0) | ((rgb >> 3) & 31);
++#endif
++    memcpy(debug_palette, pixel, sizeof(debug_palette));
++    for (i = 0; i < 0x100; i += 16) debug_palette[i] = color;
++    output_palette = debug_palette;
++  }
+ 
+   /* Adjust line offset in framebuffer */
+   line = (line + bitmap.viewport.y) % lines_per_frame;
+@@ -4955,7 +5078,7 @@
+ 
+ #if defined(KEGAREFUSION_32X) && defined(USE_16BPP_RENDERING)
+   if (kegarefusion_32x_attached &&
+-      kegarefusion_32x_render(logical_line, line, src, (uint16 *)pixel, width))
++      kegarefusion_32x_render(logical_line, line, src, (uint16 *)output_palette, width))
+   {
+     return;
+   }
+@@ -4967,18 +5090,18 @@
+   {
+     if (reg[12] & 0x01)
+     {
+-      md_ntsc_blit(md_ntsc, ( MD_NTSC_IN_T const * )pixel, src, width, line);
++      md_ntsc_blit(md_ntsc, ( MD_NTSC_IN_T const * )output_palette, src, width, line);
+     }
+     else
+     {
+-      sms_ntsc_blit(sms_ntsc, ( SMS_NTSC_IN_T const * )pixel, src, width, line);
++      sms_ntsc_blit(sms_ntsc, ( SMS_NTSC_IN_T const * )output_palette, src, width, line);
+     }
+   }
+   else
+ #endif
+   {
+ #ifdef CUSTOM_BLITTER
+-    CUSTOM_BLITTER(line, width, pixel, src)
++    CUSTOM_BLITTER(line, width, output_palette, src)
+ #else
+     /* Convert VDP pixel data to output pixel format */
+     PIXEL_OUT_T *dst = ((PIXEL_OUT_T *)&bitmap.data[(line * bitmap.pitch)]);
+@@ -4986,7 +5109,7 @@
+     {
+       do
+       {
+-        RENDER_PIXEL_LCD(src,dst,pixel,config.lcd);
++        RENDER_PIXEL_LCD(src,dst,output_palette,config.lcd);
+       }
+       while (--width);
+     }
+@@ -4994,7 +5117,7 @@
+     {
+       do
+       {
+-        *dst++ = pixel[*src++];
++        *dst++ = output_palette[*src++];
+       }
+       while (--width);
+     }
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3713,6 +3713,50 @@
+ 
+ /* Hardware identification and cached decoded CD header for achievements.
+  * Header retrieval never seeks the running drive or decodes audio. */
++/* Local output masks are outside emulated/serialized state. */
++uint32_t kega_debug_video_mask = 0;
++uint64_t kega_debug_audio_mask = 0;
++uint8_t kega_debug_audio_gain[38] = {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100};
++uint32_t kega_debug_backdrop = 0xff00ff;
++
++RETRO_API void retro_kegarefusion_debug_masks(uint32_t video, uint64_t audio)
++{
++   kega_debug_video_mask = video & 63u;
++   kega_debug_audio_mask = audio & ((UINT64_C(1) << 38) - 1);
++}
++RETRO_API void retro_kegarefusion_debug_gain(unsigned channel, unsigned percent)
++{
++   if (channel < 38) kega_debug_audio_gain[channel] = percent > 100 ? 100 : percent;
++}
++RETRO_API void retro_kegarefusion_debug_backdrop(uint32_t rgb)
++{
++   kega_debug_backdrop = rgb & 0xffffff;
++}
++RETRO_API bool retro_kegarefusion_native_video_size(unsigned *width, unsigned *height)
++{
++   unsigned full = bitmap.viewport.w + 2 * bitmap.viewport.x;
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) full = 320 + 2 * bitmap.viewport.x;
++#endif
++   const unsigned crop = config.ntsc ? vwoffset * 2 / 5 : vwoffset;
++   if (!width || !height || full <= crop || !vheight) return false;
++   *width = full - crop; *height = vheight;
++   return true;
++}
++RETRO_API void retro_kegarefusion_debug_capabilities(uint32_t *video, uint64_t *audio)
++{
++   uint32_t v = ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 15u : 24u;
++   uint64_t a = 15u;
++   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD) a |= (UINT64_C(63) << 4) | (UINT64_C(1) << 36);
++   else if ((system_hw == SYSTEM_MARKIII || system_hw == SYSTEM_SMS || system_hw == SYSTEM_SMS2 || system_hw == SYSTEM_PBC) && (config.ym2413 & 1)) a |= UINT64_C(16383) << 10;
++   if (system_hw == SYSTEM_MCD) a |= UINT64_C(1023) << 24;
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) { v |= 32u; a |= UINT64_C(3) << 34; }
++#endif
++   if (video) *video = v;
++   if (audio) *audio = a;
++}
++
+ RETRO_API unsigned retro_kegarefusion_system_hw(void)
+ {
+    return system_hw;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.16.1 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.17.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -70,6 +70,7 @@ add_executable(KegaRefusion WIN32
     src/ui/NetplaySettingsPage.cpp src/ui/NetplaySettingsPage.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
+    src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
 target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
 add_custom_command(TARGET KegaRefusion POST_BUILD
@@ -89,6 +90,15 @@ if(WIN32)
     target_link_libraries(KegaRefusion PRIVATE iphlpapi ws2_32)
 endif()
 if(BUILD_TESTING)
+    get_target_property(KEGA_DEBUG_UI_SOURCES KegaRefusion SOURCES)
+    list(FILTER KEGA_DEBUG_UI_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
+    add_executable(debug_menu_tests tests/debug_menu_tests.cpp ${KEGA_DEBUG_UI_SOURCES})
+    target_link_libraries(debug_menu_tests PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
+    if(WIN32)
+        target_link_libraries(debug_menu_tests PRIVATE iphlpapi ws2_32)
+    endif()
+    add_test(NAME debug_menu_tests COMMAND debug_menu_tests "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(debug_menu_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(netplay_quality_ui_tests tests/netplay_quality_ui_tests.cpp
         src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h)
     target_include_directories(netplay_quality_ui_tests PRIVATE src)
@@ -226,6 +236,10 @@ if(BUILD_TESTING)
     target_link_libraries(speed_benchmark PRIVATE core_host)
     add_executable(rewind_benchmark tools/rewind-benchmark.cpp)
     target_link_libraries(rewind_benchmark PRIVATE core_host)
+    add_executable(debug_fm_tests tests/debug_fm_tests.cpp)
+    target_link_libraries(debug_fm_tests PRIVATE core_host)
+    add_executable(debug_controls_tests tests/debug_controls_tests.cpp)
+    target_link_libraries(debug_controls_tests PRIVATE core_host)
     add_executable(core_integration_tests tests/core_integration_tests.cpp)
     target_link_libraries(core_integration_tests PRIVATE core_host kega_archive)
     add_executable(session_tests tests/session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)

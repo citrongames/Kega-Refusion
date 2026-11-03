@@ -47,6 +47,13 @@ public:
     bool hardReset(QString& error, bool applyPending = true);
     void setSmsFmEnabled(bool enabled) { smsFmEnabled_ = enabled; }
     bool isMasterSystem() const;
+    struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
+    DebugCapabilities debugCapabilities() const;
+    void setDebugMasks(quint32 video, quint64 audio);
+    void setDebugBackdrop(quint32 rgb);
+    void setDebugAudioGain(unsigned channel, unsigned percent);
+    quint32 debugVideoMask() const { return debugVideoMask_; }
+    quint64 debugAudioMask() const { return debugAudioMask_; }
     // Region: 0 Auto, 1 Japan, 2 USA, 3 Europe. Filter: 0 Off, 1 Mono,
     // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
     bool setRegion(int region, QString& error);
@@ -135,6 +142,9 @@ private:
     QByteArray stateCoreIdentity() const;
     bool acceptsLegacyMovieCore(const QByteArray& identity) const;
     QJsonObject movieBiosFingerprints() const;
+    quint32 debugVideoMask_ = 0, debugBackdrop_ = 0xff00ff;
+    quint64 debugAudioMask_ = 0;
+    std::array<quint8,38> debugAudioGains_ = [] { std::array<quint8,38> gains{}; gains.fill(100); return gains; }();
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();
@@ -192,6 +202,7 @@ private:
     int discIndex_ = 0;
     bool contentInfoActive_ = false;
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
+    QByteArray localBlarggFilter_ = "disabled";
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     bool smsFmEnabled_ = true;

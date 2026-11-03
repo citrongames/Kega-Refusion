@@ -184,9 +184,57 @@ static void restore_and_reentrant_fifo(void)
     kega32x_pwm_reset(&p, 18);
     CHECK(r.left == 0 && r.right == 0);
 }
+#ifdef KEGAREFUSION_32X
+/* Standalone integration build supplies the same output-only mask as libretro. */
+uint64_t kega_debug_audio_mask;
+uint8_t kega_debug_audio_gain[38];
+static void debug_output_mute(void)
+{
+    Kega32xPwm p;
+    Recorder r = {0};
+    Kega32xPwmHost h = host(&r);
+    Kega32xPwmState before, after;
+    int32_t left, right;
+    kega32x_pwm_power(&p, &h, 0);
+    kega32x_pwm_write16(&p, 0x32, 11, 0);
+    kega32x_pwm_write16(&p, 0x30, 0x305, 0);
+    kega32x_pwm_write16(&p, 0x34, 4, 0);
+    kega32x_pwm_write16(&p, 0x36, 8, 0);
+    kega32x_pwm_advance(&p, 24);
+    left = r.left; right = r.right;
+    CHECK(left && right);
+    kega32x_pwm_get_state(&p, &before);
+    kega_debug_audio_mask = UINT64_C(1) << 34;
+    kega32x_pwm_advance(&p, 24);
+    CHECK(r.left == 0 && r.right == right);
+    kega32x_pwm_get_state(&p, &after);
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+    kega_debug_audio_mask |= UINT64_C(1) << 35;
+    kega32x_pwm_advance(&p, 24);
+    CHECK(r.left == 0 && r.right == 0);
+    kega_debug_audio_mask = 0;
+    kega32x_pwm_advance(&p, 24);
+    CHECK(r.left == left && r.right == right);
+    kega_debug_audio_gain[34] = 50;
+    kega32x_pwm_advance(&p, 24);
+    CHECK(r.left == (left * 50) / 100 && r.right == right);
+    kega_debug_audio_gain[34] = 100;
+    kega32x_pwm_advance(&p, 24);
+    CHECK(r.left == left && r.right == right);
+    kega32x_pwm_get_state(&p, &after);
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+}
+#endif
+
 int main(void)
 {
+#ifdef KEGAREFUSION_32X
+    for (unsigned i = 0; i < 38; ++i) kega_debug_audio_gain[i] = 100;
+#endif
     fifo_and_routes(); exact_clock_and_silence(); late_peer_write(); restore_and_reentrant_fifo();
+#ifdef KEGAREFUSION_32X
+    debug_output_mute();
+#endif
     puts("32X PWM tests passed: FIFO, routes, exact clocks, silence, IRQ/DREQ, state");
     return 0;
 }

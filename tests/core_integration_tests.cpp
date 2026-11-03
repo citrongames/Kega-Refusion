@@ -1442,6 +1442,7 @@ void testNativeVideoGeometry(const QString& corePath) {
         require(host.setBlarggFilter(0,error) && host.load(path,error),"geometry ROM load failed");
         for (int i = 0; i < 3; ++i) host.runFrame();
         const QSize native = host.frame().size();
+        const double consoleAspect = host.aspectRatio();
         const int expectedWidth = name.endsWith(".gg") ? 160 : name.startsWith("wide") ? 320 : 256;
         require(native.width() == expectedWidth,"unexpected native diagnostic raster width");
         require(host.nativeVideoSize() == native,"unfiltered native geometry incorrect");
@@ -1452,6 +1453,7 @@ void testNativeVideoGeometry(const QString& corePath) {
                     "diagnostic Blargg did not expand horizontal sample count");
             require(host.nativeVideoSize() == native && VideoFrameGeometry::nativeSize(host.frame()) == native,
                     "Blargg metadata lost true native console geometry");
+            require(std::abs(host.aspectRatio()-consoleAspect)<1e-6,"Blargg changed Console aspect ratio");
             history.clear();
             require(history.capture(host.captureRewindState(),host.frame(),host.aspectRatio()),"filtered geometry capture failed");
             host.runFrame();

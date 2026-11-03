@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "MainWindow.h"
+#include "DebugDialogs.h"
 #include "AudioOutput.h"
 #include "ControlsPage.h"
 #include "CheatsDialog.h"
@@ -25,6 +26,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QImageWriter>
+#include <QIcon>
 #include <QJsonArray>
 #include <QJsonArray>
 #include <QDoubleSpinBox>
@@ -45,6 +47,7 @@
 #include <QStyle>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMediaDevices>
@@ -227,6 +230,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     view_->setAchievementPosition(achievementPosition_);
     region_ = qBound(0, settings_.value(QStringLiteral("emulation/region"), 0).toInt(), 3);
     blarggFilter_ = qBound(0, settings_.value(QStringLiteral("view/blarggFilter"), 0).toInt(), 4);
+    if (blarggFilter_ == 1) {
+        blarggFilter_ = 0;
+        settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
+    }
     session_.setRegion(region_);
     session_.setBlarggFilter(blarggFilter_);
     session_.setSmsFmEnabled(smsFmEnabled_);
@@ -260,7 +267,24 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         if (netplayLeaveAction_) netplayLeaveAction_->setEnabled(active);
         updateInputEnabled();
     });
+    debugAudioGains_.fill(100);
     buildMenus();
+    connect(&session_, &EmulationSession::debugControlsChanged, this,
+            [this](quint32 videoAvailable, quint64 audioAvailable) {
+        const bool changed = debugVideoAvailable_ != videoAvailable ||
+                             debugAudioAvailable_ != audioAvailable;
+        debugVideoAvailable_ = videoAvailable;
+        debugAudioAvailable_ = audioAvailable;
+        if (!videoAvailable && !audioAvailable) {
+            debugVideoDisabled_ = 0;
+            debugAudioDisabled_ = 0;
+            debugAudioGains_.fill(100);
+        } else {
+            debugVideoDisabled_ &= videoAvailable;
+            debugAudioDisabled_ &= audioAvailable;
+        }
+        if (changed || (!videoAvailable && !audioAvailable)) updateDebugDialogs();
+    });
     connect(&session_, &EmulationSession::masterSystemChanged,
             smsFmAction_, &QAction::setVisible);
     for (QAction* action : menuBar()->actions()) {
@@ -361,6 +385,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             [this](bool enabled) {
         if (achievementsHardcore_ == enabled) return;
         achievementsHardcore_ = enabled;
+        if (enabled && debugVideoDisabled_) {
+            debugVideoDisabled_ = 0;
+            applyDebugMasks();
+        }
+        updateDebugDialogs();
         if (enabled) {
             frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
             session_.setFrameAdvanceHeld(false);
@@ -485,6 +514,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 }
 
 MainWindow::~MainWindow() {
+    if (volumeSaveTimer_ && volumeSaveTimer_->isActive()) flushVolumePreference();
     if (netplay_) netplay_->leaveSession();
     // The direct audio producer must stop before QObject destroys AudioOutput.
     session_.shutdown();
@@ -761,29 +791,43 @@ void MainWindow::buildMenus() {
         view_->setIntegerScaling(enabled);
         settings_.setValue(QStringLiteral("view/integer"), enabled);
     });
-    blarggMenu_ = viewMenu->addMenu(Localization::text(QStringLiteral("Фильтр Blargg NTSC")));
-    blarggMenu_->setObjectName(QStringLiteral("blarggMenu"));
-    auto* blarggGroup = new QActionGroup(this);
-    const QStringList filters{Localization::text(QStringLiteral("Выключен")), Localization::text(QStringLiteral("Монохромный")),
-        Localization::text(QStringLiteral("Композитный")), QStringLiteral("S-Video"), QStringLiteral("RGB")};
-    for (int filter = 0; filter < filters.size(); ++filter) {
-        QAction* action = blarggMenu_->addAction(filters[filter]);
-        action->setObjectName(QStringLiteral("blargg%1").arg(filter));
-        action->setCheckable(true); action->setChecked(filter == blarggFilter_);
-        blarggGroup->addAction(action);
-        connect(action, &QAction::triggered, this, [this, filter] {
-            blarggFilter_ = filter;
-            settings_.setValue(QStringLiteral("view/blarggFilter"), filter);
-            session_.setBlarggFilter(filter);
-        });
-    }
     QMenu* shaderMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Шейдер")));
     shaderMenu->setObjectName(QStringLiteral("shaderMenu"));
     auto* shaderGroup = new QActionGroup(this);
     shaderOffAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Выключен")));
+    shaderOffAction_->setObjectName(QStringLiteral("shaderOff"));
+    shaderOffAction_->setCheckable(true);
+    shaderGroup->addAction(shaderOffAction_);
+    const std::array<int, 3> blarggFilters{2, 3, 4};
+    const std::array<QString, 3> blarggLabels{
+        Localization::text(QStringLiteral("Композитный (Blargg)")),
+        Localization::text(QStringLiteral("S-Video (Blargg)")),
+        Localization::text(QStringLiteral("RGB (Blargg)"))
+    };
+    for (unsigned index = 0; index < blarggFilters.size(); ++index) {
+        const int filter = blarggFilters[index];
+        QAction* action = shaderMenu->addAction(blarggLabels[index]);
+        action->setObjectName(QStringLiteral("blargg%1").arg(filter));
+        action->setCheckable(true);
+        shaderGroup->addAction(action);
+        blarggActions_[filter] = action;
+        connect(action, &QAction::triggered, this, [this, filter] {
+            if (!view_->setShaderPreset({})) {
+                updateShaderActions();
+                return;
+            }
+            settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
+            blarggFilter_ = filter;
+            settings_.setValue(QStringLiteral("view/blarggFilter"), filter);
+            session_.setBlarggFilter(filter);
+            updateShaderActions();
+        });
+    }
+    shaderMenu->addSeparator();
     shaderGdaptAction_ = shaderMenu->addAction(QStringLiteral("GDAPT"));
+    shaderGdaptAction_->setObjectName(QStringLiteral("shaderGdapt"));
     shaderCustomAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Пользовательский")));
-    for (QAction* action : {shaderOffAction_, shaderGdaptAction_, shaderCustomAction_}) {
+    for (QAction* action : {shaderGdaptAction_, shaderCustomAction_}) {
         action->setCheckable(true); shaderGroup->addAction(action);
     }
     shaderCustomAction_->setEnabled(false);
@@ -868,18 +912,26 @@ void MainWindow::buildMenus() {
     QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
     volumeLayout->setContentsMargins(12, 6, 12, 8);
     volumeLayout->addWidget(new QLabel(Localization::text(QStringLiteral("Громкость")), volumePanel));
-    QSlider* volumeSlider = new QSlider(Qt::Horizontal, volumePanel);
-    volumeSlider->setRange(0, 100);
-    volumeSlider->setMinimumWidth(160);
-    volumeSlider->setValue(qBound(0, settings_.value(QStringLiteral("audio/volume"), 80).toInt(), 100));
-    audio_->setVolume(volumeSlider->value());
-    volumeLayout->addWidget(volumeSlider);
+    volumeSlider_ = new QSlider(Qt::Horizontal, volumePanel);
+    volumeSlider_->setObjectName(QStringLiteral("masterVolumeSlider"));
+    volumeSlider_->setRange(0, 100);
+    volumeSlider_->setMinimumWidth(160);
+    volumeSlider_->setValue(qBound(0, settings_.value(QStringLiteral("audio/volume"), 80).toInt(), 100));
+    savedVolume_ = volumeSlider_->value();
+    audio_->setVolume(savedVolume_);
+    volumeLayout->addWidget(volumeSlider_);
     QWidgetAction* volumeAction = new QWidgetAction(soundMenu);
     volumeAction->setDefaultWidget(volumePanel);
     soundMenu->addAction(volumeAction);
-    connect(volumeSlider, &QSlider::valueChanged, this, [this](int value) {
+    volumeSaveTimer_ = new QTimer(this);
+    volumeSaveTimer_->setSingleShot(true);
+    volumeSaveTimer_->setInterval(400);
+    connect(volumeSaveTimer_, &QTimer::timeout, this, &MainWindow::flushVolumePreference);
+    connect(volumeSlider_, &QSlider::valueChanged, this, [this](int value) {
         audio_->setVolume(value);
-        settings_.setValue(QStringLiteral("audio/volume"), value);
+        view_->showOsd(Localization::text(QStringLiteral("Громкость: %1%"))
+                           .arg(value), 1200, QStringLiteral("volume"));
+        volumeSaveTimer_->start();
     });
     QMenu* onlineMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Сетевая игра")));
     onlineMenu->setObjectName(QStringLiteral("onlineMenu"));
@@ -910,6 +962,15 @@ void MainWindow::buildMenus() {
     connect(emulatorSettingsAction, &QAction::triggered, this, [this] { editSettings(); });
     QAction* controlsAction = settingsMenu->addAction(Localization::text(QStringLiteral("Управление…")));
     connect(controlsAction, &QAction::triggered, this, &MainWindow::editControls);
+    debugMenu_ = menuBar()->addMenu(Localization::text(QStringLiteral("&Отладка")));
+    debugMenu_->setObjectName(QStringLiteral("debugMenu"));
+    debugMenu_->menuAction()->setVisible(false);
+    debugGraphicsAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Графика…")));
+    debugGraphicsAction_->setObjectName(QStringLiteral("debugGraphicsAction"));
+    connect(debugGraphicsAction_, &QAction::triggered, this, &MainWindow::showDebugGraphics);
+    debugAudioAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Звуковые каналы…")));
+    debugAudioAction_->setObjectName(QStringLiteral("debugAudioAction"));
+    connect(debugAudioAction_, &QAction::triggered, this, &MainWindow::showDebugAudio);
     QMenu* helpMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Справка")));
     QAction* aboutAction = helpMenu->addAction(Localization::text(QStringLiteral("О программе")));
     connect(aboutAction, &QAction::triggered, this, [this] {
@@ -922,6 +983,80 @@ void MainWindow::buildMenus() {
     });
 }
 
+void MainWindow::applyDebugMasks() {
+    debugVideoDisabled_ &= debugVideoAvailable_;
+    debugAudioDisabled_ &= debugAudioAvailable_;
+    if (achievementsHardcore_) debugVideoDisabled_ = 0;
+    updateDebugDialogs();
+    if (!loading_ && (debugVideoAvailable_ || debugAudioAvailable_))
+        session_.setDebugMasks(debugVideoDisabled_, debugAudioDisabled_);
+}
+
+void MainWindow::updateDebugDialogs() {
+    if (debugMenu_) debugMenu_->menuAction()->setVisible(
+        debugVideoAvailable_ || debugAudioAvailable_);
+    if (debugGraphicsAction_) {
+        debugGraphicsAction_->setVisible(debugVideoAvailable_ != 0);
+        debugGraphicsAction_->setEnabled(!loading_ && !achievementsHardcore_);
+    }
+    if (debugAudioAction_) {
+        debugAudioAction_->setVisible(debugAudioAvailable_ != 0);
+        debugAudioAction_->setEnabled(!loading_);
+    }
+    if (debugGraphicsDialog_)
+        debugGraphicsDialog_->setControls(debugVideoAvailable_, debugVideoDisabled_,
+                                          achievementsHardcore_, !loading_, debugBackdropColor_);
+    if (debugAudioDialog_)
+        debugAudioDialog_->setControls(debugAudioAvailable_, debugAudioDisabled_,
+                                       !loading_, debugAudioGains_);
+}
+
+void MainWindow::showDebugGraphics() {
+    if (!debugGraphicsDialog_) {
+        debugGraphicsDialog_ = new DebugGraphicsDialog(this);
+        connect(debugGraphicsDialog_, &DebugGraphicsDialog::maskChanged, this,
+                [this](quint32 disabled) {
+            if (loading_) return;
+            debugVideoDisabled_ = disabled;
+            applyDebugMasks();
+        });
+        connect(debugGraphicsDialog_, &DebugGraphicsDialog::backdropChanged, this,
+                [this](quint32 rgb) {
+            if (loading_) return;
+            debugBackdropColor_ = QColor::fromRgb(rgb);
+            session_.setDebugBackdrop(rgb);
+            updateDebugDialogs();
+        });
+    }
+    updateDebugDialogs();
+    debugGraphicsDialog_->show();
+    debugGraphicsDialog_->raise();
+    debugGraphicsDialog_->activateWindow();
+}
+
+void MainWindow::showDebugAudio() {
+    if (!debugAudioDialog_) {
+        debugAudioDialog_ = new DebugAudioDialog(this);
+        connect(debugAudioDialog_, &DebugAudioDialog::maskChanged, this,
+                [this](quint64 disabled) {
+            if (loading_) return;
+            debugAudioDisabled_ = disabled;
+            applyDebugMasks();
+        });
+        connect(debugAudioDialog_, &DebugAudioDialog::gainChanged, this,
+                [this](unsigned channel, unsigned percent) {
+            if (loading_ || channel >= debugAudioGains_.size() ||
+                !(debugAudioAvailable_ & (quint64(1) << channel))) return;
+            debugAudioGains_[channel] = percent;
+            session_.setDebugAudioGain(channel, percent);
+        });
+    }
+    updateDebugDialogs();
+    debugAudioDialog_->show();
+    debugAudioDialog_->raise();
+    debugAudioDialog_->activateWindow();
+}
+
 bool MainWindow::applyShaderPreset(const QString& path) {
     QString error;
     if (!view_->setShaderPreset(path, &error)) {
@@ -930,6 +1065,11 @@ bool MainWindow::applyShaderPreset(const QString& path) {
         return false;
     }
     settings_.setValue(QStringLiteral("view/shaderPreset"), path);
+    if (blarggFilter_) {
+        blarggFilter_ = 0;
+        settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
+        session_.setBlarggFilter(0);
+    }
     const QString prefix = shaderParameterPrefix(path);
     for (const auto& parameter : view_->shaderParameters()) {
         const float value = settings_.value(prefix + parameter.id, parameter.value).toFloat();
@@ -942,9 +1082,12 @@ bool MainWindow::applyShaderPreset(const QString& path) {
 void MainWindow::updateShaderActions() {
     if (!shaderOffAction_) return;
     const QString path = view_->shaderPreset();
-    shaderOffAction_->setChecked(path.isEmpty());
-    shaderGdaptAction_->setChecked(path == QLatin1String(":/shaders/gdapt.glslp"));
-    shaderCustomAction_->setChecked(!path.isEmpty() && path != QLatin1String(":/shaders/gdapt.glslp"));
+    if (blarggFilter_ >= 2 && blarggFilter_ <= 4)
+        blarggActions_[blarggFilter_]->setChecked(true);
+    else if (path.isEmpty()) shaderOffAction_->setChecked(true);
+    else if (path == QLatin1String(":/shaders/gdapt.glslp"))
+        shaderGdaptAction_->setChecked(true);
+    else shaderCustomAction_->setChecked(true);
     shaderParametersAction_->setEnabled(!view_->shaderParameters().isEmpty());
 }
 
@@ -1083,8 +1226,18 @@ void MainWindow::saveScreenshot() {
     failed(Localization::text(QStringLiteral("не удалось подобрать свободное имя файла")));
 }
 
+void MainWindow::flushVolumePreference() {
+    if (!volumeSaveTimer_ || !volumeSlider_) return;
+    volumeSaveTimer_->stop();
+    const int value = volumeSlider_->value();
+    if (value == savedVolume_) return;
+    settings_.setValue(QStringLiteral("audio/volume"), value);
+    savedVolume_ = value;
+}
+
 void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
     loading_ = loading;
+    updateDebugDialogs();
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading &&
                                                   movieMode_ == 0 && !achievementsHardcore_);
     updateMovieActions();
@@ -2000,7 +2153,6 @@ void MainWindow::updateMovieActions() {
     if (movieStopAction_->text() != stopLabel) movieStopAction_->setText(stopLabel);
     if (regionMenu_) regionMenu_->setEnabled(!protectedMovie && !moviePending_ &&
                                              !achievementsHardcore_);
-    if (blarggMenu_) blarggMenu_->setEnabled(!protectedMovie && !moviePending_);
     if (resetAction_) resetAction_->setEnabled(game && !protectedMovie && !moviePending_);
     if (hardResetAction_) hardResetAction_->setEnabled(game && !protectedMovie && !moviePending_);
     if (cheatsAction_) cheatsAction_->setEnabled(game && cheatsSupported_ && !protectedMovie &&
@@ -2052,9 +2204,17 @@ void MainWindow::updateInputEnabled() {
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     const bool modalActive = QApplication::activeModalWidget();
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
+    bool debugWindowActive = false;
+    for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
+        if (active == debugGraphicsDialog_ || active == debugAudioDialog_) {
+            debugWindowActive = true;
+            break;
+        }
+    }
     session_.setBackgroundPaused(!netplay_->active() &&
         (modalActive || popupActive || (pauseOnFocusLoss_ &&
-        (!isActiveWindow() || QApplication::applicationState() != Qt::ApplicationActive))));
+        ((!isActiveWindow() && !debugWindowActive) ||
+         QApplication::applicationState() != Qt::ApplicationActive))));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() &&
                          !loading_ && !moviePending_ && !modalActive && !popupActive;
     view_->setLightgunInputEnabled(enabled);
@@ -2203,6 +2363,16 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         setFrameAdvanceSource(true, false);
         return true;
     }
+    const bool volumeUp = (key == Qt::Key_Equal || key == Qt::Key_Plus) &&
+        (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier);
+    const bool volumeDown = key == Qt::Key_Minus && modifiers == Qt::NoModifier;
+    if (volumeUp || volumeDown) {
+        if (shortcutOverride) event->accept();
+        else if (pressed && volumeSlider_)
+            volumeSlider_->setValue(qBound(0, volumeSlider_->value() +
+                                            (volumeUp ? 5 : -5), 100));
+        return true;
+    }
     // Claim these keys before Qt resolves the logical QAction shortcuts. A
     // shortcut and its physical counterpart must produce exactly one action.
     QAction* commandAction = nullptr;
@@ -2332,6 +2502,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         }
         return;
     }
+    if (volumeSaveTimer_ && volumeSaveTimer_->isActive()) flushVolumePreference();
     settings_.setValue(QStringLiteral("window/geometry"),
                        isFullScreen() && !windowedGeometry_.isEmpty() ?
                            windowedGeometry_ : saveGeometry());

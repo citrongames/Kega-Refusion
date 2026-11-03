@@ -179,6 +179,10 @@ bool LibretroHost::startLinkedPair(QString& error) {
     if(!ok) {Activation scope(peer.get());peer.reset();return false;}
     linkPeer_=std::move(peer);linkPair_.reset(new LinkPair(this,linkPeer_.get()));
     if(!linkPair_->initialize()) {error=QStringLiteral("Cannot allocate Link Cable execution contexts");stopLinkedPair();return false;}
+    setDebugMasks(debugVideoMask_,debugAudioMask_);setDebugBackdrop(debugBackdrop_);
+    { Activation scope(linkPeer_.get());
+      for (unsigned channel=0;channel<debugAudioGains_.size();++channel)
+          linkPeer_->setDebugAudioGain(channel,debugAudioGains_[channel]); }
     linkPair_->connect();applyControllerPorts(true);refreshRecordingIdentity();return true;
 }
 void LibretroHost::runLinkedFrame(bool video,bool audio) {linkPair_->run(video,audio);}

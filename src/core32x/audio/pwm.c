@@ -14,6 +14,28 @@
 #include "pwm.h"
 #include <string.h>
 
+#ifdef KEGAREFUSION_32X
+extern uint64_t kega_debug_audio_mask;
+extern uint8_t kega_debug_audio_gain[38];
+#endif
+static unsigned output_gain(unsigned channel)
+{
+#ifdef KEGAREFUSION_32X
+    return kega_debug_audio_gain[channel];
+#else
+    (void)channel;
+    return 100;
+#endif
+}
+static unsigned output_mask(void)
+{
+#ifdef KEGAREFUSION_32X
+    return (unsigned)((kega_debug_audio_mask >> 34) & 3);
+#else
+    return 0;
+#endif
+}
+
 static uint64_t sh2_clock(uint64_t t)
 {
     return (t / 7) * 3 + ((t % 7) * 3) / 7;
@@ -40,6 +62,13 @@ static void publish(Kega32xPwm *p, uint64_t t)
 {
     int32_t left, right, dl, dr;
     routed(&p->s, &left, &right);
+    p->debug_mask = output_mask();
+    p->debug_gain[0] = (uint8_t)output_gain(34);
+    p->debug_gain[1] = (uint8_t)output_gain(35);
+    if (p->debug_mask & 1) left = 0;
+    else if (p->debug_gain[0] != 100) left = (left * p->debug_gain[0]) / 100;
+    if (p->debug_mask & 2) right = 0;
+    else if (p->debug_gain[1] != 100) right = (right * p->debug_gain[1]) / 100;
     dl = left - p->emitted[0]; dr = right - p->emitted[1];
     p->emitted[0] = left; p->emitted[1] = right;
     if ((dl || dr) && p->host.delta) p->host.delta(p->host.userdata, t, dl, dr);
@@ -63,6 +92,9 @@ void kega32x_pwm_advance(Kega32xPwm *p, uint64_t t)
 {
     uint64_t target = sh2_clock(t);
     if (t < p->s.now_mclk || p->advancing) return;
+    /* Release a held amplitude when the presentation mask changes. */
+    if (p->debug_mask != output_mask() || p->debug_gain[0] != output_gain(34) ||
+        p->debug_gain[1] != output_gain(35)) publish(p, p->s.now_mclk);
     p->advancing = 1;
     for (;;) {
         unsigned clocks = period(&p->s), first_irq, interval, fired;
