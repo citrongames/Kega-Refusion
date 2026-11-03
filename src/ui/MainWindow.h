@@ -9,6 +9,7 @@
 #include <QColor>
 #include <QMainWindow>
 #include <QSettings>
+#include <QPointer>
 #include <QStringList>
 #include <QVector>
 
@@ -24,6 +25,7 @@ class AudioOutput;
 class AchievementNetwork;
 class EmulationSession;
 class DebugGraphicsDialog;
+class CheatSearchDialog;
 class DebugAudioDialog;
 class InputManager;
 class NetplayController;
@@ -62,6 +64,7 @@ private:
     void editSettings(int initialPage = 0);
     void editControls();
     void editCheats();
+    void showCheatSearch();
     void showAchievements();
     void updateGunConfiguration();
     void updateGunPresentation();
@@ -117,6 +120,8 @@ private:
     QAction* pauseAction_ = nullptr;
     QAction* frameAdvanceAction_ = nullptr;
     QAction* cheatsAction_ = nullptr;
+    QAction* cheatSearchAction_ = nullptr;
+    QPointer<CheatSearchDialog> cheatSearchDialog_;
     CheatList cheats_;
     AchievementsState achievementsState_;
     bool achievementsHardcore_ = false;

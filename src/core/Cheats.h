@@ -16,14 +16,17 @@ using CheatList = QList<CheatEntry>;
 namespace Cheats {
 // GPX uses the MD decoder for CD/32X; this does not add SH-2 memory codes.
 enum class Platform { MegaDrive, MasterSystem, SegaCd, Sega32x, Cd32x };
-constexpr int MaxCodes = 100; // Below pinned GPX MAX_CHEATS=150, including disabled entries.
+constexpr int MaxCodes = 100; // Enabled native components; below GPX MAX_CHEATS=150.
+constexpr int MaxEntries = 4096;
+constexpr int MaxCodeLength = 4095;
 constexpr int MaxDescriptionLength = 256;
-constexpr qint64 MaxFileBytes = 128 * 1024;
+constexpr qint64 MaxFileBytes = 2 * 1024 * 1024;
 bool normalize(const CheatList& entries, Platform platform, CheatList& normalized, QString& error);
 QString supportText(Platform platform);
+QString ramCode(quint32 address, int width, bool bigEndian, quint32 value);
 
 // Emulation-thread owned. Reads once at game load; writes atomically only on
-// an explicit change. All formats store one native core code per entry.
+// an explicit change. Entries can group native codes with + under one enabled flag.
 class Store final {
 public:
     bool load(const QString& path, Platform platform, QString& error);

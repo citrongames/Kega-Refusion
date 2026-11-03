@@ -9,13 +9,14 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QtEndian>
 #include <utility>
 
 namespace Cheats {
 bool normalize(const CheatList& entries, Platform platform, CheatList& normalized, QString& error) {
     error.clear();
-    if (entries.size() > MaxCodes) {
-        error = Localization::text(QStringLiteral("Можно сохранить не больше %1 кодов.")).arg(MaxCodes); return false;
+    if (entries.size() > MaxEntries) {
+        error = Localization::text(QStringLiteral("Можно сохранить не больше %1 кодов.")).arg(MaxEntries); return false;
     }
     // Formats from GPX f27655b libretro.c:decode_cheat. Require complete
     // payloads: its MD PAR decoder otherwise accepts truncated values.
@@ -26,14 +27,26 @@ bool normalize(const CheatList& entries, Platform platform, CheatList& normalize
     const auto& pattern = platform == Platform::MasterSystem ? sms : md;
     CheatList result;
     result.reserve(entries.size());
-    QSet<QString> codes;
+    QSet<QString> codes, active;
     for (qsizetype i = 0; i < entries.size(); ++i) {
         const auto& entry = entries[i];
-        const auto code = entry.code.trimmed().toUpper();
+        auto code = entry.code.trimmed().toUpper();
         const auto description = entry.description.trimmed();
-        if (code.size() > 11 || !pattern.match(code).hasMatch()) {
-            error = Localization::text(QStringLiteral("Строка %1: неверный формат кода. Один код на строку.")).arg(i+1); return false;
+        if (code.isEmpty() || code.size() > MaxCodeLength) {
+            error = Localization::text(QStringLiteral("Строка %1: неверный формат кода.")).arg(i+1); return false;
         }
+        auto parts = code.split(QLatin1Char('+'));
+        for (auto& part : parts) {
+            part = part.trimmed();
+            if (part.size() > 11 || !pattern.match(part).hasMatch()) {
+                error = Localization::text(QStringLiteral("Строка %1: неверный формат кода.")).arg(i+1); return false;
+            }
+            if (entry.enabled) active.insert(part);
+        }
+        if (active.size() > MaxCodes) {
+            error = Localization::text(QStringLiteral("Одновременно можно включить не больше %1 кодов с учётом составных читов.")).arg(MaxCodes); return false;
+        }
+        code = parts.join(QLatin1Char('+'));
         if (description.size() > MaxDescriptionLength || description.contains(QChar::Null) ||
             description.contains(QLatin1Char('\n')) || description.contains(QLatin1Char('\r'))) {
             error = Localization::text(QStringLiteral("Строка %1: описание должно занимать одну строку, до %2 символов."))
@@ -46,6 +59,25 @@ bool normalize(const CheatList& entries, Platform platform, CheatList& normalize
     }
     normalized = std::move(result);
     return true;
+}
+QString ramCode(quint32 address, int width, bool bigEndian, quint32 value) {
+    if ((width != 1 && width != 2 && width != 4) ||
+        (width < 4 && value >= (quint32(1) << (width*8)))) return {};
+    const quint32 base = bigEndian ? 0xff0000u : 0xc000u;
+    const quint32 end = bigEndian ? 0x1000000u : 0xe000u;
+    if (address < base || quint64(address)+width > end) return {};
+    QStringList parts;
+    for (int i=0; i<width; ++i) {
+        quint32 target = address+quint32(i);
+        // GPX native 68000 byte cheats address its word-swapped RAM buffer.
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+        if (bigEndian) target ^= 1u;
+#endif
+        const unsigned shift = unsigned(bigEndian ? width-1-i : i)*8;
+        parts.append(QStringLiteral("%1:%2").arg(target,bigEndian?6:4,16,QLatin1Char('0'))
+            .arg((value>>shift)&255u,bigEndian?4:2,16,QLatin1Char('0')).toUpper());
+    }
+    return parts.join(QLatin1Char('+'));
 }
 QString supportText(Platform platform) {
     if (platform == Platform::MasterSystem)
@@ -70,11 +102,11 @@ bool Store::load(const QString& path, Platform platform, QString& error) {
         error = Localization::text(QStringLiteral("Не удалось прочитать читы: %1")).arg(file.errorString()); return false;
     }
     if (file.size() > MaxFileBytes) {
-        error = Localization::text(QStringLiteral("Файл читов слишком большой (максимум 128 КиБ).")); return false;
+        error = Localization::text(QStringLiteral("Файл читов слишком большой (максимум 2 МиБ).")); return false;
     }
     const auto bytes = file.read(MaxFileBytes+1);
     if (bytes.size() > MaxFileBytes || !file.atEnd() || file.error() != QFileDevice::NoError) {
-        error = Localization::text(QStringLiteral("Файл читов прочитан не полностью или превышает 128 КиБ.")); return false;
+        error = Localization::text(QStringLiteral("Файл читов прочитан не полностью или превышает 2 МиБ.")); return false;
     }
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(bytes,&parseError);
@@ -84,8 +116,8 @@ bool Store::load(const QString& path, Platform platform, QString& error) {
         error = Localization::text(QStringLiteral("Неверный формат файла читов: %1")).arg(path_); return false;
     }
     const auto codes = object.value(QStringLiteral("codes")).toArray();
-    if (codes.size() > MaxCodes) {
-        error = Localization::text(QStringLiteral("В файле больше %1 кодов.")).arg(MaxCodes); return false;
+    if (codes.size() > MaxEntries) {
+        error = Localization::text(QStringLiteral("В файле больше %1 кодов.")).arg(MaxEntries); return false;
     }
     CheatList decoded;
     decoded.reserve(codes.size());
@@ -111,7 +143,7 @@ bool Store::set(const CheatList& entries, QString& error) {
                                  {QStringLiteral("description"),entry.description},{QStringLiteral("enabled"),entry.enabled}});
     const auto bytes = QJsonDocument(QJsonObject{{QStringLiteral("version"),1},{QStringLiteral("codes"),codes}})
         .toJson(QJsonDocument::Indented);
-    if (bytes.size() > MaxFileBytes) { error = Localization::text(QStringLiteral("Файл читов превышает 128 КиБ.")); return false; }
+    if (bytes.size() > MaxFileBytes) { error = Localization::text(QStringLiteral("Файл читов превышает 2 МиБ.")); return false; }
     if (!QDir().mkpath(QFileInfo(path_).absolutePath())) {
         error = Localization::text(QStringLiteral("Не удалось создать папку читов.")); return false;
     }

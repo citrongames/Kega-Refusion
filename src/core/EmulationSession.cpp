@@ -1,6 +1,7 @@
 #include "i18n/Localization.h"
 #include "EmulationSession.h"
 #include "LibretroHost.h"
+#include "CheatSearch.h"
 #include "net/NetplayTimeline.h"
 #include "net/NetRollbackSession.h"
 #include <QJsonDocument>
@@ -99,10 +100,28 @@ EmulationSession::~EmulationSession() { shutdown(); }
 void EmulationSession::enqueue(Command command) {
     if(command.type==Type::Load&&networkMode_.load())emit networkGameLoading(command.path,command.value);
     if (networkMode_.load() && !command.networkAuthorized && networkShared(command.type)) {
-        emit networkCommandRequested(encodeNetworkCommand(command)); return;
+        const auto packet=encodeNetworkCommand(command);
+        if (packet.size()>Cheats::MaxFileBytes) {
+            emit errorOccurred(Localization::text(QStringLiteral("Файл читов превышает 2 МиБ."))); return;
+        }
+        emit networkCommandRequested(packet); return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (commands_.size()<2048) commands_.push_back(std::move(command));
+    if (command.type == Type::Cheats) {
+        command.retainedCheatBytes = command.cheats.size()*qsizetype(sizeof(CheatEntry));
+        for (const auto& entry:command.cheats)
+            command.retainedCheatBytes += (entry.code.size()+entry.description.size())*qsizetype(sizeof(QChar));
+    }
+    // Coalesce adjacent complete edits only: never reorder a save across game loading.
+    if ((command.type==Type::Cheats || command.type==Type::CheatSearch) &&
+        !commands_.empty() && commands_.back().type==command.type) {
+        queuedCheatBytes_ -= commands_.back().retainedCheatBytes;
+        commands_.pop_back();
+    }
+    if (commands_.size()<2048 && queuedCheatBytes_+command.retainedCheatBytes <= 8*1024*1024) {
+        queuedCheatBytes_ += command.retainedCheatBytes;
+        commands_.push_back(std::move(command));
+    }
 }
 void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue({Type::Load,path,archiveIndex}); }
 void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry) {
@@ -175,6 +194,13 @@ void EmulationSession::resumeMovieRecording(const QString& path) { enqueue({Type
 void EmulationSession::rerecordMovie(const QString& path) { enqueue({Type::MovieFork,path}); }
 void EmulationSession::takeOverMovie() { enqueue({Type::MovieTakeOver,{}}); }
 void EmulationSession::stopMovie() { enqueue({Type::MovieStop,{}}); }
+void EmulationSession::searchCheats(quint64 id, int width, int comparison, quint32 value, bool restart) {
+    Command command{Type::CheatSearch,{}}; command.requestId = id;
+    command.bytes = QJsonDocument(QJsonObject{{"width",width},{"comparison",comparison},
+        {"value",double(value)},{"restart",restart}}).toJson(QJsonDocument::Compact);
+    enqueue(std::move(command));
+}
+void EmulationSession::clearCheatSearch() { enqueue({Type::CheatSearchClear,{}}); }
 void EmulationSession::setCheats(const CheatList& cheats) {
     Command command{Type::Cheats,{}}; command.cheats = cheats; enqueue(std::move(command));
 }
@@ -287,10 +313,11 @@ QByteArray EmulationSession::encodeNetworkCommand(const Command& c) {
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 void EmulationSession::applyNetworkCommand(const QByteArray& bytes) {
-    if (networkMode_.load()!=1 || bytes.size()>64*1024) return;
+    if (networkMode_.load()!=1 || bytes.size()>Cheats::MaxFileBytes) return;
     const auto o=QJsonDocument::fromJson(bytes).object();
     const int t=o.value("type").toInt(-1), v=o.value("value").toInt();
     if (t<0 || t>int(Type::NetStepHold) || !networkShared(Type(t))) return;
+    if (Type(t)!=Type::Cheats && bytes.size()>64*1024) return;
     Command c{Type(t),{},v}; c.networkAuthorized=true;
     if ((c.type==Type::Save || c.type==Type::Restore) && (v<0 || v>9)) return;
     if (c.type==Type::Region && (v<0 || v>3)) return;
@@ -298,10 +325,12 @@ void EmulationSession::applyNetworkCommand(const QByteArray& bytes) {
     if ((c.type==Type::ControllerType || c.type==Type::Port) && (v<0 || v>15)) return;
     if (c.type==Type::ControllerKind && (v<0 || v>47 || ((v&7)>=3 && (v>>3)!=0) || ((v&7)==2 && (v>>3)!=0 && (v>>3)!=3))) return;
     if (c.type==Type::Cheats) {
-        const auto a=o.value("cheats").toArray(); if(a.size()>256) return;
+        if (!o.value("cheats").isArray()) return;
+        const auto a=o.value("cheats").toArray(); if(a.size()>Cheats::MaxEntries) return;
         for (const auto& v:a) { const auto e=v.toObject();
             const auto code=e.value("code").toString(), description=e.value("description").toString();
-            if(code.size()>256 || description.size()>512) return;
+            if(!v.isObject() || !e.value("code").isString() || !e.value("description").isString() ||
+               !e.value("enabled").isBool() || code.size()>Cheats::MaxCodeLength || description.size()>Cheats::MaxDescriptionLength) return;
             c.cheats.push_back({code,description,e.value("enabled").toBool()});
         }
     }
@@ -483,6 +512,7 @@ void EmulationSession::run() {
         lastDiscEjected = host.discEjected();
         emit discStateChanged(host.discPaths(),host.discIndex(),lastDiscEjected);
     };
+    Cheats::Search cheatSearch;
     RewindBuffer history;
     bool historyEnabled = rewindEnabled_.load();
     int historyMemoryMiB = rewindMemoryMiB_.load();
@@ -588,7 +618,12 @@ void EmulationSession::run() {
                 if(!snapshotGeometry.isEmpty())metadata.insert("linkPreview",QString::fromLatin1(snapshotGeometry.toBase64()));
             }
         }
-        const auto json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
+        auto json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
+        if (json.size()>4*1024*1024) {
+            // A large imported catalog takes priority over the optional screenshot.
+            metadata.remove("image"); metadata.remove("linkPreview"); metadata.remove("aspect");
+            json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
+        }
         QByteArray packet; const auto n=qToBigEndian(quint32(json.size()));
         packet.append(reinterpret_cast<const char*>(&n),4); packet+=json; packet+=qCompress(state,1);
         networkPosition=0; networkDirty=false; emit networkSnapshotReady(packet);
@@ -727,16 +762,18 @@ void EmulationSession::run() {
     };
     while (!quitting_.load()) {
         std::deque<Command> pending;
-        { std::lock_guard<std::mutex> lock(mutex_); pending.swap(commands_); }
+        { std::lock_guard<std::mutex> lock(mutex_); pending.swap(commands_); queuedCheatBytes_=0; }
         if(!networkMode)frameRequested=false;
         for (const auto& command : pending) {
             QString error;
+            if (command.type==Type::Load || command.type==Type::Close || command.type==Type::NetMode)
+                cheatSearch.clear();
             if(networkMode && (command.type==Type::Load || command.type==Type::Close))networkTimeline.stop();
             if(networkMode && (command.type==Type::MovieRecord || command.type==Type::MoviePlay ||
                 command.type==Type::MovieResume || command.type==Type::MovieFork || command.type==Type::Disc)) {
                 emit actionNotice(QStringLiteral("Завершите онлайн-сессию перед этим действием.")); continue;
             }
-            if(networkMode==1 && command.networkAuthorized && command.type!=Type::Save && command.type!=Type::NetStepHold && command.type!=Type::FrameAdvance && command.type!=Type::NetReverse &&
+            if(networkMode==1 && command.networkAuthorized && command.type!=Type::Cheats && command.type!=Type::Save && command.type!=Type::NetStepHold && command.type!=Type::FrameAdvance && command.type!=Type::NetReverse &&
                command.type!=Type::Port && command.type!=Type::ControllerType && command.type!=Type::ControllerKind)
                 networkDirty=true;
             if (achievementHardcore) {
@@ -1109,10 +1146,35 @@ void EmulationSession::run() {
                 }
                 if (host.loaded() && paused && !backgroundPaused_.load() && !rewind_.load()) frameRequested = true;
                 break;
+            case Type::CheatSearchClear: cheatSearch.clear(); break;
+            case Type::CheatSearch: {
+                const auto args = QJsonDocument::fromJson(command.bytes).object();
+                QByteArray memory; quint32 base=0; bool bigEndian=false;
+                const int width=args.value("width").toInt(), comparison=args.value("comparison").toInt();
+                const auto value=quint32(args.value("value").toDouble());
+                bool ok=false;
+                if (achievementHardcore || movie.active())
+                    error=Localization::text(QStringLiteral("Поиск читов недоступен в текущем режиме."));
+                else if (host.cheatMemory(memory,base,bigEndian,error))
+                    ok=cheatSearch.filter(memory,base,bigEndian,width,Cheats::Search::Comparison(comparison),value,
+                        args.value("restart").toBool(),error);
+                QJsonArray results;
+                if (ok) for (const auto& match:cheatSearch.matches())
+                    results.append(QJsonObject{{"address",double(match.address)},
+                        {"previous",double(match.previous)},{"value",double(match.value)}});
+                const QJsonObject result{{"error",error},{"count",double(cheatSearch.count())},{"width",width},
+                    {"base",double(base)},{"bigEndian",bigEndian},{"results",results}};
+                emit cheatSearchResults(command.requestId,QJsonDocument(result).toJson(QJsonDocument::Compact));
+                break;
+            }
             case Type::Cheats: {
                 bool changed = false;
+                const bool edited = host.cheats()!=command.cheats;
                 if (!host.setCheats(command.cheats,error,&changed)) emit errorOccurred(error);
-                else if (changed) { clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false); pacer.reset(nowNs()); }
+                else {
+                    if (networkMode==1 && edited) networkDirty=true;
+                    if (changed) { clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false); pacer.reset(nowNs()); }
+                }
                 cheatStatus();
                 break;
             }

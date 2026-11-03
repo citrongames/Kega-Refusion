@@ -4,6 +4,7 @@
 #include "AudioOutput.h"
 #include "ControlsPage.h"
 #include "CheatsDialog.h"
+#include "CheatSearchDialog.h"
 #include "AchievementsDialog.h"
 #include "AchievementNetwork.h"
 #include "NetplaySettingsPage.h"
@@ -714,9 +715,19 @@ void MainWindow::buildMenus() {
     frameAdvanceAction_->setEnabled(false);
     shortcut(frameAdvanceAction_);
     connect(frameAdvanceAction_, &QAction::triggered, this, [this] { session_.advanceFrame(); });
-    cheatsAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Читы…")));
+    auto* cheatsMenu = menuBar()->addMenu(Localization::text(QStringLiteral("Читы")));
+    cheatsMenu->setObjectName(QStringLiteral("cheatsMenu"));
+    cheatsAction_ = cheatsMenu->addAction(Localization::text(QStringLiteral("Коды / Game Genie…")));
     cheatsAction_->setEnabled(false);
     connect(cheatsAction_, &QAction::triggered, this, &MainWindow::editCheats);
+    cheatSearchAction_ = cheatsMenu->addAction(Localization::text(QStringLiteral("Поиск читов…")));
+    cheatSearchAction_->setEnabled(false);
+    connect(cheatSearchAction_, &QAction::triggered, this, &MainWindow::showCheatSearch);
+    connect(cheatsAction_, &QAction::changed, this, [this] {
+        const bool enabled=cheatsAction_->isEnabled();
+        cheatSearchAction_->setEnabled(enabled);
+        if (!enabled && cheatSearchDialog_) cheatSearchDialog_->close();
+    });
     QAction* achievementsAction = emulationMenu->addAction(Localization::text(QStringLiteral("Достижения…")));
     achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
     connect(achievementsAction, &QAction::triggered, this, &MainWindow::showAchievements);
@@ -2090,6 +2101,38 @@ void MainWindow::editCheats() {
         session_.setCheats(dialog.cheats());
     view_->setFocus();
     updateInputEnabled();
+}
+
+void MainWindow::showCheatSearch() {
+    if (!cheatSearchAction_->isEnabled()) return;
+    releaseInput();
+    if (!cheatSearchDialog_) {
+        auto* dialog=new CheatSearchDialog(this);
+        cheatSearchDialog_=dialog;
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dialog,&CheatSearchDialog::searchRequested,&session_,&EmulationSession::searchCheats);
+        connect(dialog,&CheatSearchDialog::clearRequested,&session_,&EmulationSession::clearCheatSearch);
+        connect(&session_,&EmulationSession::cheatSearchResults,dialog,&CheatSearchDialog::setResults);
+        connect(&session_,&EmulationSession::cheatsChanged,dialog,
+            [dialog](const CheatList& entries,int,bool,const QString&) { dialog->setCheats(entries); });
+        connect(&session_,&EmulationSession::errorOccurred,dialog,&CheatSearchDialog::setSaveError);
+        connect(dialog,&CheatSearchDialog::saveRequested,this,[this,dialog](const CheatEntry& entry) {
+            if (!cheatsAction_->isEnabled()) return;
+            auto entries=cheats_;
+            auto existing=std::find_if(entries.begin(),entries.end(),[&](const CheatEntry& item) { return item.code==entry.code; });
+            if (existing==entries.end()) entries.append(entry); else *existing=entry;
+            CheatList normalized; QString error;
+            if (!Cheats::normalize(entries,cheatPlatform_,normalized,error)) {
+                dialog->setSaveError(error); return;
+            }
+            // Keep consecutive manual additions together until the worker confirms the list.
+            cheats_=normalized;
+            session_.setCheats(normalized);
+        });
+        connect(&session_,&EmulationSession::gameLoaded,dialog,[dialog] { dialog->resetSearch(); });
+        connect(&session_,&EmulationSession::gameClosed,dialog,&QWidget::close);
+    }
+    cheatSearchDialog_->show(); cheatSearchDialog_->raise(); cheatSearchDialog_->activateWindow();
 }
 
 void MainWindow::deliverMouseMotion(unsigned player, double dx, double dy) {

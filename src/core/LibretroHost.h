@@ -66,6 +66,7 @@ public:
     const CheatList& cheats() const { return movieCheatsActive_ ? movieCheats_ : cheats_.entries(); }
     Cheats::Platform cheatPlatform() const;
     bool cheatsSupported() const;
+    bool cheatMemory(QByteArray& memory, quint32& base, bool& bigEndian, QString& error) const;
     QString cheatSupportText() const;
     // activeChanged excludes descriptions and disabled-code edits.
     bool setCheats(const CheatList& entries, QString& error, bool* activeChanged = nullptr);

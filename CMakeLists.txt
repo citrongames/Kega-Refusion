@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.19.1 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.20.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -32,6 +32,8 @@ target_include_directories(kega_libco PUBLIC third_party/libco)
 target_compile_definitions(kega_libco PRIVATE LIBCO_MP)
 add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/Cheats.cpp src/core/Cheats.h
+    src/core/CheatImport.cpp src/core/CheatImport.h
+    src/core/CheatSearch.cpp src/core/CheatSearch.h
     src/core/AchievementsClient.cpp src/core/AchievementsClient.h src/core/Achievements.h
     src/core/Mp3Stream.cpp src/core/Mp3Stream.h
     src/core/PapriumMusic.cpp src/core/PapriumMusic.h
@@ -85,6 +87,7 @@ add_executable(KegaRefusion WIN32
     assets/app.qrc
     src/ui/ControlsPage.cpp src/ui/ControlsPage.h
     src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
+    src/ui/CheatSearchDialog.cpp src/ui/CheatSearchDialog.h
     src/ui/AchievementsDialog.cpp src/ui/AchievementsDialog.h
     src/ui/AchievementNetwork.cpp src/ui/AchievementNetwork.h
     src/ui/ControllerDiagram.cpp src/ui/ControllerDiagram.h
@@ -119,6 +122,19 @@ if(WIN32)
     target_link_libraries(KegaRefusion PRIVATE iphlpapi ws2_32)
 endif()
 if(BUILD_TESTING)
+    foreach(cheat_test IN ITEMS cheat_search_tests cheat_import_tests cheat_integration_tests)
+        add_executable(${cheat_test} tests/${cheat_test}.cpp)
+        target_link_libraries(${cheat_test} PRIVATE core_host)
+    endforeach()
+    add_test(NAME cheat_search_tests COMMAND cheat_search_tests)
+    add_test(NAME cheat_import_tests COMMAND cheat_import_tests)
+    add_executable(cheat_ui_tests tests/cheat_ui_tests.cpp src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
+        src/ui/CheatSearchDialog.cpp src/ui/CheatSearchDialog.h)
+    target_link_libraries(cheat_ui_tests PRIVATE core_host Qt6::Widgets)
+
+    add_executable(cheat_session_tests tests/cheat_session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
+    target_link_libraries(cheat_session_tests PRIVATE core_host input_backend Qt6::Core Qt6::Gui)
+
     get_target_property(KEGA_DEBUG_UI_SOURCES KegaRefusion SOURCES)
     list(FILTER KEGA_DEBUG_UI_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
     add_executable(debug_menu_tests tests/debug_menu_tests.cpp ${KEGA_DEBUG_UI_SOURCES})

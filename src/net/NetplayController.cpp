@@ -570,7 +570,7 @@ void NetplayController::releasePeerCommands(quint64 peer){
         if(it.value().remove(peer)&&it.value().isEmpty())session_.applyNetworkCommand(json({{"type",it.key()},{"value",0}}));
 }
 void NetplayController::acceptCommand(quint64 peer,const QByteArray& b){
-    if(!hosting_||b.size()>16*1024)return;
+    if(!hosting_||b.size()>2*1024*1024)return;
     const auto command=QJsonDocument::fromJson(b).object();
     const bool momentary=EmulationSession::isNetworkMomentaryCommand(b);
     const int type=command.value("type").toInt(-1);

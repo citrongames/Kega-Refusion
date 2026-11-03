@@ -201,8 +201,9 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     participants_->horizontalHeader()->setStretchLastSection(false);
     participants_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     participants_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Interactive);
-    participants_->setColumnWidth(1, 150);
-    participants_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    participants_->setColumnWidth(1, 300);
+    participants_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive);
+    participants_->setColumnWidth(2, 105);
     participants_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     participants_->setSelectionBehavior(QAbstractItemView::SelectRows);
     participants_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -534,7 +535,9 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
         } else if (roleBox) {
             participants_->removeCellWidget(row, 1);
         }
-        setCell(participants_, row, 2, readinessName(peer.value(QStringLiteral("readiness")).toString()));
+        const QString readiness = readinessName(peer.value(QStringLiteral("readiness")).toString());
+        setCell(participants_, row, 2, readiness);
+        participants_->item(row, 2)->setToolTip(readiness);
         if (!selection.isEmpty() && id == selection) selectedRow = row;
     }
     if (selectedRow >= 0 && participants_->currentRow() != selectedRow)

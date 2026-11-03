@@ -30,7 +30,7 @@ public:
     static constexpr quint8 SoftReset = 0x01;
     static constexpr quint64 MaxFrames = 1'000'000'000ULL;
     static constexpr qsizetype MaxInitialBytes = 32 * 1024 * 1024;
-    static constexpr qsizetype MaxMetadataBytes = 64 * 1024;
+    static constexpr qsizetype MaxMetadataBytes = 4 * 1024 * 1024;
     static constexpr qsizetype MaxRunBytes = 64 * 1024 * 1024;
 
     bool create(const QJsonObject& metadata, const QByteArray& initialState, QString& error);

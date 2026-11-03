@@ -13,6 +13,7 @@
 #include <QCryptographicHash>
 #include <QByteArrayView>
 #include <QDir>
+#include <QSet>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -741,6 +742,26 @@ bool LibretroHost::cheatsSupported() const {
     return loaded_ && api_->cheat_reset && api_->cheat_set &&
         (!(api_->features && (api_->features() & 2u)) || api_->invalidate_code);
 }
+bool LibretroHost::cheatMemory(QByteArray& memory, quint32& base, bool& bigEndian, QString& error) const {
+    error.clear();
+    if (!cheatsSupported() || !api_->get_memory_data || !api_->get_memory_size) {
+        error = Localization::text(QStringLiteral("Память игры недоступна для поиска.")); return false;
+    }
+    const auto* ram = static_cast<const char*>(api_->get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+    const bool md = cheatPlatform() != Cheats::Platform::MasterSystem;
+    const auto size = std::min<size_t>(api_->get_memory_size(RETRO_MEMORY_SYSTEM_RAM),md?65536:8192);
+    if (!ram || !size) { error = Localization::text(QStringLiteral("Память игры недоступна для поиска.")); return false; }
+    QByteArray snapshot(qsizetype(size),Qt::Uninitialized);
+    for (size_t i=0; i<size; ++i) {
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+        snapshot[qsizetype(i)] = ram[md ? i^1u : i];
+#else
+        snapshot[qsizetype(i)] = ram[i];
+#endif
+    }
+    memory = std::move(snapshot); base = md?0xff0000u:0xc000u; bigEndian = md;
+    return true;
+}
 QString LibretroHost::cheatSupportText() const {
     if (!loaded_) return Localization::text(QStringLiteral("Сначала откройте игру."));
     if (!cheatsSupported()) return Localization::text(QStringLiteral("Для читов требуется обновлённое ядро эмуляции."));
@@ -763,7 +784,13 @@ void LibretroHost::loadCheats() {
 void LibretroHost::applyCheats() {
     if (!cheatsSupported()) return;
     QList<QByteArray> codes;
-    for (const auto& entry : cheats()) if (entry.enabled) codes.append(entry.code.toLatin1());
+    QSet<QByteArray> seen;
+    for (const auto& entry : cheats()) if (entry.enabled) {
+        for (const auto& part : entry.code.split(QLatin1Char('+'))) {
+            const auto code = part.toLatin1();
+            if (!seen.contains(code)) { seen.insert(code); codes.append(code); }
+        }
+    }
     if (codes == activeCheatCodes_) return;
     clearCoreCheats();
     for (qsizetype i = 0; i < codes.size(); ++i) api_->cheat_set(unsigned(i),true,codes[i].constData());
@@ -1842,7 +1869,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         }
     }
     const auto cheatArray = configuration.value(QStringLiteral("cheats")).toArray();
-    if (cheatArray.size() > Cheats::MaxCodes) { error = Localization::text(QStringLiteral("Слишком много читов в записи.")); return false; }
+    if (cheatArray.size() > Cheats::MaxEntries) { error = Localization::text(QStringLiteral("Слишком много читов в записи.")); return false; }
     CheatList decoded, normalized;
     for (const auto& value : cheatArray) {
         const auto object = value.toObject();

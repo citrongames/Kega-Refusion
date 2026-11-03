@@ -31,13 +31,13 @@
 namespace kega::net {
 namespace {
 constexpr int kSecretSize = 32;
-constexpr quint32 kMaxFrame = 256 * 1024;
+constexpr quint32 kMaxFrame = 2 * 1024 * 1024 + 1;
 constexpr qint64 kMaxQueuedBytes = NetTransport::maxQueuedBytes;
 constexpr int kMaxFramesPerSecond = 4096;
 constexpr int kMaxBytesPerSecond = 128 * 1024 * 1024;
 constexpr int kDeadLinkMs = 5000;
-constexpr int kMaxBufferedBytes = 512 * 1024;
-constexpr int kProtocol = 5;
+constexpr int kMaxBufferedBytes = int(kMaxFrame) + 64 * 1024;
+constexpr int kProtocol = 6;
 constexpr int kHandshakeMs = 10000;
 constexpr quint8 kInternalKind = 0;
 
@@ -357,6 +357,14 @@ void NetTransport::read(Connection* connection) {
             if (length < 1 || length > kMaxFrame) {
                 close(connection, QStringLiteral("Invalid frame length"));
                 return;
+            }
+            if (connection->receive.size() >= 5) {
+                const auto incomingKind = MessageKind(p[4]);
+                const int bound = p[4] == kInternalKind ? 16*1024 : maxPayloadFor(incomingKind);
+                if (!bound || length > quint32(bound+1) ||
+                    (!connection->authenticated && p[4] != kInternalKind)) {
+                    close(connection, QStringLiteral("Invalid frame length")); return;
+                }
             }
             if (connection->receive.size() < qsizetype(length + 4)) break;
             const auto kind = MessageKind(p[4]);
@@ -908,7 +916,7 @@ int NetTransport::maxPayloadFor(MessageKind kind) {
     switch (kind) {
     case MessageKind::Input: return 4096;
     case MessageKind::Frame: return 64 * 1024;
-    case MessageKind::Command: return 16 * 1024;
+    case MessageKind::Command: return 2 * 1024 * 1024;
     case MessageKind::Snapshot: return maxPayloadBytes;
     case MessageKind::Content: return maxPayloadBytes;
     case MessageKind::FileRequest: return 16 * 1024;

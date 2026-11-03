@@ -63,6 +63,8 @@ public:
     void takeOverMovie();
     void stopMovie();
     void setCheats(const CheatList& cheats);
+    void searchCheats(quint64 requestId, int width, int comparison, quint32 value, bool restart);
+    void clearCheatSearch();
     void releaseButtons();
     void setFastForward(bool enabled);
     void setFastForwardFactor(int factor);
@@ -147,6 +149,7 @@ signals:
     void effectivePauseChanged(bool paused);
     void rewindingChanged(bool enabled);
     void rewindProgress(qint64 remainingMs, qint64 totalMs);
+    void cheatSearchResults(quint64 requestId, const QByteArray& result);
     void cheatsChanged(const CheatList& cheats, int platform, bool supported, const QString& detail);
     void stateSlotsChanged(int selected, unsigned occupied);
     void notification(const QString& text);
@@ -156,7 +159,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear};
     struct Command {
         Type type;
         QString path;
@@ -166,6 +169,7 @@ private:
         QByteArray bytes{};
         quint64 requestId = 0;
         bool networkAuthorized = false;
+        qsizetype retainedCheatBytes = 0;
     };
     static bool networkShared(Type type);
     static QByteArray encodeNetworkCommand(const Command& command);
@@ -186,6 +190,7 @@ private:
     std::atomic<qint64> audioQueueUs_{0}, audioTargetUs_{0}, audioFeedbackNs_{0};
     std::atomic<bool> audioClockAvailable_{false};
     std::deque<Command> commands_;
+    qsizetype queuedCheatBytes_ = 0;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
     std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false};

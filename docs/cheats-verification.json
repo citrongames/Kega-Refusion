@@ -1,0 +1,34 @@
+{
+  "version": "0.20.0",
+  "date": "2026-11-03",
+  "collection": {
+    "entries": 47829,
+    "failures": [
+      {
+        "error": "Строка 7: неверная запись RetroArch .cht.",
+        "file": "Sega - Game Gear/Double Dragon (USA, Europe) (Action Replay).cht"
+      },
+      {
+        "error": "Строка 1: неверная запись RetroArch .cht.",
+        "file": "Sega - Master System - Mark III/Ys - The Vanished Omens (USA, Europe, Brazil).cht"
+      }
+    ],
+    "files": 3705,
+    "filesWithWarnings": 1545,
+    "parsed": 3703,
+    "skippedEntries": 3643
+  },
+  "checks": {
+    "importExport": "passed: grouped codes, actual export flags, quote/encoding recovery, byte shorthand, atomic store and unchanged-file write avoidance",
+    "manualSearch": "passed: exact and relative filtering, widths/endian, bounds, state invariance, clear",
+    "core": "passed: original MD/SMS programs, CPU byte echo, 8/16/32-bit freezes, zero bytes, neighbor preservation, reset, disabled groups, long group flattening, filename persistence",
+    "network": "passed: host command path, 121-entry list, grouped enabled/disabled snapshots, sequential client restore, manual RAM results",
+    "ui": "passed: offscreen windows at default size, export button, bounded results and stale reply rejection; visual previews inspected",
+    "windows": "cross-compiled; Windows desktop/game testing left to user",
+    "lobby": "Role width 150 -> 300 px, status 105 px; unchanged window size",
+    "packages": "Windows EXE and Linux archive executable/language files match final build"
+  },
+  "scope": "Collection figures validate parsing, not the gameplay effect of each third-party code. Special RetroArch handlers, templates and unrecognized native formats are skipped with warnings.",
+  "windowsExeSha256": "7c4d4f044f2c84032fb524dbd4c010c1071158f98ffeeef694ab833b48a4613c",
+  "linuxArchiveSha256": "3d98fdf92d6828b6ee231b9007f3584eff3b034b264d98052af45d919ef01ce3"
+}
