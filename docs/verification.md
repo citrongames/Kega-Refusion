@@ -341,3 +341,11 @@ Added a 0–100% master-volume slider to Settings / Sound with a numeric percent
 - `audio_queue_tests` passed: all three profiles at 32/44.1/48 kHz and 50/60 Hz, sustained fractional PCM, stalls, bounded overflow, partial-write alignment, rate/profile switches and unchanged-profile no-op. `audio_output_tests` passed: correct new clock targets, one invalidation per actual change and one queued wake for a burst of changes.
 - `video_ui_tests --audio-profiles` passed with the real core and an original 68000 fixture, offscreen Qt and native audio fallback. Each profile selected through settings immediately changed audio, persisted through dialog rejection/reopening, and resumed frames/native audio with the new target without reloading the ROM. Initial test was held by focus-loss pausing of the invisible window; that preference is disabled only for this fixture. No application workaround was introduced.
 - Linux and Windows Release builds passed. No broad core/gameplay suites or Windows desktop automation were used.
+
+
+## Public release preparation, v0.21.1 — 2026-11-03
+
+- Native and MinGW builds use Release; integrated Linux/Windows cores were rebuilt/checked through the maintained core builder. Clean Windows ZIP and Linux tar.gz packaging excludes user data, games, BIOS and credentials. Windows ZIP CRC checks passed; the extracted Linux archive completed an isolated offscreen startup with exit 0.
+- Scanned all reachable Git objects before publication: 1,380 blobs / 64,742,319 bytes; no matches for the checked private-key/token/account-password patterns, credential file paths or Genesis ROM headers. This records the checks performed, not an absolute guarantee that every possible secret can be detected.
+- Added GPL-3.0-or-later for original project code with a specific core linking exception and explicit third-party scope. The existing GDAPT licensing uncertainty remains documented, not relabeled as GPL. About dialog links to the licensing overview.
+- Both distributions now include the same integrated-core/Paprium/component notices; Linux packaging previously omitted several of these notices. Source distribution accompanies binary release artifacts.

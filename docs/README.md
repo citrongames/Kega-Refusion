@@ -10,6 +10,7 @@ Start with the overview for current features and basic use, or the build guide f
 - [Architecture and resource-management rules](architecture.md)
 - [Verification record](verification.md)
 - [Adding an interface translation](../languages/README.md)
+- [Project licensing and core exception](../LICENSING.md)
 - [Third-party components and licensing](../THIRD_PARTY.md)
 
 ## Features

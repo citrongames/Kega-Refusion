@@ -1003,6 +1003,8 @@
     "Обычный": "Normal",
     "Повышенная устойчивость": "More stable",
     "Задержка звука:": "Audio latency:",
-    "Применяется сразу, без перезапуска игры. Если слышен треск, выберите повышенную устойчивость. Фактическая задержка также зависит от устройства вывода.": "Applied immediately without restarting the game. If you hear crackling, select More stable. Actual latency also depends on the output device."
+    "Применяется сразу, без перезапуска игры. Если слышен треск, выберите повышенную устойчивость. Фактическая задержка также зависит от устройства вывода.": "Applied immediately without restarting the game. If you hear crackling, select More stable. Actual latency also depends on the output device.",
+    "Оригинальный код: GPLv3+ с исключением для ядра. Без гарантий.": "Original code: GPLv3+ with a core linking exception. No warranty.",
+    "Лицензии и условия распространения": "Licenses and distribution terms"
   }
 }

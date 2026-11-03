@@ -1,0 +1,31 @@
+Kega Refusion Core Linking Exception
+Version 1.0
+
+Additional permission under section 7 of GNU GPL version 3
+
+Copyright (C) 2026 Vladimir Salata (vova791)
+
+For the portions of Kega Refusion covered by this permission, the copyright
+holder permits you to link or combine those portions with the Genesis Plus GX
+emulation core, including its Kega Refusion modifications and integrated
+PicoDrive-derived 32X and Paprium components, and to convey the resulting
+combination. This permission also covers modified versions of those core
+components.
+
+You may convey such a combination under the GNU General Public License,
+version 3 or any later version, without applying that license to the covered
+core components solely as a consequence of this linking or combination.
+Those core components remain subject to their own licenses and notices.
+All other applicable GPL obligations for the GPL-covered portions remain
+in force, including the obligation to provide Corresponding Source.
+
+This permission does not change or waive any third-party license, including
+restrictions on commercial use, source-availability requirements, or required
+copyright notices. It does not grant permission to combine unrelated
+GPL-incompatible components. It applies only to code for which the copyright
+holder granting this permission has authority to do so.
+
+If you modify the portions covered by this permission, you may extend this
+permission to your version, but you are not obligated to do so. If you do not
+wish to extend it, remove the statement granting it from your version and
+comply with the GPL without this exception.

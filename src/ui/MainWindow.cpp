@@ -1140,7 +1140,11 @@ void MainWindow::buildMenus() {
             "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
             "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.")) +
             QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Авторы:")) +
-            QStringLiteral("<br>vova791 — Салата Владимир<br>Codex ChatGPT"), QMessageBox::Ok, this);
+            QStringLiteral("<br>vova791 — Салата Владимир<br>Codex ChatGPT<br><br>") +
+            Localization::text(QStringLiteral("Оригинальный код: GPLv3+ с исключением для ядра. Без гарантий.")) +
+            QStringLiteral("<br><a href=\"https://github.com/citrongames/Kega-Refusion/blob/master/LICENSING.md\">") +
+            Localization::text(QStringLiteral("Лицензии и условия распространения")) +
+            QStringLiteral("</a>"), QMessageBox::Ok, this);
         about.setObjectName(QStringLiteral("aboutDialog"));
         about.setIconPixmap(windowIcon().pixmap(64,64));
         about.setTextFormat(Qt::RichText);

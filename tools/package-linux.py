@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 sys.dont_write_bytecode = True
 from package_symbols import strip_binary
+from package_notices import copy_core32x_notices
 
 
 PLUGIN_FILES = (
@@ -168,9 +169,21 @@ Windows и Linux x86_64 используют общий контракт сет�
 """
     (stage / "ЗАПУСК-LINUX.txt").write_text(instruction, encoding="utf-8")
     notice = stage / "licenses"
+    copy_core32x_notices(root, notice)
+    for name in ("LICENSE", "PROVENANCE.md"):
+        copy(root / "src/paprium" / name, notice / "paprium" / name)
     shutil.copytree(root / "build/deps/video-minimal/linux/share/kegarefusion-ffmpeg", notice / "ffmpeg")
+    for name in ("LICENSE", "LICENSE-EXCEPTION", "LICENSING.md"):
+        shutil.copy2(root / name, notice / name)
     for source, name in (
         (root / "THIRD_PARTY.md", "THIRD_PARTY.md"),
+        (root / "assets/fonts/OFL.txt", "PressStart2P-OFL.txt"),
+        (root / "third_party/minimp3/LICENSE", "minimp3-CC0.txt"),
+        (root / "third_party/rcheevos/LICENSE", "rcheevos-LICENSE.txt"),
+        (root / "third_party/libarchive-LICENSE.txt", "libarchive-LICENSE.txt"),
+        (root / "third_party/liblzma-LICENSE.txt", "liblzma-LICENSE.txt"),
+        (root / "third_party/zlib-LICENSE.txt", "zlib-LICENSE.txt"),
+        (root / "third_party/gdapt-NOTICE.txt", "gdapt-NOTICE.txt"),
         (root / "third_party/libco/LICENSE.txt", "libco-LICENSE.txt"),
         (root / "third_party/libco/README.txt", "libco-PROVENANCE.txt"),
         (root / "tools/patches/genesis-plus-gx-link-cable.README.md", "LinkCable-PROVENANCE.md"),

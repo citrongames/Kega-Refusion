@@ -75,4 +75,4 @@ See [Building and packaging](docs/building.md) for dependencies, commands, incre
 
 Created by **vova791 — Vladimir Salata**, with **Codex ChatGPT**.
 
-See [THIRD_PARTY.md](THIRD_PARTY.md) for upstream authors, source revisions and licenses. The integrated core includes non-commercial components; this repository is not covered by a single permissive license.
+Original project code is **GPL-3.0-or-later with a core linking exception**. See [Licensing](LICENSING.md), the [GPL text](LICENSE), and the [exception](LICENSE-EXCEPTION). Third-party code keeps its own terms, including the integrated core’s non-commercial restrictions; [THIRD_PARTY.md](THIRD_PARTY.md) lists upstream authors and licenses.
