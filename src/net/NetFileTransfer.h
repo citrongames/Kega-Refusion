@@ -6,11 +6,31 @@
 #include <QString>
 #include <QVector>
 #include <optional>
+#include <memory>
 #include <atomic>
+
+class QLockFile;
 
 // Transport agnostic; prepare and readChunk must run off the emulation thread.
 class NetFileTransfer final {
 public:
+    // Only these marked, locked directories belong to temporary netplay sessions.
+    class TemporaryArea final {
+    public:
+        enum class Kind { Downloads, Session };
+        static std::unique_ptr<TemporaryArea> create(const QString& dataPath, Kind kind,
+                                                      QString* error = nullptr);
+        static void cleanupStale(const QString& dataPath);
+        static void migrateLegacySessions(const QString& dataPath);
+        static bool cleanupOwned(const QString& directory, QString* error = nullptr);
+        ~TemporaryArea();
+        const QString& directory() const { return directory_; }
+        const QString& id() const { return id_; }
+    private:
+        TemporaryArea(QString id, QString directory, std::unique_ptr<QLockFile> lock);
+        QString id_, directory_;
+        std::unique_ptr<QLockFile> lock_;
+    };
     static constexpr qint64 ChunkSize = 64 * 1024;
     static constexpr int MaxFiles = 512;
     static constexpr qint64 MaxFileSize = 8LL * 1024 * 1024 * 1024;
@@ -53,7 +73,8 @@ public:
     class Receiver final {
     public:
         // Call only after local user action. Host paths are never used for output.
-        bool begin(const Manifest& manifest, const QString& dataPath, QString* error = nullptr);
+        bool begin(const Manifest& manifest, const QString& dataPath, QString* error = nullptr,
+                   const QString& downloadRoot = {});
         std::optional<Request> nextRequest(QString* error = nullptr);
         bool writeChunk(const Chunk& chunk, QString* error = nullptr);
         void cancel() { active_ = false; } // Preserve verified .part for resume.

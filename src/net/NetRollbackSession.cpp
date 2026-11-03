@@ -58,7 +58,21 @@ struct NetRollbackSession::Impl {
     std::array<int, GGPO_MAX_PREDICTION_FRAMES + 2> stateFrames{};
     std::array<QImage, GGPO_MAX_PREDICTION_FRAMES + 2> images, secondImages;
     std::array<double, GGPO_MAX_PREDICTION_FRAMES + 2> aspects{}, secondAspects{};
-    bool historyEnabled=false;
+    bool historyEnabled=false, achievementsEnabled=false;
+    struct AchievementFrame { QByteArray memory; int frame=-1; };
+    std::array<AchievementFrame, GGPO_MAX_PREDICTION_FRAMES + 2> achievementFrames;
+    int lastAchievementFrame=-1;
+    void captureAchievements(int frame) {
+        if (!achievementsEnabled || frame<=lastAchievementFrame) return;
+        auto& slot=achievementFrames[size_t(frame)%achievementFrames.size()];
+        // No overwrite of unconsumed frames: reset the local condition history
+        // if a future GGPO configuration ever exceeds the prediction bound.
+        if (slot.frame>=0 && slot.frame!=frame) {
+            for (auto& pending:achievementFrames) pending.frame=-1;
+            lastAchievementFrame=frame-2;
+        }
+        slot.frame=host->captureAchievementMemory(slot.memory) ? frame : -1;
+    }
     int rollbackPosition=0,lastHistoryFrame=0;
     Send send;
     bool running = false, localQueued = false;
@@ -129,7 +143,8 @@ struct NetRollbackSession::Impl {
         ++self.rollbackFrames;
         self.maxRollbackFrames=std::max(self.maxRollbackFrames,++self.rollbackGroupFrames);
         const bool preview=self.historyEnabled&&self.localId==0&&self.rollbackPosition%2==0;
-        self.host->runFrame(preview,false); // Only rewind previews; no presentation, audio queue, achievements or disk writes.
+        self.host->runFrame(preview,false); // No presentation, audio queue, achievement evaluation or disk writes.
+        self.captureAchievements(self.rollbackPosition-1);
         if(ggpo_advance_frame(self.session)!=GGPO_OK) throw std::runtime_error("GGPO rollback advance failed");
         return true;
     }
@@ -178,6 +193,26 @@ void NetRollbackSession::setHistoryEnabled(bool enabled) {
     if(!enabled)for(size_t i=0;i<d->images.size();++i) {
         d->stateBytes-=d->images[i].sizeInBytes()+d->secondImages[i].sizeInBytes();
         d->images[i]={};d->secondImages[i]={};
+    }
+}
+void NetRollbackSession::setAchievementsEnabled(bool enabled) {
+    enabled=enabled && d->session && d->localRole>0;
+    if (d->achievementsEnabled==enabled) return;
+    d->achievementsEnabled=enabled;
+    d->lastAchievementFrame=int(d->frame)-1;
+    for (auto& slot:d->achievementFrames) { slot.frame=-1; slot.memory.clear(); slot.memory.squeeze(); }
+}
+void NetRollbackSession::processConfirmedAchievements(const std::function<void(const QByteArray&)>& consume) {
+    if (!d->achievementsEnabled || !d->session) return;
+    int confirmed=-1; Impl::Scope scope(d.get());
+    if (ggpo_get_confirmed_frame(d->session,&confirmed)!=GGPO_OK) return;
+    confirmed=std::min(confirmed,int(d->frame)-1);
+    while (d->lastAchievementFrame<confirmed) {
+        const int next=d->lastAchievementFrame+1;
+        auto& slot=d->achievementFrames[size_t(next)%d->achievementFrames.size()];
+        if (slot.frame==next) { consume(slot.memory); slot.frame=-1; }
+        else consume({}); // A missing memory map resets conditions, never reads predicted RAM.
+        d->lastAchievementFrame=next;
     }
 }
 bool NetRollbackSession::takeConfirmedHistory(RewindFrame& output) {
@@ -319,6 +354,7 @@ bool NetRollbackSession::afterFrame(QString& error) {
     if(!d->session)return false;
     Impl::Scope scope(d.get());
     try {
+        d->captureAchievements(int(d->frame));
         if(!d->check(ggpo_advance_frame(d->session),error))return false;
         ++d->frame;d->localQueued=false;return true;
     }catch(const std::exception& e){error=QString::fromUtf8(e.what());d->failure=error;return false;}

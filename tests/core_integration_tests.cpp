@@ -1555,11 +1555,6 @@ void testSmsFm(const QString& corePath) {
             "pending SMS FM preference changed active recording metadata");
     require(smsFmOption(host, true) == QLatin1String("disabled"),
             "new recording did not predict the pending power-reset setting");
-    require(host.setNetplayStorage(QStringLiteral("0123456789abcdef0123456789abcdef"), error),
-            "network storage switch failed with pending SMS FM");
-    require(smsFmOption(host) == QLatin1String("enabled"),
-            "network storage switch applied pending SMS FM");
-    expectSmsFmAudio(host, true);
     host.reset();
     require(smsFmOption(host) == QLatin1String("enabled"),
             "soft reset changed the active SMS FM option");

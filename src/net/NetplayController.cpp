@@ -17,6 +17,7 @@
 #include <QHostInfo>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QUuid>
 #include <QMessageBox>
 #include <QtEndian>
 #include <algorithm>
@@ -122,6 +123,10 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     files_->moveToThread(&fileThread_);
     connect(&fileThread_,&QThread::finished,files_,&QObject::deleteLater);
     fileThread_.start();
+    const QString cleanupDataPath = dataPath_;
+    QMetaObject::invokeMethod(files_, [this, cleanupDataPath] {
+        files_->cleanupStale(cleanupDataPath);
+    });
     inputTimer_.setInterval(1000); inputTimer_.setTimerType(Qt::PreciseTimer);
     connect(&inputTimer_,&QTimer::timeout,this,&NetplayController::sendInput);
     reconnectTimer_.setInterval(5000);
@@ -178,8 +183,8 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(lobby_,&NetplayLobby::downloadRomRequested,this,[this]{
         if(!active_ || hosting_ || !allowDownloads_ || manifest_.isEmpty() || downloading_)return;
         downloading_=true;transferDone_=transferTotal_=0;
-        const auto bytes=manifest_;const auto path=dataPath_;
-        QMetaObject::invokeMethod(files_,[this,bytes,path]{files_->acceptManifest(bytes,path);});refreshLobby();
+        const auto bytes=manifest_;const auto path=dataPath_;const auto root=downloadRoot_;
+        QMetaObject::invokeMethod(files_,[this,bytes,path,root]{files_->acceptManifest(bytes,path,root);});refreshLobby();
     });
     connect(lobby_,&NetplayLobby::cancelTransferRequested,this,[this]{
         files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);downloading_=false;refreshLobby();
@@ -203,6 +208,16 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         filePending_.remove(id);if(hosting_)transport_.send(id,MessageKind::Control,json({{"op","file-error"},{"text",error.left(1024)}}));
     });
     connect(files_,&NetTransferWorker::failed,this,[this](const QString& e){if(!active_)return;downloading_=false;status_=e;emit notice(e);refreshLobby();});
+    connect(files_,&NetTransferWorker::temporaryCleaned,this,[this](const QStringList& directories){
+        temporaryAreas_.erase(std::remove_if(temporaryAreas_.begin(),temporaryAreas_.end(),
+            [&directories](const auto& area){return directories.contains(area->directory());}),
+            temporaryAreas_.end());
+    });
+    connect(&session_,&EmulationSession::networkModeApplied,this,[this](int mode){
+        if(mode!=0)return;
+        temporaryModeCleared_=true;
+        queueTemporaryCleanup();
+    });
     connect(&transport_,&NetTransport::peerLatency,this,[this](quint64 id,int ms){
         if(participants_.contains(id)){participants_[id].insert("pingMs",ms);refreshLobby();}
     });
@@ -346,8 +361,13 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         session_.setNetworkWaiting(!hosting_);
     });
     connect(&session_,&EmulationSession::networkGameSource,this,[this](const QString& path,int index){if(active_)prepareSource(path,index);});
-    connect(&session_,&EmulationSession::gameLoaded,this,[this](const QString& path,double,const QString& name){gamePath_=path;gameName_=name;onGameLoaded(path);});
+    connect(&session_,&EmulationSession::gameLoaded,this,[this](const QString& path,double,const QString& name){
+        loadedGamePath_=path;gamePath_=path;gameName_=name;onGameLoaded(path);
+        if(temporaryModeCleared_&&!active_)queueTemporaryCleanup();
+    });
     connect(&session_,&EmulationSession::gameClosed,this,[this]{
+        loadedGamePath_.clear();
+        if(temporaryModeCleared_&&!active_)queueTemporaryCleanup();
         networkQuality_={};lobby_->setNetworkQuality({});
         gamePath_.clear();gameName_.clear();localManifest_.clear();gameReady_=false;roleKinds_ = {};jcart_=false;jcartBase_=0;
         if(active_&&hosting_){manifest_.clear();readyPeers_.clear();announceContent();}
@@ -400,13 +420,13 @@ void NetplayController::startHost(quint16 port,const QString& address,const QStr
     if(!datagrams_.host(transport_.localPort(),&error)) {
         transport_.stop();emit notice(error);QMessageBox::warning(lobby_,t("Онлайн"),error);return;
     }
+    if(!reserveTemporarySession(&error)) {datagrams_.stop();transport_.stop();emit notice(error);return;}
     rosterBytes_.clear();lastLobbyBytes_.clear();udpReadyPeers_.clear();
     active_=hosting_=true;localId_=0;localRole_=1;allowCommands_=true;allowDownloads_=true;linkCable_=false;roleKinds_ = {};jcart_=false;jcartBase_=0;
     controllerAdapter_=session_.controllerAdapter();
     playerCount_=int(session_.controllerPlayerCount());
     if(!validControllerAdapter(controllerAdapter_) || playerCount_<2 || playerCount_>int(MaxControllerPlayers)) {controllerAdapter_=0;playerCount_=2;}
     QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(true);});
-    storageId_=QString::fromLatin1(NetTransport::generateSecret().left(16).toHex());
     invitationKey_=options.inviteSecret;invitationPassword_=password;connectionId_=connectionId;
     lanInvite_.clear();
     const auto connection=NetInterfaces::choose(connectionId_);
@@ -430,9 +450,9 @@ void NetplayController::startJoin(const QString& invitation,const QString& passw
     if(options.password.isEmpty())options.password=QUrlQuery(QUrl(invitation)).queryItemValue("password",QUrl::FullyDecoded);
     joinInvite_=invitation;joinPassword_=options.password;
     if(!transport_.join(options,&error)){QMessageBox::warning(lobby_,t("Онлайн"),error);return;}
+    if(!reserveTemporarySession(&error)) {transport_.stop();emit notice(error);return;}
     active_=true;hosting_=false;remoteGameOpen_=false;localRole_=0;localId_=0;allowDownloads_=false;gameReady_=false;linkCable_=false;
     playerCount_=2;controllerAdapter_=0;roleKinds_ = {};jcart_=false;jcartBase_=0;
-    storageId_=QString::fromLatin1(options.inviteSecret.left(16).toHex());
     session_.setNetworkMode(2,storageId_);session_.setNetworkRole(0);
     inputTimer_.start();status_=t("Подключение…");emit activeChanged(true);showLobby();
 }
@@ -445,13 +465,48 @@ void NetplayController::leaveSession(){
     invitationKey_.clear();invitationPassword_.clear();lanInvite_.clear();addressStatus_.clear();invite_.clear();inviteWithPassword_.clear();
     inputTimer_.stop();reconnectTimer_.stop();snapshotTimer_.stop();
     datagrams_.stop();udpReadyPeers_.clear();rosterBytes_.clear();lastLobbyBytes_.clear();heldCommandOwners_.clear();
-    transport_.stop();session_.setNetworkMode(0);session_.setNetworkWaiting(false);
+    transport_.stop();temporaryModeCleared_=false;
+    session_.setNetworkMode(0);session_.setNetworkWaiting(false);
+    downloadRoot_.clear();storageId_.clear();
     files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);
     QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(false);});
     participants_.clear();inputs_.clear();readyPeers_.clear();filePending_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();disconnectedAt_.clear();
     incomingSnapshot_.clear();manifest_.clear();localManifest_.clear();transferDone_=transferTotal_=0;
     hosting_=false;linkCable_=false;gameReady_=false;downloading_=false;snapshotRequested_=false;applyingEpoch_=incomingEpoch_=pendingIncomingEpoch_=0;linkCableRevision_=applyingLinkCableRevision_=0;incomingSize_=pendingIncomingSize_=0;fileChunkExpected_=false;stopping_=false;
     status_=t("Онлайн-сессия завершена");emit activeChanged(false);refreshLobby();lobby_->hide();
+}
+bool NetplayController::reserveTemporarySession(QString* error) {
+    auto downloads=NetFileTransfer::TemporaryArea::create(
+        dataPath_,NetFileTransfer::TemporaryArea::Kind::Downloads,error);
+    if(!downloads)return false;
+    downloadRoot_=downloads->directory();
+    storageId_=QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').toLower();
+    temporaryAreas_.push_back(std::move(downloads));
+    temporaryModeCleared_=false;
+    return true;
+}
+void NetplayController::queueTemporaryCleanup() {
+    if(active_||!temporaryModeCleared_)return;
+    QStringList directories;
+    for(const auto& area:temporaryAreas_) {
+        const auto& path=area->directory();
+        if(!loadedGamePath_.isEmpty()&&
+           loadedGamePath_.startsWith(path+QLatin1Char('/')))continue;
+        directories.append(path);
+    }
+    if(!directories.isEmpty())
+        QMetaObject::invokeMethod(files_,[this,directories]{files_->cleanupTemporary(directories);});
+}
+void NetplayController::finishTemporarySessions() {
+    files_->requestCancel();
+    QStringList directories;
+    for(const auto& area:temporaryAreas_)directories.append(area->directory());
+    QMetaObject::invokeMethod(files_,[this,directories]{
+        files_->cancel();
+        files_->cleanupTemporary(directories);
+        NetFileTransfer::TemporaryArea::cleanupStale(dataPath_);
+    },Qt::BlockingQueuedConnection);
+    temporaryAreas_.clear();
 }
 void NetplayController::onGameLoaded(const QString&){if(active_){gameReady_=hosting_;refreshLobby();}}
 void NetplayController::prepareSource(const QString& path,int archiveIndex){

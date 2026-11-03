@@ -96,6 +96,48 @@ void checkHash(LibretroHost& host,const QByteArray& original) {
     require(hash.toLatin1()==QCryptographicHash::hash(original,QCryptographicHash::Md5).toHex(),
             "RA ROM hash differs from original source bytes");
 }
+void checkNetworkReadOnlySave(const QString& core,const QString& rom,const QString& data) {
+    QLibrary library(core);
+    auto memoryData=reinterpret_cast<void* (*)(unsigned)>(library.resolve("retro_get_memory_data"));
+    require(memoryData,"core SRAM export unavailable");
+    LibretroHost host(core,data);
+    QString error;
+    const QString save=data+"/saves/fixture.srm";
+    auto sram=[&]() {
+        auto* bytes=static_cast<uint8_t*>(memoryData(RETRO_MEMORY_SAVE_RAM));
+        require(bytes,"fixture SRAM unavailable");
+        return bytes;
+    };
+    require(host.load(rom,error),qPrintable(error));
+    host.setNetworkReadOnly(true);
+    sram()[0]=0x55;
+    require(host.pollSaveRam(1000000,error) && host.flushSaveRam(error),qPrintable(error));
+    host.unload();
+    require(!QFile::exists(save) && !QFile::exists(save+".bak"),
+            "read-only client created SRAM save or backup");
+
+    host.setNetworkReadOnly(false);
+    require(host.load(rom,error),qPrintable(error));
+    sram()[0]=0x11;
+    require(host.flushSaveRam(error),qPrintable(error));
+    const auto baseline=readFile(save);
+    require(!baseline.isEmpty() && quint8(baseline[0])==0x11 &&
+            readFile(save+".bak")==baseline,"ordinary SRAM baseline or backup missing");
+    host.setNetworkReadOnly(true);
+    sram()[0]=0x22;
+    require(host.pollSaveRam(2000000,error) && host.flushSaveRam(error),qPrintable(error));
+    host.unload();
+    require(readFile(save)==baseline && readFile(save+".bak")==baseline,
+            "read-only client changed existing SRAM or backup");
+
+    host.setNetworkReadOnly(false);
+    require(host.load(rom,error),qPrintable(error));
+    require(sram()[0]==0x11,"ordinary SRAM baseline was not restored");
+    sram()[0]=0x33;
+    require(host.flushSaveRam(error),qPrintable(error));
+    require(quint8(readFile(save)[0])==0x33 && readFile(save+".bak")==baseline,
+            "ordinary SRAM save or previous-version backup incorrect");
+}
 void run(const QString& core) {
     QTemporaryDir temp;
     require(temp.isValid(),"temporary directory failed");
@@ -105,6 +147,7 @@ void run(const QString& core) {
     writeFile(temp.filePath("fixture.md"),md);
     writeFile(temp.filePath("fixture.smd"),smd);
     for (const auto& ext : {"sms","gg","sg"}) writeFile(temp.filePath(QStringLiteral("fixture.")+ext),z80);
+    checkNetworkReadOnlySave(core,temp.filePath("fixture.md"),temp.filePath("read-only-data"));
     QLibrary library(core);
     auto memoryData=reinterpret_cast<void* (*)(unsigned)>(library.resolve("retro_get_memory_data"));
     require(memoryData,"core memory export unavailable");
@@ -127,6 +170,50 @@ void run(const QString& core) {
     uint8_t save[8]{};
     require(host.readAchievementMemory(0x10000,save,8)==8 &&
             std::memcmp(save,sram,8)==0,"MD achievement SRAM mapping incorrect");
+    QByteArray snapshot;
+    require(host.captureAchievementMemory(snapshot),"achievement memory capture failed");
+    require(snapshot.size() <= 1024*1024+16+32*8,"achievement snapshot exceeded bound");
+    const auto checkSnapshotRead=[&](uint32_t address,uint32_t count) {
+        uint8_t live[16]{}, captured[16]{};
+        require(count <= sizeof(live),"snapshot test read too large");
+        const auto liveCount=host.readAchievementMemory(address,live,count);
+        const auto capturedCount=LibretroHost::readAchievementSnapshot(snapshot,address,captured,count);
+        require(capturedCount==liveCount && std::memcmp(captured,live,liveCount)==0,
+                "achievement snapshot differs from live memory");
+    };
+    for (uint32_t address : {0u,0xfffcu,0x10000u,0x1fffcu,0x20000u})
+        checkSnapshotRead(address,8);
+    const auto* allocation=snapshot.constData();
+    require(host.captureAchievementMemory(snapshot) && snapshot.constData()==allocation,
+            "achievement capture did not reuse output storage");
+    auto* rawRam=static_cast<uint8_t*>(memoryData(RETRO_MEMORY_SYSTEM_RAM));
+    const uint8_t previous=rawRam[0];
+    uint8_t captured{};
+    rawRam[0] ^= 0xff;
+    require(LibretroHost::readAchievementSnapshot(snapshot,0,&captured,1)==1 &&
+            captured==previous,"achievement snapshot changed with live RAM");
+    rawRam[0]=previous;
+    auto badSnapshot=snapshot;
+    qToBigEndian(quint32(33),badSnapshot.data()+8);
+    require(LibretroHost::readAchievementSnapshot(badSnapshot,0,&captured,1)==0,
+            "oversized achievement snapshot region count accepted");
+    require(LibretroHost::readAchievementSnapshot(snapshot.left(snapshot.size()-1),0,&captured,1)==0,
+            "truncated achievement snapshot accepted");
+    QByteArray withGap(16+3*8+2,char(0));
+    std::memcpy(withGap.data(),"KRACHS01",8);
+    qToBigEndian(quint32(3),withGap.data()+8);
+    qToBigEndian(quint32(2),withGap.data()+12);
+    for (int i=0;i<3;++i) {
+        qToBigEndian(quint32(1),withGap.data()+16+i*8);
+        qToBigEndian(i==1 ? quint32(0xffffffffu) : quint32(i==0 ? 0 : 1),
+                     withGap.data()+20+i*8);
+    }
+    withGap[40]='A'; withGap[41]='B';
+    uint8_t gapRead[3]{};
+    require(LibretroHost::readAchievementSnapshot(withGap,0,gapRead,3)==1 && gapRead[0]=='A' &&
+            LibretroHost::readAchievementSnapshot(withGap,1,gapRead,1)==0 &&
+            LibretroHost::readAchievementSnapshot(withGap,2,gapRead,1)==1 && gapRead[0]=='B',
+            "achievement snapshot gap/partial read semantics incorrect");
 
     require(host.saveState(0,error),qPrintable(error));
     const auto oldState=readFile(temp.filePath("data/states/fixture.slot0.krs"));
@@ -156,12 +243,16 @@ void run(const QString& core) {
     checkHash(host,smd);
     host.runFrame(false,false);
     checkMemory(host,memoryData,16);
+    require(host.captureAchievementMemory(snapshot),"SMD achievement memory capture failed");
+    checkSnapshotRead(0,8);
     for (const auto& entry : {std::pair{"sms",11u},std::pair{"gg",15u},std::pair{"sg",33u}}) {
         require(host.load(temp.filePath(QStringLiteral("fixture.")+entry.first),error),qPrintable(error));
         require(host.achievementConsoleId()==entry.second,"8-bit console id incorrect");
         checkHash(host,z80);
         host.runFrame(false,false);
         checkMemory(host,memoryData,entry.second==33u?4u:16u);
+        require(host.captureAchievementMemory(snapshot),"8-bit achievement memory capture failed");
+        checkSnapshotRead(0,8);
     }
 
     // Synthetic CD header and boot ROM: enough to test loading and hashing,
@@ -185,6 +276,9 @@ void run(const QString& core) {
     for (uint32_t address : {0u,0x10000u,0x90000u})
         require(host.readAchievementMemory(address,cdMemory,sizeof(cdMemory))==sizeof(cdMemory),
                 "CD achievement memory map incomplete");
+    require(host.captureAchievementMemory(snapshot),"CD achievement memory capture failed");
+    for (uint32_t address : {0u,0x10000u,0x90000u,0xafffcu,0xb0000u})
+        checkSnapshotRead(address,8);
     require(host.changeDisc(temp.filePath("disc-b.iso"),error),qPrintable(error));
     require(host.achievementHash(error).toLatin1()==
             QCryptographicHash::hash(discB.left(512),QCryptographicHash::Md5).toHex(),

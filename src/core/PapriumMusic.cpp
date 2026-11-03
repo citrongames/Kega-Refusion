@@ -90,12 +90,25 @@ void collectTracks(const QString& directory, std::array<QString, 0x3f>& paths) {
 PapriumMusic::PapriumMusic() = default;
 PapriumMusic::~PapriumMusic() = default;
 
+bool PapriumMusic::isTrackFileName(const QString& fileName) {
+    for (const auto& name : kTrackNames)
+        if (fileName.compare(QString::fromLatin1(name.baseName) + QStringLiteral(".mp3"),
+                             Qt::CaseInsensitive) == 0) return true;
+    return false;
+}
+
+std::array<QString, 0x3f> PapriumMusic::discoverTracks(const QString& romPath) {
+    std::array<QString, 0x3f> paths{};
+    if (romPath.isEmpty()) return paths;
+    const QDir romDirectory(QFileInfo(romPath).absolutePath());
+    collectTracks(papriumDirectory(romDirectory), paths);
+    collectTracks(romDirectory.absolutePath(), paths);
+    return paths;
+}
+
 void PapriumMusic::configure(const QString& romPath) {
     clear();
-    if (romPath.isEmpty()) return;
-    const QDir romDirectory(QFileInfo(romPath).absolutePath());
-    collectTracks(papriumDirectory(romDirectory), paths_);
-    collectTracks(romDirectory.absolutePath(), paths_);
+    paths_ = discoverTracks(romPath);
 }
 
 void PapriumMusic::clear() {

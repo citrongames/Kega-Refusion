@@ -140,6 +140,7 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     invite_ = new QLineEdit(inviteBox);
     invite_->setObjectName(QStringLiteral("netplayInvite"));
     invite_->setReadOnly(true);
+    invite_->setEchoMode(QLineEdit::Password);
     invite_->setPlaceholderText(t("Доступно после создания сеанса"));
     inviteRow->addWidget(invite_, 1);
     copyInvite_ = new QPushButton(t("Копировать"), inviteBox);
@@ -391,6 +392,7 @@ void NetplayLobby::showJoinDialog() {
     auto* form = new QFormLayout;
     auto* invite = new QLineEdit(dialog);
     invite->setObjectName(QStringLiteral("netplayJoinInvite"));
+    invite->setEchoMode(QLineEdit::Password);
     invite->setPlaceholderText(t("Вставьте приглашение от хоста"));
     form->addRow(t("Приглашение:"), invite);
     auto* password = new QLineEdit(dialog);

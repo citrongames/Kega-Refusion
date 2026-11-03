@@ -267,3 +267,15 @@ The overlay now contains only one-decimal numbers: emulation `59.9`, game estima
 - Linux and Windows application builds succeeded. No new emulation-frame polling or disk activity was added for the controls UI; captured-device state uses reusable buffers. No Windows desktop automation or interactive Windows gameplay checks were performed.
 - Investigated the reported Contra: Hard Corps red screen by inspecting the supplied USA/Korea ROM and CHT: `NNCT-AAH4` changes initial lives at 0x5FA from 3 to 99; the startup checksum comparison at 0x384 fails without the accompanying Master Code. `EABT-AA56` skips that check. No emulator workaround or delayed cheat activation was introduced.
 - Published Windows EXE SHA-256: `04a0a5415cc91488b6ffbbc01f594a4fea512fcc5383cc494dbf60ef8f3bc25a`. Published EXE, both core modules and language catalogs match build sources; the same five Linux components were compared inside the archive.
+
+
+## 0.20.3 — network Softcore, complete media transfer and temporary files
+
+- `achievements_host_tests` passed against the real core: bounded immutable snapshot parity for MD/SMD/SMS/GG/SG/CD, null gaps and invalid ranges, allocation reuse, and read-only client SRAM poll/flush/unload preserving an existing save/backup. Normal host writes still persist with the previous backup.
+- `netplay_achievement_rollback_tests` passed: two process-isolated real cores with delayed GGPO packets, incorrect predicted RAM observed, matching corrected confirmed-frame streams. No server or real account was contacted.
+- `netplay_achievement_tests` passed with original ROM and mocked HTTP: spectator suppression, requested Hardcore downgraded, exactly one confirmed Softcore award, and continued gameplay with no further awards/errors after logout. Fixture metadata and raw Genesis memory addresses were corrected before the passing run.
+- `net_file_tests` passed: complete multitrack CUE+MP3 reception, M3U dependencies, Paprium soundtrack inclusion without unrelated MP3, full-file integrity/resume checks, owned/stale cleanup, retained active-owner files and user source ROMs, and idempotent legacy save migration without overwrites.
+- `netplay_session_tests --moderation` passed: kick/ban/rejoin and host continuation, ordinary quick-state storage after leaving, failed replacement preserving the loaded game. The fixture report writer now commits atomically so its directory watcher cannot read a partially written report.
+- Linux and Windows application builds passed. Invitation fields use password echo mode in both lobby and join dialog; copy buttons still read original invitation data. No Windows desktop automation was used.
+- Legacy testbuild cleanup was performed only after confirming no KegaRefusion process was running: 38 old session directories and 3 old download directories were removed; one saved state was copied into ordinary storage and SHA-256 verified before deletion.
+- Published Windows EXE SHA-256: `9c6f79d06c3bcfe3b882ec87b3025ecd62ccaef066ce949ad3db4a4bab71eb56`. Application, both core modules and language files were matched against build sources on both platforms.

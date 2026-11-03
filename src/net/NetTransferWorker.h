@@ -2,6 +2,7 @@
 
 #include "NetFileTransfer.h"
 #include <QObject>
+#include <QStringList>
 #include <atomic>
 #include <optional>
 
@@ -16,7 +17,10 @@ public:
 public slots:
     void setSharingEnabled(bool enabled);
     void prepare(const QString& path, int archiveIndex = -1);
-    void acceptManifest(const QByteArray& manifestBytes, const QString& dataPath);
+    void acceptManifest(const QByteArray& manifestBytes, const QString& dataPath,
+                        const QString& downloadRoot = {});
+    void cleanupTemporary(const QStringList& directories);
+    void cleanupStale(const QString& dataPath);
     void receiveChunk(const QByteArray& bytes);
     void requestChunk(quint64 peerId, const QByteArray& bytes);
     void cancel();
@@ -31,6 +35,7 @@ signals:
     void progress(qint64 received, qint64 total);
     void completed(const QString& path);
     void failed(const QString& error);
+    void temporaryCleaned(const QStringList& directories);
 
 private:
     void queueNext();

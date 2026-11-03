@@ -113,11 +113,12 @@ void NetTransferWorker::prepare(const QString& path, int archiveIndex) {
 }
 
 void NetTransferWorker::acceptManifest(const QByteArray& manifestBytes,
-                                       const QString& dataPath) {
+                                       const QString& dataPath,
+                                       const QString& downloadRoot) {
     receiver_.cancel();
     QString error;
     const auto manifest = NetFileTransfer::Manifest::fromBytes(manifestBytes, &error);
-    if (!manifest || !receiver_.begin(*manifest, dataPath, &error)) {
+    if (!manifest || !receiver_.begin(*manifest, dataPath, &error, downloadRoot)) {
         emit failed(error);
         return;
     }
@@ -169,4 +170,21 @@ void NetTransferWorker::queueNext() {
     }
     const auto request = receiver_.nextRequest();
     if (request) emit requestReady(encodeRequest(receivingId_, *request));
+}
+
+void NetTransferWorker::cleanupTemporary(const QStringList& directories) {
+    QStringList cleaned;
+    for (const auto& directory : directories) {
+        QString error;
+        if (NetFileTransfer::TemporaryArea::cleanupOwned(directory, &error))
+            cleaned.append(directory);
+        else if (!error.isEmpty())
+            emit failed(error);
+    }
+    emit temporaryCleaned(cleaned);
+}
+
+void NetTransferWorker::cleanupStale(const QString& dataPath) {
+    NetFileTransfer::TemporaryArea::migrateLegacySessions(dataPath);
+    NetFileTransfer::TemporaryArea::cleanupStale(dataPath);
 }

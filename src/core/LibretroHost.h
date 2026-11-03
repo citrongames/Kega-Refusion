@@ -78,8 +78,6 @@ public:
     QByteArray serialize() const;
     QByteArray netplayDigest() const;
     static QByteArray unpackNetworkState(const QByteArray& packed);
-    bool setNetplayStorage(const QString& scope, QString& error);
-    void deferNetplayStorageClear();
     bool unserialize(const QByteArray& state);
     unsigned occupiedStateSlots() const;
     QByteArray captureRewindState() const;
@@ -101,12 +99,16 @@ public:
     unsigned achievementConsoleId() const;
     QString achievementHash(QString& error) const;
     uint32_t readAchievementMemory(uint32_t address, uint8_t* buffer, uint32_t count);
+    bool captureAchievementMemory(QByteArray& output);
+    static uint32_t readAchievementSnapshot(const QByteArray& snapshot, uint32_t address,
+                                            uint8_t* buffer, uint32_t count);
     QString achievementHardcoreBlockReason() const;
     std::function<QByteArray()> captureAchievementProgress;
     std::function<void(const QByteArray&)> restoreAchievementProgress;
     const QString& movieCompatibilityWarning() const { return movieCompatibilityWarning_; }
     void setMoviePlayback(bool playback) { moviePlayback_ = playback; }
     bool flushSaveRam(QString& error);
+    void setNetworkReadOnly(bool readOnly) { networkReadOnly_ = readOnly; }
     bool pollSaveRam(qint64 nowMs, QString& error);
     void setButtons(unsigned port, unsigned mask);
     // Virtual console ports, independent of physical input device selection.
@@ -177,6 +179,7 @@ private:
     bool restoreSaveRam(QString& error);
     bool updateSaveRam(qint64 nowMs, bool force, QString& error);
     void resetAchievementMemory();
+    bool initializeAchievementMemory();
     static void achievementCoreMemoryInfo(uint32_t id, rc_libretro_core_memory_info_t* info);
     static void* achievementCdOpenTrack(const char* path, uint32_t track);
     static size_t achievementCdReadSector(void* track, uint32_t sector, void* buffer, size_t count);
@@ -193,9 +196,6 @@ private:
     static thread_local LibretroHost* active_;
     QLibrary library_;
     std::unique_ptr<Api> api_;
-    QString netplaySaveRoot_;
-    bool clearNetplayStorageOnUnload_ = false;
-    QString storageRoot() const { return netplaySaveRoot_.isEmpty() ? dataPath_ : netplaySaveRoot_; }
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
     QString movieCompatibilityWarning_;
     void refreshRecordingIdentity();
@@ -251,4 +251,5 @@ private:
     QByteArray audio_;
     bool videoEnabled_ = true, audioEnabled_ = true;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
+    bool networkReadOnly_ = false;
 };

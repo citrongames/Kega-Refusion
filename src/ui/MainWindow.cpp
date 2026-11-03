@@ -547,6 +547,7 @@ MainWindow::~MainWindow() {
     if (netplay_) netplay_->leaveSession();
     // The direct audio producer must stop before QObject destroys AudioOutput.
     session_.shutdown();
+    netplay_->finishTemporarySessions();
 }
 
 void MainWindow::buildMenus() {

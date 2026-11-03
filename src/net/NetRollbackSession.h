@@ -29,6 +29,10 @@ public:
         QImage secondImage; double secondAspect=1;
     };
     void setHistoryEnabled(bool enabled);
+    // Only final, locally earned frames reach the achievement runtime. Predicted
+    // frames keep bounded memory snapshots, replaced when GGPO replays them.
+    void setAchievementsEnabled(bool enabled);
+    void processConfirmedAchievements(const std::function<void(const QByteArray&)>& consume);
     bool takeConfirmedHistory(RewindFrame& frame);
     // At most one snapshot per second, using GGPO's existing UDP quality replies.
     bool takeQuality(QJsonObject& quality,bool realtime);

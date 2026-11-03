@@ -421,18 +421,26 @@ void EmulationSession::run() {
     bool achievementHardcore = false, achievementResetRequested = false;
     bool achievementPolicyRejected = false;
     bool achievementSuppressed = false;
+    int networkMode=0, achievementNetworkRole=0;
+    const QByteArray* confirmedAchievementMemory=nullptr;
     QString achievementStatusOverride;
     AchievementsClient achievements(dataPath_, {
         [&](uint32_t address, uint8_t* buffer, uint32_t count) {
-            return host.readAchievementMemory(address,buffer,count);
+            return confirmedAchievementMemory
+                ? LibretroHost::readAchievementSnapshot(*confirmedAchievementMemory,address,buffer,count)
+                : host.readAchievementMemory(address,buffer,count);
         },
         [this](const AchievementHttpRequest& request) { emit achievementHttpRequest(request); },
         [&](const AchievementsState& state) {
             achievementState = state;
             if (!achievementStatusOverride.isEmpty()) achievementState.status = achievementStatusOverride;
-            if (achievementSuppressed) achievementState.status = Localization::text(QStringLiteral("Учёт достижений отключён для записи управления или онлайн-сессии."));
+            if (achievementSuppressed) achievementState.status = Localization::text(QStringLiteral("Учёт достижений отключён при воспроизведении записи."));
+            else if (networkMode && state.enabled && state.loggedIn && state.gameId && !state.loading)
+                achievementState.status = Localization::text(achievementNetworkRole>0
+                    ? QStringLiteral("Сетевая игра: достижения учитываются в Softcore.")
+                    : QStringLiteral("Режим зрителя: достижения не засчитываются."));
             emit achievementsChanged(achievementState);
-            const bool hardcore = state.enabled && state.loggedIn && state.hardcore && host.loaded() && !achievementSuppressed;
+            const bool hardcore = state.enabled && state.loggedIn && state.hardcore && host.loaded() && !achievementSuppressed && !networkMode;
             if (hardcore && !host.achievementHardcoreBlockReason().isEmpty()) {
                 achievementPolicyRejected = true;
                 achievementStatusOverride = Localization::text(QStringLiteral("Hardcore недоступен: %1")).arg(host.achievementHardcoreBlockReason());
@@ -445,12 +453,15 @@ void EmulationSession::run() {
             }
         },
         [this](const AchievementNotice& notice) { emit achievementNotice(notice); },
-        [&] { achievementResetRequested = true; }
+        [&] { if (!networkMode) achievementResetRequested = true; }
     });
     host.captureAchievementProgress = [&] {
-        return achievementSuppressed ? QByteArray() : achievements.saveProgress();
+        return achievementSuppressed || networkMode ? QByteArray() : achievements.saveProgress();
     };
-    host.restoreAchievementProgress = [&](const QByteArray& progress) { achievements.restoreProgress(progress); };
+    host.restoreAchievementProgress = [&](const QByteArray& progress) {
+        if (networkMode) achievements.reset();
+        else achievements.restoreProgress(progress);
+    };
     const auto loadAchievements = [&](bool changedMedia = false) {
         if (achievementSuppressed || !achievementEnabled || !host.loaded()) { achievements.unloadGame(); achievements.refresh(); return; }
         if (!achievements.wantsGame()) return;
@@ -473,7 +484,7 @@ void EmulationSession::run() {
         if (achievementHardcoreRequested && !AchievementsHardcoreApproved)
             achievementStatusOverride = Localization::text(QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. Учёт работает в Softcore."));
         achievements.configure(achievementEnabled,achievementHardcoreRequested && AchievementsHardcoreApproved &&
-            blocked.isEmpty() && !achievementSuppressed);
+            blocked.isEmpty() && !achievementSuppressed && !networkMode);
         achievements.refresh();
     };
     auto nextAchievementIdle = Clock::now();
@@ -561,10 +572,22 @@ void EmulationSession::run() {
     pacer.reset(nowNs());
     auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
     NetRollbackSession networkTimeline;
+    bool networkAchievementTracking=false;
+    const auto resetNetworkAchievements = [&] {
+        networkTimeline.setAchievementsEnabled(false);
+        networkAchievementTracking=false;
+        achievements.reset();
+    };
+    const auto evaluateConfirmedAchievements = [&](const QByteArray& memory) {
+        if (memory.isEmpty()) { achievements.reset(); return; }
+        confirmedAchievementMemory=&memory;
+        achievements.frame();
+        confirmedAchievementMemory=nullptr;
+    };
     bool networkQualityVisible=false;
     QJsonArray networkRoster;
     bool networkStepAnnounced=false, frameRequested=false;
-    int networkMode=0, loadedArchiveIndex=-1;
+    int loadedArchiveIndex=-1;
     bool networkLinkCableRequested=false;
     unsigned networkSlots=0;
     quint64 networkEpoch=0, networkPosition=0;
@@ -595,6 +618,7 @@ void EmulationSession::run() {
             emit networkModeFailed(QStringLiteral("Не удалось синхронизировать состояние игры."));return;
         }
         ++networkEpoch;
+        resetNetworkAchievements();
         auto configuration=host.movieConfiguration();
         configuration.insert("networkCompatibility",QString::fromLatin1(host.networkCompatibility().toHex()));
         QString startError;
@@ -698,6 +722,7 @@ void EmulationSession::run() {
 #endif
                 emit networkResyncRequested();
             }
+            if (networkReady) networkTimeline.processConfirmedAchievements(evaluateConfirmedAchievements);
             ++networkPosition;return;
         }
         movie.afterFrame();
@@ -825,6 +850,10 @@ void EmulationSession::run() {
             }
             switch (command.type) {
             case Type::NetMode: {
+                // Preserve offline progress before joining somebody else's game.
+                if (command.value==2 && networkMode!=2 && !host.flushSaveRam(error)) {
+                    networkMode_.store(networkMode); emit networkModeFailed(error); break;
+                }
                 networkTimeline.stop();
                 if(movie.active() && !movie.finish(false,error)) {networkMode_.store(networkMode);emit networkModeFailed(error);break;}
                 if(command.value==0) {
@@ -839,21 +868,10 @@ void EmulationSession::run() {
                         latestFrame_={};videoPending_=false;latestAspect_=4.0/3.0;
                     }
                     host.restoreMovieConfiguration(error);
-                    if(keepHostGame) {
-                        // Flushing or changing scope now would import the live online
-                        // battery into solo saves. Clear the scope after this game ends.
-                        host.deferNetplayStorageClear();
-                    } else {
-                        if(!host.setNetplayStorage({},error))emit errorOccurred(error);
-                    }
                     releaseButtons();
                     paused=false;emit pausedChanged(false);
                     frameAdvanceHeld_.store(false);stepHeldLatched=false;
                     rewindLatched=false;rewindStatus(false);emit rewindProgress(0,0);
-                } else if(!host.setNetplayStorage(command.path,error)) {
-                    networkMode_.store(networkMode);loaded_.store(host.loaded());
-                    if(!host.loaded())emit gameClosed();
-                    emit networkModeFailed(error);break;
                 }
                 if(command.value==1 && !host.setLinkCableEnabled(networkLinkCableRequested,error)) {
                     networkLinkCableRequested=host.linkCableEnabled();emit actionNotice(error);
@@ -861,18 +879,29 @@ void EmulationSession::run() {
                 host.setLinkPresentationRole(networkRole_.load());
                 if(networkLinkCableDesired_.load()==networkLinkCableRequested)emit networkLinkCableChanged(host.linkCableEnabled());
                 emit movieHardwareChanged({});
+                host.setNetworkReadOnly(command.value==2);
                 networkMode=command.value; networkReady=networkMode==1; networkDirty=networkMode==1;
                 networkRoster=networkMode==1?QJsonArray{QJsonObject{{"id","0"},{"role",networkRole_.load()}}}:QJsonArray{};
                 networkEpoch=networkPosition=0; networkRemoteRewinding=false;rewindStatus(false);networkRewindImage={};networkRewindLinkPreview.clear(); networkTimeline.stop(); networkStepAnnounced=false; frameRequested=false; lastNetworkConfiguration={};
-                achievementSuppressed=networkMode!=0;
-                achievements.unloadGame(); configureAchievements();
-                if(!networkMode && host.loaded()) loadAchievements();
+                achievementSuppressed=false;
+                achievementNetworkRole=networkRole_.load();
+                achievementResetRequested=false;
+                resetNetworkAchievements();
+                configureAchievements();
+                // A lobby transition does not change the game/account. Preserve
+                // the loaded set and avoid repeating optional HTTP requests.
+                if (!host.loaded()) achievements.unloadGame();
+                else if (!achievementState.gameId && !achievements.loading()) loadAchievements();
                 clearHistory(); clearAudio(); fastForward_.store(false); rewind_.store(false);
                 pacer.reset(nowNs());
                 if(networkMode && host.loaded()) emit networkGameSource(host.gamePath(),loadedArchiveIndex);
+                emit networkModeApplied(networkMode);
                 break;
             }
             case Type::NetRole:
+                achievementNetworkRole=command.value;
+                resetNetworkAchievements();
+                configureAchievements();
                 host.setLinkPresentationRole(command.value);
                 clearAudio();
                 if(host.loaded() && !host.frame().isNull() && networkRewindImage.isNull())publishVideo(host.frame(),host.aspectRatio());
@@ -950,6 +979,7 @@ void EmulationSession::run() {
                                 }
                             }
                             if(ok) {
+                                resetNetworkAchievements();
                                 lastNetworkConfiguration=config; networkEpoch=epoch; networkPosition=0;
                                 host.setLinkPresentationRole(networkRole_.load());
                                 if(config.value("linkCable").toBool()==networkLinkCableDesired_.load())emit networkLinkCableChanged(host.linkCableEnabled());
@@ -1088,8 +1118,8 @@ void EmulationSession::run() {
                     debugAvailable = {}; emit debugControlsChanged(0,0);
                     host.setLinkPresentationRole(networkRole_.load());
                     loaded_.store(true); releaseButtons(); paused = false;
-                    achievementSuppressed = networkMode!=0; configureAchievements();
-                    if(!networkMode) loadAchievements();
+                    achievementSuppressed = false; configureAchievements();
+                    loadAchievements();
                     networkReady=networkMode==1; networkDirty=networkMode==1;
                     lastNetworkConfiguration={};
                     loadedArchiveIndex=command.value;
@@ -1120,7 +1150,7 @@ void EmulationSession::run() {
                     emit errorOccurred(error);
                     break;
                 }
-                achievements.unloadGame(); achievementSuppressed = networkMode!=0;
+                achievements.unloadGame(); achievementSuppressed = false;
                 host.unload(); achievements.refresh();
                 loaded_.store(false);
                 releaseButtons();
@@ -1387,6 +1417,15 @@ void EmulationSession::run() {
             }
         }
         if(networkDirty && networkMode==1 && host.loaded()) networkSnapshot();
+        const bool trackNetworkAchievements=networkMode && networkReady &&
+            !achievementSuppressed && achievementNetworkRole>0 && achievementState.enabled &&
+            achievementState.loggedIn && !achievementState.loading && achievementState.gameId &&
+            achievementState.unlocked<achievementState.total && !rewind_.load() && !networkRemoteRewinding;
+        if (trackNetworkAchievements!=networkAchievementTracking) {
+            resetNetworkAchievements();
+            networkAchievementTracking=trackNetworkAchievements;
+        }
+        networkTimeline.setAchievementsEnabled(trackNetworkAchievements);
         if(networkMode && networkTimeline.active()) {
             QString networkError;
             if(networkReady && !rewind_.load() && !networkRemoteRewinding && !networkTimeline.idle(networkError)) {
@@ -1397,6 +1436,8 @@ void EmulationSession::run() {
                 emit networkResyncRequested();
             }
         }
+        if (networkMode && networkReady)
+            networkTimeline.processConfirmedAchievements(evaluateConfirmedAchievements);
         if(networkMode && networkTimeline.active()) {
             QJsonObject quality;
             const bool realtime=networkReady && !paused && !networkWaiting_.load() &&
@@ -1534,7 +1575,7 @@ void EmulationSession::run() {
             if (!beforeFrame()) continue;
             frameRequested=false;networkStepAnnounced=false;
             host.runFrame(true,false); // Exactly one video frame; no burst of queued sound.
-            if (!achievementSuppressed) achievements.frame();
+            if (!achievementSuppressed && !networkMode) achievements.frame();
             afterFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
             if (optionsPending) { optionsPending = false; clearHistory(); }
@@ -1563,7 +1604,7 @@ void EmulationSession::run() {
         // Emulated CPU/audio state still advances normally.
         host.runFrame(!fast || present || optionsPending, !fast);
         if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
-        if (!achievementSuppressed) achievements.frame();
+        if (!achievementSuppressed && !networkMode) achievements.frame();
         afterFrame();
         if (host.isCd() && host.discEjected() != lastDiscEjected) {
             clearHistory(); discStatus();

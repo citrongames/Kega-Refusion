@@ -1,8 +1,12 @@
 #include "NetFileTransfer.h"
+#include "../core/PapriumMusic.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QDirIterator>
+#include <QLockFile>
+#include <QUuid>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,8 +23,10 @@ QByteArray hashBytes(const QByteArray& data) {
 }
 bool safeName(const QString& name) {
     static const QRegularExpression pattern(QStringLiteral("^[a-z0-9][a-z0-9_.-]{0,95}$"));
-    return pattern.match(name).hasMatch() && name != "." && name != "..";
+    return (pattern.match(name).hasMatch() && name != "." && name != "..") ||
+           PapriumMusic::isTrackFileName(name);
 }
+
 QByteArray canonical(const Transfer::Manifest& manifest) {
     QJsonArray files;
     for (const auto& file : manifest.files) {
@@ -142,6 +148,27 @@ bool addDisk(Transfer::Prepared* output, const QString& name,
     output->sources.append(std::move(source));
     return true;
 }
+bool isPapriumRom(const QByteArray& rom) {
+    // Genesis Plus GX enables the Paprium bridge for this exact ROM size and
+    // product field (the latter starts at 0x182 in the Mega Drive header).
+    return rom.size() == 0x800000 && rom.mid(0x182, 12) == " T-574120-00";
+}
+bool isPapriumRom(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() != 0x800000 ||
+        !file.seek(0x182)) return false;
+    return file.read(12) == " T-574120-00";
+}
+bool addPapriumTracks(Transfer::Prepared* output, const QString& romPath,
+                      QString* error) {
+    const auto tracks = PapriumMusic::discoverTracks(romPath);
+    for (const auto& path : tracks) {
+        if (path.isEmpty()) continue;
+        const QString name = QFileInfo(path).fileName();
+        if (!addDisk(output, name, path, error)) return false;
+    }
+    return true;
+}
 bool addImage(Transfer::Prepared* output, const QString& sourcePath,
               int discIndex, QString* entry, QString* error) {
     QString path = sourcePath;
@@ -250,6 +277,160 @@ bool safeDownloadedReferences(const QString& path, const Transfer::Manifest& man
 }
 }
 
+namespace {
+constexpr char OwnerMarker[] = "KegaRefusion temporary netplay v2\\n";
+QString ownedRoot(const QString& dataPath, Transfer::TemporaryArea::Kind kind) {
+    return QDir(dataPath).absoluteFilePath(kind == Transfer::TemporaryArea::Kind::Downloads
+        ? QStringLiteral("netplay/downloads") : QStringLiteral("netplay/sessions"));
+}
+bool temporaryName(const QString& name, Transfer::TemporaryArea::Kind kind) {
+    static const QRegularExpression hex(QStringLiteral("^[0-9a-f]{32}$"));
+    return kind == Transfer::TemporaryArea::Kind::Downloads
+        ? name.startsWith(QLatin1String("v2-")) && hex.match(name.mid(3)).hasMatch()
+        : hex.match(name).hasMatch();
+}
+bool marked(const QString& directory) {
+    const QFileInfo info(directory);
+    const QFileInfo markerInfo(directory + "/.owned");
+    if (!info.isDir() || info.isSymLink() || markerInfo.isSymLink() ||
+        !markerInfo.isFile() || markerInfo.size() != qint64(sizeof(OwnerMarker) - 1)) return false;
+    QFile marker(markerInfo.absoluteFilePath());
+    return marker.open(QIODevice::ReadOnly) && marker.readAll() == OwnerMarker;
+}
+QString lockPath(const QString& directory) {
+    const QFileInfo info(directory);
+    return info.absolutePath() + "/." + info.fileName() + ".lock";
+}
+bool safelyRemoveOwned(const QString& directory, QString* error) {
+    if (!QFileInfo::exists(directory)) return true;
+    const QString name = QFileInfo(directory).fileName();
+    const QString parent = QFileInfo(directory).dir().dirName();
+    const bool download = parent == QLatin1String("downloads");
+    if ((download ? !temporaryName(name, Transfer::TemporaryArea::Kind::Downloads)
+                  : parent != QLatin1String("sessions") ||
+                    !temporaryName(name, Transfer::TemporaryArea::Kind::Session)) ||
+        !marked(directory)) {
+        fail(error, "Refusing to delete unowned netplay directory"); return false;
+    }
+    QDirIterator entries(directory, QDir::AllEntries | QDir::Hidden | QDir::System |
+                         QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    int examined = 0;
+    while (entries.hasNext()) {
+        entries.next();
+        if (++examined > 100000 || entries.fileInfo().isSymLink()) {
+            fail(error, "Unsafe temporary directory contents"); return false;
+        }
+    }
+    if (!QDir(directory).removeRecursively()) {
+        fail(error, "Cannot remove temporary netplay directory"); return false;
+    }
+    return true;
+}
+}
+NetFileTransfer::TemporaryArea::TemporaryArea(
+    QString id, QString directory, std::unique_ptr<QLockFile> lock)
+    : id_(std::move(id)), directory_(std::move(directory)), lock_(std::move(lock)) {}
+NetFileTransfer::TemporaryArea::~TemporaryArea() = default;
+
+std::unique_ptr<NetFileTransfer::TemporaryArea>
+NetFileTransfer::TemporaryArea::create(const QString& dataPath, Kind kind, QString* error) {
+    const QString root = ownedRoot(dataPath, kind);
+    if (QFileInfo(root).isSymLink() || !QDir().mkpath(root)) {
+        fail(error, "Cannot create temporary netplay root"); return {};
+    }
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-').toLower();
+        const QString name = kind == Kind::Downloads ? "v2-" + id : id;
+        const QString directory = root + '/' + name;
+        if (QFileInfo::exists(directory)) continue;
+        auto lock = std::make_unique<QLockFile>(lockPath(directory));
+        lock->setStaleLockTime(0); // A live game may retain this directory for hours.
+        if (!lock->tryLock(0)) continue;
+        if (!QDir().mkdir(directory)) continue;
+        QFile marker(directory + "/.owned");
+        if (!marker.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+            marker.write(OwnerMarker, sizeof(OwnerMarker) - 1) != sizeof(OwnerMarker) - 1) {
+            marker.close();
+            QDir(directory).removeRecursively();
+            continue;
+        }
+        marker.close();
+        return std::unique_ptr<TemporaryArea>(
+            new TemporaryArea(id, directory, std::move(lock)));
+    }
+    fail(error, "Cannot reserve temporary netplay directory"); return {};
+}
+bool NetFileTransfer::TemporaryArea::cleanupOwned(const QString& directory, QString* error) {
+    return safelyRemoveOwned(directory, error);
+}
+void NetFileTransfer::TemporaryArea::migrateLegacySessions(const QString& dataPath) {
+    const QString sessions = ownedRoot(dataPath, Kind::Session);
+    if (QFileInfo(sessions).isSymLink()) return;
+    const QDir root(sessions);
+    const auto scopes = root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+    int examined = 0;
+    for (const auto& scope : scopes) {
+        if (++examined > 4096) break;
+        if (!temporaryName(scope.fileName(), Kind::Session)) continue;
+        for (const QString& category : {QStringLiteral("saves"), QStringLiteral("states")}) {
+            const QString sourceDir = scope.absoluteFilePath() + '/' + category;
+            const QString destinationDir = QDir(dataPath).absoluteFilePath(category);
+            if (QFileInfo(sourceDir).isSymLink() || QFileInfo(destinationDir).isSymLink() ||
+                !QFileInfo(sourceDir).isDir() || !QDir().mkpath(destinationDir)) continue;
+            const auto files = QDir(sourceDir).entryInfoList(
+                QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+            int count = 0;
+            for (const auto& source : files) {
+                if (++count > 4096) break;
+                if (source.isSymLink() || !source.isFile() ||
+                    source.size() <= 0 || source.size() > MaxFileSize) continue;
+                qint64 size = 0;
+                const QByteArray digest = hashFile(source.absoluteFilePath(), &size, nullptr);
+                if (digest.isEmpty()) continue;
+                const QString name = source.fileName();
+                const QFileInfo parsed(name);
+                const QString stem = parsed.completeBaseName();
+                const QString extension = parsed.suffix();
+                for (int alternate = -1; alternate < 100; ++alternate) {
+                    const QString candidate = alternate < 0 ? name :
+                        stem + ".netplay-" + scope.fileName() +
+                        (alternate ? QStringLiteral("-%1").arg(alternate) : QString()) +
+                        (extension.isEmpty() ? QString() : "." + extension);
+                    const QString destination = destinationDir + '/' + candidate;
+                    const QFileInfo existing(destination);
+                    if (existing.isSymLink()) continue;
+                    if (existing.exists()) {
+                        qint64 existingSize = 0;
+                        if (existing.size() == size &&
+                            hashFile(destination, &existingSize, nullptr) == digest) break;
+                        continue;
+                    }
+                    if (QFile::copy(source.absoluteFilePath(), destination)) break;
+                    if (!QFileInfo::exists(destination)) break;
+                }
+            }
+        }
+    }
+}
+
+void NetFileTransfer::TemporaryArea::cleanupStale(const QString& dataPath) {
+    for (const Kind kind : {Kind::Downloads}) {
+        const QString root = ownedRoot(dataPath, kind);
+        if (QFileInfo(root).isSymLink()) continue;
+        const QDir dir(root);
+        const auto entries = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+        int examined = 0;
+        for (const auto& info : entries) {
+            if (++examined > 4096) break;
+            if (!temporaryName(info.fileName(), kind) || !marked(info.absoluteFilePath())) continue;
+            QLockFile lock(lockPath(info.absoluteFilePath()));
+            lock.setStaleLockTime(0); // Only a dead owner, never the age of an active session.
+            if (!lock.tryLock(0)) continue; // Another emulator still owns it.
+            safelyRemoveOwned(info.absoluteFilePath(), nullptr);
+        }
+    }
+}
+
 QByteArray NetFileTransfer::Manifest::toBytes() const {
     QJsonObject object = QJsonDocument::fromJson(canonical(*this)).object();
     object.insert("id", QString::fromLatin1(id.toHex()));
@@ -317,7 +498,9 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
         SourceFile source;
         source.file = {result.manifest.entry, rom.size(), hashBytes(rom)};
         source.contents = std::move(rom);
+        const bool paprium = isPapriumRom(source.contents);
         result.sources.append(std::move(source));
+        if (paprium && !addPapriumTracks(&result, path, error)) return std::nullopt;
     } else if (selected.suffix().compare("m3u", Qt::CaseInsensitive) == 0) {
         QFile playlist(path);
         if (!playlist.open(QIODevice::ReadOnly) || playlist.size() <= 0 || playlist.size() > 65536) {
@@ -348,7 +531,9 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
         if (!addImage(&result, path, -1, &result.manifest.entry, error)) return std::nullopt;
     } else {
         result.manifest.entry = "game." + suffix(path);
-        if (!addDisk(&result, result.manifest.entry, path, error)) return std::nullopt;
+        if (!addDisk(&result, result.manifest.entry, path, error) ||
+            (isPapriumRom(path) && !addPapriumTracks(&result, path, error)))
+            return std::nullopt;
     }
     for (const auto& source : result.sources) {
         if (result.manifest.totalSize > MaxTotalSize - source.file.size) {
@@ -397,13 +582,17 @@ std::optional<NetFileTransfer::Chunk> NetFileTransfer::Sender::readChunk(
 }
 
 bool NetFileTransfer::Receiver::begin(const Manifest& manifest, const QString& dataPath,
-                                      QString* error) {
+                                      QString* error, const QString& downloadRoot) {
     active_ = complete_ = false;
     bytesReceived_ = 0;
     if (!validManifest(manifest, error)) return false;
     const QString base = QDir(dataPath).absolutePath();
     const QString netplay = base + "/netplay";
-    const QString downloads = netplay + "/downloads";
+    const QString downloads = downloadRoot.isEmpty() ? netplay + "/downloads"
+                                                      : QDir(downloadRoot).absolutePath();
+    if (!downloadRoot.isEmpty() && !downloads.startsWith(netplay + "/downloads/v2-")) {
+        fail(error, "Invalid temporary download root"); return false;
+    }
     const QString directory = downloads + '/' + QString::fromLatin1(manifest.id.toHex());
     if (!safeOwned(netplay) || !safeOwned(downloads) || !safeOwned(directory) ||
         !QDir().mkpath(directory)) {

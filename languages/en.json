@@ -934,6 +934,9 @@
     "Не удалось прочитать сохранение: %1": "Could not read save: %1",
     "Сохранение в файл доступно только хосту онлайн-сессии.": "Saving to a file is available only to the online session host.",
     "Геймпад порта": "Port gamepad",
-    "Дважды нажмите кнопку для назначения": "Double-click a button to assign"
+    "Дважды нажмите кнопку для назначения": "Double-click a button to assign",
+    "Учёт достижений отключён при воспроизведении записи.": "Achievement tracking is disabled during input playback.",
+    "Сетевая игра: достижения учитываются в Softcore.": "Netplay: achievements are tracked in Softcore.",
+    "Режим зрителя: достижения не засчитываются.": "Spectator mode: achievements are not awarded."
   }
 }

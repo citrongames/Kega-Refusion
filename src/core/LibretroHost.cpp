@@ -45,6 +45,12 @@ QString resolvedBiosPath(const QString& dataPath, const QString& role) {
 }
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
 constexpr qsizetype maxAchievementProgressSize = 2 * 1024 * 1024;
+// The largest supported RetroAchievements map is Sega CD: 0xB0000 bytes.
+constexpr uint32_t maxAchievementSnapshotBytes = 1024 * 1024;
+constexpr qsizetype achievementSnapshotHeaderSize = 16;
+constexpr qsizetype achievementSnapshotRegionSize = 8;
+constexpr uint32_t nullAchievementSnapshotOffset = 0xffffffffu;
+constexpr char achievementSnapshotMagic[] = "KRACHS01";
 bool mdControllerHardware(unsigned system) { return system == 0x80 || system == 0x84; }
 bool smsControllerHardware(unsigned system) {
     return system == 0x10 || system == 0x20 || system == 0x21 || system == 0x81;
@@ -212,7 +218,7 @@ bool LibretroHost::initialize(QString& error) {
     }
     active_ = this;
     systemPath_ = QDir::toNativeSeparators(dataPath_ + "/bios").toUtf8();
-    savePath_ = QDir::toNativeSeparators(storageRoot() + "/saves").toUtf8();
+    savePath_ = QDir::toNativeSeparators(dataPath_ + "/saves").toUtf8();
     api_->set_environment(environment);
     api_->set_video_refresh(video);
     api_->set_audio_sample(audioSample);
@@ -579,12 +585,7 @@ void LibretroHost::unload() {
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
     batterySave_.clear(); cheats_.clear(); movieCheats_.clear(); movieCheatsActive_ = false; activeCheatCodes_.clear();
-    if (clearNetplayStorageOnUnload_) {
-        // The scoped RAM and the core's own unload writer have finished.
-        netplaySaveRoot_.clear();
-        savePath_ = QDir::toNativeSeparators(dataPath_ + QStringLiteral("/saves")).toUtf8();
-        clearNetplayStorageOnUnload_ = false;
-    }
+
 }
 bool LibretroHost::frameInputPolled() const {
     if (linkPeer_ && linkPresentationRole_==2) return linkPeer_->frameInputPolled();
@@ -1180,45 +1181,6 @@ QByteArray LibretroHost::unpackNetworkState(const QByteArray& packed) {
         reinterpret_cast<const Bytef*>(packed.constData()+4),uLong(packed.size()-4))!=Z_OK||actual!=length)return {};
     return result;
 }
-void LibretroHost::deferNetplayStorageClear() {
-    clearNetplayStorageOnUnload_ = !netplaySaveRoot_.isEmpty();
-}
-bool LibretroHost::setNetplayStorage(const QString& scope,QString& error) {
-    // Never move live online battery bytes into the ordinary save directory.
-    if (scope.isEmpty() && clearNetplayStorageOnUnload_ && loaded_) {
-        error.clear();
-        return true;
-    }
-    if (!scope.isEmpty() && (scope.size()!=32 || QByteArray::fromHex(scope.toLatin1()).toHex()!=scope.toLatin1())) {
-        error=QStringLiteral("Invalid network storage identity"); return false;
-    }
-    const QString next=scope.isEmpty()?QString():dataPath_+QStringLiteral("/netplay/sessions/")+scope;
-    const QString destination=next.isEmpty()?dataPath_:next;
-    for (const auto* directory:{"saves","states"}) if (!QDir().mkpath(destination+QLatin1Char('/')+QLatin1String(directory))) {
-        error=QStringLiteral("Cannot create network save directory");return false;
-    }
-    if (!flushSaveRam(error)) return false;
-    const auto state=loaded_?captureMovieState():QByteArray();
-    if (loaded_ && state.isEmpty()) {error=QStringLiteral("Cannot preserve game state for network session");return false;}
-    const auto previousRoot=netplaySaveRoot_;const auto previousPath=savePath_;
-    netplaySaveRoot_=next;savePath_=QDir::toNativeSeparators(destination+QStringLiteral("/saves")).toUtf8();
-    if(loaded_) {
-        const bool playback=moviePlayback_;moviePlayback_=true;
-        bool ok=hardReset(error,false);
-        if(ok)ok=restoreMovieState(state,error);
-        if(!ok) {
-            const auto originalError=error;netplaySaveRoot_=previousRoot;savePath_=previousPath;
-            QString rollbackError;
-            if(!hardReset(rollbackError,false)||!restoreMovieState(state,rollbackError))unload();
-            error=originalError;
-        }
-        moviePlayback_=playback;
-        if (ok) clearNetplayStorageOnUnload_ = false;
-        return ok;
-    }
-    clearNetplayStorageOnUnload_ = false;
-    return true;
-}
 QByteArray LibretroHost::serialize() const {
     if (!loaded_) return {};
     if (linkPeer_) return captureLinkedState();
@@ -1235,9 +1197,9 @@ bool LibretroHost::unserialize(const QByteArray& state) {
     applyControllerPorts();
     return true;
 }
-QString LibretroHost::statePath(int slot) const { return storageRoot() + "/states/" + gameKey_ + (linkRequested_ ? QStringLiteral(".link") : QString()) + QStringLiteral(".slot%1.krs").arg(slot); }
+QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + (linkRequested_ ? QStringLiteral(".link") : QString()) + QStringLiteral(".slot%1.krs").arg(slot); }
 QString LibretroHost::saveReadPath(const QString& directory, const QString& suffix) const {
-    const QString prefix = storageRoot() + QLatin1Char('/') + directory + QLatin1Char('/');
+    const QString prefix = dataPath_ + QLatin1Char('/') + directory + QLatin1Char('/');
     const QString linkSuffix=directory==QLatin1String("states")&&linkRequested_?QStringLiteral(".link"):QString();
     const QString preferred = prefix + gameKey_ + linkSuffix + suffix;
     const QFileInfo existing(preferred);
@@ -1537,11 +1499,10 @@ QString LibretroHost::achievementHash(QString& error) const {
     achievementHashCache_ = QString::fromLatin1(hash);
     return achievementHashCache_;
 }
-uint32_t LibretroHost::readAchievementMemory(uint32_t address, uint8_t* buffer, uint32_t count) {
-    if (linkPeer_ && linkPresentationRole_==2) { Activation scope(linkPeer_.get()); return linkPeer_->readAchievementMemory(address,buffer,count); }
-    if (!loaded_ || !buffer || !count) return 0;
+bool LibretroHost::initializeAchievementMemory() {
+    if (!loaded_) return false;
     const unsigned console = achievementConsoleId();
-    if (!console) return 0;
+    if (!console) return false;
     if (!achievementMemoryInitialized_ || achievementMemoryConsole_ != console) {
         resetAchievementMemory();
         retro_memory_map map{};
@@ -1551,7 +1512,104 @@ uint32_t LibretroHost::readAchievementMemory(uint32_t address, uint8_t* buffer, 
         achievementMemoryInitialized_ = true;
         achievementMemoryConsole_ = console;
     }
+    return true;
+}
+uint32_t LibretroHost::readAchievementMemory(uint32_t address, uint8_t* buffer, uint32_t count) {
+    if (linkPeer_ && linkPresentationRole_==2) { Activation scope(linkPeer_.get()); return linkPeer_->readAchievementMemory(address,buffer,count); }
+    if (!buffer || !count || !initializeAchievementMemory()) return 0;
     return rc_libretro_memory_read(&achievementMemory_, address, buffer, count);
+}
+bool LibretroHost::captureAchievementMemory(QByteArray& output) {
+    if (linkPeer_ && linkPresentationRole_==2) {
+        Activation scope(linkPeer_.get());
+        return linkPeer_->captureAchievementMemory(output);
+    }
+    if (!initializeAchievementMemory()) { output.clear(); return false; }
+    const auto& regions = achievementMemory_;
+    if (!regions.count || regions.count > RC_LIBRETRO_MAX_MEMORY_REGIONS) {
+        output.clear(); return false;
+    }
+    uint32_t span = 0, payload = 0;
+    bool hasMemory = false;
+    for (uint32_t i = 0; i < regions.count; ++i) {
+        if (!regions.size[i] || regions.size[i] > maxAchievementSnapshotBytes - span) {
+            output.clear(); return false;
+        }
+        span += uint32_t(regions.size[i]);
+        if (regions.data[i]) {
+            hasMemory = true;
+            if (regions.size[i] > maxAchievementSnapshotBytes - payload) {
+                output.clear(); return false;
+            }
+            payload += uint32_t(regions.size[i]);
+        }
+    }
+    if (!hasMemory) { output.clear(); return false; }
+    const qsizetype payloadStart = achievementSnapshotHeaderSize +
+        qsizetype(regions.count) * achievementSnapshotRegionSize;
+    output.resize(payloadStart + payload);
+    char* bytes = output.data();
+    std::memcpy(bytes, achievementSnapshotMagic, 8);
+    qToBigEndian(regions.count, bytes + 8);
+    qToBigEndian(payload, bytes + 12);
+    uint32_t offset = 0;
+    for (uint32_t i = 0; i < regions.count; ++i) {
+        const qsizetype descriptor = achievementSnapshotHeaderSize +
+            qsizetype(i) * achievementSnapshotRegionSize;
+        const uint32_t size = uint32_t(regions.size[i]);
+        qToBigEndian(size, bytes + descriptor);
+        qToBigEndian(regions.data[i] ? offset : nullAchievementSnapshotOffset, bytes + descriptor + 4);
+        if (regions.data[i]) {
+            std::memcpy(bytes + payloadStart + offset, regions.data[i], size);
+            offset += size;
+        }
+    }
+    return true;
+}
+uint32_t LibretroHost::readAchievementSnapshot(const QByteArray& snapshot, uint32_t address,
+                                               uint8_t* buffer, uint32_t count) {
+    if (!buffer || !count || snapshot.size() < achievementSnapshotHeaderSize ||
+        std::memcmp(snapshot.constData(), achievementSnapshotMagic, 8)) return 0;
+    const char* bytes = snapshot.constData();
+    const uint32_t regions = qFromBigEndian<uint32_t>(bytes + 8);
+    const uint32_t payload = qFromBigEndian<uint32_t>(bytes + 12);
+    if (!regions || regions > RC_LIBRETRO_MAX_MEMORY_REGIONS ||
+        payload > maxAchievementSnapshotBytes) return 0;
+    const qsizetype payloadStart = achievementSnapshotHeaderSize +
+        qsizetype(regions) * achievementSnapshotRegionSize;
+    if (snapshot.size() != payloadStart + payload) return 0;
+    uint32_t span = 0, expectedOffset = 0;
+    for (uint32_t i = 0; i < regions; ++i) {
+        const qsizetype descriptor = achievementSnapshotHeaderSize +
+            qsizetype(i) * achievementSnapshotRegionSize;
+        const uint32_t size = qFromBigEndian<uint32_t>(bytes + descriptor);
+        const uint32_t offset = qFromBigEndian<uint32_t>(bytes + descriptor + 4);
+        if (!size || size > maxAchievementSnapshotBytes - span) return 0;
+        span += size;
+        if (offset != nullAchievementSnapshotOffset) {
+            if (offset != expectedOffset || size > payload - expectedOffset) return 0;
+            expectedOffset += size;
+        }
+    }
+    if (expectedOffset != payload) return 0;
+    uint32_t read = 0;
+    for (uint32_t i = 0; i < regions; ++i) {
+        const qsizetype descriptor = achievementSnapshotHeaderSize +
+            qsizetype(i) * achievementSnapshotRegionSize;
+        const uint32_t size = qFromBigEndian<uint32_t>(bytes + descriptor);
+        const uint32_t offset = qFromBigEndian<uint32_t>(bytes + descriptor + 4);
+        if (address >= size) { address -= size; continue; }
+        if (offset == nullAchievementSnapshotOffset) break;
+        const uint32_t available = size - address;
+        const uint32_t copied = std::min(available, count);
+        std::memcpy(buffer, bytes + payloadStart + offset + address, copied);
+        read += copied;
+        if (copied == count) break;
+        count -= copied;
+        buffer += copied;
+        address = 0;
+    }
+    return read;
 }
 QString LibretroHost::achievementHardcoreBlockReason() const {
     if (!loaded_) return Localization::text(QStringLiteral("Сначала откройте игру."));
@@ -2121,7 +2179,7 @@ bool LibretroHost::pollSaveRam(qint64 nowMs, QString& error) {
 bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
     if (linkParent_) return true;
     error.clear();
-    if (!loaded_ || !saveRamWritable_ || moviePlayback_) return true;
+    if (!loaded_ || !saveRamWritable_ || moviePlayback_ || networkReadOnly_) return true;
     if (hasCdHardware()) {
         // An unmodified CD core retains its own unload writer. Paprium is a
         // cartridge and may also expose ordinary SRAM below.
@@ -2144,7 +2202,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         const auto data = api_->get_memory_data(id);
         if (!size || !data) continue;
-        const auto path = storageRoot() + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
+        const auto path = dataPath_ + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
         if (size > size_t(maxStateSize)) {
             error = Localization::text(QStringLiteral("Ядро вернуло неверный размер памяти сохранения.")); return false;
         }

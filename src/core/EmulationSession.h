@@ -113,6 +113,7 @@ public:
 signals:
     void networkQualityChanged(const QJsonObject& quality);
     void networkModeFailed(const QString& error);
+    void networkModeApplied(int mode);
     void networkLinkCableChanged(bool enabled);
     void networkCommandRequested(const QByteArray& command);
     void networkSnapshotReady(const QByteArray& snapshot);

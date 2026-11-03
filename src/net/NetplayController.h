@@ -1,5 +1,6 @@
 #pragma once
 #include "NetTransport.h"
+#include "NetFileTransfer.h"
 #include "NetDatagramChannel.h"
 #include <QJsonArray>
 #include <QJsonObject>
@@ -7,6 +8,7 @@
 #include <QTimer>
 #include <QThread>
 #include <memory>
+#include <vector>
 class EmulationSession;
 class QSettings;
 class QWidget;
@@ -23,6 +25,7 @@ public:
     void joinSession();
     void showLobby();
     void leaveSession();
+    void finishTemporarySessions(); // Call after the emulation thread has stopped.
     void setControllerTopology(int adapter, unsigned playerCount);
     bool active() const { return active_; }
     QString nickname() const;
@@ -60,7 +63,8 @@ private:
     int activePlayerCount() const;
     void compareContent();
     void prepareSource(const QString&,int archiveIndex=-1);
-    EmulationSession& session_;
+    bool reserveTemporarySession(QString* error);
+    void queueTemporaryCleanup();    EmulationSession& session_;
     QString dataPath_;
     QSettings& settings_;
     NetplayLobby* lobby_ = nullptr;
@@ -96,7 +100,9 @@ private:
     QHash<quint64,qint64> commandTimes_;
     QHash<int,QSet<quint64>> heldCommandOwners_;
     bool snapshotRequested_=false;
-    QString storageId_, downloadedPath_;
+    QString storageId_, downloadedPath_, downloadRoot_, loadedGamePath_;
+    std::vector<std::unique_ptr<NetFileTransfer::TemporaryArea>> temporaryAreas_;
+    bool temporaryModeCleared_ = false;
     int sourceArchiveIndex_=-1;
     quint64 hostEpoch_ = 0;
     quint64 localId_ = 0;

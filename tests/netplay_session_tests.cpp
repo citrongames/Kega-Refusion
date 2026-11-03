@@ -11,6 +11,7 @@
 #include <QSettings>
 #include <QProcess>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QTimer>
@@ -179,7 +180,7 @@ public:
         return false;
     }
 };
-static void write(const QString& path,const QByteArray& bytes){QFile f(path);if(!f.open(QIODevice::WriteOnly)||f.write(bytes)!=bytes.size())throw std::runtime_error("fixture write failed");}
+static void write(const QString& path,const QByteArray& bytes){QSaveFile f(path);if(!f.open(QIODevice::WriteOnly)||f.write(bytes)!=bytes.size()||!f.commit())throw std::runtime_error("fixture write failed");}
 static QByteArray read(const QString& path){QFile f(path);if(!f.open(QIODevice::ReadOnly))return {};return f.readAll();}
 // Original 68000 fixture: P1 Up gives a green backdrop and PSG tone; P1 B
 // gives red and silence. The linked consoles therefore have distinct outputs.
@@ -710,8 +711,8 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
                 const QString networkState=data+"/netplay/sessions/"+hostScope+"/states/host.slot9.krs";
                 const QString soloHostState=data+"/states/host.slot9.krs";
                 if(!offlineStateRequested) {session.saveState(9);offlineStateRequested=true;return;}
-                if(!QFile::exists(networkState))return;
-                if(!check(!QFile::exists(soloHostState),"offline continuation wrote a network state into solo storage"))return;
+                if(!QFile::exists(soloHostState))return;
+                if(!check(!QFile::exists(networkState),"quick state was written into temporary network storage"))return;
                 if(!invalidLoadRequested) {
                     framesBeforeInvalidLoad=frames;
                     invalidLoadRequested=true;session.loadGame(root+"/missing.md");return;
@@ -729,8 +730,8 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
                 if(currentGamePath!=QFileInfo(root+"/client.md").absoluteFilePath())return;
                 if(!soloStateRequested) {session.saveState(9);soloStateRequested=true;return;}
                 if(!QFile::exists(data+"/states/client.slot9.krs"))return;
-                if(check(QFile::exists(networkState) && hostGameCloses==0,
-                         "changing the offline game lost its network state or emitted gameClosed"))app.exit(0);
+                if(check(QFile::exists(soloHostState) && hostGameCloses==0,
+                         "changing the offline game lost its ordinary state or emitted gameClosed"))app.exit(0);
                 return;
             }
             ++round;actionSent=reportReceived=false;

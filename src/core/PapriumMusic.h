@@ -16,6 +16,8 @@ public:
     PapriumMusic();
     ~PapriumMusic();
 
+    static std::array<QString, 0x3f> discoverTracks(const QString& romPath);
+    static bool isTrackFileName(const QString& name);
     void configure(const QString& romPath);
     void clear();
 
