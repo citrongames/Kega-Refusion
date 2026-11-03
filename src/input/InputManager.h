@@ -1,5 +1,6 @@
 #pragma once
 #include "ControllerType.h"
+#include "ControllerTopology.h"
 #include <QByteArray>
 #include <QObject>
 #include <QMap>
@@ -43,6 +44,7 @@ public:
     ~InputManager() override;
     QVector<InputDevice> devices() const;
     PlayerMapping mapping(ConsoleProfile profile, int player) const;
+    PlayerMapping ordinaryMapping(ConsoleProfile profile, int player) const;
     void setMapping(ConsoleProfile profile, int player, const PlayerMapping& mapping);
     static PlayerMapping defaultMapping(ConsoleProfile profile, int player);
     static QString bindingName(const PadBinding& binding);
@@ -51,6 +53,9 @@ public:
                                     ControllerType type = ControllerType::Pad);
     static QString targetName(ConsoleProfile profile, int target,
                               ControllerType type = ControllerType::Pad);
+    ControllerAdapter adapter() const;
+    ControllerAdapter adapter(ConsoleProfile profile) const;
+    void setAdapter(ConsoleProfile profile, ControllerAdapter adapter);
     void setProfile(ConsoleProfile profile);
     void setMovieControllers(const QByteArray& controllersJson);
     ConsoleProfile profile() const;
@@ -59,6 +64,7 @@ public:
     ControllerType controllerType(unsigned player) const;
     bool aimWithMouse(unsigned player) const;
     unsigned mouseButtonMask(unsigned player, unsigned qtButtons) const;
+    void setNetworkInputSourceEnabled(bool enabled); // transient local P1 pad source for online pad roles
     void setEnabled(bool enabled); // foreground keyboard, pad commands, and mouse input
     bool backgroundGamepadEnabled() const;
     void setBackgroundGamepadEnabled(bool enabled); // persistent preference
@@ -74,6 +80,7 @@ public:
     void poll(); // timer calls it; explicit for deterministic virtual joystick tests
 signals:
     void devicesChanged();
+    void adapterChanged(int adapter);
     void maskChanged(unsigned player, unsigned mask);
     void connectionChanged(unsigned player, bool connected);
     void controllerTypeChanged(unsigned player, bool sixButton);

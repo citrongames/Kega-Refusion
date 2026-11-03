@@ -6,12 +6,13 @@
 #include <QtGlobal>
 #include <array>
 #include <deque>
+#include "input/ControllerTopology.h"
 
-// One canonical poll of the three controller ports. Aim uses signed 16-bit X
+// One canonical poll of all logical controller players. Aim uses signed 16-bit X
 // in bits 0..15, signed 16-bit Y in bits 16..31, and offscreen in bit 32.
 struct MovieInput {
-    std::array<quint16, 3> buttons{};
-    std::array<quint64, 3> aim{};
+    std::array<quint16, MaxControllerPlayers> buttons{};
+    std::array<quint64, MaxGunPlayers> aim{};
     quint8 commands = 0;
 
     bool operator==(const MovieInput& other) const {
@@ -61,12 +62,19 @@ public:
 
 private:
     struct Run { MovieInput input; quint64 endFrame = 0; };
-    // Leaves room for deque block maps and allocator overhead within the run
-    // budget; the exact allocation footprint remains implementation-specific.
-    static constexpr qsizetype MaxRuns = MaxRunBytes / (sizeof(Run) + 16);
-    static bool parseRuns(const char* bytes, quint32 count, quint64 frames,
+    // Retain the original v1 run-count ceiling so recordings that reached it
+    // can still be loaded and continued. The v2 serialized size is separately
+    // bounded by MaxRunBytes in both movie and checkpoint readers.
+    struct LegacyInputLayout {
+        std::array<quint16, 3> buttons{};
+        std::array<quint64, MaxGunPlayers> aim{};
+        quint8 commands = 0;
+    };
+    struct LegacyRunLayout { LegacyInputLayout input; quint64 endFrame = 0; };
+    static constexpr qsizetype MaxRuns = MaxRunBytes / (sizeof(LegacyRunLayout) + 16);
+    static bool parseRuns(const char* bytes, quint32 count, quint64 frames, quint32 version,
                           std::deque<Run>& out, QString& error);
-    void appendRuns(QByteArray& bytes, quint64 frames) const;
+    void appendRuns(QByteArray& bytes, quint64 frames, quint32 version) const;
     void invalidateResume() { QByteArray().swap(resumeState_); resumeFrame_ = 0; }
     bool prefixMatches(const std::deque<Run>& prefix, quint64 cursor) const;
 

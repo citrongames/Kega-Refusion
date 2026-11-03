@@ -8,6 +8,7 @@
 #include "AchievementNetwork.h"
 #include "NetplaySettingsPage.h"
 #include "net/NetplayController.h"
+#include "net/NetplayTimeline.h"
 #include <cmath>
 #include "../core/EmulationSession.h"
 #include "../core/RomArchive.h"
@@ -180,7 +181,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         qWarning("%s", qPrintable(text));
     });
     connect(input_, &InputManager::maskChanged, this, [this](unsigned port, unsigned mask) {
-        if (port < 3) { padMasks_[port] = mask; session_.setButtons(port,mask | gunMasks_[port]); }
+        if (port < padMasks_.size()) { padMasks_[port] = mask; session_.setButtons(port,mask | (port < gunMasks_.size() ? gunMasks_[port] : 0)); }
     });
     connect(input_, &InputManager::connectionChanged, this, [this](unsigned port, bool connected) {
         session_.setControllerConnected(port, connected);
@@ -188,7 +189,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(input_, &InputManager::controllerTypeChanged, this, [this](unsigned port, bool sixButton) {
         session_.setControllerSixButton(port, sixButton);
     });
-    for (unsigned port = 0; port < 3; ++port) {
+    connect(input_, &InputManager::adapterChanged, this, [this](int adapter) {
+        session_.setControllerAdapter(ControllerAdapter(adapter));
+    });
+    session_.setControllerAdapter(input_->adapter());
+    for (unsigned port = 0; port < MaxControllerPlayers; ++port) {
         session_.setControllerConnected(port, input_->isConnected(port));
         session_.setControllerSixButton(port, input_->sixButton(port));
     }
@@ -265,8 +270,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(netplay_, &NetplayController::readinessWaitingChanged, view_, &GameView::setReadinessWaiting);
     connect(netplay_, &NetplayController::activeChanged, this, [this](bool active) {
         if (netplayLeaveAction_) netplayLeaveAction_->setEnabled(active);
+        updateGunPresentation();
         updateInputEnabled();
     });
+    connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) { updateGunPresentation(); });
     debugAudioGains_.fill(100);
     buildMenus();
     connect(&session_, &EmulationSession::debugControlsChanged, this,
@@ -1909,7 +1916,7 @@ void MainWindow::editSettings(int initialPage) {
         }
         if (row == kControlsSettingsPage && !controls) {
             controls = new ControlsPage(*input_, controlsViewport);
-            controls->setHardwareConfigurationLocked(movieMode_ != 0);
+            controls->setTopologyLocked(movieMode_ != 0 || moviePending_ || session_.networkClient() || session_.networkLinkCable());
             controlsViewport->setWidget(controls);
         }
         pages->setCurrentIndex(row);
@@ -2070,12 +2077,37 @@ void MainWindow::updateGunAim(unsigned player, QPointF position, bool offscreen)
 }
 
 void MainWindow::updateGunConfiguration() {
+    for (unsigned player=0;player<MaxControllerPlayers;++player)
+        session_.setControllerKind(player,input_->controllerType(player));
+    updateGunPresentation();
+}
+
+void MainWindow::updateGunPresentation() {
+    const bool online = netplay_ && netplay_->active();
+    const int localRole = session_.networkRole();
+    unsigned source = 0;
+    bool gunRole = false;
+    if (online) {
+        QJsonArray controllers;
+        for (unsigned player=0;player<MaxControllerPlayers;++player)
+            controllers.append(QJsonObject{{"connected",input_->isConnected(player)},
+                                           {"kind",int(input_->controllerType(player))}});
+        const QJsonObject hardware{{"adapter",int(input_->adapter())},{"controllers",controllers}};
+        source = NetplayTimeline::localInputSource(localRole,hardware);
+        gunRole = localRole >= 1 && localRole <= int(MaxGunPlayers) &&
+                  input_->isConnected(unsigned(localRole-1)) &&
+                  input_->controllerType(unsigned(localRole-1)) != ControllerType::Pad;
+    }
+    input_->setNetworkInputSourceEnabled(online && localRole > 0 && !gunRole);
     int mousePlayer = -1;
     for (unsigned player=0;player<3;++player) {
-        session_.setControllerKind(player,input_->controllerType(player));
-        const bool gun = input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad;
+        const bool gun = input_->isConnected(player) && input_->controllerType(player) != ControllerType::Pad &&
+                         (!online || (gunRole && player == source));
         view_->setCrosshairVisible(player,input_->mapping(input_->profile(),int(player)).showCrosshair);
-        view_->setLightgunEnabled(player,gun, input_->profile() == ConsoleProfile::MegaDrive ? player : player + 1);
+        const unsigned gunNumber = online && gunRole
+            ? unsigned(input_->profile() == ConsoleProfile::MegaDrive ? localRole-1 : localRole)
+            : (input_->profile() == ConsoleProfile::MegaDrive ? player : player + 1);
+        view_->setLightgunEnabled(player,gun,gunNumber);
         if (gun && input_->aimWithMouse(player) && mousePlayer < 0) mousePlayer = int(player);
     }
     view_->setMouseGunPlayer(mousePlayer);

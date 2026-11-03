@@ -1,9 +1,12 @@
 #include "net/NetplayController.h"
 #include "net/NetplayTimeline.h"
 #include "core/EmulationSession.h"
+#include "input/ControllerTopology.h"
 #include "i18n/Localization.h"
 #include "ui/NetplayLobby.h"
 #include <QApplication>
+#include <QComboBox>
+#include <QTableWidget>
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QProcess>
@@ -18,6 +21,7 @@
 #include <QSet>
 #include <QFileSystemWatcher>
 #include <memory>
+#include <functional>
 #include <algorithm>
 #include <QtEndian>
 #include <cstdio>
@@ -25,6 +29,41 @@
 #include <stdexcept>
 class NetplayScenario {
 public:
+    static void verifyRoleCapacity(NetplayController& c) {
+        const auto require=[](bool value,const char* text){if(!value)throw std::runtime_error(text);};
+        c.active_=c.hosting_=true;
+        c.participants_.insert(0,QJsonObject{{"id","0"},{"role","player1"}});
+        c.participants_.insert(7,QJsonObject{{"id","7"},{"role","player8"}});
+        c.participants_.insert(8,QJsonObject{{"id","8"},{"role","player4"}});
+        c.playerCount_=8;
+        c.setControllerTopology(1,5);
+        require(c.activePlayerCount()==5 && c.participants_.value(7).value("role").toString()=="spectator" &&
+                c.participants_.value(8).value("role").toString()=="player4","capacity shrink did not demote only invalid roles");
+        c.lobby_->roleRequested("0","player6");
+        require(c.participants_.value(0).value("role").toString()=="player1","unavailable role was assigned");
+        c.lobby_->roleRequested("0","player5");
+        require(c.participants_.value(0).value("role").toString()=="player5","available role was rejected");
+        c.applyLinkCableConfiguration(true);
+        require(!c.linkCable_,"Link Cable accepted a multitap adapter");
+        c.setControllerTopology(0,2);
+        require(c.participants_.value(0).value("role").toString()=="spectator" &&
+                c.participants_.value(8).value("role").toString()=="spectator","adapter removal retained invalid role");
+        c.leaveSession();
+        c.active_=true;c.hosting_=false;c.localId_=5;
+        const auto malformed=[](const QString& role,int count) {
+            return QJsonDocument(QJsonObject{{"op","lobby"},{"playerCount",count},
+                {"participants",QJsonArray{QJsonObject{{"id","5"},{"role",role}}}}}).toJson(QJsonDocument::Compact);
+        };
+        c.receive(0,kega::net::MessageKind::Control,malformed("player9",8));
+        require(c.participants_.isEmpty(),"out-of-range network role accepted");
+        c.receive(0,kega::net::MessageKind::Control,malformed("player8",2));
+        require(c.participants_.isEmpty(),"role above advertised controller capacity accepted");
+        c.receive(0,kega::net::MessageKind::Control,malformed("player2",9));
+        require(c.participants_.isEmpty(),"invalid network controller capacity accepted");
+        c.receive(0,kega::net::MessageKind::Control,malformed("player5",5));
+        require(c.localRole_==5 && c.playerCount_==5,"expanded host role was not applied");
+        c.leaveSession();
+    }
     static void verifyReadinessWaiting(NetplayController& c) {
         const auto require=[](bool value,const char* text){if(!value)throw std::runtime_error(text);};
         QObject observer;int changes=0;bool waiting=false;
@@ -62,7 +101,7 @@ public:
         c.leaveSession();require(!waiting,"lobby exit did not clear readiness OSD");
         c.active_=true;c.hosting_=false;
         const auto lobby=[](bool ready){return QJsonDocument(QJsonObject{{"op","lobby"},{"participants",QJsonArray{}},
-            {"readinessWaiting",ready},{"connectionWaiting",false}}).toJson(QJsonDocument::Compact);};
+            {"readinessWaiting",ready},{"connectionWaiting",false},{"playerCount",2}}).toJson(QJsonDocument::Compact);};
         c.receive(0,kega::net::MessageKind::Control,lobby(true));
         require(waiting&&!c.connectionWaiting_,"client did not receive host readiness waiting");
         const int before=changes;c.receive(0,kega::net::MessageKind::Control,lobby(true));
@@ -102,6 +141,7 @@ public:
     static quint64 ready(NetplayController& c){return c.readyPeers_.isEmpty()?0:*c.readyPeers_.begin();}
     static int role(NetplayController& c,quint64 id){return c.participants_.value(id).value("role").toString()=="spectator"?0:1;}
     static void assign(NetplayController& c,quint64 id,bool link=false){c.transport_.setRole(id,link?kega::net::Role::Player2:kega::net::Role::Player1);}
+    static void assignRole(NetplayController& c,quint64 id,int role){c.lobby_->roleRequested(QString::number(id),QStringLiteral("player%1").arg(role));}
     static void linkCable(NetplayController& c,bool enabled){c.lobby_->linkCableRequested(enabled);}
     static bool linked(NetplayController& c){return c.linkCable_;}
     static bool active(NetplayController& c){return c.active_;}
@@ -124,6 +164,7 @@ public:
         c.leaveSession();return reconnects;
     }
     static int localRole(NetplayController& c){return c.localRole_;}
+    static int capacity(NetplayController& c){return c.activePlayerCount();}
     static bool waiting(NetplayController& c){return c.connectionWaiting_;}
     static void stopWaiting(NetplayController& c){c.lobby_->stopWaitingRequested();}
     static bool abortConnection(NetplayController& c){
@@ -338,6 +379,164 @@ static int qualityScenario(QApplication& app,const QStringList& args) {
     const int result=app.exec();controller.leaveSession();session.shutdown();return result;
 }
 
+// One short real-core GGPO session: the host P1 jack is disconnected, while
+// the client local P1 drives logical P3 and the host local P1 drives P4.
+static int multitapScenario(QApplication& app,const QStringList& args) {
+    if(args.size()==3 && args[2]=="--multitap") {
+        QTemporaryDir scratch;if(!scratch.isValid())return 1;
+        write(scratch.filePath("host.md"),rom());write(scratch.filePath("client.md"),rom());
+        const QString executable=QCoreApplication::applicationFilePath();
+        QProcess host,client;
+        host.start(executable,{"--multitap-host",args[1],scratch.path(),"--multitap"});
+        if(!host.waitForStarted(5000)){std::fprintf(stderr,"multitap host launch failed\n");return 1;}
+        QByteArray startup;QElapsedTimer ready;ready.start();
+        while(!startup.contains("READY") && ready.elapsed()<10000 && host.state()!=QProcess::NotRunning) {
+            host.waitForReadyRead(250);startup+=host.readAllStandardOutput();
+        }
+        startup+=host.readAllStandardOutput();
+        if(!startup.contains("READY")) {
+            std::fprintf(stderr,"multitap host not ready: %s\n",host.readAllStandardError().constData());
+            if(host.state()!=QProcess::NotRunning){host.kill();host.waitForFinished();}return 1;
+        }
+        client.start(executable,{"--multitap-client",args[1],scratch.path(),"--multitap"});
+        if(!client.waitForStarted(5000)){host.kill();host.waitForFinished();return 1;}
+        const bool hostDone=host.waitForFinished(24000),clientDone=client.waitForFinished(5000);
+        const auto hostError=host.readAllStandardError(),clientError=client.readAllStandardError();
+        if(!hostDone){host.kill();host.waitForFinished();}
+        if(!clientDone){client.kill();client.waitForFinished();}
+        if(!hostDone||!clientDone||host.exitStatus()!=QProcess::NormalExit||client.exitStatus()!=QProcess::NormalExit||
+           host.exitCode()!=0||client.exitCode()!=0) {
+            std::fprintf(stderr,"multitap session failed\nHOST: %s\nCLIENT: %s\n",hostError.constData(),clientError.constData());return 1;
+        }
+        std::puts("multitap: disconnected host P1, remote P3/local P4, role demotion and chained Justifier GGPO packets passed");
+        return 0;
+    }
+    if(args.size()!=5 || (args[1]!="--multitap-host" && args[1]!="--multitap-client"))return 2;
+    const bool hosting=args[1]=="--multitap-host";
+    const QString root=args[3],data=root+(hosting?"/multitap-host-data":"/multitap-client-data");
+    QDir().mkpath(data);
+    QSettings settings(data+"/settings.ini",QSettings::IniFormat);
+    EmulationSession session(args[2],data);
+    NetplayController controller(session,data,settings,nullptr);
+    quint64 peerId=0;
+    int phase=0,comboFrames=0,gunFrames=0,frames=0;
+    bool gameLoaded=false,created=false,configSeen=false,gunConfigSeen=false,clientReported=false,demotedReported=false,gunReported=false;
+    std::function<void()> maybeCreate=[&] {
+        if(!hosting || created || !gameLoaded || session.controllerAdapter()!=int(ControllerAdapter::TeamPlayerPort1))return;
+        created=true;NetplayScenario::create(controller);
+        const auto invitation=NetplayScenario::invitation(controller);
+        if(invitation.isEmpty()){std::fprintf(stderr,"multitap invitation unavailable\n");app.exit(1);return;}
+        write(root+"/invite",invitation.toUtf8());std::puts("READY");std::fflush(stdout);
+    };
+    QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&](const QString&,double,const QString&){gameLoaded=true;maybeCreate();});
+    QObject::connect(&session,&EmulationSession::controllerTopologyChanged,&app,[&](int,unsigned){maybeCreate();});
+    QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& error){
+        std::fprintf(stderr,"multitap core error: %s\n",qPrintable(error));app.exit(1);
+    });
+    QObject::connect(&session,&EmulationSession::networkModeFailed,&app,[&](const QString& error){
+        std::fprintf(stderr,"multitap network error: %s\n",qPrintable(error));app.exit(1);
+    });
+    QObject::connect(&session,&EmulationSession::networkSnapshotApplied,&app,[&](bool ok,const QString& error){
+        if(!ok){std::fprintf(stderr,"multitap snapshot error: %s\n",qPrintable(error));app.exit(1);}
+    });
+    QObject::connect(&session,&EmulationSession::networkSnapshotReady,&app,[&](const QByteArray& state){
+        if(!hosting || state.size()<8)return;
+        const quint32 length=qFromBigEndian<quint32>(state.constData());
+        if(length>4*1024*1024 || quint64(length)+8>quint64(state.size()))return;
+        const auto config=QJsonDocument::fromJson(state.mid(4,length)).object().value("configuration").toObject();
+        const auto ports=config.value("controllers").toArray();
+        if(config.value("adapter").toInt(-1)==int(ControllerAdapter::TeamPlayerPort1) &&
+           config.value("playerCount").toInt()==5 && ports.size()==int(MaxControllerPlayers) &&
+           !ports[0].toObject().value("connected").toBool())configSeen=true;
+        if(config.value("adapter").toInt(-1)==0 && config.value("playerCount").toInt()==3 &&
+           ports.size()==int(MaxControllerPlayers) &&
+           ports[1].toObject().value("kind").toInt(-1)==int(ControllerType::Justifier) &&
+           ports[2].toObject().value("kind").toInt(-1)==int(ControllerType::Justifier) &&
+           ports[1].toObject().value("connected").toBool() &&
+           ports[2].toObject().value("connected").toBool())gunConfigSeen=true;
+    });
+    QObject::connect(&session,&EmulationSession::networkFrameReady,&app,[&](const QByteArray& packet){
+        if(packet.size()!=56)return;
+        MovieInput input;
+        if(NetplayTimeline::parseInput(packet.mid(16,40),input) &&
+           input.buttons[0]==0 && input.buttons[2]==1 && input.buttons[3]==0x10)
+            ++comboFrames;
+        if(input.buttons[1]==0x02 && input.buttons[2]==0x08 &&
+           qint16(input.aim[1])==123 && qint16(input.aim[1]>>16)==-45 &&
+           !(input.aim[1]&(quint64(1)<<32)) && (input.aim[2]&(quint64(1)<<32)))
+            ++gunFrames;
+        ++frames;
+    });
+    QTimer poll;poll.setInterval(50);
+    QObject::connect(&poll,&QTimer::timeout,&app,[&] {
+        const int role=NetplayScenario::localRole(controller);
+        if(hosting && role==3 && session.controllerPlayerCount()==3) {
+            session.setButtons(0,0);session.setButtons(1,0x08);
+            session.setGunAim(1,-333,444,true);
+        } else if(!hosting && role==2 && session.controllerPlayerCount()==3) {
+            session.setButtons(0,0);session.setButtons(1,0x02);
+            session.setGunAim(1,123,-45,false);
+        } else session.setButtons(0,hosting?0x10:1);
+        if(hosting) {
+            if(phase==0 && (peerId=NetplayScenario::ready(controller))) {
+                NetplayScenario::assignRole(controller,0,4);
+                NetplayScenario::assignRole(controller,peerId,3);
+                phase=1;
+            } else if(phase==1 && configSeen && comboFrames>=12 && QFile::exists(root+"/multitap-p3")) {
+                session.setControllerAdapter(ControllerAdapter::None);phase=2;
+            } else if(phase==2 && session.controllerAdapter()==0 &&
+                      NetplayScenario::localRole(controller)==0 && NetplayScenario::role(controller,peerId)==0 &&
+                      QFile::exists(root+"/multitap-demoted")) {
+                session.setControllerKind(1,ControllerType::Justifier);
+                session.setControllerKind(2,ControllerType::Justifier);
+                session.setControllerConnected(1,true);
+                session.setControllerConnected(2,true);
+                phase=3;
+            } else if(phase==3 && session.controllerPlayerCount()==3 &&
+                      NetplayScenario::capacity(controller)==3) {
+                NetplayScenario::assignRole(controller,0,3);
+                NetplayScenario::assignRole(controller,peerId,2);
+                phase=4;
+            } else if(phase==4 && gunConfigSeen && gunFrames>=12 &&
+                      QFile::exists(root+"/multitap-gun")) {
+                write(root+"/multitap-gun-done",QByteArray("ok"));app.exit(0);
+            }
+        } else {
+            if(!clientReported && role==3 &&
+               session.controllerAdapter()==int(ControllerAdapter::TeamPlayerPort1) &&
+               comboFrames>=12) {
+                write(root+"/multitap-p3",QByteArray("ok"));clientReported=true;
+            }
+            if(clientReported && !demotedReported && role==0 &&
+               session.controllerAdapter()==0 && session.controllerPlayerCount()==2 &&
+               session.networkActive() && session.hasGame()) {
+                write(root+"/multitap-demoted",QByteArray("ok"));demotedReported=true;
+            }
+            if(demotedReported && !gunReported && role==2 &&
+               session.controllerPlayerCount()==3 && gunFrames>=12) {
+                write(root+"/multitap-gun",QByteArray("ok"));gunReported=true;
+            }
+            if(gunReported && QFile::exists(root+"/multitap-gun-done"))app.exit(0);
+        }
+    });
+    poll.start();
+    QTimer::singleShot(20000,&app,[&] {
+        std::fprintf(stderr,"multitap timeout role=%s phase=%d frames=%d merged=%d gun=%d config=%d/%d localRole=%d adapter=%d detail=%s\n",
+            hosting?"host":"client",phase,frames,comboFrames,gunFrames,configSeen,gunConfigSeen,
+            NetplayScenario::localRole(controller),session.controllerAdapter(),
+            NetplayScenario::debug(controller).constData());app.exit(1);
+    });
+    if(hosting) {
+        session.setControllerAdapter(ControllerAdapter::TeamPlayerPort1);
+        session.setControllerConnected(0,false);
+        session.loadGame(root+"/host.md");
+    } else {
+        NetplayScenario::join(controller,QString::fromUtf8(read(root+"/invite")));
+        session.loadGame(root+"/client.md");
+    }
+    const int result=app.exec();controller.leaveSession();session.shutdown();return result;
+}
+
 // One actual TLS lobby covers every terminal host action. Unique round markers
 // wake directory watchers; they are not read or written from frame callbacks.
 static int moderationScenario(QApplication& app,const QStringList& args) {
@@ -526,9 +725,89 @@ static int moderationScenario(QApplication& app,const QStringList& args) {
     const int result=app.exec();controller.leaveSession();session.shutdown();return result;
 }
 
+void verifyGunRoleLabels() {
+    const auto require=[](bool value,const char* text){if(!value)throw std::runtime_error(text);};
+    NetplayLobby lobby;
+    QJsonObject state{{"active",true},{"host",true},{"playerCount",3},
+        {"roleKinds",QJsonArray{0,3,3}},
+        {"participants",QJsonArray{QJsonObject{{"id","1"},{"role","player2"}},
+                                    QJsonObject{{"id","2"},{"role","player3"}}}}};
+    lobby.setLobbyState(state);
+    auto* table=lobby.findChild<QTableWidget*>("netplayParticipants");
+    require(table && table->rowCount()==2,"gun role table missing");
+    auto* combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
+    require(combo && combo->itemText(2).contains("Justifier 1") &&
+            combo->itemText(3).contains("Justifier 2") &&
+            table->item(1,1)->text().contains("Justifier 2"),
+            "chained Justifier role labels missing");
+    state.insert("playerCount",2);
+    state.insert("roleKinds",QJsonArray{1,1});
+    state.insert("participants",QJsonArray{QJsonObject{{"id","1"},{"role","player1"}},
+                                           QJsonObject{{"id","2"},{"role","player2"}}});
+    lobby.setLobbyState(state);
+    combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
+    require(combo && combo->itemText(1).contains("Light Phaser") &&
+            combo->itemText(1).contains("1") && combo->itemText(2).contains("Light Phaser") &&
+            combo->itemText(2).contains("2"),"SMS gun port labels missing");
+    state.insert("roleKinds",QJsonArray{0,2});
+    lobby.setLobbyState(state);
+    combo=qobject_cast<QComboBox*>(table->cellWidget(0,1));
+    require(combo && combo->itemText(2).contains("Menacer") && combo->itemText(2).contains("2"),
+            "Menacer port label missing after kind update");
+}
+
+void verifyMultitapFrames() {
+    const auto require=[](bool value,const char* text){if(!value)throw std::runtime_error(text);};
+    const auto device=[](ControllerType kind,bool connected) {
+        return QJsonObject{{"kind",int(kind)},{"connected",connected}};
+    };
+    const auto config=[](int adapter,const QJsonArray& controllers) {
+        return QJsonObject{{"adapter",adapter},{"controllers",controllers}};
+    };
+    const auto pad=device(ControllerType::Pad,false);
+    const auto phaser=device(ControllerType::LightPhaser,true);
+    const auto menacer=device(ControllerType::Menacer,true);
+    const auto justifier=device(ControllerType::Justifier,true);
+    const auto smsBoth=config(0,QJsonArray{phaser,phaser,pad});
+    const auto smsSecond=config(0,QJsonArray{pad,phaser,pad});
+    const auto mdMenacer=config(0,QJsonArray{pad,menacer,pad});
+    const auto mdJustifiers=config(0,QJsonArray{pad,justifier,justifier});
+    const auto mdSecondOnly=config(0,QJsonArray{pad,device(ControllerType::Justifier,false),justifier});
+    const auto adapter=config(int(ControllerAdapter::TeamPlayerPort1),QJsonArray{pad,pad,pad,pad});
+    require(NetplayTimeline::localInputSource(1,smsBoth)==0 &&
+            NetplayTimeline::localInputSource(2,smsBoth)==0 &&
+            NetplayTimeline::localInputSource(2,smsSecond)==1 &&
+            NetplayTimeline::localInputSource(2,mdMenacer)==1 &&
+            NetplayTimeline::localInputSource(2,mdJustifiers)==1 &&
+            NetplayTimeline::localInputSource(3,mdJustifiers)==1 &&
+            NetplayTimeline::localInputSource(3,mdSecondOnly)==2 &&
+            NetplayTimeline::localInputSource(4,adapter)==0 &&
+            NetplayTimeline::localInputSource(2,config(0,QJsonArray{pad,pad,pad}))==0,
+            "gun source must use first connected matching local gun; pads use local P1");
+    MovieInput first; first.buttons[0]=0x01;first.aim[0]=0x00010002;
+    MovieInput another; another.buttons[0]=0x04;another.aim.fill(quint64(1)<<32);
+    MovieInput fourth; fourth.buttons[0]=0x08;
+    MovieInput eighth; eighth.buttons[0]=0x10;
+    const auto merged=NetplayTimeline::merge({{3,first},{3,another},{4,fourth},{8,eighth},{9,first},{0,first}});
+    require(merged.buttons[0]==0 && merged.buttons[2]==5 && merged.buttons[3]==8 &&
+            merged.buttons[7]==16 && merged.aim[2]==first.aim[0],"P3/P4/P8 role merging failed");
+    const auto bytes=NetplayTimeline::inputBytes(merged);
+    require(bytes.size()==40 && qFromBigEndian<quint16>(bytes.constData()+4)==5 &&
+            qFromBigEndian<quint16>(bytes.constData()+14)==16,"canonical 40-byte input layout failed");
+    MovieInput parsed;require(NetplayTimeline::parseInput(bytes,parsed) && parsed==merged,"canonical input round-trip failed");
+    require(!NetplayTimeline::parseInput(bytes.left(30),parsed) &&
+            !NetplayTimeline::parseInput(bytes+QByteArray(1,'x'),parsed),"malformed input length accepted");
+    auto badAim=bytes;badAim[16]=char(0x80);
+    require(!NetplayTimeline::parseInput(badAim,parsed),"malformed aim bits accepted");
+    require(NetplayTimeline::frameBytes(1,2,merged).size()==56 &&
+            NetplayTimeline::frameBytes(1,2,merged,QByteArray(32,'x')).size()==88,
+            "network frame layout failed");
+}
+
 int main(int argc,char** argv){
     QApplication app(argc,argv);app.setQuitOnLastWindowClosed(false);
     const auto args=app.arguments();
+    if(args.contains("--multitap"))return multitapScenario(app,args);
     if(args.contains("--quality"))return qualityScenario(app,args);
     if(args.contains("--moderation"))return moderationScenario(app,args);
     if(args.size()==2 && args[1]=="--waiting-only") {
@@ -537,7 +816,7 @@ int main(int argc,char** argv){
         EmulationSession session(QString{},scratch.path());int result=0;
         {
             NetplayController controller(session,scratch.path(),settings,nullptr);
-            try {NetplayScenario::verifyReadinessWaiting(controller);std::puts("player readiness transitions, role release, synchronization, exit, no duplicate signals and remote status passed");}
+            try {verifyMultitapFrames();verifyGunRoleLabels();NetplayScenario::verifyRoleCapacity(controller);NetplayScenario::verifyReadinessWaiting(controller);std::puts("player readiness transitions, role release, synchronization, exit, no duplicate signals and remote status passed");}
             catch(const std::exception& error){std::fprintf(stderr,"readiness test failed: %s\n",error.what());result=1;}
         }
         session.shutdown();return result;
@@ -640,7 +919,7 @@ int main(int argc,char** argv){
         ++rewindProgressSignals;lastRewindRemaining=remaining;lastRewindTotal=total;
         if(activeRewindRole&&total>0&&remaining>=0&&remaining<=total)rewindProgressed|=activeRewindRole;
     });
-    QObject::connect(&session,&EmulationSession::networkFrameReady,&app,[&](const QByteArray& b){MovieInput input;if(NetplayTimeline::parseInput(b.mid(16,30),input)&&
+    QObject::connect(&session,&EmulationSession::networkFrameReady,&app,[&](const QByteArray& b){MovieInput input;if(NetplayTimeline::parseInput(b.mid(16,40),input)&&
         (linkScenario?(input.buttons[0]==0x10 && input.buttons[1]==1):input.buttons[0]==0x11))++combined;});
     QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString& text){
         if(hosting&&phase==4&&text==Localization::text(QStringLiteral("Загружено: слот %1")).arg(0)){

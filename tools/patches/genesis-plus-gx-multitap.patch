@@ -1,0 +1,103 @@
+--- a/core/input_hw/input.c
++++ b/core/input_hw/input.c
+@@ -137,7 +137,7 @@
+           /* only allow 3-buttons or 6-buttons control pad */
+           if (config.input[player].padtype != (DEVICE_PAD2B | DEVICE_PAD3B | DEVICE_PAD6B))
+           {
+-            input.dev[i] = config.input[player].padtype & DEVICE_PAD6B;
++            input.dev[i] = config.input[player].padtype == NO_DEVICE ? NO_DEVICE : config.input[player].padtype & DEVICE_PAD6B;
+           }
+           else
+           {
+@@ -158,7 +158,7 @@
+           /* only allow 3-buttons or 6-buttons control pad */
+           if (config.input[player].padtype != (DEVICE_PAD2B | DEVICE_PAD3B | DEVICE_PAD6B))
+           {
+-            input.dev[i] = config.input[player].padtype & DEVICE_PAD6B;
++            input.dev[i] = config.input[player].padtype == NO_DEVICE ? NO_DEVICE : config.input[player].padtype & DEVICE_PAD6B;
+           }
+           else
+           {
+@@ -177,7 +177,7 @@
+       {
+         if (player < MAX_INPUTS)
+         {
+-          input.dev[i] = DEVICE_PAD2B;
++          input.dev[i] = config.input[player].padtype == NO_DEVICE ? NO_DEVICE : DEVICE_PAD2B;
+           player++;
+         }
+       }
+@@ -291,7 +291,7 @@
+           /* only allow 3-buttons or 6-buttons control pad */
+           if (config.input[player].padtype != (DEVICE_PAD2B | DEVICE_PAD3B | DEVICE_PAD6B))
+           {
+-            input.dev[i] = config.input[player].padtype & DEVICE_PAD6B;
++            input.dev[i] = config.input[player].padtype == NO_DEVICE ? NO_DEVICE : config.input[player].padtype & DEVICE_PAD6B;
+           }
+           else
+           {
+@@ -310,7 +310,7 @@
+       {
+         if (player < MAX_INPUTS)
+         {
+-          input.dev[i] = DEVICE_PAD2B;
++          input.dev[i] = config.input[player].padtype == NO_DEVICE ? NO_DEVICE : DEVICE_PAD2B;
+           player++;
+         }
+       }
+@@ -364,7 +364,7 @@
+         /* only allow 3-buttons or 6-buttons control pad */
+         if (config.input[player].padtype != (DEVICE_PAD2B | DEVICE_PAD3B | DEVICE_PAD6B))
+         {
+-          input.dev[i] = config.input[player].padtype & DEVICE_PAD6B;
++          input.dev[i] = config.input[player].padtype == NO_DEVICE ? NO_DEVICE : config.input[player].padtype & DEVICE_PAD6B;
+         }
+         else
+         {
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3470,6 +3470,33 @@
+    input_reset();
+ }
+ 
++/* Configure the complete adapter topology atomically. Pad slots are logical,
++ * ordered across port A then port B; inactive slots keep their physical position.
++ * No protocol/state is reset unless the frontend changes the topology. */
++RETRO_API bool retro_kegarefusion_multitap(unsigned mode, unsigned connected, unsigned six)
++{
++   unsigned count, i;
++   int master = (mode >= 5 && mode <= 7);
++   int md = ((system_hw & SYSTEM_PBC) == SYSTEM_MD);
++   int sms = (system_hw == SYSTEM_SMS || system_hw == SYSTEM_SMS2 ||
++              system_hw == SYSTEM_MARKIII || system_hw == SYSTEM_PBC);
++   if (mode < 1 || mode > 7 || (master ? !sms : !md)) return false;
++   if (mode == 4) { input.system[0] = input.system[1] = SYSTEM_WAYPLAY; count = 4; }
++   else
++   {
++      unsigned placement = master ? mode - 4 : mode;
++      input.system[0] = placement == 2 ? SYSTEM_GAMEPAD : (master ? SYSTEM_MASTERTAP : SYSTEM_TEAMPLAYER);
++      input.system[1] = placement == 1 ? SYSTEM_GAMEPAD : (master ? SYSTEM_MASTERTAP : SYSTEM_TEAMPLAYER);
++      count = placement == 3 ? 8 : 5;
++   }
++   for (i = 0; i < MAX_INPUTS; ++i)
++      config.input[i].padtype = i >= count || !(connected & (1u << i)) ? NO_DEVICE :
++         master ? DEVICE_PAD2B : (six & (1u << i)) ? DEVICE_PAD6B : DEVICE_PAD3B;
++   old_system[0] = input.system[0]; old_system[1] = input.system[1];
++   io_init(); input_reset();
++   return true;
++}
++
+ size_t retro_serialize_size(void) {
+ #ifdef KEGAREFUSION_32X
+    if (kegarefusion_32x_attached) return STATE_SIZE + kegarefusion_32x_state_size();
+--- a/core/input_hw/teamplayer.c
++++ b/core/input_hw/teamplayer.c
+@@ -64,7 +64,7 @@
+       teamplayer[port].Table[index++] = padnum;
+       teamplayer[port].Table[index++] = padnum | 4;
+     }
+-    else
++    else if (input.dev[padnum] == DEVICE_PAD6B)
+     {
+       padnum = padnum << 4;
+       teamplayer[port].Table[index++] = padnum;

@@ -25,7 +25,7 @@ enum class MessageKind : quint8 {
     Control = 23
 };
 
-enum class Role : quint8 { Spectator = 0, Player1 = 1, Player2 = 2 };
+enum class Role : quint8 { Spectator = 0, Player1 = 1, Player2 = 2, Player3 = 3, Player4 = 4, Player5 = 5, Player6 = 6, Player7 = 7, Player8 = 8 };
 
 struct PeerInfo {
     quint64 id = 0;

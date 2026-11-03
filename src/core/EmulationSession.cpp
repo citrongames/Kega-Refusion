@@ -140,15 +140,22 @@ void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},fi
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
+void EmulationSession::setControllerAdapter(ControllerAdapter adapter) {
+    // Connected participants follow host hardware; local bindings remain editable.
+    if (networkMode_.load() != 2 && validControllerAdapter(int(adapter))) enqueue({Type::Adapter,{},int(adapter)});
+}
 void EmulationSession::setControllerConnected(unsigned port, bool connected) {
-    if (port < 3) enqueue({Type::Port,{},int(port) | (connected ? 4 : 0)});
+    if (networkMode_.load() == 2) return; // Host snapshots own hardware; local bindings do not send it back.
+    if (port < MaxControllerPlayers) enqueue({Type::Port,{},int(port) | (connected ? 8 : 0)});
 }
 void EmulationSession::setControllerSixButton(unsigned port, bool sixButton) {
-    if (port < 3) enqueue({Type::ControllerType,{},int(port) | (sixButton ? 4 : 0)});
+    if (networkMode_.load() == 2) return; // Host snapshots own hardware; local bindings do not send it back.
+    if (port < MaxControllerPlayers) enqueue({Type::ControllerType,{},int(port) | (sixButton ? 8 : 0)});
 }
 void EmulationSession::setControllerKind(unsigned player, ControllerType type) {
-    if (player < 3 && int(type) >= 0 && int(type) <= int(ControllerType::Justifier))
-        enqueue({Type::ControllerKind,{},int(player) | (int(type) << 2)});
+    if (networkMode_.load() == 2) return; // Host snapshots own hardware; local bindings do not send it back.
+    if (player < MaxControllerPlayers && int(type) >= 0 && int(type) <= int(ControllerType::Justifier))
+        enqueue({Type::ControllerKind,{},int(player) | (int(type) << 3)});
 }
 void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) {
     if (player >= 3) return;
@@ -197,10 +204,10 @@ bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio) {
 void EmulationSession::saveState(int slot) { enqueue({Type::Save,{},slot}); }
 void EmulationSession::loadState(int slot) { enqueue({Type::Restore,{},slot}); }
 void EmulationSession::setButton(unsigned port, unsigned id, bool pressed) {
-    if (port >= 3 || id >= 16) return;
+    if (port >= MaxControllerPlayers || id >= 16) return;
     if (pressed) buttons_[port].fetch_or(1u << id); else buttons_[port].fetch_and(~(1u << id));
 }
-void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < 3) buttons_[port].store(mask & 0xffffu); }
+void EmulationSession::setButtons(unsigned port, unsigned mask) { if (port < MaxControllerPlayers) buttons_[port].store(mask & 0xffffu); }
 void EmulationSession::releaseButtons() { for (auto& mask : buttons_) mask.store(0); }
 void EmulationSession::setFastForward(bool enabled) {
     if (networkMode_.load()) {
@@ -265,7 +272,8 @@ void EmulationSession::applyNetworkCommand(const QByteArray& bytes) {
     if ((c.type==Type::Save || c.type==Type::Restore) && (v<0 || v>9)) return;
     if (c.type==Type::Region && (v<0 || v>3)) return;
     if (c.type==Type::Filter && (v<0 || v>4)) return;
-    if ((c.type==Type::ControllerKind || c.type==Type::ControllerType || c.type==Type::Port) && (v<0 || v>int(ControllerType::Justifier)*4+2 || (v&3)>2)) return;
+    if ((c.type==Type::ControllerType || c.type==Type::Port) && (v<0 || v>15)) return;
+    if (c.type==Type::ControllerKind && (v<0 || v>31 || ((v&7)>=3 && (v>>3)!=0))) return;
     if (c.type==Type::Cheats) {
         const auto a=o.value("cheats").toArray(); if(a.size()>256) return;
         for (const auto& v:a) { const auto e=v.toObject();
@@ -302,9 +310,10 @@ void EmulationSession::setNetworkMode(int mode,const QString& scope) {
     enqueue({Type::NetMode,scope,mode});
 }
 void EmulationSession::setNetworkRole(int role) {
-    role=std::clamp(role,0,2);
+    role=std::clamp(role,0,int(MaxControllerPlayers));
     if(networkRole_.exchange(role)==role)return;
     enqueue({Type::NetRole,{},role});
+    emit networkRoleChanged(role);
 }
 void EmulationSession::setNetworkLinkCableEnabled(bool enabled) {
     if(networkLinkCableDesired_.exchange(enabled)!=enabled)networkLinkCableRevision_.fetch_add(1);
@@ -417,10 +426,10 @@ void EmulationSession::run() {
     bool lastAchievementBackground = false;
     auto liveInput = [&] {
         MovieInput input;
-        for (unsigned player = 0; player < 3; ++player) {
+        for (unsigned player = 0; player < MaxControllerPlayers; ++player)
             input.buttons[player] = quint16(buttons_[player].load());
+        for (unsigned player = 0; player < MaxGunPlayers; ++player)
             input.aim[player] = gunPositions_[player].load();
-        }
         return input;
     };
     auto cheatStatus = [&] {
@@ -681,7 +690,8 @@ void EmulationSession::run() {
                 command.type==Type::MovieResume || command.type==Type::MovieFork || command.type==Type::Disc)) {
                 emit actionNotice(QStringLiteral("Завершите онлайн-сессию перед этим действием.")); continue;
             }
-            if(networkMode==1 && command.networkAuthorized && command.type!=Type::Save && command.type!=Type::NetStepHold && command.type!=Type::FrameAdvance && command.type!=Type::NetReverse)
+            if(networkMode==1 && command.networkAuthorized && command.type!=Type::Save && command.type!=Type::NetStepHold && command.type!=Type::FrameAdvance && command.type!=Type::NetReverse &&
+               command.type!=Type::Port && command.type!=Type::ControllerType && command.type!=Type::ControllerKind)
                 networkDirty=true;
             if (achievementHardcore) {
                 const bool prohibited = command.type == Type::Restore || command.type == Type::FrameAdvance ||
@@ -700,15 +710,19 @@ void EmulationSession::run() {
                 bool blocked = false;
                 switch (command.type) {
                 case Type::Port:
-                    blocked = host.controllerConnected(unsigned(command.value & 3)) != bool(command.value & 4);
+                    blocked = host.controllerConnected(unsigned(command.value & 7)) != bool(command.value & 8);
                     if (!blocked) continue;
                     break;
                 case Type::ControllerType:
-                    blocked = host.controllerSixButton(unsigned(command.value & 3)) != bool(command.value & 4);
+                    blocked = host.controllerSixButton(unsigned(command.value & 7)) != bool(command.value & 8);
                     if (!blocked) continue;
                     break;
                 case Type::ControllerKind:
-                    blocked = host.controllerKind(unsigned(command.value & 3)) != ControllerType(command.value >> 2);
+                    blocked = host.controllerKind(unsigned(command.value & 7)) != ControllerType(command.value >> 3);
+                    if (!blocked) continue;
+                    break;
+                case Type::Adapter:
+                    blocked = host.controllerAdapter() != ControllerAdapter(command.value);
                     if (!blocked) continue;
                     break;
                 case Type::Reset: case Type::HardReset: case Type::Region:
@@ -848,7 +862,7 @@ void EmulationSession::run() {
                                 fastForwardFactor_.store(std::clamp(meta.value("factor").toInt(4),0,32));
                                 networkSlots=unsigned(meta.value("slots").toInt())&0x3ff;
                                 emit pausedChanged(paused);emit stateSlotsChanged(-1,networkSlots);
-                                emit movieHardwareChanged(QJsonDocument(config.value("controllers").toArray()).toJson(QJsonDocument::Compact));
+                                emit movieHardwareChanged(QJsonDocument(QJsonObject{{"adapter",config.value("adapter")},{"controllers",config.value("controllers")}}).toJson(QJsonDocument::Compact));
                                 clearHistory(); clearAudio(); pacer.reset(nowNs()); cheatStatus(); discStatus();
                                 QByteArray preview=QByteArray::fromBase64(meta.value("image").toString().toLatin1());
                                 if(!preview.isEmpty()) {
@@ -1056,8 +1070,17 @@ void EmulationSession::run() {
                 cheatStatus();
                 break;
             }
+            case Type::Adapter:
+                if (networkMode == 2) break;
+                if (host.requestedControllerAdapter() == ControllerAdapter(command.value)) break;
+                if (host.setControllerAdapter(ControllerAdapter(command.value),error)) {
+                    clearHistory(); clearAudio(); releaseButtons(); rewind_.store(false); rewindStatus(false);
+                    pacer.reset(nowNs()); if (networkMode == 1) networkDirty = true;
+                } else emit actionNotice(error);
+                break;
             case Type::ControllerKind:
-                if (host.setControllerKind(unsigned(command.value & 3),ControllerType(command.value >> 2))) {
+                if (host.setControllerKind(unsigned(command.value & 7),ControllerType(command.value >> 3))) {
+                    if (networkMode == 1) networkDirty = true;
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false); pacer.reset(nowNs());
                 }
                 break;
@@ -1113,13 +1136,15 @@ void EmulationSession::run() {
                 break;
             }
             case Type::Port:
-                if (host.setControllerConnected(unsigned(command.value & 3), (command.value & 4) != 0)) {
+                if (host.setControllerConnected(unsigned(command.value & 7), (command.value & 8) != 0)) {
+                    if (networkMode == 1) networkDirty = true;
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
                     pacer.reset(nowNs());
                 }
                 break;
             case Type::ControllerType:
-                if (host.setControllerSixButton(unsigned(command.value & 3), (command.value & 4) != 0)) {
+                if (host.setControllerSixButton(unsigned(command.value & 7), (command.value & 8) != 0)) {
+                    if (networkMode == 1) networkDirty = true;
                     clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
                     pacer.reset(nowNs());
                 }
@@ -1202,6 +1227,20 @@ void EmulationSession::run() {
                 break;
             }
             default:break;
+            }
+        }
+        if (!pending.empty()) {
+            const auto effectiveAdapter = int(host.controllerAdapter());
+            const auto playerCount = host.controllerPlayerCount();
+            if (controllerAdapter_.exchange(effectiveAdapter) != effectiveAdapter || controllerPlayerCount_.load() != playerCount) {
+                controllerPlayerCount_.store(playerCount);
+                emit controllerTopologyChanged(effectiveAdapter,playerCount);
+            }
+        }
+        if (networkMode == 1 && networkDirty) for (int i=0;i<networkRoster.size();++i) {
+            auto peer=networkRoster[i].toObject();
+            if (peer.value("role").toInt() > int(host.controllerPlayerCount())) {
+                peer.insert("role",0);networkRoster[i]=peer;networkDirty=true;
             }
         }
         if(networkDirty && networkMode==1 && host.loaded()) networkSnapshot();

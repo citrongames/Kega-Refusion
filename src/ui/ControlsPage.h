@@ -26,6 +26,7 @@ public:
     ~ControlsPage() override;
     bool apply();
     void setHardwareConfigurationLocked(bool locked);
+    void setTopologyLocked(bool locked);
     void cancelCapture();
 
 protected:
@@ -36,6 +37,8 @@ protected:
 private:
     ConsoleProfile selectedProfile() const;
     int selectedPlayer() const;
+    ControllerAdapter selectedAdapter() const;
+    PlayerMapping displayMapping() const;
     int draftKey() const;
     PlayerMapping& draft();
     QVector<int> activeGameTargets();
@@ -62,6 +65,9 @@ private:
     InputManager& input_;
     QComboBox* profileBox_ = nullptr;
     QComboBox* playerBox_ = nullptr;
+    QComboBox* adapterBox_ = nullptr;
+    QLabel* adapterLabel_ = nullptr;
+    QLabel* adapterHint_ = nullptr;
     QComboBox* deviceBox_ = nullptr;
     QLabel* deviceTypeLabel_ = nullptr;
     QComboBox* deviceTypeBox_ = nullptr;
@@ -86,6 +92,8 @@ private:
     QPushButton* skipButton_ = nullptr;
     QPushButton* clearButton_ = nullptr;
     QMap<int, PlayerMapping> drafts_;
+    QMap<int, ControllerAdapter> adapterDrafts_;
+    QSet<int> dirtyAdapters_;
     QSet<int> dirty_;
     QSet<int> captureKeysDown_;
     QMap<QString, QString> knownDevices_;

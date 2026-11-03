@@ -37,7 +37,7 @@ constexpr int kMaxFramesPerSecond = 4096;
 constexpr int kMaxBytesPerSecond = 128 * 1024 * 1024;
 constexpr int kDeadLinkMs = 5000;
 constexpr int kMaxBufferedBytes = 512 * 1024;
-constexpr int kProtocol = 3;
+constexpr int kProtocol = 4;
 constexpr int kHandshakeMs = 10000;
 constexpr quint8 kInternalKind = 0;
 
@@ -130,7 +130,7 @@ PeerInfo parsePeer(const QJsonObject& object) {
     peer.nickname = object.value(QStringLiteral("nickname")).toString();
     peer.identityFingerprint = object.value(QStringLiteral("identity")).toString();
     const int role = object.value(QStringLiteral("role")).toInt();
-    peer.role = role >= 0 && role <= 2 ? Role(role) : Role::Spectator;
+    peer.role = role >= 0 && role <= 8 ? Role(role) : Role::Spectator;
     peer.connected = true;
     return peer;
 }
@@ -459,7 +459,7 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
         } else if (type == QStringLiteral("role")) {
             const quint64 id = object.value(QStringLiteral("id")).toString().toULongLong();
             const int role = object.value(QStringLiteral("role")).toInt(-1);
-            if (role < 0 || role > 2) return;
+            if (role < 0 || role > 8) return;
             for (auto it = sessionPeers_.begin(); it != sessionPeers_.end(); ++it)
                 if (it->id == id) { it->role = Role(role); break; }
             emit peerRoleChanged(id, Role(role));
@@ -803,7 +803,7 @@ bool NetTransport::unban(const QString& identityFingerprint) {
 }
 
 bool NetTransport::setRole(quint64 peerId, Role role) {
-    if (!hosting_ || int(role) > 2) return false;
+    if (!hosting_ || int(role) > 8) return false;
     auto peer = sessionPeers_.end();
     for (auto it = sessionPeers_.begin(); it != sessionPeers_.end(); ++it) {
         if (it->id == peerId) { peer = it; break; }

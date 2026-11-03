@@ -46,8 +46,9 @@ void restorePreviousSession(LibretroHost& host, const QByteArray& state,
 }
 void applyInput(LibretroHost& host, const MovieInput& input) {
     if (input.commands & MovieTape::SoftReset) host.reset();
-    for (unsigned p = 0; p < 3; ++p) {
+    for (unsigned p = 0; p < input.buttons.size(); ++p)
         host.setButtons(p, input.buttons[p]);
+    for (unsigned p = 0; p < input.aim.size(); ++p) {
         const quint64 aim = input.aim[p];
         host.setGunAim(p, qint16(aim & 0xffff), qint16((aim >> 16) & 0xffff), bool((aim >> 32) & 1));
     }
@@ -165,7 +166,15 @@ double MovieSession::frameRate() const {
     return active() ? tape_.metadata().value(QStringLiteral("frameRate")).toDouble(host_.fps()) : host_.fps();
 }
 QByteArray MovieSession::controllers() const {
-    return active() ? QJsonDocument(tape_.metadata().value(QStringLiteral("controllers")).toArray()).toJson(QJsonDocument::Compact) : QByteArray();
+    if (!active()) return {};
+    const QJsonObject metadata = tape_.metadata();
+    const QJsonArray controllers = metadata.value(QStringLiteral("controllers")).toArray();
+    if (controllers.size() == 3)
+        return QJsonDocument(controllers).toJson(QJsonDocument::Compact);
+    QJsonObject topology;
+    topology.insert(QStringLiteral("adapter"), metadata.value(QStringLiteral("adapter")).toInt());
+    topology.insert(QStringLiteral("controllers"), controllers);
+    return QJsonDocument(topology).toJson(QJsonDocument::Compact);
 }
 QString MovieSession::slotPath(int slot) const {
     const QString name = QFileInfo(path_).completeBaseName();

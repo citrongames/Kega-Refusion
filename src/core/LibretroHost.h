@@ -7,6 +7,7 @@
 #include <QList>
 #include <map>
 #include <array>
+#include "input/ControllerTopology.h"
 #include <functional>
 #include <memory>
 #include <libretro.h>
@@ -106,6 +107,10 @@ public:
     void setButtons(unsigned port, unsigned mask);
     // Virtual console ports, independent of physical input device selection.
     // Configuration survives unload/load. Returns true only for a change.
+    bool setControllerAdapter(ControllerAdapter adapter, QString& error);
+    ControllerAdapter controllerAdapter() const;
+    ControllerAdapter requestedControllerAdapter() const { return adapter_; }
+    unsigned controllerPlayerCount() const;
     bool setControllerConnected(unsigned port, bool connected);
     bool controllerConnected(unsigned port) const;
     bool setControllerSixButton(unsigned port, bool sixButton);
@@ -207,13 +212,16 @@ private:
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     bool smsFmEnabled_ = true;
     bool attachCd_ = false, attach32x_ = false, contentNeeds32x_ = false;
-    std::array<unsigned,3> buttons_{};
-    std::array<bool,3> controllerConnected_{{true,false,false}};
-    std::array<bool,3> controllerSixButton_{{true,true,true}};
+    std::array<unsigned,MaxControllerPlayers> buttons_{};
+    std::array<bool,MaxControllerPlayers> controllerConnected_{{true,false,false}};
+    std::array<bool,MaxControllerPlayers> controllerSixButton_{{true,true,true,true,true,true,true,true}};
+    ControllerAdapter adapter_ = ControllerAdapter::None, preMovieAdapter_ = ControllerAdapter::None;
+    ControllerAdapter appliedAdapter_ = ControllerAdapter::None;
+    unsigned appliedConnected_ = 0, appliedSixButton_ = 0;
     std::array<unsigned,2> controllerDevices_{{~0u,~0u}};
-    std::array<ControllerType,3> controllerKinds_{{ControllerType::Pad,ControllerType::Pad,ControllerType::Justifier}};
+    std::array<ControllerType,MaxControllerPlayers> controllerKinds_{{ControllerType::Pad,ControllerType::Pad,ControllerType::Justifier}};
     // GPX compacts callback indices over connected devices; Justifiers add a third callback.
-    std::array<int,3> callbackPlayers_{{0,-1,-1}};
+    std::array<int,MaxControllerPlayers> callbackPlayers_{{0,-1,-1,-1,-1,-1,-1,-1}};
     struct GunAim { int16_t x = 0, y = 0; bool offscreen = true; };
     std::array<GunAim,3> gunAim_{};
     std::array<size_t,2> saveMemorySizes_{};
@@ -224,8 +232,8 @@ private:
     bool movieCheatsActive_ = false, moviePlayback_ = false, movieConfigurationActive_ = false;
     std::map<QByteArray,QByteArray> preMovieVariables_, preMovieOptionOverrides_;
     bool preMovieAutoFixChecksum_ = false;
-    std::array<bool,3> preMovieControllerConnected_{}, preMovieControllerSixButton_{};
-    std::array<ControllerType,3> preMovieControllerKinds_{};
+    std::array<bool,MaxControllerPlayers> preMovieControllerConnected_{}, preMovieControllerSixButton_{};
+    std::array<ControllerType,MaxControllerPlayers> preMovieControllerKinds_{};
     QList<QByteArray> activeCheatCodes_;
     retro_system_av_info av_{};
     retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;

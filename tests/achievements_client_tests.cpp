@@ -128,6 +128,42 @@ int main() {
         require(req.postData.contains("ApiToken"), "remembered token used after configure");
         client.respond(req.id, 200, kLogin);
         require(client.snapshot().loggedIn, "token login succeeded");
+        auto loadFailures = [&] {
+            int count = 0;
+            for (const auto& notice : notices)
+                if (notice.kind == AchievementNotice::LoadFailed) ++count;
+            return count;
+        };
+        client.loadGame(QStringLiteral("11111111111111111111111111111111"), 17);
+        req = take(requests);
+        client.respond(req.id, 200,
+            "{\"Success\":true,\"GameId\":0,\"Title\":\"Unknown Game\","
+            "\"ConsoleId\":17,\"ImageIconUrl\":\"https://retroachievements.org/Images/000000.png\",\"Sets\":[]}");
+        client.idle();
+        require(!client.loading() && client.snapshot().gameId == 0 && loadFailures() == 0,
+                "unknown game must not report a load failure");
+
+        client.loadGame(QStringLiteral("22222222222222222222222222222222"), 17);
+        req = take(requests);
+        client.respond(req.id, 200,
+            "{\"Success\":true,\"GameId\":2345,\"Title\":\"Empty Game\",\"ConsoleId\":17,"
+            "\"ImageIconUrl\":\"https://retroachievements.org/Images/112233.png\","
+            "\"RichPresenceGameId\":2345,\"RichPresencePatch\":\"\",\"Sets\":[{"
+            "\"AchievementSetId\":2222,\"GameId\":2345,\"Title\":null,\"Type\":\"core\","
+            "\"ImageIconUrl\":\"https://retroachievements.org/Images/112233.png\","
+            "\"Achievements\":[],\"Leaderboards\":[]}]}");
+        req = take(requests);
+        client.respond(req.id, 200, "{\"Success\":true}");
+        client.idle();
+        require(!client.loading() && client.snapshot().gameId == 2345 &&
+                client.snapshot().total == 0 && loadFailures() == 0,
+                "recognized game with no achievements must not report a load failure");
+
+        client.loadGame(QStringLiteral("33333333333333333333333333333333"), 17);
+        req = take(requests);
+        client.respond(req.id, 500, "server unavailable");
+        require(!client.loading() && loadFailures() == 1,
+                "HTTP game load failure must still be reported");
         client.logout();
         require(!client.wantsGame(), "logout disables ROM hashing");
         require(!QFile::exists(data.filePath(QStringLiteral("retroachievements-account.ini"))),

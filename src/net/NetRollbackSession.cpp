@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include "core/LibretroHost.h"
+#include "input/ControllerTopology.h"
 #include <ggponet.h>
 #include <kega_ggpo_transport.h>
 #include <QHostAddress>
@@ -20,11 +21,11 @@ namespace {
 constexpr int InputSize = 7;
 constexpr qsizetype StateLimit = 64 * 1024 * 1024;
 constexpr qsizetype PacketLimit = 2 * 1024 * 1024;
-std::array<char,InputSize> encodeInput(const MovieInput& input) {
+std::array<char,InputSize> encodeInput(const MovieInput& input,unsigned source) {
     std::array<char,InputSize> bytes{};
-    qToBigEndian(input.buttons[0], bytes.data());
-    qToBigEndian(quint32(input.aim[0]), bytes.data() + 2);
-    bytes[6] = char((input.aim[0] >> 32) & 1);
+    qToBigEndian(input.buttons[source], bytes.data());
+    qToBigEndian(quint32(input.aim[source]), bytes.data() + 2);
+    bytes[6] = char((input.aim[source] >> 32) & 1);
     return bytes;
 }
 MovieInput decodeInput(const char* data) {
@@ -45,6 +46,7 @@ struct NetRollbackSession::Impl {
     GGPOSession* session = nullptr;
     GGPOPlayerHandle localHandle = -1;
     int localRole=0;
+    unsigned localInputSource=0;
     quint64 epoch = 0, localId = 0, frame = 0;
     QVector<Peer> peers, players;
     QList<QPair<int,MovieInput>> contributions;
@@ -193,11 +195,14 @@ quint64 NetRollbackSession::position() const {return d->frame;}
 bool NetRollbackSession::start(LibretroHost& host,quint64 epoch,const QJsonArray& roster,quint64 localId,Send send,QString& error) {
     stop();error.clear();d->qualityClock.start();d->host=&host;d->epoch=epoch;d->localId=localId;d->send=std::move(send);
     if(!epoch || roster.isEmpty() || roster.size()>32) {error=QStringLiteral("Invalid GGPO roster");return false;}
+    const auto configuration=host.movieConfiguration();
+    const int playerCount=configuration.value("linkCable").toBool()?2:configuration.value("playerCount").toInt(2);
+    if(playerCount<2 || playerCount>int(MaxControllerPlayers)) {error=QStringLiteral("Invalid GGPO controller topology");return false;}
     bool localPresent=false,hostPresent=false;
     for(int i=0;i<roster.size();++i) {
         const auto entry=roster[i].toObject();bool ok=false;const auto id=entry.value("id").toString().toULongLong(&ok);
         const int role=entry.value("role").toInt(-1);
-        if(!ok || role<0 || role>2) {error=QStringLiteral("Invalid GGPO participant");return false;}
+        if(!ok || role<0 || role>playerCount) {error=QStringLiteral("Invalid GGPO participant");return false;}
         for(const auto& peer:d->peers) if(peer.id==id) {error=QStringLiteral("Duplicate GGPO participant");return false;}
         Impl::Peer peer{id,role,quint32(0x0a010001u+i)};d->peers.append(peer);
         if(role || id==0) d->players.append(peer);
@@ -241,6 +246,9 @@ bool NetRollbackSession::start(LibretroHost& host,quint64 epoch,const QJsonArray
                 GGPOPlayerHandle handle=-1;if(!d->check(ggpo_add_player(d->session,&player,&handle),error)){stop();return false;}
             }
         }
+        // Pads use local P1. A gun role uses the first connected local gun of
+        // the matching kind, so a remote second Justifier can use its primary mouse.
+        d->localInputSource=NetplayTimeline::localInputSource(d->localRole,configuration);
         ggpo_set_disconnect_timeout(d->session,15000);ggpo_set_disconnect_notify_start(d->session,3000);
         return true;
     } catch(const std::exception& e) {kega_ggpo_set_transport(nullptr);error=QString::fromUtf8(e.what());stop();return false;}
@@ -265,7 +273,7 @@ NetRollbackSession::Result NetRollbackSession::beforeFrame(const MovieInput& loc
     Impl::Scope scope(d.get());
     try {
         if(d->localHandle>=0 && !d->localQueued) {
-            auto bytes=encodeInput(local);
+            auto bytes=encodeInput(local,d->localInputSource);
             const int previousDelay=d->delay.frames();
             int nextDelay=d->realtime?d->delay.pending():previousDelay;
             // GGPO drops one captured input when reducing delay by one. Only

@@ -152,6 +152,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
     api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
+    api_->multitap = reinterpret_cast<decltype(api_->multitap)>(library_.resolve("retro_kegarefusion_multitap"));
     api_->debug_gain = reinterpret_cast<decltype(api_->debug_gain)>(library_.resolve("retro_kegarefusion_debug_gain"));
     api_->debug_capabilities = reinterpret_cast<decltype(api_->debug_capabilities)>(library_.resolve("retro_kegarefusion_debug_capabilities"));
     api_->native_video_size = reinterpret_cast<decltype(api_->native_video_size)>(library_.resolve("retro_kegarefusion_native_video_size"));
@@ -906,9 +907,10 @@ bool LibretroHost::setControllerKind(unsigned player, ControllerType type) {
     if (player >= controllerKinds_.size() || int(type) < 0 || int(type) > int(ControllerType::Justifier) ||
         (player == 0 && (type == ControllerType::Menacer || type == ControllerType::Justifier)) ||
         (player == 2 && type != ControllerType::Justifier && type != ControllerType::Pad) ||
+        (player >= 3 && type != ControllerType::Pad) ||
         controllerKinds_[player] == type) return false;
     controllerKinds_[player] = type;
-    buttons_[player] = 0; gunAim_[player] = {};
+    buttons_[player] = 0; if (player < gunAim_.size()) gunAim_[player] = {};
     applyControllerPorts();
     return true;
 }
@@ -916,17 +918,62 @@ void LibretroHost::setGunAim(unsigned player, int x, int y, bool offscreen) {
     if (player < gunAim_.size()) gunAim_[player] = {int16_t(std::clamp(x,-32767,32767)),
         int16_t(std::clamp(y,-32767,32767)),offscreen};
 }
+ControllerAdapter LibretroHost::controllerAdapter() const {
+    if (linkRequested_ || linkParent_) return ControllerAdapter::None;
+    if (!loaded_) return adapter_;
+    const bool sms = isMasterSystem();
+    const bool md = api_->system_hw && (api_->system_hw() & 0x81u) == 0x80u;
+    return (isMasterTap(adapter_) ? sms : md) ? adapter_ : ControllerAdapter::None;
+}
+unsigned LibretroHost::controllerPlayerCount() const {
+    const auto adapter = controllerAdapter();
+    if (adapter != ControllerAdapter::None) return adapterPlayerCount(adapter);
+    // The chained second Justifier is a third logical input, still on port B.
+    if (!linkRequested_ && controllerConnected_[1] && controllerConnected_[2] &&
+        controllerKinds_[1] == ControllerType::Justifier && controllerKinds_[2] == ControllerType::Justifier &&
+        (!loaded_ || (api_->system_hw && (api_->system_hw() & 0x81u) == 0x80u))) return 3;
+    return 2;
+}
+bool LibretroHost::setControllerAdapter(ControllerAdapter adapter, QString& error) {
+    error.clear();
+    if (!validControllerAdapter(int(adapter))) return false;
+    if (adapter != ControllerAdapter::None && (linkRequested_ || linkParent_)) {
+        error = Localization::text(QStringLiteral("Мультиадаптер недоступен при включённом Link Cable.")); return false;
+    }
+    if (adapter_ == adapter) return true;
+    adapter_ = adapter; buttons_.fill(0); applyControllerPorts(); return true;
+}
 void LibretroHost::applyControllerPorts(bool force) {
     if (!loaded_) return;
     const bool sms = contentExtension_ == "sms";
     const bool md = !sms && contentExtension_ != "gg" && contentExtension_ != "sg";
     if (linkRequested_ || linkParent_) {
-        callbackPlayers_ = {{0,-1,-1}};
+        callbackPlayers_.fill(-1); callbackPlayers_[0] = 0;
         const unsigned pad = controllerSixButton_[0] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1) : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,0);
         const std::array<unsigned,2> wanted{{pad,RETRO_DEVICE_NONE}};
         for (unsigned i=0;i<2;++i) if (force || controllerDevices_[i]!=wanted[i]) { api_->set_controller_port_device(i,wanted[i]); controllerDevices_[i]=wanted[i]; }
         return;
     }
+    const auto adapter = controllerAdapter();
+    if (adapter != ControllerAdapter::None && api_->multitap) {
+        unsigned connected = 0, six = 0, callback = 0;
+        callbackPlayers_.fill(-1);
+        for (unsigned player = 0; player < adapterPlayerCount(adapter); ++player) {
+            if (controllerConnected_[player]) {
+                connected |= 1u << player;
+                callbackPlayers_[callback++] = int(player);
+            }
+            if (controllerSixButton_[player]) six |= 1u << player;
+        }
+        if (force || appliedAdapter_ != adapter || appliedConnected_ != connected || appliedSixButton_ != six) {
+            if (api_->multitap(unsigned(adapter), connected, six)) {
+                appliedAdapter_ = adapter; appliedConnected_ = connected; appliedSixButton_ = six;
+                controllerDevices_.fill(~0u);
+            }
+        }
+        return;
+    }
+    if (appliedAdapter_ != ControllerAdapter::None) { force = true; appliedAdapter_ = ControllerAdapter::None; }
     std::array<unsigned,2> devices{{RETRO_DEVICE_NONE,RETRO_DEVICE_NONE}};
     callbackPlayers_.fill(-1);
     unsigned callback = 0;
@@ -1488,16 +1535,22 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         {QStringLiteral("discIndex"),discIndex_},
         {QStringLiteral("frameRate"),fps()},
         {QStringLiteral("controllers"),controllers},
+        {QStringLiteral("adapter"),int(controllerAdapter())},
+        {QStringLiteral("playerCount"),int(controllerPlayerCount())},
         {QStringLiteral("cheats"),cheatsJson},
         {QStringLiteral("bios"),movieBiosFingerprints()}};
 }
 bool LibretroHost::prepareNetwork(const QJsonObject& configuration,QString& error) {
-    if (!setLinkCableEnabled(configuration.value(QStringLiteral("linkCable")).toBool(false),error)) return false;
+    const auto localAdapter = adapter_;
+    const bool preserveLocalAdapter = !movieConfigurationActive_;
+    if (configuration.value(QStringLiteral("linkCable")).toBool(false)) adapter_ = ControllerAdapter::None;
+    if (!setLinkCableEnabled(configuration.value(QStringLiteral("linkCable")).toBool(false),error)) { adapter_=localAdapter;return false; }
     const auto identity = networkCompatibility();
     if (identity.size() != 32 ||
         configuration.value(QStringLiteral("networkCompatibility")).toString() !=
             QString::fromLatin1(identity.toHex())) {
         error = Localization::text(QStringLiteral("Сетевые состояния ядер несовместимы."));
+        adapter_ = localAdapter; applyControllerPorts();
         return false;
     }
     // The coordinator has matched the complete canonical media manifest. Safe
@@ -1505,7 +1558,10 @@ bool LibretroHost::prepareNetwork(const QJsonObject& configuration,QString& erro
     auto local = configuration;
     local.insert(QStringLiteral("gameIdentity"),QString::fromLatin1(movieGameIdentity().toHex()));
     local.insert(QStringLiteral("coreIdentity"),QString::fromLatin1(recordingCoreHash_.toHex()));
-    return prepareMovie(local,error);
+    const bool ok = prepareMovie(local,error);
+    if (ok && preserveLocalAdapter) preMovieAdapter_ = localAdapter;
+    else if (!ok) { adapter_ = localAdapter; applyControllerPorts(); }
+    return ok;
 }
 bool LibretroHost::restoreNetworkState(const QByteArray& state,QString& error) {
     const auto identity = networkCompatibility();
@@ -1627,10 +1683,16 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
             "Набор параметров ядра изменился: недоступные параметры записи пропущены. Возможна рассинхронизация."));
     }
     const auto controllers = configuration.value(QStringLiteral("controllers")).toArray();
-    if (controllers.size() != 3) { error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи.")); return false; }
-    std::array<bool,3> connected{}, sixButton{};
-    std::array<ControllerType,3> kinds{};
-    for (int i = 0; i < 3; ++i) {
+    if (controllers.size() != 3 && controllers.size() != int(MaxControllerPlayers)) { error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи.")); return false; }
+    const int adapterValue = configuration.value(QStringLiteral("adapter")).toInt(0);
+    if (!validControllerAdapter(adapterValue) || (adapterValue && controllers.size() != int(MaxControllerPlayers)) ||
+        (adapterValue && configuration.value(QStringLiteral("linkCable")).toBool())) {
+        error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи.")); return false;
+    }
+    std::array<bool,MaxControllerPlayers> connected{}, sixButton{};
+    sixButton.fill(true);
+    std::array<ControllerType,MaxControllerPlayers> kinds{};
+    for (int i = 0; i < controllers.size(); ++i) {
         const auto value = controllers[i];
         const auto object = value.toObject();
         const auto kindValue = object.value(QStringLiteral("kind"));
@@ -1639,7 +1701,8 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
             kindValue.toInt(-1) < 0 || kindValue.toInt(-1) > int(ControllerType::Justifier) ||
             (i == 0 && kindValue.toInt() >= int(ControllerType::Menacer)) ||
             (i == 2 && kindValue.toInt() != int(ControllerType::Pad) &&
-             kindValue.toInt() != int(ControllerType::Justifier))) {
+             kindValue.toInt() != int(ControllerType::Justifier)) ||
+            (i >= 3 && kindValue.toInt() != int(ControllerType::Pad))) {
             error = Localization::text(QStringLiteral("Неверная конфигурация контроллеров записи.")); return false;
         }
         connected[size_t(i)] = object.value(QStringLiteral("connected")).toBool();
@@ -1674,6 +1737,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         preMovieControllerConnected_ = controllerConnected_;
         preMovieControllerSixButton_ = controllerSixButton_;
         preMovieControllerKinds_ = controllerKinds_;
+        preMovieAdapter_ = adapter_;
         movieConfigurationActive_ = true;
     }
     linkRequested_ = configuration.value(QStringLiteral("linkCable")).toBool(false);
@@ -1683,6 +1747,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     }
     autoFixChecksum_ = configuration.value(QStringLiteral("autoFixChecksum")).toBool();
     controllerConnected_ = connected; controllerSixButton_ = sixButton; controllerKinds_ = kinds;
+    adapter_ = ControllerAdapter(adapterValue);
     movieCheats_ = std::move(normalized); movieCheatsActive_ = true;
     buttons_.fill(0); gunAim_.fill(GunAim{});
     const int previousDisc = discIndex_;
@@ -1737,6 +1802,7 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     controllerConnected_ = preMovieControllerConnected_;
     controllerSixButton_ = preMovieControllerSixButton_;
     controllerKinds_ = preMovieControllerKinds_;
+    adapter_ = preMovieAdapter_;
     movieCheats_.clear(); movieCheatsActive_ = false;
     movieConfigurationActive_ = false;
     buttons_.fill(0); gunAim_.fill(GunAim{});
@@ -2064,6 +2130,7 @@ int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsig
         return baseDevice == RETRO_DEVICE_LIGHTGUN && id == RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN;
     auto mask = active_->buttons_[owner];
     if (baseDevice == RETRO_DEVICE_LIGHTGUN) {
+        if (unsigned(owner) >= active_->gunAim_.size()) return 0;
         const auto& aim = active_->gunAim_[owner];
         const bool reload = (mask & (1u << 2)) != 0;
         switch (id) {

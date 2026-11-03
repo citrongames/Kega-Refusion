@@ -23,6 +23,7 @@ public:
     void joinSession();
     void showLobby();
     void leaveSession();
+    void setControllerTopology(int adapter, unsigned playerCount);
     bool active() const { return active_; }
     QString nickname() const;
     QJsonArray bannedPeers() const;
@@ -55,6 +56,8 @@ private:
     void updateRoster();
     void announceContent();
     void applyLinkCableConfiguration(bool enabled);
+    void normalizeRoles();
+    int activePlayerCount() const;
     void compareContent();
     void prepareSource(const QString&,int archiveIndex=-1);
     EmulationSession& session_;
@@ -66,6 +69,7 @@ private:
     QSet<quint64> udpReadyPeers_;
     QByteArray rosterBytes_, lastLobbyBytes_;
     QJsonObject networkQuality_;
+    QJsonArray roleKinds_;
     NetAddressDiscovery* addressDiscovery_=nullptr;
     QByteArray invitationKey_;
     QString invitationPassword_,lanInvite_,addressStatus_,connectionId_;
@@ -79,6 +83,8 @@ private:
     bool remoteReadinessWaiting_=false, readinessWaiting_=false;
     bool allowCommands_ = true, allowDownloads_ = false;
     bool linkCable_ = false;
+    int controllerAdapter_ = 0, playerCount_ = 2;
+    bool adjustingRoles_ = false;
     bool gameReady_ = false, remoteGameOpen_ = false;
     QString invite_, inviteWithPassword_, gamePath_, gameName_, status_;
     QString joinInvite_, joinPassword_;

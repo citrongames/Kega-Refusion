@@ -21,11 +21,11 @@ class QTableWidget;
 //   active, host, status, connectionWaiting, addressStatus, addressRetry, invite,
 //   inviteWithPassword, lanInvite (LAN links include password when configured),
 //   connections: [{id, name, ipv4, physical}] for the create dialog;
-//   allowCommands, allowDownloads, linkCable;
+//   allowCommands, allowDownloads, linkCable, playerCount, roleKinds;
 //   participants: [{id, nickname, role, readiness, pingMs, local, host}];
 //   rom: {filename, status, message, progress (0..100), canSelect,
 //         canDownload, canCancel}.
-// Roles are player1, player2, spectator. Only the host can assign roles, and
+// Roles are player1 through player8 and spectator, limited by playerCount. Only the host can assign roles, and
 // any number of peers may have the same role. Peer IDs must be stable strings.
 class NetplayLobby final : public QWidget {
     Q_OBJECT

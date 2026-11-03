@@ -1,6 +1,7 @@
 #include "NetplayLobby.h"
 
 #include "i18n/Localization.h"
+#include "input/ControllerType.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -43,9 +44,20 @@ bool validManualAddress(const QString& address) {
     return true;
 }
 
-QString roleName(const QString& role) {
-    if (role == QLatin1String("player1")) return t("Игрок 1");
-    if (role == QLatin1String("player2")) return t("Игрок 2");
+QString roleName(const QString& role,const QJsonArray& kinds) {
+    if (role.startsWith(QLatin1String("player"))) {
+        bool ok=false;const int player=role.mid(6).toInt(&ok);
+        if(ok && player>=1 && player<=8 && role==QStringLiteral("player%1").arg(player)) {
+            const int kind=player<=kinds.size()?kinds[player-1].toInt(0):0;
+            if(kind==int(ControllerType::LightPhaser) && player<=2)
+                return t("Игрок %1 · Light Phaser (порт %2)").arg(player).arg(player);
+            if(kind==int(ControllerType::Menacer) && player==2)
+                return t("Игрок %1 · Menacer (порт 2)").arg(player);
+            if(kind==int(ControllerType::Justifier) && player>=2 && player<=3)
+                return t("Игрок %1 · Justifier %2 (порт 2)").arg(player).arg(player-1);
+            return t("Игрок %1").arg(player);
+        }
+    }
     if (role == QLatin1String("spectator")) return t("Зритель");
     return t("Не выбрана");
 }
@@ -464,6 +476,7 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
 
 void NetplayLobby::updateParticipants(const QJsonObject& state) {
     const QJsonArray entries = state.value(QStringLiteral("participants")).toArray();
+    const QJsonArray kinds = state.value(QStringLiteral("roleKinds")).toArray();
     const int count = qMin(entries.size(), 32);
     participantsTitle_->setText(t("Участники (%1)").arg(entries.size()));
     const QString selection = selectedPeerId();
@@ -483,17 +496,19 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
         if (nameCell->data(Qt::UserRole).toString() != id) nameCell->setData(Qt::UserRole, id);
         if (nameCell->data(Qt::UserRole + 1).toBool() != local)
             nameCell->setData(Qt::UserRole + 1, local);
-        setCell(participants_, row, 1, roleName(role));
+        setCell(participants_, row, 1, roleName(role,kinds));
         auto* roleBox = qobject_cast<QComboBox*>(participants_->cellWidget(row, 1));
         if (state.value(QStringLiteral("active")).toBool() &&
             state.value(QStringLiteral("host")).toBool() && !id.isEmpty()) {
-            if (!roleBox || roleBox->property("peerId").toString() != id) {
+            const int playerCount=qBound(2,state.value(QStringLiteral("playerCount")).toInt(2),8);
+            if (!roleBox || roleBox->property("peerId").toString() != id || roleBox->count()!=playerCount+1) {
+                if(roleBox)participants_->removeCellWidget(row,1);
                 roleBox = new QComboBox(participants_);
                 roleBox->setObjectName(QStringLiteral("netplayParticipantRole"));
                 roleBox->setProperty("peerId", id);
                 roleBox->addItem(t("Зритель"), QStringLiteral("spectator"));
-                roleBox->addItem(t("Игрок 1"), QStringLiteral("player1"));
-                roleBox->addItem(t("Игрок 2"), QStringLiteral("player2"));
+                for(int player=1;player<=playerCount;++player)
+                    roleBox->addItem(roleName(QStringLiteral("player%1").arg(player),kinds),QStringLiteral("player%1").arg(player));
                 participants_->setCellWidget(row, 1, roleBox);
                 connect(roleBox, &QComboBox::currentIndexChanged, this, [this, roleBox, id](int index) {
                     if (index >= 0 && state_.value(QStringLiteral("active")).toBool() &&
@@ -502,6 +517,10 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
                 });
             }
             const QSignalBlocker roleBlocker(roleBox);
+            for(int player=1;player<=playerCount;++player) {
+                const auto label=roleName(QStringLiteral("player%1").arg(player),kinds);
+                if(roleBox->itemText(player)!=label)roleBox->setItemText(player,label);
+            }
             const int roleIndex = roleBox->findData(role);
             if (roleBox->currentIndex() != roleIndex) roleBox->setCurrentIndex(roleIndex);
         } else if (roleBox) {

@@ -135,6 +135,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     playerBox_->setObjectName(QStringLiteral("playerBox"));
     playerBox_->addItem(Localization::text(QStringLiteral("Порт 1")), 0);
     playerBox_->addItem(Localization::text(QStringLiteral("Порт 2")), 1);
+    adapterLabel_ = new QLabel(Localization::text(QStringLiteral("Адаптер контроллеров")), this);
+    adapterBox_ = new QComboBox(this);
+    adapterBox_->setObjectName(QStringLiteral("adapterBox"));
+    adapterBox_->setMinimumWidth(170);
     deviceBox_ = new QComboBox(this);
     deviceBox_->setMinimumWidth(230);
     deadzoneSlider_ = new QSlider(Qt::Horizontal, this);
@@ -145,8 +149,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     scope->addWidget(new QLabel(Localization::text(QStringLiteral("Система")), this), 0, 0);
     scope->addWidget(profileBox_, 1, 0);
-    scope->addWidget(new QLabel(Localization::text(QStringLiteral("Порт консоли")), this), 0, 1);
+    scope->addWidget(new QLabel(Localization::text(QStringLiteral("Игрок / порт")), this), 0, 1);
     scope->addWidget(playerBox_, 1, 1);
+    scope->addWidget(adapterLabel_, 0, 2);
+    scope->addWidget(adapterBox_, 1, 2);
     scope->addWidget(new QLabel(Localization::text(QStringLiteral("Геймпад")), this), 2, 0);
     scope->addWidget(deviceBox_, 3, 0);
     scope->addWidget(new QLabel(Localization::text(QStringLiteral("Мёртвая зона")), this), 2, 1);
@@ -197,6 +203,9 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     aimHint_->setWordWrap(true);
     scope->addWidget(aimHint_, 8, 0, 1, 2);
     mainLayout->addLayout(scope);
+    adapterHint_ = new QLabel(this);
+    adapterHint_->setWordWrap(true);
+    mainLayout->addWidget(adapterHint_);
     portHint_ = new QLabel(Localization::text(QStringLiteral(
         "Порт отключён. Назначения можно настроить заранее; для игры выберите контроллер вместо «Нет».")), this);
     portHint_->setWordWrap(true);
@@ -285,6 +294,29 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     connect(profileBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this] { stopCapture(); refreshContents(); });
+    connect(adapterBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        if (refreshing_) return;
+        stopCapture();
+        const int profile = int(selectedProfile());
+        const ControllerAdapter after = ControllerAdapter(adapterBox_->currentData().toInt());
+        adapterDrafts_[profile] = after;
+        dirtyAdapters_.insert(profile);
+        for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+            const int key = profile * int(MaxControllerPlayers) + player;
+            if (dirty_.contains(key)) continue;
+            if (after == ControllerAdapter::None)
+                drafts_[key] = input_.ordinaryMapping(selectedProfile(), player);
+            else {
+                drafts_[key] = input_.adapter(selectedProfile()) == ControllerAdapter::None
+                    ? input_.ordinaryMapping(selectedProfile(), player)
+                    : input_.mapping(selectedProfile(), player);
+                if (input_.adapter(selectedProfile()) == ControllerAdapter::None &&
+                    player < int(adapterPlayerCount(after)))
+                    drafts_[key].connected = true;
+            }
+        }
+        refreshContents();
+    });
     connect(playerBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this] { stopCapture(); refreshContents(); });
     connect(deviceBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -308,7 +340,8 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
         const int type = deviceTypeBox_->currentData().toInt();
         if (type == -1) draft().connected = false;
         else {
-            draft().controllerType = static_cast<ControllerType>(type);
+            if (selectedAdapter() == ControllerAdapter::None)
+                draft().controllerType = static_cast<ControllerType>(type);
             draft().connected = true;
         }
         dirty_.insert(draftKey());
@@ -317,7 +350,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     connect(secondJustifierBox_, &QCheckBox::toggled, this, [this](bool enabled) {
         if (refreshing_ || selectedProfile() != ConsoleProfile::MegaDrive || selectedPlayer() != 1) return;
         stopCapture();
-        const int key = int(ConsoleProfile::MegaDrive) * 3 + 2;
+        const int key = int(ConsoleProfile::MegaDrive) * int(MaxControllerPlayers) + 2;
         if (!drafts_.contains(key)) drafts_.insert(key, input_.mapping(ConsoleProfile::MegaDrive, 2));
         drafts_[key].connected = enabled;
         drafts_[key].controllerType = ControllerType::Justifier;
@@ -382,6 +415,8 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     connect(defaultsButton, &QPushButton::clicked, this, [this] {
         stopCapture();
         draft() = InputManager::defaultMapping(selectedProfile(), selectedPlayer());
+        if (selectedAdapter() != ControllerAdapter::None)
+            draft().connected = true;
         dirty_.insert(draftKey());
         refreshContents();
         setFeedback(Localization::text(QStringLiteral("Настройки этого игрока и системы сброшены к исходным.")));
@@ -391,7 +426,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     connect(&input_, &InputManager::captureReady, this, [this] {
         if (captureTarget_ < 0) return;
         const QString label = captureTarget_ < 16
-            ? InputManager::targetName(selectedProfile(), captureTarget_, draft().controllerType)
+            ? InputManager::targetName(selectedProfile(), captureTarget_, displayMapping().controllerType)
             : commandName(captureTarget_);
         setFeedback((captureTarget_ < 16
             ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
@@ -437,7 +472,26 @@ int ControlsPage::selectedPlayer() const {
 }
 
 int ControlsPage::draftKey() const {
-    return static_cast<int>(selectedProfile()) * 3 + selectedPlayer();
+    return static_cast<int>(selectedProfile()) * int(MaxControllerPlayers) + selectedPlayer();
+}
+
+ControllerAdapter ControlsPage::selectedAdapter() const {
+    const int profile = int(selectedProfile());
+    return adapterDrafts_.contains(profile)
+        ? adapterDrafts_.value(profile) : input_.adapter(selectedProfile());
+}
+
+PlayerMapping ControlsPage::displayMapping() const {
+    const int key = int(selectedProfile()) * int(MaxControllerPlayers) + selectedPlayer();
+    PlayerMapping mapping = drafts_.contains(key) ? drafts_.value(key)
+        : input_.mapping(selectedProfile(), selectedPlayer());
+    if (selectedAdapter() != ControllerAdapter::None) {
+        mapping.controllerType = ControllerType::Pad;
+        if (!dirty_.contains(key) && input_.adapter(selectedProfile()) == ControllerAdapter::None &&
+            selectedPlayer() < int(adapterPlayerCount(selectedAdapter())))
+            mapping.connected = true;
+    }
+    return mapping;
 }
 
 PlayerMapping& ControlsPage::draft() {
@@ -448,26 +502,33 @@ PlayerMapping& ControlsPage::draft() {
 }
 
 QVector<int> ControlsPage::activeGameTargets() {
-    const auto& mapping = draft();
+    const auto mapping = displayMapping();
     return InputManager::gameTargets(selectedProfile(), mapping.sixButton, mapping.controllerType);
 }
 
 void ControlsPage::refreshPlayerChoices() {
     const int current = selectedPlayer();
-    const int secondaryKey = int(selectedProfile()) * 3 + 2;
-    const int parentKey = int(selectedProfile()) * 3 + 1;
-    const PlayerMapping parent = drafts_.contains(parentKey) ? drafts_.value(parentKey)
-        : input_.mapping(selectedProfile(), 1);
-    const PlayerMapping secondary = drafts_.contains(secondaryKey) ? drafts_.value(secondaryKey)
-        : input_.mapping(selectedProfile(), 2);
-    const bool pair = selectedProfile() == ConsoleProfile::MegaDrive &&
-        parent.connected && parent.controllerType == ControllerType::Justifier && secondary.connected;
+    const ControllerAdapter adapter = selectedAdapter();
     const QSignalBlocker blocker(playerBox_);
     playerBox_->clear();
-    playerBox_->addItem(Localization::text(QStringLiteral("Порт 1")), 0);
-    playerBox_->addItem(Localization::text(QStringLiteral("Порт 2")), 1);
-    if (pair) playerBox_->addItem(Localization::text(QStringLiteral("Второй пистолет")), 2);
-    playerBox_->setCurrentIndex(playerBox_->findData(current == 2 && !pair ? 1 : current));
+    if (adapter != ControllerAdapter::None) {
+        for (unsigned player = 0; player < adapterPlayerCount(adapter); ++player)
+            playerBox_->addItem(QStringLiteral("P%1").arg(player + 1), int(player));
+    } else {
+        const int secondaryKey = int(selectedProfile()) * int(MaxControllerPlayers) + 2;
+        const int parentKey = int(selectedProfile()) * int(MaxControllerPlayers) + 1;
+        const PlayerMapping parent = drafts_.contains(parentKey) ? drafts_.value(parentKey)
+            : input_.mapping(selectedProfile(), 1);
+        const PlayerMapping secondary = drafts_.contains(secondaryKey) ? drafts_.value(secondaryKey)
+            : input_.mapping(selectedProfile(), 2);
+        const bool pair = selectedProfile() == ConsoleProfile::MegaDrive &&
+            parent.connected && parent.controllerType == ControllerType::Justifier && secondary.connected;
+        playerBox_->addItem(Localization::text(QStringLiteral("Порт 1")), 0);
+        playerBox_->addItem(Localization::text(QStringLiteral("Порт 2")), 1);
+        if (pair) playerBox_->addItem(Localization::text(QStringLiteral("Второй пистолет")), 2);
+    }
+    const int found = playerBox_->findData(current);
+    playerBox_->setCurrentIndex(found >= 0 ? found : 0);
 }
 
 QString ControlsPage::captureDeviceKey() {
@@ -477,29 +538,32 @@ QString ControlsPage::captureDeviceKey() {
     const auto devices = input_.devices();
     if (devices.isEmpty())
         return key;
-    QVector<QString> assigned(3);
+    QVector<QString> assigned(static_cast<qsizetype>(MaxControllerPlayers));
     QVector<PlayerMapping> players;
-    for (int player = 0; player < 3; ++player) {
-        const int mappingKey = int(selectedProfile()) * 3 + player;
+    for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+        const int mappingKey = int(selectedProfile()) * int(MaxControllerPlayers) + player;
         players.append(drafts_.contains(mappingKey) ? drafts_.value(mappingKey)
             : input_.mapping(selectedProfile(), player));
         if (players[player].deviceKey != QStringLiteral("auto") &&
             players[player].deviceKey != QStringLiteral("none"))
             assigned[player] = players[player].deviceKey;
     }
-    const bool chainedActive = selectedProfile() == ConsoleProfile::MegaDrive &&
+    const bool chainedActive = selectedAdapter() == ControllerAdapter::None &&
+        selectedProfile() == ConsoleProfile::MegaDrive &&
         players[1].connected && players[1].controllerType == ControllerType::Justifier &&
         players[2].connected;
-    const auto active = [&players, chainedActive](int player) {
-        return player == 2 ? chainedActive : players[player].connected;
+    const auto active = [this, &players, chainedActive](int player) {
+        if (selectedAdapter() != ControllerAdapter::None)
+            return player < int(adapterPlayerCount(selectedAdapter())) && players[player].connected;
+        return player == 2 ? chainedActive : player < 2 && players[player].connected;
     };
     for (int pass = 0; pass < 2; ++pass) {
-        for (int player = 0; player < 3; ++player) {
+        for (int player = 0; player < int(MaxControllerPlayers); ++player) {
             if (players[player].deviceKey != QStringLiteral("auto") ||
                 active(player) != (pass == 0)) continue;
             for (const InputDevice& device : devices) {
                 bool usedByActive = false;
-                for (int other = 0; other < 3; ++other)
+                for (int other = 0; other < int(MaxControllerPlayers); ++other)
                     usedByActive |= active(other) && assigned[other] == device.key;
                 if (!usedByActive) { assigned[player] = device.key; break; }
             }
@@ -538,13 +602,58 @@ void ControlsPage::refreshDevices() {
 
 void ControlsPage::refreshContents() {
     refreshing_ = true;
+    const ConsoleProfile profile = selectedProfile();
+    const ControllerAdapter adapter = selectedAdapter();
+    const bool md = profile == ConsoleProfile::MegaDrive;
+    const bool sms = profile == ConsoleProfile::MasterSystem;
+    const bool supportsAdapter = md || sms;
+    {
+        const QSignalBlocker blocker(adapterBox_);
+        adapterBox_->clear();
+        adapterBox_->addItem(Localization::text(QStringLiteral("Нет адаптера")), int(ControllerAdapter::None));
+        if (md) {
+            adapterBox_->addItem(Localization::text(QStringLiteral("Team Player · порт 1")), int(ControllerAdapter::TeamPlayerPort1));
+            adapterBox_->addItem(Localization::text(QStringLiteral("Team Player · порт 2")), int(ControllerAdapter::TeamPlayerPort2));
+            adapterBox_->addItem(Localization::text(QStringLiteral("Team Player · оба порта")), int(ControllerAdapter::TeamPlayerBoth));
+            adapterBox_->addItem(QStringLiteral("4 Way Play"), int(ControllerAdapter::FourWayPlay));
+        } else if (sms) {
+            adapterBox_->addItem(Localization::text(QStringLiteral("Master Tap · порт 1")), int(ControllerAdapter::MasterTapPort1));
+            adapterBox_->addItem(Localization::text(QStringLiteral("Master Tap · порт 2")), int(ControllerAdapter::MasterTapPort2));
+            adapterBox_->addItem(Localization::text(QStringLiteral("Master Tap · оба порта")), int(ControllerAdapter::MasterTapBoth));
+        }
+        adapterBox_->setCurrentIndex(adapterBox_->findData(int(adapter)));
+    }
+    adapterLabel_->setVisible(supportsAdapter);
+    adapterBox_->setVisible(supportsAdapter);
+    QString occupancy;
+    switch (adapter) {
+    case ControllerAdapter::TeamPlayerPort1:
+    case ControllerAdapter::MasterTapPort1:
+        occupancy = Localization::text(QStringLiteral("Адаптер занимает порт 1: P1–P4; P5 подключён к порту 2."));
+        break;
+    case ControllerAdapter::TeamPlayerPort2:
+    case ControllerAdapter::MasterTapPort2:
+        occupancy = Localization::text(QStringLiteral("P1 подключён к порту 1; адаптер занимает порт 2: P2–P5."));
+        break;
+    case ControllerAdapter::TeamPlayerBoth:
+    case ControllerAdapter::MasterTapBoth:
+        occupancy = Localization::text(QStringLiteral("Оба порта заняты адаптерами: P1–P4 в порту 1, P5–P8 в порту 2."));
+        break;
+    case ControllerAdapter::FourWayPlay:
+        occupancy = Localization::text(QStringLiteral("4 Way Play занимает оба порта: P1–P4."));
+        break;
+    case ControllerAdapter::None:
+        occupancy = Localization::text(QStringLiteral("Обычные порты консоли: P1 и P2."));
+        break;
+    }
+    adapterHint_->setText(occupancy + QStringLiteral(" ") + Localization::text(QStringLiteral(
+        "В сетевой игре схему и роли задаёт хост. Зрители по умолчанию не управляют игрой; хост может назначить одну роль нескольким участникам.")));
+    adapterHint_->setVisible(supportsAdapter);
     refreshPlayerChoices();
-    const PlayerMapping mapping = draft();
+    const PlayerMapping mapping = displayMapping();
     portHint_->setVisible(!mapping.connected);
-    const bool md = selectedProfile() == ConsoleProfile::MegaDrive;
-    const bool sms = selectedProfile() == ConsoleProfile::MasterSystem;
     const bool gun = mapping.controllerType != ControllerType::Pad;
-    const bool chained = md && selectedPlayer() == 2;
+    const bool chained = md && adapter == ControllerAdapter::None && selectedPlayer() == 2;
     controllerTypeLabel_->setVisible(mapping.connected && md && !gun && !chained);
     controllerTypeBox_->setVisible(mapping.connected && md && !gun && !chained);
     controllerTypeBox_->setCurrentIndex(mapping.sixButton ? 1 : 0);
@@ -553,18 +662,21 @@ void ControlsPage::refreshContents() {
     deviceTypeBox_->clear();
     deviceTypeBox_->addItem(Localization::text(QStringLiteral("Нет")), -1);
     deviceTypeBox_->addItem(Localization::text(QStringLiteral("Геймпад")), int(ControllerType::Pad));
-    if (md && selectedPlayer() == 1) {
-        deviceTypeBox_->addItem(QStringLiteral("Menacer"), int(ControllerType::Menacer));
-        deviceTypeBox_->addItem(QStringLiteral("Justifier"), int(ControllerType::Justifier));
-    } else if (sms) {
-        deviceTypeBox_->addItem(QStringLiteral("Light Phaser"), int(ControllerType::LightPhaser));
+    if (adapter == ControllerAdapter::None) {
+        if (md && selectedPlayer() == 1) {
+            deviceTypeBox_->addItem(QStringLiteral("Menacer"), int(ControllerType::Menacer));
+            deviceTypeBox_->addItem(QStringLiteral("Justifier"), int(ControllerType::Justifier));
+        } else if (sms) {
+            deviceTypeBox_->addItem(QStringLiteral("Light Phaser"), int(ControllerType::LightPhaser));
+        }
     }
     deviceTypeBox_->setCurrentIndex(deviceTypeBox_->findData(
         mapping.connected ? int(mapping.controllerType) : -1));
-    const int secondaryKey = int(ConsoleProfile::MegaDrive) * 3 + 2;
+    const int secondaryKey = int(ConsoleProfile::MegaDrive) * int(MaxControllerPlayers) + 2;
     const bool secondGun = drafts_.contains(secondaryKey) ? drafts_.value(secondaryKey).connected
         : input_.mapping(ConsoleProfile::MegaDrive, 2).connected;
-    secondJustifierBox_->setVisible(md && selectedPlayer() == 1 && mapping.connected &&
+    secondJustifierBox_->setVisible(adapter == ControllerAdapter::None && md &&
+                                    selectedPlayer() == 1 && mapping.connected &&
                                     mapping.controllerType == ControllerType::Justifier);
     secondJustifierBox_->setChecked(secondGun);
     aimSourceLabel_->setVisible(mapping.connected && gun);
@@ -579,9 +691,8 @@ void ControlsPage::refreshContents() {
     gameTable_->setColumnHidden(3, !gun);
     refreshDevices();
     deadzoneSlider_->setValue(qBound(5, mapping.deadzonePercent, 60));
-    deadzoneValue_->setText(
-        QStringLiteral("%1 %").arg(deadzoneSlider_->value()));
-    diagram_->setProfile(selectedProfile());
+    deadzoneValue_->setText(QStringLiteral("%1 %").arg(deadzoneSlider_->value()));
+    diagram_->setProfile(profile);
     diagram_->setSixButton(mapping.sixButton);
     diagram_->setControllerType(mapping.controllerType);
     diagram_->setTargets(activeGameTargets());
@@ -595,7 +706,7 @@ void ControlsPage::refreshContents() {
 
 void ControlsPage::fillGameTable() {
     const QVector<int> targets = activeGameTargets();
-    const PlayerMapping mapping = draft();
+    const PlayerMapping mapping = displayMapping();
     gameTable_->clearContents();
     gameTable_->setRowCount(targets.size());
     for (int row = 0; row < targets.size(); ++row) {
@@ -656,7 +767,7 @@ void ControlsPage::fillGameTable() {
 }
 
 void ControlsPage::fillCommandTable() {
-    const PlayerMapping mapping = draft();
+    const PlayerMapping mapping = displayMapping();
     commandTable_->clearContents();
     commandTable_->setRowCount(commands.size());
     for (int row = 0; row < commands.size(); ++row) {
@@ -773,7 +884,7 @@ void ControlsPage::beginCaptureFor(int target) {
     selectTarget(target);
     setFocus(Qt::OtherFocusReason);
     const QString label = target < 16
-        ? InputManager::targetName(selectedProfile(), target, draft().controllerType)
+        ? InputManager::targetName(selectedProfile(), target, displayMapping().controllerType)
         : commandName(target);
     setFeedback((target < 16
         ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Перед назначением геймпада отпустите его кнопки и стики. Esc — отмена."))
@@ -876,39 +987,51 @@ void ControlsPage::onCaptureCancelled() {
 }
 
 bool ControlsPage::validateDrafts() {
-    // Validate the physical ports and any chained Justifier together.
     for (int profile = 0; profile < 4; ++profile) {
-        if (!dirty_.contains(profile * 3) && !dirty_.contains(profile * 3 + 1) &&
-            !dirty_.contains(profile * 3 + 2)) continue;
-        PlayerMapping players[3];
-        for (int player = 0; player < 3; ++player) {
-            const int key = profile * 3 + player;
+        bool touched = dirtyAdapters_.contains(profile);
+        for (int player = 0; player < int(MaxControllerPlayers); ++player)
+            touched |= dirty_.contains(profile * int(MaxControllerPlayers) + player);
+        if (!touched) continue;
+        const ConsoleProfile system = ConsoleProfile(profile);
+        const ControllerAdapter adapter = adapterDrafts_.contains(profile)
+            ? adapterDrafts_.value(profile) : input_.adapter(system);
+        PlayerMapping players[MaxControllerPlayers];
+        for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+            const int key = profile * int(MaxControllerPlayers) + player;
             players[player] = drafts_.contains(key) ? drafts_.value(key)
-                : input_.mapping(static_cast<ConsoleProfile>(profile), player);
+                : input_.mapping(system, player);
         }
-        if (profile == int(ConsoleProfile::MegaDrive) &&
-            players[0].controllerType != ControllerType::Pad) {
-            setFeedback(Localization::text(QStringLiteral("Для Mega Drive пистолет выбирается на порту 2.")), true);
-            return false;
-        }
-        const bool firstMouseGun = profile == int(ConsoleProfile::MasterSystem) &&
-            players[0].connected && players[0].controllerType == ControllerType::LightPhaser &&
-            players[0].aimSource == AimSource::Mouse;
-        const bool secondMouseGun = players[1].connected &&
-            players[1].controllerType != ControllerType::Pad &&
-            players[1].aimSource == AimSource::Mouse;
-        const bool chainedMouseGun = profile == int(ConsoleProfile::MegaDrive) &&
-            players[1].connected && players[1].controllerType == ControllerType::Justifier &&
-            players[2].connected && players[2].aimSource == AimSource::Mouse;
-        if ((firstMouseGun && secondMouseGun) || (secondMouseGun && chainedMouseGun)) {
-            setFeedback(Localization::text(QStringLiteral("Одна мышь управляет одним пистолетом. "
-                                       "Для другого игрока выберите левый стик.")), true);
-            return false;
+        if (adapter == ControllerAdapter::None) {
+            if (profile == int(ConsoleProfile::MegaDrive) &&
+                players[0].controllerType != ControllerType::Pad) {
+                setFeedback(Localization::text(QStringLiteral("Для Mega Drive пистолет выбирается на порту 2.")), true);
+                return false;
+            }
+            const bool firstMouseGun = profile == int(ConsoleProfile::MasterSystem) &&
+                players[0].connected && players[0].controllerType == ControllerType::LightPhaser &&
+                players[0].aimSource == AimSource::Mouse;
+            const bool secondMouseGun = players[1].connected &&
+                players[1].controllerType != ControllerType::Pad &&
+                players[1].aimSource == AimSource::Mouse;
+            const bool chainedMouseGun = profile == int(ConsoleProfile::MegaDrive) &&
+                players[1].connected && players[1].controllerType == ControllerType::Justifier &&
+                players[2].connected && players[2].aimSource == AimSource::Mouse;
+            if ((firstMouseGun && secondMouseGun) || (secondMouseGun && chainedMouseGun)) {
+                setFeedback(Localization::text(QStringLiteral("Одна мышь управляет одним пистолетом. "
+                                           "Для другого игрока выберите левый стик.")), true);
+                return false;
+            }
         }
     }
     for (int key : dirty_) {
+        const int profile = key / int(MaxControllerPlayers);
+        const ConsoleProfile system = ConsoleProfile(profile);
+        const ControllerAdapter adapter = adapterDrafts_.contains(profile)
+            ? adapterDrafts_.value(profile) : input_.adapter(system);
         const PlayerMapping& mapping = drafts_[key];
-        const auto targets = InputManager::gameTargets(static_cast<ConsoleProfile>(key / 3), mapping.sixButton, mapping.controllerType);
+        const ControllerType type = adapter == ControllerAdapter::None
+            ? mapping.controllerType : ControllerType::Pad;
+        const auto targets = InputManager::gameTargets(system, mapping.sixButton, type);
         QSet<int> keyboard;
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
             const int assigned = it.value();
@@ -935,10 +1058,10 @@ bool ControlsPage::validateDrafts() {
             }
             pad.append(assigned);
         }
-        if (mapping.controllerType != ControllerType::Pad) {
+        if (type != ControllerType::Pad) {
             QSet<int> mouseButtons;
             for (int target : targets) {
-                const int button = mapping.mouse.value(int(mapping.controllerType)).value(target, 0);
+                const int button = mapping.mouse.value(int(type)).value(target, 0);
                 if (!button) continue;
                 if (mouseButtons.contains(button)) {
                     setFeedback(Localization::text(QStringLiteral("Проверьте мышь: одна кнопка назначена двум действиям.")), true);
@@ -951,13 +1074,19 @@ bool ControlsPage::validateDrafts() {
     return true;
 }
 
+void ControlsPage::setTopologyLocked(bool locked) {
+    setHardwareConfigurationLocked(locked);
+}
+
 void ControlsPage::setHardwareConfigurationLocked(bool locked) {
+    adapterBox_->setEnabled(!locked);
     deviceTypeBox_->setEnabled(!locked);
     controllerTypeBox_->setEnabled(!locked);
     secondJustifierBox_->setEnabled(!locked);
     const QString hint = locked
         ? Localization::text(QStringLiteral("Тип и подключение контроллеров заданы записью управления до её остановки."))
         : QString();
+    adapterBox_->setToolTip(hint);
     deviceTypeBox_->setToolTip(hint);
     controllerTypeBox_->setToolTip(hint);
     secondJustifierBox_->setToolTip(hint);
@@ -970,9 +1099,12 @@ bool ControlsPage::apply() {
     }
     if (!validateDrafts())
         return false;
+    for (int profile : dirtyAdapters_)
+        input_.setAdapter(ConsoleProfile(profile), adapterDrafts_[profile]);
+    dirtyAdapters_.clear();
     for (int key : dirty_)
-        input_.setMapping(static_cast<ConsoleProfile>(key / 3),
-                          key % 3, drafts_[key]);
+        input_.setMapping(static_cast<ConsoleProfile>(key / int(MaxControllerPlayers)),
+                          key % int(MaxControllerPlayers), drafts_[key]);
     dirty_.clear();
     input_.setBackgroundGamepadEnabled(backgroundGamepadBox_->isChecked());
     return true;

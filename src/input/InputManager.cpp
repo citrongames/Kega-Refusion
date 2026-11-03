@@ -16,7 +16,7 @@
 #include <memory>
 
 namespace {
-constexpr int playerCount = 3; // Ports A/B and a second Justifier chained to port B.
+constexpr int playerCount = int(MaxControllerPlayers); // Slot 2 also stores the legacy chained Justifier.
 constexpr int targetCount = FrameAdvanceCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
@@ -128,15 +128,25 @@ QString settingsPrefix(ConsoleProfile profile, int player) {
     return QStringLiteral("input/%1/player%2/").arg(profileId(profile)).arg(player + 1);
 }
 bool gameplayTarget(int target) { return target >= 0 && target < 16; }
-bool activeGameplayTarget(ConsoleProfile profile, const PlayerMapping& mapping, int target) {
-    const auto range = gameTargetRange(profile, mapping.sixButton, mapping.controllerType);
+bool activeGameplayTarget(ConsoleProfile profile, const PlayerMapping& mapping, int target, ControllerType type) {
+    const auto range = gameTargetRange(profile, mapping.sixButton, type);
     return std::find(range.begin(), range.end(), target) != range.end();
 }
 bool validPlayer(int player) { return player >= 0 && player < playerCount; }
+ControllerAdapter allowedAdapter(ConsoleProfile profile, ControllerAdapter adapter) {
+    if (!validControllerAdapter(int(adapter))) return ControllerAdapter::None;
+    if (profile == ConsoleProfile::MegaDrive && int(adapter) >= 1 && int(adapter) <= 4) return adapter;
+    if (profile == ConsoleProfile::MasterSystem && isMasterTap(adapter)) return adapter;
+    return ControllerAdapter::None;
+}
+QString adapterSetting(ConsoleProfile profile) {
+    return QStringLiteral("input/%1/adapter").arg(profileId(profile));
+}
 ControllerType slotControllerType(ConsoleProfile profile, int player, ControllerType type) {
     if (profile == ConsoleProfile::MegaDrive && player == 0) return ControllerType::Pad;
     if (player == 2) return profile == ConsoleProfile::MegaDrive
         ? ControllerType::Justifier : ControllerType::Pad;
+    if (player >= 3) return ControllerType::Pad;
     return validControllerType(profile, type);
 }
 bool validMouseButton(int button) {
@@ -208,6 +218,21 @@ struct InputManager::Impl {
     QString settingsPath;
     std::array<std::array<PlayerMapping, playerCount>, 4> mappings;
     std::array<PlayerMapping, playerCount> movieMappings;
+    std::array<ControllerAdapter, 4> adapters{};
+    std::array<std::array<bool, playerCount>, 4> adapterConnections{};
+    ControllerAdapter movieAdapter = ControllerAdapter::None;
+    ControllerAdapter effectiveAdapter() const {
+        return movieControllersActive && profile == movieProfile
+            ? movieAdapter : adapters[profileIndex(profile)];
+    }
+    ControllerType effectiveType(int player) const {
+        return effectiveAdapter() != ControllerAdapter::None
+            ? ControllerType::Pad : effective(player).controllerType;
+    }
+    ControllerType inputSourceType(int player) const {
+        return networkInputSourceEnabled && player == 0
+            ? ControllerType::Pad : effectiveType(player);
+    }
     ConsoleProfile movieProfile = ConsoleProfile::MegaDrive;
     bool movieControllersActive = false;
     const PlayerMapping& effective(int player) const {
@@ -221,6 +246,10 @@ struct InputManager::Impl {
     bool sdlReady = false;
     bool initialScan = true;
     bool enabled = true;
+    bool networkInputSourceEnabled = false;
+    bool inputSourceConnected(int player) const {
+        return connected(player) || (networkInputSourceEnabled && player == 0);
+    }
     bool backgroundGamepadEnabled = false;
     bool backgroundGamepadActive = false;
     std::array<unsigned, playerCount> masks{};
@@ -242,6 +271,11 @@ struct InputManager::Impl {
             for (int player = 0; player < playerCount; ++player)
                 mappings[p][player] = InputManager::defaultMapping(ConsoleProfile(p), player);
         QSettings settings(settingsPath, QSettings::IniFormat);
+        for (int p = 0; p < 4; ++p) {
+            const auto profile = ConsoleProfile(p);
+            adapters[p] = allowedAdapter(profile, ControllerAdapter(settings.value(
+                adapterSetting(profile), 0).toInt()));
+        }
         backgroundGamepadEnabled = settings.value(QStringLiteral("input/backgroundGamepad"), false).toBool();
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
                     backgroundGamepadEnabled ? "1" : "0");
@@ -249,6 +283,9 @@ struct InputManager::Impl {
             auto& m = mappings[p][player];
             const QString prefix = settingsPrefix(ConsoleProfile(p), player);
             m.deviceKey = settings.value(prefix + "device", m.deviceKey).toString();
+            adapterConnections[p][player] = settings.value(
+                QStringLiteral("input/%1/adapterPlayer%2/connected")
+                    .arg(profileId(ConsoleProfile(p))).arg(player + 1), true).toBool();
             m.connected = settings.value(prefix + "connected", m.connected).toBool();
             m.sixButton = settings.value(prefix + "sixButton", m.sixButton).toBool();
             m.controllerType = validControllerType(ConsoleProfile(p), static_cast<ControllerType>(
@@ -349,6 +386,13 @@ struct InputManager::Impl {
         return nullptr;
     }
     bool connected(int player) const {
+        if (effectiveAdapter() != ControllerAdapter::None) {
+            const bool recorded = movieControllersActive && profile == movieProfile;
+            return player < int(adapterPlayerCount(effectiveAdapter())) &&
+                (recorded ? effective(player).connected
+                          : adapterConnections[profileIndex(profile)][player]);
+        }
+        if (player >= 3) return false;
         if (player == 2)
             return profile == ConsoleProfile::MegaDrive && effective(1).connected &&
                    effective(1).controllerType == ControllerType::Justifier && effective(2).connected;
@@ -363,11 +407,11 @@ struct InputManager::Impl {
         for (int pass = 0; pass < 2; ++pass) {
             for (int player = 0; player < playerCount; ++player) {
                 if (effective(player).deviceKey != "auto" ||
-                    connected(player) != (pass == 0)) continue;
+                    inputSourceConnected(player) != (pass == 0)) continue;
                 for (const auto& device : devices) {
                     bool usedByActive = false;
                     for (int other = 0; other < playerCount; ++other)
-                        usedByActive |= connected(other) && out[other] == device.get();
+                        usedByActive |= inputSourceConnected(other) && out[other] == device.get();
                     if (!usedByActive) { out[player] = device.get(); break; }
                 }
                 if (!out[player] && !devices.empty()) out[player] = devices.front().get();
@@ -483,7 +527,7 @@ struct InputManager::Impl {
         if ((enabled || backgroundGamepadActive) && !capture) {
             for (unsigned player = 0; player < playerCount; ++player) {
                 const auto& mapping = effective(int(player));
-                needed |= connected(player) && mapping.controllerType != ControllerType::Pad &&
+                needed |= inputSourceConnected(int(player)) && inputSourceType(int(player)) != ControllerType::Pad &&
                           mapping.aimSource == AimSource::LeftStick && assigned[player];
             }
         }
@@ -494,7 +538,7 @@ struct InputManager::Impl {
         for (unsigned player = 0; player < playerCount; ++player) {
             const auto& mapping = effective(int(player));
             const auto* device = assigned[player];
-            if (!connected(player) || mapping.controllerType == ControllerType::Pad ||
+            if (!inputSourceConnected(int(player)) || inputSourceType(int(player)) == ControllerType::Pad ||
                 mapping.aimSource != AimSource::LeftStick || !device) continue;
             double x, y;
             if (device->controller) {
@@ -518,7 +562,7 @@ struct InputManager::Impl {
         if (!device) return 0;
         const auto& m = effective(player);
         unsigned result = 0;
-        for (int target : gameTargetRange(profile, m.sixButton, m.controllerType)) {
+        for (int target : gameTargetRange(profile, m.sixButton, inputSourceType(player))) {
             const auto configured = m.pad.value(target);
             bool& held = axisHeld[player][target];
             const bool pressed = configured.kind == PadBinding::Automatic ?
@@ -533,15 +577,15 @@ struct InputManager::Impl {
         std::array<bool, targetCount - 16> nextCommands{};
         for (int player = 0; player < playerCount; ++player) {
             const auto& m = effective(player);
-            const unsigned pad = connected(player) ? padMask(player, assigned[player]) : 0u;
+            const unsigned pad = inputSourceConnected(player) ? padMask(player, assigned[player]) : 0u;
             if (previews[player] != pad) {
                 previews[player] = pad;
                 emit owner->previewChanged(player, pad);
             }
             unsigned mask = pad;
             for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
-                if (activeGameplayTarget(profile, m, it.key()) && keys.contains(it.value())) mask |= (1u << it.key());
-            if ((!enabled && !backgroundGamepadActive) || capture || !connected(player)) mask = 0;
+                if (activeGameplayTarget(profile, m, it.key(), inputSourceType(player)) && keys.contains(it.value())) mask |= (1u << it.key());
+            if ((!enabled && !backgroundGamepadActive) || capture || !inputSourceConnected(player)) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
                 emit owner->maskChanged(player, mask);
@@ -649,8 +693,15 @@ QVector<InputDevice> InputManager::devices() const {
 }
 PlayerMapping InputManager::mapping(ConsoleProfile profile, int player) const {
     if (!validPlayer(player)) return {};
-    return d->movieControllersActive && profile == d->movieProfile
-        ? d->movieMappings[player] : d->mappings[profileIndex(profile)][player];
+    if (d->movieControllersActive && profile == d->movieProfile)
+        return d->movieMappings[player];
+    PlayerMapping result = ordinaryMapping(profile, player);
+    if (d->adapters[profileIndex(profile)] != ControllerAdapter::None)
+        result.connected = d->adapterConnections[profileIndex(profile)][player];
+    return result;
+}
+PlayerMapping InputManager::ordinaryMapping(ConsoleProfile profile, int player) const {
+    return validPlayer(player) ? d->mappings[profileIndex(profile)][player] : PlayerMapping{};
 }
 void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMapping& value) {
     if (!validPlayer(player)) return;
@@ -680,11 +731,20 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     if (profile == d->profile && (previous.sixButton != m.sixButton || previous.controllerType != m.controllerType))
         d->keys.clear(); // Release keys hidden by a type change, including their later key-up.
     d->aimTimer.invalidate();
+    const bool tapActive = d->adapters[profileIndex(profile)] != ControllerAdapter::None;
+    if (tapActive && !(d->movieControllersActive && profile == d->movieProfile)) {
+        d->adapterConnections[profileIndex(profile)][player] = value.connected;
+        m.connected = previous.connected; // Keep the ordinary port and chained gun state.
+    }
     d->mappings[profileIndex(profile)][player] = m;
     QSettings settings(d->settingsPath, QSettings::IniFormat);
     const QString prefix = settingsPrefix(profile, player);
     settings.setValue(prefix + "device", m.deviceKey);
     settings.setValue(prefix + "connected", m.connected);
+    if (tapActive && !(d->movieControllersActive && profile == d->movieProfile))
+        settings.setValue(QStringLiteral("input/%1/adapterPlayer%2/connected")
+            .arg(profileId(profile)).arg(player + 1),
+            d->adapterConnections[profileIndex(profile)][player]);
     settings.setValue(prefix + "sixButton", m.sixButton);
     settings.setValue(prefix + "controllerType", int(m.controllerType));
     settings.setValue(prefix + "aimSource", int(m.aimSource));
@@ -714,7 +774,7 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
         emit connectionChanged(unsigned(player), d->connected(player));
         if (player == 1) emit connectionChanged(2, d->connected(2));
         emit controllerTypeChanged(unsigned(player), d->effective(player).sixButton);
-        emit deviceTypeChanged(unsigned(player), int(d->effective(player).controllerType));
+        emit deviceTypeChanged(unsigned(player), int(d->effectiveType(player)));
         emit configurationChanged();
     }
     d->axisHeld = {};
@@ -836,31 +896,89 @@ QString InputManager::targetName(ConsoleProfile profile, int target, ControllerT
     default: return Localization::text(QStringLiteral("Кнопка %1")).arg(target);
     }
 }
+ControllerAdapter InputManager::adapter() const {
+    return d->effectiveAdapter();
+}
+ControllerAdapter InputManager::adapter(ConsoleProfile profile) const {
+    return d->movieControllersActive && profile == d->movieProfile
+        ? d->movieAdapter : d->adapters[profileIndex(profile)];
+}
+void InputManager::setAdapter(ConsoleProfile profile, ControllerAdapter requested) {
+    const ControllerAdapter selected = allowedAdapter(profile, requested);
+    const int p = profileIndex(profile);
+    if (d->adapters[p] == selected) return;
+    d->adapters[p] = selected;
+    QSettings settings(d->settingsPath, QSettings::IniFormat);
+    settings.setValue(adapterSetting(profile), int(selected));
+    settings.sync();
+    if (profile != d->profile ||
+        (d->movieControllersActive && d->movieProfile == d->profile)) return;
+    d->keys.clear();
+    d->axisHeld = {};
+    d->aimTimer.invalidate();
+    emit adapterChanged(int(selected));
+    for (unsigned player = 0; player < playerCount; ++player) {
+        emit connectionChanged(player, d->connected(int(player)));
+        emit controllerTypeChanged(player, d->effective(int(player)).sixButton);
+        emit deviceTypeChanged(player, int(d->effectiveType(int(player))));
+    }
+    emit configurationChanged();
+    d->recompute();
+}
 void InputManager::setProfile(ConsoleProfile profile) {
     if (d->profile == profile) return;
     d->profile = profile; d->axisHeld = {}; d->aimTimer.invalidate();
+    emit adapterChanged(int(d->effectiveAdapter()));
     for (unsigned player = 0; player < playerCount; ++player) {
         const auto& mapping = d->effective(int(player));
         emit connectionChanged(player, d->connected(player));
         emit controllerTypeChanged(player, mapping.sixButton);
-        emit deviceTypeChanged(player, int(mapping.controllerType));
+        emit deviceTypeChanged(player, int(d->effectiveType(int(player))));
     }
     emit configurationChanged();
     d->recompute();
 }
 void InputManager::setMovieControllers(const QByteArray& controllersJson) {
+    const ControllerAdapter previousAdapter = d->effectiveAdapter();
     if (controllersJson.isEmpty()) {
         if (!d->movieControllersActive) return;
         d->movieControllersActive = false;
     } else {
         const QJsonDocument document = QJsonDocument::fromJson(controllersJson);
-        if (!document.isArray() || document.array().size() != playerCount) {
+        QJsonArray controllers;
+        ControllerAdapter recordedAdapter = ControllerAdapter::None;
+        int count = 3;
+        if (document.isArray()) {
+            controllers = document.array(); // Legacy recordings have three ports.
+        } else if (document.isObject()) {
+            const QJsonObject object = document.object();
+            const QJsonValue adapterValue = object.value(QStringLiteral("adapter"));
+            if (!adapterValue.isDouble() || !validControllerAdapter(adapterValue.toInt(-1)) ||
+                object.value(QStringLiteral("controllers")).type() != QJsonValue::Array) {
+                qWarning("Ignoring invalid movie controller configuration");
+                return;
+            }
+            recordedAdapter = ControllerAdapter(adapterValue.toInt());
+            if (allowedAdapter(d->profile, recordedAdapter) != recordedAdapter) {
+                qWarning("Ignoring unsupported movie controller adapter");
+                return;
+            }
+            controllers = object.value(QStringLiteral("controllers")).toArray();
+            count = playerCount;
+        } else {
             qWarning("Ignoring invalid movie controller configuration");
             return;
         }
-        const QJsonArray controllers = document.array();
+        if (controllers.size() != count) {
+            qWarning("Ignoring invalid movie controller configuration");
+            return;
+        }
         std::array<PlayerMapping, playerCount> next = d->mappings[profileIndex(d->profile)];
-        for (int player = 0; player < playerCount; ++player) {
+        for (int player = 0; player < count; ++player) {
+            if (!controllers.at(player).isObject()) {
+                qWarning("Ignoring invalid movie controller configuration");
+                return;
+            }
             const QJsonObject object = controllers.at(player).toObject();
             const QJsonValue connected = object.value(QStringLiteral("connected"));
             const QJsonValue sixButton = object.value(QStringLiteral("sixButton"));
@@ -875,7 +993,8 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
             next[player].controllerType = slotControllerType(d->profile, player,
                 static_cast<ControllerType>(kind.toInt()));
         }
-        bool unchanged = d->movieControllersActive && d->movieProfile == d->profile;
+        bool unchanged = d->movieControllersActive && d->movieProfile == d->profile &&
+                         d->movieAdapter == recordedAdapter;
         for (int player = 0; player < playerCount && unchanged; ++player) {
             const auto& previous = d->movieMappings[player];
             const auto& current = next[player];
@@ -883,20 +1002,22 @@ void InputManager::setMovieControllers(const QByteArray& controllersJson) {
                         previous.sixButton == current.sixButton &&
                         previous.controllerType == current.controllerType;
         }
-        // A network snapshot repeats the same hardware description. Clearing
-        // keys here would release buttons still held by a remote player.
+        // Repeated network snapshots must not release keys held by a remote player.
         if (unchanged) return;
         d->movieProfile = d->profile;
+        d->movieAdapter = recordedAdapter;
         d->movieMappings = std::move(next);
         d->movieControllersActive = true;
     }
     d->keys.clear();
     d->axisHeld = {};
     d->aimTimer.invalidate();
+    if (d->effectiveAdapter() != previousAdapter)
+        emit adapterChanged(int(d->effectiveAdapter()));
     for (unsigned player = 0; player < playerCount; ++player) {
         emit connectionChanged(player, d->connected(int(player)));
         emit controllerTypeChanged(player, d->effective(int(player)).sixButton);
-        emit deviceTypeChanged(player, int(d->effective(int(player)).controllerType));
+        emit deviceTypeChanged(player, int(d->effectiveType(int(player))));
     }
     emit configurationChanged();
     d->recompute();
@@ -910,7 +1031,7 @@ bool InputManager::sixButton(unsigned player) const {
     return player < playerCount && d->effective(int(player)).sixButton;
 }
 ControllerType InputManager::controllerType(unsigned player) const {
-    return player < playerCount ? d->effective(int(player)).controllerType : ControllerType::Pad;
+    return player < playerCount ? d->effectiveType(int(player)) : ControllerType::Pad;
 }
 bool InputManager::aimWithMouse(unsigned player) const {
     return player < playerCount && d->effective(int(player)).aimSource == AimSource::Mouse;
@@ -918,7 +1039,7 @@ bool InputManager::aimWithMouse(unsigned player) const {
 unsigned InputManager::mouseButtonMask(unsigned player, unsigned qtButtons) const {
     if (player >= playerCount || !d->enabled || d->capture) return 0;
     const auto& mapping = d->effective(int(player));
-    if (!d->connected(int(player)) || mapping.controllerType == ControllerType::Pad ||
+    if (!d->inputSourceConnected(int(player)) || d->inputSourceType(int(player)) == ControllerType::Pad ||
         mapping.aimSource != AimSource::Mouse) return 0;
     const auto bindings = mapping.mouse.constFind(int(mapping.controllerType));
     if (bindings == mapping.mouse.cend()) return 0;
@@ -943,6 +1064,13 @@ void InputManager::setBackgroundGamepadActive(bool active) {
     active = active && d->backgroundGamepadEnabled;
     if (d->backgroundGamepadActive == active) return;
     d->backgroundGamepadActive = active;
+    d->aimTimer.invalidate();
+    d->recompute();
+}
+void InputManager::setNetworkInputSourceEnabled(bool enabled) {
+    if (d->networkInputSourceEnabled == enabled) return;
+    d->networkInputSourceEnabled = enabled;
+    d->axisHeld[0].fill(false);
     d->aimTimer.invalidate();
     d->recompute();
 }
@@ -996,7 +1124,7 @@ bool InputManager::keyEvent(int key, bool pressed) {
     for (int player = 0; player < playerCount; ++player) {
         const auto& mapping = d->effective(player);
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
-            if (activeGameplayTarget(d->profile, mapping, it.key()) && it.value() == key && key != 0) bound = true;
+            if (activeGameplayTarget(d->profile, mapping, it.key(), d->inputSourceType(player)) && it.value() == key && key != 0) bound = true;
     }
     if (!bound) return false;
     if (!d->enabled || d->capture) return true;

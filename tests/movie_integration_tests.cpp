@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QLibrary>
 #include <QTemporaryDir>
 #include <QtEndian>
@@ -28,6 +30,38 @@ void writeFile(const QString& path, const QByteArray& data) {
 QByteArray readFile(const QString& path) {
     QFile file(path); require(file.open(QIODevice::ReadOnly), "could not read fixture");
     return file.readAll();
+}
+// Original v1 slot checkpoints contained three button masks per RLE run.
+QByteArray asLegacyCheckpoint(const QByteArray& modern) {
+    require(modern.size() >= 72+32 && modern.left(8) == QByteArrayLiteral("KRMCHK01") &&
+            qFromLittleEndian<quint32>(modern.constData()+8) == 2,
+            "modern checkpoint fixture invalid");
+    const quint32 count = qFromLittleEndian<quint32>(modern.constData()+68);
+    require(quint64(modern.size()) == 72 + quint64(count)*45 + 32,
+            "modern checkpoint length invalid");
+    QByteArray old = modern.left(72);
+    qToLittleEndian<quint32>(1, old.data()+8);
+    for (quint32 i = 0; i < count; ++i) {
+        const char* run = modern.constData()+72+qsizetype(i)*45;
+        old.append(run,10); old.append(run+20,25);
+    }
+    old.append(QCryptographicHash::hash(old,QCryptographicHash::Sha256));
+    return old;
+}
+void makeSlotCheckpointLegacy(const QString& path) {
+    const QByteArray slot = readFile(path);
+    require(slot.size() >= 40+36 && slot.left(8) == QByteArrayLiteral("KRMSLOT1"),
+            "movie slot fixture invalid");
+    QByteArray payload = slot.mid(40);
+    const quint32 state = qFromBigEndian<quint32>(payload.constData());
+    const quint32 prefix = qFromBigEndian<quint32>(payload.constData()+4);
+    require(quint64(36)+state+prefix <= quint64(payload.size()),
+            "movie slot prefix range invalid");
+    const QByteArray old = asLegacyCheckpoint(payload.mid(36+state,prefix));
+    payload.replace(36+state,prefix,old);
+    qToBigEndian<quint32>(quint32(old.size()),payload.data()+4);
+    writeFile(path,QByteArrayLiteral("KRMSLOT1")+
+            QCryptographicHash::hash(payload,QCryptographicHash::Sha256)+payload);
 }
 void putLong(QByteArray& data, int at, quint32 value) { qToBigEndian(value, data.data()+at); }
 
@@ -159,6 +193,80 @@ void smsRegionRecording(const QString& core) {
     require(readFile(path)==rom,"SMS region fixture source changed");
 }
 
+void multitapRecording(const QString& core) {
+    QTemporaryDir temp; require(temp.isValid(), "multitap movie directory failed");
+    const QString romPath=temp.filePath("multitap.md");
+    const QString moviePath=temp.filePath("multitap.krm");
+    const QString dataPath=temp.filePath("data");
+    writeFile(romPath,makeInputRom());
+    QString error;
+    LibretroHost host(core,dataPath);
+    require(host.load(romPath,error),qPrintable(error));
+    QLibrary library(core);
+    const auto memory=reinterpret_cast<Memory>(library.resolve("retro_get_memory_data"));
+    require(memory,"multitap fixture memory API missing");
+    require(host.setControllerAdapter(ControllerAdapter::TeamPlayerBoth,error),qPrintable(error));
+    for (unsigned player=0;player<8;++player) {
+        host.setControllerConnected(player,true);
+        require(host.controllerConnected(player),"multitap player disconnected");
+    }
+    require(host.controllerPlayerCount()==8,"multitap player count wrong");
+    MovieSession movie(host,dataPath);
+    require(movie.startRecording(moviePath,error),qPrintable(error));
+    const auto topology=QJsonDocument::fromJson(movie.controllers());
+    require(topology.isObject() && topology.object().value("adapter").toInt()==3 &&
+            topology.object().value("controllers").toArray().size()==8,
+            "active movie did not expose eight-player adapter topology");
+    std::vector<MovieInput> inputs;
+    std::vector<QByteArray> expected;
+    for (int i=0;i<8;++i) {
+        MovieInput value=inputFor(i);
+        value.buttons[2]=quint16(1u<<(i%8));
+        value.buttons[3]=quint16(1u<<((i+2)%8));
+        value.buttons[7]=quint16(1u<<((i+4)%8));
+        inputs.push_back(value);
+        expected.push_back(step(movie,host,memory,value,error));
+        if (i==3) require(movie.saveSlot(1,error),qPrintable(error));
+    }
+    require(movie.finish(false,error),qPrintable(error));
+    MovieTape tape;
+    require(tape.load(moviePath,error) && tape.size()==8,qPrintable(error));
+    require(tape.metadata().value("adapter").toInt()==3 &&
+            tape.metadata().value("controllers").toArray().size()==8,
+            "recorded multitap configuration missing");
+    for (int i=0;i<8;++i) {
+        MovieInput read;
+        require(tape.inputAt(i,read) && read==inputs[size_t(i)],
+                "player three, four or eight mask lost in movie file");
+    }
+    require(host.setControllerAdapter(ControllerAdapter::None,error),qPrintable(error));
+    require(movie.play(moviePath,false,error),qPrintable(error));
+    require(host.controllerAdapter()==ControllerAdapter::TeamPlayerBoth &&
+            host.controllerPlayerCount()==8,"movie playback did not restore multitap adapter");
+    for (int i=0;i<8;++i) {
+        MovieInput decoy; decoy.buttons.fill(0xffff);
+        require(step(movie,host,memory,decoy,error)==expected[size_t(i)],
+                "multitap movie playback diverged");
+    }
+    QImage frame; double aspect=0; bool missing=false;
+    require(movie.loadSlot(1,frame,aspect,missing,error) && movie.position()==4,
+            "multitap movie checkpoint did not restore");
+    for (int i=4;i<8;++i) {
+        MovieInput decoy; decoy.buttons.fill(0xffff);
+        require(step(movie,host,memory,decoy,error)==expected[size_t(i)],
+                "multitap movie checkpoint replay diverged");
+    }
+    require(movie.finish(false,error),qPrintable(error));
+    require(movie.play(moviePath,true,error) && movie.recording() && movie.position()==8,
+            "multitap movie resume failed");
+    MovieInput continued=inputs.back(); continued.buttons[7]=0x8000;
+    step(movie,host,memory,continued,error);
+    require(movie.finish(false,error) && tape.load(moviePath,error) &&
+            tape.size()==9,qPrintable(error));
+    MovieInput read;
+    require(tape.inputAt(8,read) && read==continued,"resumed player eight input lost");
+}
+
 void integration(const QString& core) {
     QTemporaryDir temp; require(temp.isValid(), "temporary directory failed");
     const QString romPath=temp.filePath("movie-test.md");
@@ -188,6 +296,12 @@ void integration(const QString& core) {
     for (int i=0;i<10;++i) expected.push_back(step(movie,host,memory,inputFor(i),error));
     require(movie.saveSlot(0,error),qPrintable(error));
     require(movie.occupiedSlots() & 1u,"movie slot was not created");
+    MovieTape slotMovie;
+    require(slotMovie.load(moviePath,error),qPrintable(error));
+    const QString sourceSlot=dataPath+"/states/movies/original_"+
+        QString::fromLatin1(slotMovie.id().toHex())+"/slot0.krs";
+    makeSlotCheckpointLegacy(sourceSlot); // Exercise embedded v1 checkpoint during record and replay.
+
     const auto rewind=movie.captureRewind();
     require(!rewind.isEmpty(),"movie rewind snapshot unavailable");
     for (int i=10;i<16;++i) step(movie,host,memory,inputFor(i),error);
@@ -556,7 +670,8 @@ int main(int argc, char** argv) {
             std::puts("Movie core compatibility: legacy, compatible rebuild, and advisory mismatch passed");
         } else {
             integration(QString::fromLocal8Bit(argv[1]));
-            std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard and fork passed");
+            multitapRecording(QString::fromLocal8Bit(argv[1]));
+            std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard, fork and multitap passed");
         }
         return 0;
     } catch (const std::exception& failure) {

@@ -99,6 +99,9 @@ double LibretroHost::aspectRatioForLinkRole(int role) const {
 bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     error.clear();
     if(linkParent_) {error=QStringLiteral("A cable peer cannot own another console");return false;}
+    if(enabled && adapter_ != ControllerAdapter::None) {
+        error=Localization::text(QStringLiteral("Отключите мультиадаптер перед включением Link Cable."));return false;
+    }
     if(linkRequested_==enabled && (!loaded_ || !enabled || linkPair_))return true;
     if(enabled && loaded_ && (!api_->system_hw || api_->system_hw()!=0x80 || hasCdHardware() ||
             (api_->features&&(api_->features()&2u)) ||

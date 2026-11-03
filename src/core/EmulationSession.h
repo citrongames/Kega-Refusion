@@ -3,6 +3,7 @@
 #include "Cheats.h"
 #include "Achievements.h"
 #include "../input/ControllerType.h"
+#include "../input/ControllerTopology.h"
 #include <QThread>
 #include <QImage>
 #include <QByteArray>
@@ -43,6 +44,9 @@ public:
     void loadState(int slot);
     void setButton(unsigned port, unsigned id, bool pressed);
     void setButtons(unsigned port, unsigned mask);
+    void setControllerAdapter(ControllerAdapter adapter);
+    int controllerAdapter() const { return controllerAdapter_.load(); }
+    unsigned controllerPlayerCount() const { return controllerPlayerCount_.load(); }
     void setControllerConnected(unsigned port, bool connected);
     void setControllerSixButton(unsigned port, bool sixButton);
     void setControllerKind(unsigned player, ControllerType type);
@@ -74,6 +78,9 @@ public:
     void achievementResponse(quint64 id, int status, QByteArray body);
     // Network commands cross to the core only through this worker queue.
     void setNetworkMode(int mode, const QString& storageId = {}); // 0 off, 1 host, 2 client
+    bool networkClient() const { return networkMode_.load()==2; }
+    int networkRole() const { return networkRole_.load(); }
+    bool networkLinkCable() const { return networkLinkCableDesired_.load(); }
     bool networkActive() const { return networkMode_.load()!=0; }
     void setNetworkRole(int role);
     void setNetworkLinkCableEnabled(bool enabled);
@@ -119,6 +126,8 @@ signals:
     void achievementsHardcoreChanged(bool enabled);
     void movieCompatibilityWarning(const QString& message);
     void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length, double fps);
+    void controllerTopologyChanged(int adapter, unsigned playerCount);
+    void networkRoleChanged(int role);
     void movieHardwareChanged(const QByteArray& controllersJson);
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
@@ -143,7 +152,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter};
     struct Command {
         Type type;
         QString path;
@@ -180,6 +189,8 @@ private:
     // Local hold edges are separate from the shared state applied by the host.
     std::atomic<bool> networkFastRequested_{false}, networkRewindRequested_{false};
     std::atomic<bool> networkStepRequested_{false};
-    std::atomic<unsigned> buttons_[3]{};
+    std::atomic<int> controllerAdapter_{0};
+    std::atomic<unsigned> controllerPlayerCount_{2};
+    std::atomic<unsigned> buttons_[MaxControllerPlayers]{};
     std::atomic<quint64> gunPositions_[3]{{quint64(1)<<32},{quint64(1)<<32},{quint64(1)<<32}};
 };

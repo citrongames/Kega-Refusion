@@ -26,6 +26,7 @@ struct LibretroHost::Api {
     unsigned (*system_hw)() = nullptr;
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
     void (*debug_backdrop)(uint32_t) = nullptr;
+    bool (*multitap)(unsigned, unsigned, unsigned) = nullptr;
     void (*debug_gain)(unsigned,unsigned) = nullptr;
     void (*debug_capabilities)(uint32_t*,uint64_t*) = nullptr;
     bool (*native_video_size)(unsigned*,unsigned*) = nullptr;

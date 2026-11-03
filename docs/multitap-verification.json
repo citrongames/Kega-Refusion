@@ -1,0 +1,36 @@
+{
+  "version": "0.18.0",
+  "date": "2026-11-03",
+  "baseline_commit": "3c9aba8",
+  "network_protocol": 4,
+  "passed": [
+    "Linux and native Windows: original ROM fixtures read Team Player on port1, port2 and both (P1-P8), empty physical slot, mixed 3/6 button IDs, native state restore, 4 Way Play P1-P4, Master Tap on port1, port2 and both, two independent SMS Light Phaser triggers including empty port1.",
+    "Linux core_integration_tests --lightguns: Menacer, one/two Justifier detection/buttons with and without port1 pad.",
+    "Linux core_integration_tests --controller-ports: ordinary ports, live ID, state restore, hard reset and reload.",
+    "input_tests --multitap: adapter settings, P8 bindings, legacy gun restoration, local pad source with host P1 disconnected, SMS physical P1 Phaser plus local online pad role; --connections also passed.",
+    "netplay_session_tests --waiting-only: capacities, shared P3/P4/P8 merge, packet validation, readiness, gun source selection, selectable gun labels.",
+    "Two Linux processes --multitap: host port1 disconnected, client local P1 routed to P3, host local P1 to P4, adapter removal demotes invalid roles, same session switches to paired Justifiers with independent buttons/aim/offscreen.",
+    "Two Linux processes standard netplay: spectators/default, shared role input, pause/reset/save/load/rewind/game change/download.",
+    "movie_tape_tests and real-core movie_integration_tests: genuine v1 movie/checkpoint reads, v2 eight-player writes, adapter record/play/save/resume; SMS region case passed.",
+    "achievements_client_tests: unknown GameId0 and recognized game without achievements do not emit LoadFailed; HTTP500 emits it once.",
+    "Windows deployed executable, both cores and catalogs match build outputs; Linux archive executable, both cores and catalogs match outputs; git diff --check and language JSON parse passed."
+  ],
+  "resource_notes": [
+    "GGPO contribution remains 7 bytes per participant; button and aim arrays are fixed size.",
+    "Adapter hardware is recomputed only on topology changes, not each frame.",
+    "Client UI hardware updates are not sent back to host. Unchanged host controller values do not trigger new snapshots."
+  ],
+  "limits": [
+    "No claim of full commercial game coverage.",
+    "This batch used two Linux processes for live netplay and native Windows for hardware protocols, not a live Windows-to-Linux network run.",
+    "Master Tap single-port fixture power-resets its CPU together with the adapter: its on-wire four-state counter has no reset command."
+  ],
+  "published_sha256": {
+    "KegaRefusion.exe": "1703b531b26e166abcc15004a1093a47ecb43ec783e05d9ae879ee64d8589312",
+    "cores/genesis_plus_gx_libretro.dll": "c728dadf9182829f2648181d23d025017f0e004a104a75864334133e0fa1a704",
+    "cores/genesis_plus_gx_libretro_linkpeer.dll": "c728dadf9182829f2648181d23d025017f0e004a104a75864334133e0fa1a704",
+    "languages/ru.json": "12c317ef4203ecc0ad9c72d2ab77ecb31dcd5ac6e5fcc3979fb3eb69cdda56b8",
+    "languages/en.json": "7214c4a6910bce43678d94acf234f4218536d084c04db81d7df81bf00e2ebce6",
+    "KegaRefusion-0.18.0-linux-x86_64.tar.gz": "942b7d1d5d2f3b6c04c18188888270888c5f0a2b902c2725fac331ca0c91fbec"
+  }
+}

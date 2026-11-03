@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameView.h"
+#include "input/ControllerTopology.h"
 #include "../core/Cheats.h"
 #include "../core/Achievements.h"
 #include <array>
@@ -63,6 +64,7 @@ private:
     void editCheats();
     void showAchievements();
     void updateGunConfiguration();
+    void updateGunPresentation();
     void updateGunAim(unsigned player, QPointF position, bool offscreen);
     bool applyShaderPreset(const QString& path);
     void editShaderParameters();
@@ -121,7 +123,8 @@ private:
     int achievementPosition_ = 0;
     Cheats::Platform cheatPlatform_ = Cheats::Platform::MegaDrive;
     bool cheatsSupported_ = false;
-    std::array<unsigned,3> padMasks_{}, gunMasks_{};
+    std::array<unsigned,MaxControllerPlayers> padMasks_{};
+    std::array<unsigned,3> gunMasks_{};
     std::array<QPointF,3> gunAims_{{QPointF(.5,.5),QPointF(.5,.5),QPointF(.5,.5)}};
     QAction* fastForwardAction_ = nullptr;
     QAction* rewindAction_ = nullptr;

@@ -16,8 +16,21 @@
 namespace {
 constexpr char MovieMagic[8] = {'K','R','M','O','V','I','E','1'};
 constexpr char CheckpointMagic[8] = {'K','R','M','C','H','K','0','1'};
-constexpr quint32 FormatVersion = 1;
-constexpr qsizetype InputBytes = 4 + 3*2 + 3*8 + 1;
+constexpr quint32 LegacyFormatVersion = 1;
+constexpr quint32 FormatVersion = 2;
+constexpr qsizetype LegacyInputBytes = 4 + 3*2 + MaxGunPlayers*8 + 1;
+constexpr qsizetype InputBytes = 4 + MaxControllerPlayers*2 + MaxGunPlayers*8 + 1;
+static_assert(LegacyInputBytes == 35 && InputBytes == 45,
+              "Changing the recording input layout requires a new format version");
+bool validVersion(quint32 version) {
+    return version == LegacyFormatVersion || version == FormatVersion;
+}
+qsizetype inputBytes(quint32 version) {
+    return version == LegacyFormatVersion ? LegacyInputBytes : InputBytes;
+}
+unsigned buttonCount(quint32 version) {
+    return version == LegacyFormatVersion ? 3u : MaxControllerPlayers;
+}
 // Header fields: magic, version, metadata length, initial length, run count,
 // frame count, UUID, resume length and resume frame. The snapshot follows the
 // initial state; all fields and payload are covered by the trailing SHA-256.
@@ -60,17 +73,22 @@ bool validHash(const QByteArray& bytes) {
     return bytes.size() >= HashBytes &&
         sha256(bytes.constData(), bytes.size()-HashBytes) == bytes.right(HashBytes);
 }
-void addInput(QByteArray& bytes, quint32 count, const MovieInput& input) {
+void addInput(QByteArray& bytes, quint32 count, const MovieInput& input, quint32 version) {
     add32(bytes, count);
-    for (quint16 buttons : input.buttons) add16(bytes, buttons);
+    for (unsigned player = 0; player < buttonCount(version); ++player)
+        add16(bytes, input.buttons[player]);
     for (quint64 aim : input.aim) add64(bytes, aim);
     bytes.append(char(input.commands));
 }
-MovieInput readInput(const char* bytes) {
+MovieInput readInput(const char* bytes, quint32 version) {
     MovieInput input;
-    for (int port = 0; port < 3; ++port) input.buttons[size_t(port)] = read16(bytes + 4 + port*2);
-    for (int port = 0; port < 3; ++port) input.aim[size_t(port)] = read64(bytes + 10 + port*8);
-    input.commands = quint8(bytes[34]);
+    const unsigned players = buttonCount(version);
+    for (unsigned player = 0; player < players; ++player)
+        input.buttons[player] = read16(bytes + 4 + player*2);
+    const qsizetype aimOffset = 4 + qsizetype(players)*2;
+    for (unsigned player = 0; player < input.aim.size(); ++player)
+        input.aim[player] = read64(bytes + aimOffset + qsizetype(player)*8);
+    input.commands = quint8(bytes[aimOffset + qsizetype(input.aim.size())*8]);
     return input;
 }
 bool inputValid(const MovieInput& input) {
@@ -89,8 +107,10 @@ bool writeAtomic(const QString& path, const QByteArray& bytes, QString& error) {
 }
 bool movieEnvelopeValid(const QByteArray& bytes) {
     if (bytes.size() < MovieHeaderBytes + HashBytes || bytes.size() > MaxMovieFileBytes ||
-        std::memcmp(bytes.constData(), MovieMagic, 8) || read32(bytes.constData()+8) != FormatVersion)
+        std::memcmp(bytes.constData(), MovieMagic, 8) || !validVersion(read32(bytes.constData()+8)))
         return false;
+    const quint32 version = read32(bytes.constData()+8);
+    const qsizetype runBytes = inputBytes(version);
     const quint32 metadata = read32(bytes.constData()+12);
     const quint32 initial = read32(bytes.constData()+16);
     const quint32 runs = read32(bytes.constData()+20);
@@ -101,10 +121,10 @@ bool movieEnvelopeValid(const QByteArray& bytes) {
         initial > MovieTape::MaxInitialBytes ||
         resumeLength > MovieTape::MaxInitialBytes ||
         (resumeLength == 0 && resumeFrame != 0) || resumeFrame > frames ||
-        quint64(runs)*InputBytes > quint64(MovieTape::MaxRunBytes) ||
+        quint64(runs)*quint64(runBytes) > quint64(MovieTape::MaxRunBytes) ||
         frames > MovieTape::MaxFrames || (runs == 0) != (frames == 0)) return false;
     const quint64 expected = quint64(MovieHeaderBytes) + metadata + initial + resumeLength +
-        quint64(runs)*InputBytes + HashBytes;
+        quint64(runs)*quint64(runBytes) + HashBytes;
     return expected == quint64(bytes.size()) && validHash(bytes);
 }
 } // namespace
@@ -151,7 +171,7 @@ bool MovieTape::create(const QJsonObject& metadata, const QByteArray& initialSta
     return true;
 }
 
-bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames,
+bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames, quint32 version,
                           std::deque<Run>& out, QString& error) {
     if (count > quint32(MaxRuns) || frames > MaxFrames || (count == 0) != (frames == 0)) {
         error = Localization::text(QStringLiteral("Превышен предел длины записи."));
@@ -160,9 +180,9 @@ bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames,
     quint64 end = 0;
     MovieInput previous;
     for (quint32 i = 0; i < count; ++i) {
-        const char* entry = bytes + qsizetype(i)*InputBytes;
+        const char* entry = bytes + qsizetype(i)*inputBytes(version);
         const quint32 repeat = read32(entry);
-        const MovieInput input = readInput(entry);
+        const MovieInput input = readInput(entry, version);
         if (!repeat || repeat > MaxFrames-end || !inputValid(input) ||
             (i && input == previous)) {
             error = Localization::text(QStringLiteral("Повреждённые данные ввода в записи."));
@@ -179,12 +199,12 @@ bool MovieTape::parseRuns(const char* bytes, quint32 count, quint64 frames,
     return true;
 }
 
-void MovieTape::appendRuns(QByteArray& bytes, quint64 frames) const {
+void MovieTape::appendRuns(QByteArray& bytes, quint64 frames, quint32 version) const {
     quint64 start = 0;
     for (const Run& run : runs_) {
         if (start == frames) break;
         const quint64 end = std::min(run.endFrame, frames);
-        addInput(bytes, quint32(end-start), run.input);
+        addInput(bytes, quint32(end-start), run.input, version);
         start = end;
     }
 }
@@ -202,6 +222,7 @@ bool MovieTape::load(const QString& path, QString& error) {
         error = Localization::text(QStringLiteral("Повреждённый или неподдерживаемый файл записи: %1")).arg(path);
         return false;
     }
+    const quint32 version = read32(bytes.constData()+8);
     const quint32 metadataLength = read32(bytes.constData()+12);
     const quint32 initialLength = read32(bytes.constData()+16);
     const quint32 runCount = read32(bytes.constData()+20);
@@ -224,7 +245,7 @@ bool MovieTape::load(const QString& path, QString& error) {
                             resumeLength);
     std::deque<Run> runs;
     if (!parseRuns(bytes.constData()+MovieHeaderBytes+metadataLength+initialLength+resumeLength,
-                   runCount, frames, runs, error)) return false;
+                   runCount, frames, version, runs, error)) return false;
     clear();
     metadata_ = parsed.object(); metadataBytes_ = metadataBytes; initialState_ = initial;
     resumeState_ = resume; resumeFrame_ = resumeFrame;
@@ -256,7 +277,7 @@ bool MovieTape::save(const QString& path, QString& error) const {
     bytes.append(metadataBytes_);
     bytes.append(initialState_);
     bytes.append(resumeState_);
-    appendRuns(bytes, frameCount_);
+    appendRuns(bytes, frameCount_, FormatVersion);
     seal(bytes);
     if (QFileInfo::exists(path)) {
         QFile old(path);
@@ -349,7 +370,7 @@ QByteArray MovieTape::checkpoint(quint64 cursor, QString& error) const {
     bytes.append(id_);
     bytes.append(fingerprint_);
     add32(bytes, count);
-    appendRuns(bytes, cursor);
+    appendRuns(bytes, cursor, FormatVersion);
     seal(bytes);
     return bytes;
 }
@@ -369,10 +390,12 @@ bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
     if (!isValid() || bytes.size() < CheckpointHeaderBytes+HashBytes ||
         bytes.size() > MaxCheckpointBytes ||
         std::memcmp(bytes.constData(), CheckpointMagic, 8) ||
-        read32(bytes.constData()+8) != FormatVersion || !validHash(bytes)) {
+        !validVersion(read32(bytes.constData()+8)) || !validHash(bytes)) {
         error = Localization::text(QStringLiteral("Повреждена контрольная точка записи."));
         return false;
     }
+    const quint32 version = read32(bytes.constData()+8);
+    const qsizetype runBytes = inputBytes(version);
     const quint64 savedCursor = read64(bytes.constData()+12);
     const quint32 count = read32(bytes.constData()+68);
     if (QByteArray(bytes.constData()+20, 16) != id_ ||
@@ -382,12 +405,12 @@ bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
     }
     if (count > quint32(MaxRuns) || savedCursor > MaxFrames ||
         quint64(bytes.size()) != quint64(CheckpointHeaderBytes) +
-            quint64(count)*InputBytes + HashBytes) {
+            quint64(count)*quint64(runBytes) + HashBytes) {
         error = Localization::text(QStringLiteral("Превышен предел контрольной точки записи."));
         return false;
     }
     std::deque<Run> prefix;
-    if (!parseRuns(bytes.constData()+CheckpointHeaderBytes, count, savedCursor, prefix, error))
+    if (!parseRuns(bytes.constData()+CheckpointHeaderBytes, count, savedCursor, version, prefix, error))
         return false;
     if (readOnly) {
         if (!prefixMatches(prefix, savedCursor)) {

@@ -2,6 +2,28 @@
   "code": "en",
   "name": "English",
   "translations": {
+    "Игрок / порт": "Player / port",
+    "Мультиадаптер недоступен при включённом Link Cable.": "Multi-port adapter is unavailable while Link Cable is enabled.",
+    "Отключите мультиадаптер перед включением Link Cable.": "Disconnect the multi-port adapter before enabling Link Cable.",
+    "Адаптер контроллеров": "Controller adapter",
+    "Нет адаптера": "No adapter",
+    "Team Player · порт 1": "Team Player · port 1",
+    "Team Player · порт 2": "Team Player · port 2",
+    "Team Player · оба порта": "Team Player · both ports",
+    "Master Tap · порт 1": "Master Tap · port 1",
+    "Master Tap · порт 2": "Master Tap · port 2",
+    "Master Tap · оба порта": "Master Tap · both ports",
+    "Адаптер занимает порт 1: P1–P4; P5 подключён к порту 2.": "Adapter uses port 1: P1–P4; P5 uses port 2.",
+    "P1 подключён к порту 1; адаптер занимает порт 2: P2–P5.": "P1 uses port 1; adapter uses port 2: P2–P5.",
+    "Оба порта заняты адаптерами: P1–P4 в порту 1, P5–P8 в порту 2.": "Both ports have adapters: P1–P4 on port 1, P5–P8 on port 2.",
+    "4 Way Play занимает оба порта: P1–P4.": "4 Way Play uses both ports: P1–P4.",
+    "Обычные порты консоли: P1 и P2.": "Standard console ports: P1 and P2.",
+    "В сетевой игре схему и роли задаёт хост. Зрители по умолчанию не управляют игрой; хост может назначить одну роль нескольким участникам.": "In online play, the host sets the adapter and roles. Viewers have no controls by default; the host can share one role with several people.",
+    "Игрок %1": "Player %1",
+    "Игрок %1 · Light Phaser (порт %2)": "Player %1 · Light Phaser (port %2)",
+    "Игрок %1 · Menacer (порт 2)": "Player %1 · Menacer (port 2)",
+    "Игрок %1 · Justifier %2 (порт 2)": "Player %1 · Justifier %2 (port 2)",
+    "Отключите многопортовый адаптер перед включением Link Cable.": "Disconnect the multi-port adapter before enabling Link Cable.",
     "Включить все каналы": "Enable all channels",
     "Включить все слои": "Enable all layers",
     "Графика": "Graphics",
@@ -793,6 +815,6 @@
     "Хост закрыл сеанс.": "The host closed the session.",
     "Подключение отклонено: %1": "Connection rejected: %1",
     "Хост отключил вас от сеанса.": "The host removed you from the session.",
-    "Не удалось загрузить достижения. Игра продолжается.": "Could not load achievements. The game continues."
+    "Не удалось загрузить достижения": "Could not load achievements"
   }
 }

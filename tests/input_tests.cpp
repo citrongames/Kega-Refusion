@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QSettings>
 #include <QSet>
 #include <QStringList>
@@ -85,11 +86,12 @@ void testConnectedPorts() {
                 "absent connection settings did not default to P1 only");
     }
     require(manager.isConnected(0) && !manager.isConnected(1),"initial connection query");
-    unsigned mask=0;int connections=0;
+    unsigned mask=0;
+    QMap<unsigned, bool> connections;
     QObject::connect(&manager,&InputManager::maskChanged,&manager,
                      [&](unsigned p,unsigned value){if(p==0)mask=value;});
     QObject::connect(&manager,&InputManager::connectionChanged,&manager,
-                     [&](unsigned,bool){++connections;});
+                     [&](unsigned player,bool connected){connections[player]=connected;});
     auto first=manager.mapping(ConsoleProfile::MegaDrive,0);
     first.deviceKey="none";first.pad[0]={PadBinding::Button,7,0};
     manager.setMapping(ConsoleProfile::MegaDrive,0,first);
@@ -102,12 +104,16 @@ void testConnectedPorts() {
     auto second=manager.mapping(ConsoleProfile::MegaDrive,1);
     second.connected=true;manager.setMapping(ConsoleProfile::MegaDrive,1,second);
     auto sms=manager.mapping(ConsoleProfile::MasterSystem,0);sms.connected=false;
-    const int before=connections;
+    connections.clear();
     manager.setMapping(ConsoleProfile::MasterSystem,0,sms);
-    require(connections==before,"inactive profile changed live ports");
+    require(connections.isEmpty(),"inactive profile changed live ports");
     manager.setProfile(ConsoleProfile::MasterSystem);
-    require(connections==before+2 && !manager.isConnected(0) && !manager.isConnected(1),
-            "profile switch did not publish both port connections");
+    require(connections.size() == int(MaxControllerPlayers) &&
+            !manager.isConnected(0) && !manager.isConnected(1),
+            "profile switch did not publish all logical port connections");
+    for (unsigned player = 0; player < MaxControllerPlayers; ++player)
+        require(connections.contains(player) && connections.value(player) == manager.isConnected(player),
+                "profile switch published an incorrect logical port state");
     InputManager reopened(path);
     require(reopened.mapping(ConsoleProfile::MegaDrive,0).connected &&
             reopened.mapping(ConsoleProfile::MegaDrive,1).connected &&
@@ -767,6 +773,172 @@ void testSnapshotPreservesHeldKeys() {
     require(mask == 0, "actual controller change did not release the key");
 }
 
+void testControllerAdapters() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "adapter settings directory");
+    const QString path = temp.filePath("settings.ini");
+    InputManager manager(path);
+    require(manager.adapter() == ControllerAdapter::None &&
+            manager.isConnected(0) && !manager.isConnected(1) &&
+            !manager.isConnected(2) && !manager.isConnected(7),
+            "ordinary ports did not retain P1-only defaults");
+
+    auto port2 = manager.mapping(ConsoleProfile::MegaDrive, 1);
+    port2.connected = true;
+    port2.controllerType = ControllerType::Justifier;
+    manager.setMapping(ConsoleProfile::MegaDrive, 1, port2);
+    auto chained = manager.mapping(ConsoleProfile::MegaDrive, 2);
+    chained.connected = true;
+    chained.aimSource = AimSource::LeftStick;
+    manager.setMapping(ConsoleProfile::MegaDrive, 2, chained);
+    require(manager.isConnected(2), "legacy chained Justifier not connected");
+
+    QVector<QString> events;
+    QObject::connect(&manager, &InputManager::adapterChanged, &manager,
+                     [&](int) { events.append("adapter"); });
+    QObject::connect(&manager, &InputManager::connectionChanged, &manager,
+                     [&](unsigned, bool) { events.append("connection"); });
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::TeamPlayerBoth);
+    require(!events.isEmpty() && events.first() == "adapter",
+            "adapter signal did not precede port changes");
+    require(manager.adapter() == ControllerAdapter::TeamPlayerBoth,
+            "Mega Drive adapter not selected");
+    for (unsigned player = 0; player < MaxControllerPlayers; ++player) {
+        require(manager.isConnected(player) && manager.controllerType(player) == ControllerType::Pad,
+                "multitap player was not ready as a pad");
+        if (player >= 2)
+            require(manager.mapping(ConsoleProfile::MegaDrive, int(player)).keyboard.isEmpty(),
+                    "extra player default keyboard conflicts with legacy players");
+    }
+    auto eighth = manager.mapping(ConsoleProfile::MegaDrive, 7);
+    eighth.deviceKey = "none";
+    eighth.keyboard[0] = Qt::Key_T;
+    manager.setMapping(ConsoleProfile::MegaDrive, 7, eighth);
+    unsigned eighthMask = 0;
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned mask) {
+                         if (player == 7) eighthMask = mask;
+                     });
+    require(manager.keyEvent(Qt::Key_T, true) && (eighthMask & 1u),
+            "eighth-player keyboard binding did not reach its mask");
+    manager.releaseKeyboard();
+
+    {
+        InputManager reopened(path);
+        require(reopened.adapter() == ControllerAdapter::TeamPlayerBoth &&
+                reopened.isConnected(7) &&
+                reopened.mapping(ConsoleProfile::MegaDrive, 7).keyboard.value(0) == Qt::Key_T,
+                "adapter and eighth-player settings did not persist");
+    }
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::None);
+    require(manager.isConnected(2) && manager.controllerType(2) == ControllerType::Justifier &&
+            manager.mapping(ConsoleProfile::MegaDrive, 2).aimSource == AimSource::LeftStick,
+            "leaving multitap lost chained Justifier settings");
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::TeamPlayerPort1);
+    require(manager.isConnected(4) && !manager.isConnected(5),
+            "single Team Player did not expose five logical players");
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::FourWayPlay);
+    require(manager.isConnected(3) && !manager.isConnected(4),
+            "4 Way Play did not expose four logical players");
+    manager.setAdapter(ConsoleProfile::MasterSystem, ControllerAdapter::MasterTapBoth);
+    manager.setProfile(ConsoleProfile::MasterSystem);
+    require(manager.adapter() == ControllerAdapter::MasterTapBoth &&
+            manager.isConnected(7) && manager.controllerType(2) == ControllerType::Pad,
+            "Master Tap did not expose eight pads");
+    manager.setAdapter(ConsoleProfile::GameGear, ControllerAdapter::TeamPlayerBoth);
+    require(manager.adapter(ConsoleProfile::GameGear) == ControllerAdapter::None,
+            "unsupported Game Gear adapter was accepted");
+
+    manager.setProfile(ConsoleProfile::MegaDrive);
+    manager.setAdapter(ConsoleProfile::MegaDrive, ControllerAdapter::None);
+    QJsonArray controllers;
+    for (int player = 0; player < int(MaxControllerPlayers); ++player)
+        controllers.append(QJsonObject{{"connected", true}, {"sixButton", true},
+                                       {"kind", int(ControllerType::Pad)}});
+    const QByteArray snapshot = QJsonDocument(QJsonObject{
+        {"adapter", int(ControllerAdapter::TeamPlayerBoth)},
+        {"controllers", controllers}}).toJson(QJsonDocument::Compact);
+    manager.setMovieControllers(snapshot);
+    require(manager.adapter() == ControllerAdapter::TeamPlayerBoth &&
+            manager.isConnected(7), "recorded adapter override not applied");
+    manager.setMovieControllers(snapshot);
+    require(manager.adapter() == ControllerAdapter::TeamPlayerBoth,
+            "repeated recorded adapter override changed state");
+    manager.setMovieControllers({});
+    require(manager.adapter() == ControllerAdapter::None &&
+            manager.isConnected(2) && !manager.isConnected(7),
+            "ending recorded override did not restore ordinary ports");
+
+    QJsonArray legacy;
+    for (int player = 0; player < 3; ++player)
+        legacy.append(QJsonObject{{"connected", player == 0}, {"sixButton", true},
+                                  {"kind", int(player == 2 ? ControllerType::Justifier
+                                                            : ControllerType::Pad)}});
+    manager.setMovieControllers(QJsonDocument(legacy).toJson(QJsonDocument::Compact));
+    require(manager.adapter() == ControllerAdapter::None &&
+            !manager.isConnected(7), "legacy three-port recording was not accepted");
+    manager.setMovieControllers({});
+}
+
+void testNetworkInputSource() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "network source settings directory");
+    const QString path = temp.filePath("settings.ini");
+    InputManager manager(path);
+    QJsonArray controllers;
+    for (int player = 0; player < int(MaxControllerPlayers); ++player)
+        controllers.append(QJsonObject{{"connected", player != 0}, {"sixButton", true},
+                                       {"kind", int(ControllerType::Pad)}});
+    const QByteArray hardware = QJsonDocument(QJsonObject{
+        {"adapter", int(ControllerAdapter::TeamPlayerBoth)},
+        {"controllers", controllers}}).toJson(QJsonDocument::Compact);
+    manager.setMovieControllers(hardware);
+    require(!manager.isConnected(0) && manager.isConnected(3),
+            "network fixture did not disconnect emulated P1");
+    unsigned localMask = 0;
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned mask) {
+                         if (player == 0) localMask = mask;
+                     });
+    manager.setNetworkInputSourceEnabled(true);
+    require(!manager.isConnected(0), "network source changed emulated port connection");
+    require(manager.keyEvent(Qt::Key_X, true) && (localMask & 1u),
+            "disconnected P1 could not provide local online input");
+    manager.setNetworkInputSourceEnabled(false);
+    require(localMask == 0 && !manager.isConnected(0),
+            "disabling network source left local input held");
+    manager.releaseKeyboard();
+    manager.setMovieControllers({});
+
+    manager.setProfile(ConsoleProfile::MasterSystem);
+    QJsonArray smsControllers;
+    for (int player = 0; player < int(MaxControllerPlayers); ++player)
+        smsControllers.append(QJsonObject{
+            {"connected", player < 2}, {"sixButton", false},
+            {"kind", int(player == 0 ? ControllerType::LightPhaser : ControllerType::Pad)}});
+    manager.setMovieControllers(QJsonDocument(QJsonObject{
+        {"adapter", int(ControllerAdapter::None)},
+        {"controllers", smsControllers}}).toJson(QJsonDocument::Compact));
+    require(manager.controllerType(0) == ControllerType::LightPhaser &&
+            (manager.mouseButtonMask(0, unsigned(Qt::LeftButton)) & (1u << 1)),
+            "physical P1 Light Phaser fixture was not active");
+    manager.setNetworkInputSourceEnabled(true);
+    require(manager.controllerType(0) == ControllerType::LightPhaser &&
+            manager.mouseButtonMask(0, unsigned(Qt::LeftButton)) == 0,
+            "online pad source changed physical gun hardware or accepted gun mouse input");
+    require(manager.keyEvent(Qt::Key_Up, true) && (localMask & (1u << 4)),
+            "online pad source filtered P1 directional input through Light Phaser targets");
+    manager.setNetworkInputSourceEnabled(false);
+    require(localMask == 0 && manager.controllerType(0) == ControllerType::LightPhaser,
+            "ending online pad role did not restore Light Phaser input targets");
+    manager.releaseKeyboard();
+    manager.setMovieControllers({});
+    InputManager reopened(path);
+    require(reopened.isConnected(0) && reopened.adapter() == ControllerAdapter::None &&
+            reopened.adapter(ConsoleProfile::MasterSystem) == ControllerAdapter::None,
+            "transient network input source was persisted");
+}
+
 void testBackgroundGamepad() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create background gamepad settings directory");
@@ -820,6 +992,12 @@ int main(int argc, char** argv) {
             testPhysicalKeyboard();
             testKeyboardSettingsMigration();
             std::puts("physical keyboard and reserved hotkey tests passed");
+            return 0;
+        }
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--multitap")) {
+            testControllerAdapters();
+            testNetworkInputSource();
+            std::puts("multitap input tests passed");
             return 0;
         }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--background")) {

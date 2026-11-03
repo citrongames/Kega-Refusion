@@ -202,7 +202,7 @@ struct AchievementsClient::Impl {
             impl->gameHash.clear();
             impl->gameDigest.clear();
             impl->publish();
-            impl->notifyLoadFailure();
+            if (result != RC_NO_GAME_LOADED && result != RC_NOT_FOUND) impl->notifyLoadFailure();
             return;
         }
         const rc_client_game_t* game = rc_client_get_game_info(client);
@@ -254,7 +254,7 @@ struct AchievementsClient::Impl {
         }
         impl->mediaHash.clear();
         impl->publish();
-        if (result != RC_OK && result != RC_HARDCORE_DISABLED) impl->notifyLoadFailure();
+        if (result != RC_OK && result != RC_HARDCORE_DISABLED && result != RC_NO_GAME_LOADED && result != RC_NOT_FOUND) impl->notifyLoadFailure();
     }
 
     static void event(const rc_client_event_t* event, rc_client_t* client) {
@@ -314,7 +314,7 @@ struct AchievementsClient::Impl {
     void notifyLoadFailure() {
         AchievementNotice notice;
         notice.kind = AchievementNotice::LoadFailed;
-        notice.title = Localization::text(QStringLiteral("Не удалось загрузить достижения. Игра продолжается."));
+        notice.title = Localization::text(QStringLiteral("Не удалось загрузить достижения"));
         sendNotice(notice);
     }
 
