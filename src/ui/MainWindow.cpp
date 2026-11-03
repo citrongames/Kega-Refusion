@@ -246,6 +246,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(netplay_, &NetplayController::notice, this, [this](const QString& text) {
         view_->showOsd(Localization::text(text), 3000, QStringLiteral("netplay"));
     });
+    connect(netplay_, &NetplayController::sessionEnded, this, [this](const QString& message) {
+        auto* dialog = new QMessageBox(QMessageBox::Information,
+            Localization::text(QStringLiteral("Онлайн-сессия завершена")), message, QMessageBox::Ok, this);
+        dialog->setTextFormat(Qt::PlainText);
+        dialog->setWindowFlags(Qt::Dialog | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->open();
+    });
     connect(netplay_, &NetplayController::connectionWaitingChanged, view_, &GameView::setConnectionWaiting);
     connect(netplay_, &NetplayController::readinessWaitingChanged, view_, &GameView::setReadinessWaiting);
     connect(netplay_, &NetplayController::activeChanged, this, [this](bool active) {

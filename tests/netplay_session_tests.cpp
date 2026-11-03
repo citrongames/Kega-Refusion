@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QCryptographicHash>
 #include <QSet>
+#include <QFileSystemWatcher>
 #include <memory>
 #include <algorithm>
 #include <QtEndian>
@@ -106,6 +107,22 @@ public:
     static bool active(NetplayController& c){return c.active_;}
     static void spectate(NetplayController& c,quint64 id){c.transport_.setRole(id,kega::net::Role::Spectator);}
     static bool kick(NetplayController& c,quint64 id){return c.transport_.kick(id,false,false);}
+    static kega::net::NetTransport& transport(NetplayController& c){return c.transport_;}
+    static bool finalState(NetplayController& c) {
+        return !c.active_ && !c.lobby_->isVisible() && !c.reconnectTimer_.isActive() &&
+            !c.inputTimer_.isActive() && !c.snapshotTimer_.isActive() && !c.connectionLost_ &&
+            !c.connectionWaiting_ && !c.readinessWaiting_ && !c.transport_.isConnected();
+    }
+    static void moderate(NetplayController& c,quint64 id,int round) {
+        if(round==0)c.lobby_->kickRequested(QString::number(id));
+        else c.lobby_->banRequested(QString::number(id),round==3);
+    }
+    static bool unexpectedLossReconnects(NetplayController& c) {
+        c.active_=true;c.hosting_=false;
+        c.transport_.peerLeft(0,QStringLiteral("Connection reset"));
+        const bool reconnects=c.active_&&c.connectionLost_&&c.reconnectTimer_.isActive();
+        c.leaveSession();return reconnects;
+    }
     static int localRole(NetplayController& c){return c.localRole_;}
     static bool waiting(NetplayController& c){return c.connectionWaiting_;}
     static void stopWaiting(NetplayController& c){c.lobby_->stopWaitingRequested();}
@@ -321,10 +338,199 @@ static int qualityScenario(QApplication& app,const QStringList& args) {
     const int result=app.exec();controller.leaveSession();session.shutdown();return result;
 }
 
+// One actual TLS lobby covers every terminal host action. Unique round markers
+// wake directory watchers; they are not read or written from frame callbacks.
+static int moderationScenario(QApplication& app,const QStringList& args) {
+    if(args.size()==3 && args[2]=="--moderation") {
+        QTemporaryDir scratch;if(!scratch.isValid())return 1;
+        write(scratch.filePath("host.md"),rom());write(scratch.filePath("client.md"),rom());
+        QProcess host,client;
+        const QString executable=QCoreApplication::applicationFilePath();
+        host.start(executable,{"--moderation-host",args[1],scratch.path(),"--moderation"});
+        if(!host.waitForStarted(5000)){std::fprintf(stderr,"moderation host launch failed: %s\n",qPrintable(host.errorString()));return 1;}
+        QByteArray startup;QElapsedTimer ready;ready.start();
+        while(!startup.contains("READY")&&ready.elapsed()<10000&&host.state()!=QProcess::NotRunning) {
+            host.waitForReadyRead(250);startup+=host.readAllStandardOutput();
+        }
+        startup+=host.readAllStandardOutput();
+        if(!startup.contains("READY")) {
+            std::fprintf(stderr,"moderation host not ready state=%d exit=%d error=%s stdout=%s stderr=%s\n",
+                int(host.state()),host.exitCode(),qPrintable(host.errorString()),startup.constData(),host.readAllStandardError().constData());
+            if(host.state()!=QProcess::NotRunning){host.kill();host.waitForFinished();}return 1;
+        }
+        client.start(executable,{"--moderation-client",args[1],scratch.path(),"--moderation"});
+        if(!client.waitForStarted(5000)){
+            std::fprintf(stderr,"moderation client launch failed: %s\n",qPrintable(client.errorString()));
+            host.kill();host.waitForFinished();return 1;
+        }
+        const bool hostDone=host.waitForFinished(25000),clientDone=client.waitForFinished(5000);
+        const auto hostError=host.readAllStandardError(),clientError=client.readAllStandardError();
+        if(!hostDone){host.kill();host.waitForFinished();}
+        if(!clientDone){client.kill();client.waitForFinished();}
+        if(!hostDone||!clientDone||host.exitStatus()!=QProcess::NormalExit||client.exitStatus()!=QProcess::NormalExit||
+           host.exitCode()!=0||client.exitCode()!=0) {
+            std::fprintf(stderr,"moderation session failed\nHOST: %s\nCLIENT: %s\n",hostError.constData(),clientError.constData());return 1;
+        }
+        std::puts("moderation: kick, session/permanent bans, banned rejoins and host stop finalize once, unload client ROM, hide lobby, stop retries, retain host progress; unexpected loss still reconnects");
+        return 0;
+    }
+    if(args.size()!=5 || (args[1]!="--moderation-host"&&args[1]!="--moderation-client"))return 2;
+    const bool hosting=args[1]=="--moderation-host";
+    const QString root=args[3],data=root+(hosting?"/moderation-host-data":"/moderation-client-data");
+    QDir().mkpath(data);
+    QSettings settings(data+"/settings.ini",QSettings::IniFormat);
+    settings.setValue("netplay/nickname",hosting?"Moderation Host":"Moderation Client");
+    EmulationSession session(args[2],data);
+    NetplayController controller(session,data,settings,nullptr);
+    const QStringList causes{"kicked","session-ban","session-ban","permanent-ban","permanent-ban","host-stopped"};
+    const QStringList messages{
+        Localization::text(QStringLiteral("Хост отключил вас от сеанса.")),
+        Localization::text(QStringLiteral("Хост запретил вам вход до конца этого сеанса.")),
+        Localization::text(QStringLiteral("Хост запретил вам вход до конца этого сеанса.")),
+        Localization::text(QStringLiteral("Хост заблокировал ваши дальнейшие подключения.")),
+        Localization::text(QStringLiteral("Хост заблокировал ваши дальнейшие подключения.")),
+        Localization::text(QStringLiteral("Хост закрыл сеанс."))};
+    bool failed=false,created=false,actionSent=false,reportReceived=false,terminal=false,reported=false;
+    int round=0,frames=0,actionFrame=0,resyncs=0,resyncAtFinal=0,connections=0,connectionsAtFinal=0;
+    int finalSignals=0,transportFinals=0,roundConnections=0,hostContinuations=0;
+    QString lastCause,lastMessage;
+    QElapsedTimer finalWait,actionWait;
+    const auto check=[&](bool condition,const char* reason) {
+        if(condition)return true;
+        if(!failed)std::fprintf(stderr,"moderation %s round=%d failed: %s; detail=%s\n",
+            hosting?"host":"client",round,reason,NetplayScenario::debug(controller).constData());
+        failed=true;app.exit(1);return false;
+    };
+    const auto marker=[&](const char* kind,int index) {
+        return root+QStringLiteral("/moderation-%1-%2").arg(QString::fromLatin1(kind)).arg(index);
+    };
+    const auto joinRound=[&] {
+        terminal=reported=false;lastCause.clear();lastMessage.clear();roundConnections=connections;
+        NetplayScenario::join(controller,QString::fromUtf8(read(root+"/invite")));
+        session.loadGame(root+"/client.md");
+    };
+    QFileSystemWatcher watcher(QStringList{root});
+    const auto readRoundMarker=[&] {
+        if(failed)return;
+        if(hosting) {
+            if(!reportReceived && QFile::exists(marker("ended",round))) {
+                const auto report=QJsonDocument::fromJson(read(marker("ended",round))).object();
+                if(!check(report.value("round").toInt(-1)==round && report.value("cause").toString()==causes[round] &&
+                          report.value("message").toString()==messages[round] && report.value("unloaded").toBool(),
+                          "client terminal report was missing, wrong or incomplete"))return;
+                reportReceived=true;
+            }
+        } else if(reported && round+1<causes.size() && QFile::exists(marker("join",round+1))) {
+            ++round;joinRound();
+        }
+    };
+    QObject::connect(&watcher,&QFileSystemWatcher::directoryChanged,&app,[&](const QString&){readRoundMarker();});
+    QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& error) {
+        std::fprintf(stderr,"moderation core error: %s\n",qPrintable(error));failed=true;app.exit(1);
+    });
+    QObject::connect(&session,&EmulationSession::networkSnapshotApplied,&app,[&](bool ok,const QString& error) {
+        if(!ok){std::fprintf(stderr,"moderation snapshot error: %s\n",qPrintable(error));failed=true;app.exit(1);}
+    });
+    QObject::connect(&session,&EmulationSession::networkResyncRequested,&app,[&]{++resyncs;});
+    QObject::connect(&session,&EmulationSession::videoFrameReady,&app,[&] {
+        QImage image;double aspect;session.takeVideoFrame(image,aspect);++frames;
+    });
+    QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&](const QString&,double,const QString&) {
+        if(!hosting||created)return;
+        created=true;NetplayScenario::create(controller);
+        const QString invitation=NetplayScenario::invitation(controller);
+        if(!check(!invitation.isEmpty(),"host invitation unavailable"))return;
+        write(root+"/invite",invitation.toUtf8());std::puts("READY");std::fflush(stdout);
+    });
+    QObject::connect(&NetplayScenario::transport(controller),&kega::net::NetTransport::connected,&app,
+        [&](const kega::net::PeerInfo&){++connections;});
+    QObject::connect(&NetplayScenario::transport(controller),&kega::net::NetTransport::sessionEnded,&app,
+        [&](const QString& cause,const QString&) {
+            if(hosting){check(false,"host received its own terminal client event");return;}
+            ++transportFinals;lastCause=cause;
+            check(transportFinals==round+1 && cause==causes[round],"terminal transport cause was wrong or duplicated");
+        });
+    QObject::connect(&controller,&NetplayController::sessionEnded,&app,[&](const QString& message) {
+        if(hosting){check(false,"host controller ended as a client");return;}
+        ++finalSignals;lastMessage=message;
+        if(!check(finalSignals==round+1 && message==messages[round],"friendly terminal message was wrong or duplicated") ||
+           !check(resyncs==0,"client requested resynchronization before terminal cleanup") ||
+           !check(NetplayScenario::finalState(controller)&&!session.networkActive(),
+                  "sessionEnded was emitted before lobby/transport/timers stopped"))return;
+        terminal=true;resyncAtFinal=resyncs;connectionsAtFinal=connections;finalWait.start();
+    });
+    QTimer poll;poll.setInterval(50);
+    QObject::connect(&poll,&QTimer::timeout,&app,[&] {
+        if(failed)return;
+        if(hosting) {
+            if(!actionSent) {
+                if(round==2 || round==4) {
+                    actionSent=true;actionFrame=frames;actionWait.start();
+                } else if(const auto peer=NetplayScenario::ready(controller)) {
+                    actionSent=true;actionFrame=frames;actionWait.start();
+                    if(round==5)controller.leaveSession();
+                    else NetplayScenario::moderate(controller,peer,round);
+                }
+            }
+            if(actionSent && round!=5 && actionWait.elapsed()>1000 && frames-actionFrame<8) {
+                check(false,"host failed to advance eight frames after moderation");return;
+            }
+            if(!reportReceived || !actionSent || (round!=5 && frames-actionFrame<8))return;
+            if(!check(resyncs==0,"host requested resynchronization after moderation"))return;
+            if(round!=5)++hostContinuations;
+            if(round==2 || round==4) {
+                const auto bans=controller.bannedPeers();
+                if(!check(bans.size()==1 && bans[0].toObject().value("persistent").toBool()==(round==4),
+                          "fixture ban persistence was wrong"))return;
+                const QString fingerprint=bans[0].toObject().value("fingerprint").toString();
+                const auto persisted=QJsonDocument::fromJson(read(data+"/netplay-bans.json")).object();
+                if(!check(persisted.contains(fingerprint)==(round==4),"permanent ban was not persisted exclusively"))return;
+                controller.unban(fingerprint);
+                if(!check(controller.bannedPeers().isEmpty(),"fixture ban was not removed"))return;
+            }
+            if(round==5) {
+                if(check(hostContinuations==5,"not every kick/ban/rejection retained host progress"))app.exit(0);
+                return;
+            }
+            ++round;actionSent=reportReceived=false;
+            write(marker("join",round),QByteArray("join"));
+        } else if(terminal && !reported) {
+            if(!check(NetplayScenario::finalState(controller)&&!session.networkActive(),
+                      "final session revived a lobby, timer or transport") ||
+               !check(resyncs==resyncAtFinal && connections==connectionsAtFinal,
+                      "final session attempted resync or automatic reconnection"))return;
+            if(session.hasGame()) {
+                if(finalWait.elapsed()>1000)check(false,"final session did not unload client game");
+                return;
+            }
+            const int holdMs=round==5?5200:250;
+            if(finalWait.elapsed()<holdMs)return;
+            if(!check(lastCause==causes[round] && finalSignals==round+1 && transportFinals==round+1,
+                      "terminal notifications did not remain exactly once") ||
+               !check(connections==roundConnections+((round==2||round==4)?0:1),
+                      "banned rejoin unexpectedly authenticated"))return;
+            const QJsonObject report{{"round",round},{"cause",lastCause},{"message",lastMessage},{"unloaded",!session.hasGame()}};
+            write(marker("ended",round),QJsonDocument(report).toJson(QJsonDocument::Compact));reported=true;
+            if(round==5) {
+                if(check(NetplayScenario::unexpectedLossReconnects(controller),"unexpected loss no longer permits reconnect"))app.exit(0);
+            }
+        }
+    });
+    poll.start();
+    QTimer::singleShot(21000,&app,[&] {
+        std::fprintf(stderr,"moderation timeout role=%s round=%d action=%d report=%d terminal=%d finals=%d/%d frames=%d\n",
+            hosting?"host":"client",round,actionSent,reportReceived,terminal,finalSignals,transportFinals,frames);
+        app.exit(1);
+    });
+    if(hosting)session.loadGame(root+"/host.md");else joinRound();
+    const int result=app.exec();controller.leaveSession();session.shutdown();return result;
+}
+
 int main(int argc,char** argv){
     QApplication app(argc,argv);app.setQuitOnLastWindowClosed(false);
     const auto args=app.arguments();
     if(args.contains("--quality"))return qualityScenario(app,args);
+    if(args.contains("--moderation"))return moderationScenario(app,args);
     if(args.size()==2 && args[1]=="--waiting-only") {
         QTemporaryDir scratch;if(!scratch.isValid())return 1;
         QSettings settings(scratch.filePath("settings.ini"),QSettings::IniFormat);
@@ -370,12 +576,21 @@ int main(int argc,char** argv){
     qint64 lastRewindRemaining=-1,lastRewindTotal=-1;
     bool pausedSeen=false,resumed=false,downloaded=false,hostCreated=false,stateLoaded=false,playerRewindAck=false,spectatorReady=false,spectatorRewindAck=false;
     bool clientLeft=false,clientGameClosed=false,clientRejoined=false,afterKickLeaving=false,afterKickRejoined=false,socketAborted=false;
+    int forcedSessionEnds=0;bool finalKickObserved=false;
     bool linkEverEnabled=false,guestToggleRejected=false,linkRetainedAcrossGames=false;
     int enabledLinkSnapshots=0,disabledLinkSnapshots=0,toggleStartFrames=0;
     int ownColorFrames=0,spectatorColorFrames=0,ownAudioFrames=0,spectatorAudioFrames=0;
     int rewindOwnColorFrames=0,rewindSpectatorColorFrames=0;
     QElapsedTimer aloneTimer,leaveTimer,kickTimer,abortTimer,cancelTimer;
     QObject::connect(&session,&EmulationSession::networkResyncRequested,&app,[&]{++resyncs;});
+    QObject::connect(&controller,&NetplayController::sessionEnded,&app,[&](const QString& message){
+        if(hosting)return;
+        ++forcedSessionEnds;
+        finalKickObserved=forcedSessionEnds==1 && NetplayScenario::finalState(controller) &&
+            message==Localization::text(QStringLiteral("Хост отключил вас от сеанса."));
+        if(!finalKickObserved){std::fprintf(stderr,"kick did not finalize the client lobby once\n");app.exit(1);return;}
+        afterKickLeaving=true;clientGameClosed=false;
+    });
     QObject::connect(&session,&EmulationSession::networkLinkCableChanged,&app,[&](bool enabled){
         if(enabled){linkEverEnabled=true;++enabledLinkSnapshots;}
         else if(linkEverEnabled)++disabledLinkSnapshots;
@@ -539,10 +754,7 @@ int main(int argc,char** argv){
             if(clientLeft&&clientGameClosed&&!clientRejoined&&QFile::exists(root+"/rejoin-request")){
                 clientRejoined=true;NetplayScenario::join(controller,QString::fromUtf8(read(root+"/invite")));session.loadGame(root+"/other.md");
             }
-            if(!afterKickLeaving&&QFile::exists(root+"/rejoin-after-kick")){
-                afterKickLeaving=true;clientGameClosed=false;controller.leaveSession();
-            }
-            if(afterKickLeaving&&clientGameClosed&&!afterKickRejoined){
+            if(afterKickLeaving&&clientGameClosed&&!afterKickRejoined&&QFile::exists(root+"/rejoin-after-kick")){
                 afterKickRejoined=true;NetplayScenario::join(controller,QString::fromUtf8(read(root+"/invite")));session.loadGame(root+"/other.md");
             }
             if(!socketAborted&&QFile::exists(root+"/abort-request")){
@@ -551,7 +763,7 @@ int main(int argc,char** argv){
             }
             if(QFile::exists(root+"/done")){
                 std::fprintf(stderr,"client frames=%d snapshots=%d resyncs=%d paused=%d rewind=%d/%d/%d link=%d/%d color=%d/%d audio=%d/%d\n",frames,applied,resyncs,pausedSeen,rewindStarted,rewindProgressed,rewindStopped,enabledLinkSnapshots,disabledLinkSnapshots,ownColorFrames,spectatorColorFrames,ownAudioFrames,spectatorAudioFrames);
-                app.exit(frames>20&&applied>=2&&pausedSeen&&downloaded&&pausedFrames>=2&&resyncs==0&&spectatorRewindAck&&clientRejoined&&afterKickRejoined&&socketAborted&&rewindComplete==3&&
+                app.exit(frames>20&&applied>=2&&pausedSeen&&downloaded&&pausedFrames>=2&&resyncs==0&&spectatorRewindAck&&clientRejoined&&afterKickRejoined&&forcedSessionEnds==1&&finalKickObserved&&socketAborted&&rewindComplete==3&&
                     (!linkScenario || (enabledLinkSnapshots>=2&&disabledLinkSnapshots>=1&&guestToggleRejected&&ownColorFrames>=8&&spectatorColorFrames>=1&&ownAudioFrames>=8&&spectatorAudioFrames>=1&&rewindOwnColorFrames>=1&&rewindSpectatorColorFrames>=1))?0:1);
             }
         }

@@ -91,6 +91,8 @@ signals:
     void connected(const kega::net::PeerInfo& self);
     void peerJoined(const kega::net::PeerInfo& peer);
     void peerLeft(quint64 peerId, const QString& reason);
+    // An explicit host decision, not an unexpected loss of the connection.
+    void sessionEnded(const QString& cause, const QString& detail);
     void peerRoleChanged(quint64 peerId, kega::net::Role role);
     void peerLatency(quint64 peerId, int milliseconds);
     void messageReceived(quint64 peerId, kega::net::MessageKind kind, const QByteArray& payload);
@@ -107,7 +109,7 @@ private:
     void close(Connection* connection, const QString& reason);
     bool enqueue(Connection* connection, MessageKind kind, const QByteArray& payload);
     void sendControl(Connection* connection, const QByteArray& json);
-    void reject(Connection* connection, const QString& reason);
+    void reject(Connection* connection, const QString& reason, const QString& cause = QStringLiteral("rejected"));
     void handleHello(Connection* connection, const QByteArray& payload);
     void handleWelcome(Connection* connection, const QByteArray& payload);
     void handleChallenge(Connection* connection, const QByteArray& payload);

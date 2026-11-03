@@ -1,0 +1,33 @@
+{
+  "version": "0.16.1",
+  "date": "2026-11-03",
+  "scope": "Generated original Mega Drive ROM; two independent local processes per platform; actual TLS/UDP and emulation core; Qt offscreen, no user GUI automation",
+  "platforms": {
+    "Linux": "PASS",
+    "Windows native": "PASS"
+  },
+  "cases": [
+    "kick",
+    "session ban",
+    "session-ban rejection on manual rejoin",
+    "permanent ban",
+    "permanent-ban rejection on manual rejoin",
+    "host stops session"
+  ],
+  "verified": [
+    "single final notification signal",
+    "client game unload and lobby hidden",
+    "input/snapshot/reconnect timers stopped",
+    "host keeps advancing after participant removal",
+    "unexpected transport loss still starts reconnect"
+  ],
+  "limitations": [
+    "MainWindow message box appearance was reviewed in code, not driven through desktop UI"
+  ],
+  "published": {
+    "windows_exe_sha256": "4f7537e7f906d66dd4467f794db92753d1cb0a7d8301e1ed095172d27f2e5118",
+    "linux_archive_sha256": "31395d1a553be16394a5eb1a8ba3f29fdf9818b3768f3b6db32b1a1fb9f19999",
+    "linux_app_core_linkpeer_and_catalogs_match": true,
+    "windows_catalogs_match": true
+  }
+}

@@ -752,6 +752,11 @@
     "Здесь появятся местные показатели игрового соединения и автоматической задержки ввода. Если игровое измерение недоступно, в таблице показан служебный пинг лобби (TCP).": "Local gameplay connection quality and automatic input delay will appear here. When gameplay measurements are unavailable, the table shows the lobby control connection ping (TCP).",
     "Этот компьютер.": "This computer.",
     "Пинг игрового соединения (UDP), измеренный на этом компьютере. Разброс задержки: %1 мс.": "Gameplay ping (UDP), measured on this computer. Jitter: %1 ms.",
-    "Служебный пинг лобби (TCP). Измерение игрового пинга сейчас недоступно.": "Lobby control connection ping (TCP). Gameplay ping measurement is currently unavailable."
+    "Служебный пинг лобби (TCP). Измерение игрового пинга сейчас недоступно.": "Lobby control connection ping (TCP). Gameplay ping measurement is currently unavailable.",
+    "Хост запретил вам вход до конца этого сеанса.": "The host has banned you for the rest of this session.",
+    "Хост заблокировал ваши дальнейшие подключения.": "The host has banned you from future sessions.",
+    "Хост закрыл сеанс.": "The host closed the session.",
+    "Подключение отклонено: %1": "Connection rejected: %1",
+    "Хост отключил вас от сеанса.": "The host removed you from the session."
   }
 }

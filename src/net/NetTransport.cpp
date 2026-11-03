@@ -176,6 +176,7 @@ struct NetTransport::Connection {
     bool authenticated = false;
     bool closing = false;
     QString closeReason;
+    QString terminalCause;
     QByteArray challenge;
     QByteArray pendingPublicKey;
     QString pendingNickname;
@@ -414,6 +415,9 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
             else if (!connection->serverSide && type == QStringLiteral("welcome")) handleWelcome(connection, payload);
             else if (!connection->serverSide && type == QStringLiteral("reject")) {
                 const QString reason = object.value(QStringLiteral("reason")).toString().left(256);
+                const QString cause = object.value(QStringLiteral("cause")).toString();
+                connection->terminalCause = (cause == QLatin1String("session-ban") || cause == QLatin1String("permanent-ban"))
+                    ? cause : QStringLiteral("rejected");
                 close(connection, reason.isEmpty() ? QStringLiteral("Доступ запрещён.") : reason);
             }
             else close(connection, QStringLiteral("Unexpected authentication message"));
@@ -460,8 +464,12 @@ void NetTransport::process(Connection* connection, MessageKind kind, const QByte
                 if (it->id == id) { it->role = Role(role); break; }
             emit peerRoleChanged(id, Role(role));
         } else if (type == QStringLiteral("kick")) {
-            close(connection, object.value(QStringLiteral("reason")).toString(QStringLiteral("Kicked by host")));
+            const QString cause = object.value(QStringLiteral("cause")).toString();
+            connection->terminalCause = (cause == QLatin1String("session-ban") || cause == QLatin1String("permanent-ban"))
+                ? cause : QStringLiteral("kicked");
+            close(connection, object.value(QStringLiteral("reason")).toString(QStringLiteral("Kicked by host")).left(256));
         } else if (type == QStringLiteral("stop")) {
+            connection->terminalCause = QStringLiteral("host-stopped");
             close(connection, QStringLiteral("Session stopped"));
         } else {
             close(connection, QStringLiteral("Invalid control message"));
@@ -504,7 +512,8 @@ void NetTransport::handleHello(Connection* connection, const QByteArray& payload
         return;
     }
     if (bannedIdentities_.contains(identity) || sessionBannedIdentities_.contains(identity)) {
-        reject(connection, QStringLiteral("Доступ запрещён: вы заблокированы."));
+        reject(connection, QStringLiteral("Доступ запрещён: вы заблокированы."),
+               bannedIdentities_.contains(identity) ? QStringLiteral("permanent-ban") : QStringLiteral("session-ban"));
         return;
     }
     int active = 0;
@@ -580,7 +589,8 @@ void NetTransport::handleProof(Connection* connection, const QByteArray& payload
         return;
     }
     if (bannedIdentities_.contains(identity) || sessionBannedIdentities_.contains(identity)) {
-        reject(connection, QStringLiteral("Доступ запрещён: вы заблокированы."));
+        reject(connection, QStringLiteral("Доступ запрещён: вы заблокированы."),
+               bannedIdentities_.contains(identity) ? QStringLiteral("permanent-ban") : QStringLiteral("session-ban"));
         return;
     }
     PeerInfo peer;
@@ -687,10 +697,10 @@ void NetTransport::sendControl(Connection* connection, const QByteArray& data) {
     enqueue(connection, MessageKind(kInternalKind), data);
 }
 
-void NetTransport::reject(Connection* connection, const QString& reason) {
+void NetTransport::reject(Connection* connection, const QString& reason, const QString& cause) {
     if (!connections_.contains(connection)) return;
     sendControl(connection, json({{QStringLiteral("type"), QStringLiteral("reject")},
-                                  {QStringLiteral("reason"), reason}}));
+                                  {QStringLiteral("reason"), reason}, {QStringLiteral("cause"), cause}}));
     if (!connections_.contains(connection)) return;
     connection->closing = true;
     QPointer<QSslSocket> socket(connection->socket);
@@ -749,7 +759,9 @@ bool NetTransport::kick(quint64 peerId, bool persistentBan, bool banSession) {
     QPointer<NetTransport> self(this);
     QPointer<QSslSocket> socket(connection->socket);
     sendControl(connection, json({{QStringLiteral("type"), QStringLiteral("kick")},
-        {QStringLiteral("reason"), kickReason}}));
+        {QStringLiteral("reason"), kickReason},
+        {QStringLiteral("cause"), persistentBan ? QStringLiteral("permanent-ban") :
+            banSession ? QStringLiteral("session-ban") : QStringLiteral("kicked")}}));
     if (!self || !socket || !connections_.contains(connection) || connection->socket != socket.data()) return true;
     socket->disconnectFromHost();
     if (!self || !socket || !connections_.contains(connection) || connection->socket != socket.data()) return true;
@@ -820,9 +832,11 @@ void NetTransport::close(Connection* connection, const QString& reason) {
         emit peerLeft(connection->peerId, finalReason);
     } else if (connection->authenticated) {
         localPeerId_ = 0;
+        if (!connection->terminalCause.isEmpty()) emit sessionEnded(connection->terminalCause, finalReason);
         emit peerLeft(0, finalReason);
     } else if (!connection->serverSide) {
-        emit transportError(finalReason);
+        if (!connection->terminalCause.isEmpty()) emit sessionEnded(connection->terminalCause, finalReason);
+        else emit transportError(finalReason);
     }
     connection->socket->disconnect(this);
     connection->socket->abort();

@@ -143,7 +143,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     });
     connect(files_,&NetTransferWorker::requestReady,this,[this](const QByteArray& b){if(active_&&!hosting_&&downloading_){fileChunkExpected_=true;transport_.send(0,MessageKind::FileRequest,b);}});
     connect(files_,&NetTransferWorker::chunkReady,this,[this](quint64 id,const QByteArray& b){filePending_.remove(id);if(hosting_&&allowDownloads_)transport_.send(id,MessageKind::FileChunk,b);});
-    connect(files_,&NetTransferWorker::progress,this,[this](qint64 done,qint64 total){transferDone_=done;transferTotal_=total;refreshLobby();});
+    connect(files_,&NetTransferWorker::progress,this,[this](qint64 done,qint64 total){if(!active_)return;transferDone_=done;transferTotal_=total;refreshLobby();});
     connect(files_,&NetTransferWorker::completed,this,[this](const QString& path){
         if(!active_||hosting_||!downloading_)return;
         downloading_=false;downloadedPath_=path;localManifest_=manifest_;emit openRomRequested(path);refreshLobby();
@@ -151,7 +151,7 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(files_,&NetTransferWorker::requestFailed,this,[this](quint64 id,const QString& error){
         filePending_.remove(id);if(hosting_)transport_.send(id,MessageKind::Control,json({{"op","file-error"},{"text",error.left(1024)}}));
     });
-    connect(files_,&NetTransferWorker::failed,this,[this](const QString& e){downloading_=false;status_=e;emit notice(e);refreshLobby();});
+    connect(files_,&NetTransferWorker::failed,this,[this](const QString& e){if(!active_)return;downloading_=false;status_=e;emit notice(e);refreshLobby();});
     connect(&transport_,&NetTransport::peerLatency,this,[this](quint64 id,int ms){
         if(participants_.contains(id)){participants_[id].insert("pingMs",ms);refreshLobby();}
     });
@@ -185,6 +185,19 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         if(id==localId_){localRole_=int(role);session_.setNetworkRole(localRole_);}
         inputs_.remove(id);if(hosting_){updateRoster();updateWaiting();}refreshLobby();
     });
+    connect(&transport_,&NetTransport::sessionEnded,this,[this](const QString& cause,const QString& detail){
+        if(!active_ || hosting_ || stopping_)return;
+        QString message;
+        if(cause==QLatin1String("session-ban"))message=t("Хост запретил вам вход до конца этого сеанса.");
+        else if(cause==QLatin1String("permanent-ban"))message=t("Хост заблокировал ваши дальнейшие подключения.");
+        else if(cause==QLatin1String("host-stopped"))message=t("Хост закрыл сеанс.");
+        else if(cause==QLatin1String("rejected"))message=t("Подключение отклонено: %1").arg(Localization::text(detail));
+        else message=t("Хост отключил вас от сеанса.");
+        // Stop the worker timeline, transfers and retry timers before notifying
+        // the UI. A later socket/rollback callback must not revive this session.
+        leaveSession();
+        emit sessionEnded(message);
+    });
     connect(&transport_,&NetTransport::peerLeft,this,[this](quint64 id,const QString& reason){
         if(!active_||stopping_)return;
         if(hosting_) {
@@ -199,16 +212,15 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
             }
             updateWaiting();sendInput();
         } else if(id==0) {
+            // Explicit kick/ban/stop arrives through sessionEnded above. Only
+            // an unexpected transport loss reaches this reconnect path.
             gameReady_=false;session_.setNetworkWaiting(true);status_=t("Связь потеряна. Переподключение…");
-            // An explicit host removal is final for this attempt; don't hammer a ban.
-            if(reason.contains("kick",Qt::CaseInsensitive)||reason.contains("ban",Qt::CaseInsensitive)||reason.contains("stopped",Qt::CaseInsensitive)) {
-                status_=reason;connectionLost_=remoteConnectionWaiting_=false;reconnectTimer_.stop();
-            } else {connectionLost_=true;reconnectAttempts_=0;reconnectTimer_.start();}
+            connectionLost_=true;reconnectAttempts_=0;reconnectTimer_.start();
         }
         refreshLobby();
     });
-    connect(&transport_,&NetTransport::transportError,this,[this](const QString& error){status_=error;if(!connectionLost_)emit notice(error);refreshLobby();});
-    connect(&session_,&EmulationSession::networkModeFailed,this,[this](const QString& error){leaveSession();emit notice(error);});
+    connect(&transport_,&NetTransport::transportError,this,[this](const QString& error){if(!active_||stopping_)return;status_=error;if(!connectionLost_)emit notice(error);refreshLobby();});
+    connect(&session_,&EmulationSession::networkModeFailed,this,[this](const QString& error){if(!active_||stopping_)return;leaveSession();emit notice(error);});
     connect(&session_,&EmulationSession::networkCommandRequested,this,[this](const QByteArray& b){
         if(!active_)return;
         if(hosting_)acceptCommand(0,b);
@@ -370,7 +382,7 @@ void NetplayController::leaveSession(){
     files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);
     QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(false);});
     participants_.clear();inputs_.clear();readyPeers_.clear();filePending_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();disconnectedAt_.clear();
-    incomingSnapshot_.clear();manifest_.clear();localManifest_.clear();
+    incomingSnapshot_.clear();manifest_.clear();localManifest_.clear();transferDone_=transferTotal_=0;
     hosting_=false;linkCable_=false;gameReady_=false;downloading_=false;snapshotRequested_=false;applyingEpoch_=incomingEpoch_=pendingIncomingEpoch_=0;linkCableRevision_=applyingLinkCableRevision_=0;incomingSize_=pendingIncomingSize_=0;fileChunkExpected_=false;stopping_=false;
     status_=t("Онлайн-сессия завершена");emit activeChanged(false);refreshLobby();lobby_->hide();
 }

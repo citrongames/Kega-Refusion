@@ -32,6 +32,7 @@ signals:
     void activeChanged(bool);
     void openRomRequested(const QString&);
     void notice(const QString&);
+    void sessionEnded(const QString& message);
     void connectionWaitingChanged(bool waiting);
     void readinessWaitingChanged(bool waiting);
 private:
