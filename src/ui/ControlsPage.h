@@ -29,6 +29,9 @@ public:
     void setTopologyLocked(bool locked);
     void cancelCapture();
 
+signals:
+    void feedbackChanged(const QString& message, bool error);
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
@@ -55,6 +58,7 @@ private:
     void refreshPadCell(int target);
     void updateActionButtons();
     void setFeedback(const QString& message, bool warning = false);
+    void selectFailure(int profile, int player, bool commandTab = false);
     bool onKeyboardChanged(int target, const QKeySequence& sequence);
     void beginCaptureFor(int target);
     void startSequence();
@@ -70,16 +74,15 @@ private:
     QComboBox* playerBox_ = nullptr;
     QComboBox* adapterBox_ = nullptr;
     QLabel* adapterLabel_ = nullptr;
-    QLabel* adapterHint_ = nullptr;
     QComboBox* deviceBox_ = nullptr;
     QLabel* deviceTypeLabel_ = nullptr;
     QComboBox* deviceTypeBox_ = nullptr;
     QCheckBox* showCrosshairBox_ = nullptr;
     QCheckBox* backgroundGamepadBox_ = nullptr;
+    QCheckBox* mouseCaptureBox_ = nullptr;
     QCheckBox* secondJustifierBox_ = nullptr;
     QLabel* aimSourceLabel_ = nullptr;
     QComboBox* aimSourceBox_ = nullptr;
-    QLabel* aimHint_ = nullptr;
     QLabel* analogSensitivityLabel_ = nullptr;
     QSlider* analogSensitivitySlider_ = nullptr;
     QLabel* analogSensitivityValue_ = nullptr;
@@ -88,7 +91,6 @@ private:
     QSlider* deadzoneSlider_ = nullptr;
     QLabel* deadzoneValue_ = nullptr;
     QLabel* feedback_ = nullptr;
-    QLabel* portHint_ = nullptr;
     QTabWidget* tabs_ = nullptr;
     QTableWidget* gameTable_ = nullptr;
     QTableWidget* commandTable_ = nullptr;

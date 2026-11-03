@@ -73,6 +73,8 @@ public:
     void setEnabled(bool enabled); // foreground keyboard, pad commands, and mouse input
     bool backgroundGamepadEnabled() const;
     void setBackgroundGamepadEnabled(bool enabled); // persistent preference
+    bool mouseCaptureEnabled() const;
+    void setMouseCaptureEnabled(bool enabled); // persistent preference
     void setBackgroundGamepadActive(bool active); // MainWindow's game/modal focus gate
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native);
@@ -93,6 +95,7 @@ signals:
     void deviceTypeChanged(unsigned player, int type);
     void configurationChanged();
     void backgroundGamepadChanged(bool enabled);
+    void mouseCaptureChanged(bool enabled);
     void mouseMotion(unsigned player, double dx, double dy); // relative core pixels from a stick
     void paddleMoved(unsigned player, int position); // signed absolute X, -32768..32767
     void aimMoved(unsigned player, double dx, double dy); // screen fractions, includes elapsed time

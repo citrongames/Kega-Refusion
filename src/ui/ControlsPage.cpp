@@ -117,10 +117,12 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     qApp->installEventFilter(this);
 
     auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(9);
+    mainLayout->setContentsMargins(6, 4, 6, 4);
+    mainLayout->setSpacing(5);
 
     auto* scope = new QGridLayout;
-    scope->setHorizontalSpacing(10);
+    scope->setHorizontalSpacing(9);
+    scope->setVerticalSpacing(4);
     profileBox_ = new QComboBox(this);
     profileBox_->setObjectName(QStringLiteral("profileBox"));
     for (ConsoleProfile profile : {ConsoleProfile::MegaDrive,
@@ -168,7 +170,6 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     controllerTypeBox_->setObjectName(QStringLiteral("controllerTypeBox"));
     controllerTypeBox_->addItem(Localization::text(QStringLiteral("3 кнопки")), false);
     controllerTypeBox_->addItem(Localization::text(QStringLiteral("6 кнопок")), true);
-    controllerTypeBox_->setToolTip(Localization::text(QStringLiteral("Тип геймпада, который видит игра. Назначения сохраняются при переключении.")));
     auto* controllerTypeRow = new QHBoxLayout;
     controllerTypeRow->addWidget(controllerTypeLabel_);
     controllerTypeRow->addWidget(controllerTypeBox_);
@@ -177,12 +178,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     deviceTypeLabel_ = new QLabel(Localization::text(QStringLiteral("Контроллер")), this);
     deviceTypeBox_ = new QComboBox(this);
     deviceTypeBox_->setObjectName(QStringLiteral("deviceTypeBox"));
-    deviceTypeBox_->setToolTip(Localization::text(QStringLiteral("Контроллер, который видит игра. «Нет» отключает порт, сохраняя назначения.")));
     scope->addWidget(deviceTypeLabel_, 4, 0);
     scope->addWidget(deviceTypeBox_, 5, 0);
     secondJustifierBox_ = new QCheckBox(Localization::text(QStringLiteral("Второй пистолет")), this);
     secondJustifierBox_->setObjectName(QStringLiteral("secondJustifierBox"));
-    secondJustifierBox_->setToolTip(Localization::text(QStringLiteral("Второй Justifier в паре на порту 2; назначения настраиваются отдельно.")));
     scope->addWidget(secondJustifierBox_, 6, 0);
     aimSourceLabel_ = new QLabel(Localization::text(QStringLiteral("Прицеливание")), this);
     aimSourceBox_ = new QComboBox(this);
@@ -208,34 +207,27 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     sensitivityRow->addWidget(analogSensitivitySlider_, 1);
     sensitivityRow->addWidget(analogSensitivityValue_);
     scope->addLayout(sensitivityRow, 7, 1);
-    aimHint_ = new QLabel(Localization::text(QStringLiteral(
-        "Мышь доступна одному пистолету; для второго выберите левый стик. "
-        "Прицелы: первый пистолет — голубой, второй — оранжевый.")), this);
-    aimHint_->setWordWrap(true);
-    scope->addWidget(aimHint_, 8, 0, 1, 2);
     mainLayout->addLayout(scope);
-    adapterHint_ = new QLabel(this);
-    adapterHint_->setWordWrap(true);
-    mainLayout->addWidget(adapterHint_);
-    portHint_ = new QLabel(Localization::text(QStringLiteral(
-        "Порт отключён. Назначения можно настроить заранее; для игры выберите контроллер вместо «Нет».")), this);
-    portHint_->setWordWrap(true);
-    mainLayout->addWidget(portHint_);
+    mouseCaptureBox_ = new QCheckBox(Localization::text(QStringLiteral("Захватывать мышь")), this);
+    mouseCaptureBox_->setObjectName(QStringLiteral("mouseCaptureBox"));
+    mouseCaptureBox_->setChecked(input_.mouseCaptureEnabled());
     backgroundGamepadBox_ = new QCheckBox(Localization::text(QStringLiteral("Геймпад работает в фоне")), this);
     backgroundGamepadBox_->setObjectName(QStringLiteral("backgroundGamepadBox"));
     backgroundGamepadBox_->setChecked(input_.backgroundGamepadEnabled());
-    backgroundGamepadBox_->setToolTip(Localization::text(QStringLiteral(
-        "При потере фокуса геймпад продолжает управлять игрой. Клавиатура в фоне не работает. "
-        "Пауза при потере фокуса настраивается отдельно.")));
-    mainLayout->addWidget(backgroundGamepadBox_);
+    auto* inputOptions = new QHBoxLayout;
+    inputOptions->addWidget(mouseCaptureBox_);
+    inputOptions->addWidget(backgroundGamepadBox_);
+    inputOptions->addStretch(1);
+    mainLayout->addLayout(inputOptions);
 
     tabs_ = new QTabWidget(this);
     tabs_->setObjectName(QStringLiteral("mappingTabs"));
     auto* gamePage = new QWidget(tabs_);
     auto* gameLayout = new QHBoxLayout(gamePage);
-    gameLayout->setContentsMargins(7, 8, 7, 7);
-    gameLayout->setSpacing(10);
+    gameLayout->setContentsMargins(4, 4, 4, 4);
+    gameLayout->setSpacing(8);
     diagram_ = new ControllerDiagram(gamePage);
+    diagram_->setMinimumSize(240, 210);
     gameLayout->addWidget(diagram_, 4);
     gameTable_ = new QTableWidget(gamePage);
     gameTable_->setColumnCount(4);
@@ -258,12 +250,6 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     auto* commandPage = new QWidget(tabs_);
     auto* commandLayout = new QVBoxLayout(commandPage);
-    auto* commandHint = new QLabel(
-        Localization::text(QStringLiteral("Команды можно назначить на геймпад. "
-                       "Сочетания клавиатуры показаны для справки; здесь они не меняются.")),
-        commandPage);
-    commandHint->setWordWrap(true);
-    commandLayout->addWidget(commandHint);
     commandTable_ = new QTableWidget(commandPage);
     commandTable_->setColumnCount(3);
     commandTable_->setHorizontalHeaderLabels(
@@ -300,7 +286,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
 
     feedback_ = new QLabel(this);
     feedback_->setWordWrap(true);
-    feedback_->setMinimumHeight(25);
+    feedback_->hide();
     mainLayout->addWidget(feedback_);
 
     connect(profileBox_, qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -483,9 +469,6 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
             });
 
     refreshContents();
-    setFeedback(Localization::text(QStringLiteral(
-        "Выберите кнопку и нажмите «Назначить», затем клавишу или кнопку геймпада. "
-        "Клавиатура и геймпад работают одновременно; одно назначение не стирает другое.")));
 }
 
 ControlsPage::~ControlsPage() {
@@ -694,36 +677,8 @@ void ControlsPage::refreshContents() {
     }
     adapterLabel_->setVisible(supportsAdapter);
     adapterBox_->setVisible(supportsAdapter);
-    QString occupancy;
-    switch (adapter) {
-    case ControllerAdapter::TeamPlayerPort1:
-    case ControllerAdapter::MasterTapPort1:
-        occupancy = Localization::text(QStringLiteral("Адаптер занимает порт 1: P1–P4; P5 подключён к порту 2."));
-        break;
-    case ControllerAdapter::TeamPlayerPort2:
-    case ControllerAdapter::MasterTapPort2:
-        occupancy = Localization::text(QStringLiteral("P1 подключён к порту 1; адаптер занимает порт 2: P2–P5."));
-        break;
-    case ControllerAdapter::TeamPlayerBoth:
-    case ControllerAdapter::MasterTapBoth:
-        occupancy = Localization::text(QStringLiteral("Оба порта заняты адаптерами: P1–P4 в порту 1, P5–P8 в порту 2."));
-        break;
-    case ControllerAdapter::FourWayPlay:
-        occupancy = Localization::text(QStringLiteral("4 Way Play занимает оба порта: P1–P4."));
-        break;
-    case ControllerAdapter::None:
-        occupancy = Localization::text(QStringLiteral("Обычные порты консоли: P1 и P2."));
-        break;
-    }
-    if (selectedJCart())
-        occupancy += QStringLiteral(" ") + Localization::text(QStringLiteral(
-            "J-Cart добавляет два геймпада после обычных портов и адаптера; их номера показаны в списке игроков."));
-    adapterHint_->setText(occupancy + QStringLiteral(" ") + Localization::text(QStringLiteral(
-        "В сетевой игре схему и роли задаёт хост. Зрители по умолчанию не управляют игрой; хост может назначить одну роль нескольким участникам.")));
-    adapterHint_->setVisible(supportsAdapter);
     refreshPlayerChoices();
     const PlayerMapping mapping = displayMapping();
-    portHint_->setVisible(!mapping.connected);
     const bool gun = isLightgun(mapping.controllerType);
     const bool analog = isAnalogController(mapping.controllerType);
     const bool chained = md && adapter == ControllerAdapter::None && selectedPlayer() == 2 &&
@@ -762,16 +717,6 @@ void ControlsPage::refreshContents() {
     aimSourceLabel_->setVisible(mapping.connected && (gun || analog));
     aimSourceBox_->setVisible(mapping.connected && (gun || analog));
     aimSourceBox_->setCurrentIndex(aimSourceBox_->findData(int(mapping.aimSource)));
-    if (analog) {
-        aimHint_->setText(mapping.controllerType == ControllerType::Mouse
-            ? Localization::text(QStringLiteral("MD Mouse: движение мышью или левым стиком. Кнопки A, B, C и Start назначаются ниже."))
-            : Localization::text(QStringLiteral("SMS Paddle: положение задаёт мышь или горизонталь левого стика; обе физические кнопки выполняют одно действие.")));
-    } else {
-        aimHint_->setText(Localization::text(QStringLiteral("Мышь доступна одному пистолету; для второго выберите левый стик. ")) +
-            (md ? Localization::text(QStringLiteral("Пистолет подключается ко второму порту консоли. Для меню T2 и Lethal Enforcers нужен геймпад в первом порту. ")) : QString()) +
-            Localization::text(QStringLiteral("Прицелы: первый пистолет — голубой, второй — оранжевый.")));
-    }
-    aimHint_->setVisible(mapping.connected && (gun || analog));
     showCrosshairBox_->setVisible(mapping.connected && gun);
     showCrosshairBox_->setChecked(mapping.showCrosshair);
     gameTable_->setColumnHidden(3, !(gun || analog));
@@ -789,6 +734,9 @@ void ControlsPage::refreshContents() {
     diagram_->setProfile(profile);
     diagram_->setSixButton(mapping.sixButton);
     diagram_->setControllerType(mapping.controllerType);
+    // The table scrolls independently; keep the illustration compact enough
+    // that the whole settings page fits the standard dialog height.
+    diagram_->setMinimumHeight(210);
     diagram_->setTargets(activeGameTargets());
     fillGameTable();
     fillCommandTable();
@@ -805,13 +753,12 @@ void ControlsPage::fillGameTable() {
     gameTable_->setRowCount(targets.size());
     for (int row = 0; row < targets.size(); ++row) {
         const int target = targets[row];
-        gameTable_->setRowHeight(row, 34);
+        gameTable_->setRowHeight(row, 30);
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target, mapping.controllerType), target));
         auto* keyEdit = new PhysicalKeySequenceEdit(gameTable_);
         if (auto* line = keyEdit->findChild<QLineEdit*>())
             line->setPlaceholderText(Localization::text(QStringLiteral("Нажмите клавишу")));
-        keyEdit->setToolTip(Localization::text(QStringLiteral("Клавиша по положению, независимо от раскладки. 0–9 — выбор слота; точка — следующий кадр.")));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         keyEdit->setMaximumSequenceLength(1);
 #endif
@@ -866,7 +813,7 @@ void ControlsPage::fillCommandTable() {
     commandTable_->setRowCount(commands.size());
     for (int row = 0; row < commands.size(); ++row) {
         const int target = commands[row];
-        commandTable_->setRowHeight(row, 34);
+        commandTable_->setRowHeight(row, 30);
         commandTable_->setItem(row, 0, cell(commandName(target), target));
         commandTable_->setItem(row, 1, cell(commandShortcut(target)));
         commandTable_->setItem(row, 2, cell(padName(mapping, target)));
@@ -916,11 +863,21 @@ void ControlsPage::updateActionButtons() {
 
 void ControlsPage::setFeedback(const QString& message, bool warning) {
     feedback_->setText(message);
+    feedback_->setVisible(!message.isEmpty());
+    emit feedbackChanged(message, warning);
     const QColor color = warning
         ? (palette().color(QPalette::Base).lightness() < 128
                ? QColor(245, 144, 122) : QColor(164, 48, 40))
         : palette().color(QPalette::Text);
     feedback_->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+}
+
+void ControlsPage::selectFailure(int profile, int player, bool commandTab) {
+    const int profileIndex = profileBox_->findData(profile);
+    if (profileIndex >= 0) profileBox_->setCurrentIndex(profileIndex);
+    const int playerIndex = playerBox_->findData(player);
+    if (playerIndex >= 0) playerBox_->setCurrentIndex(playerIndex);
+    tabs_->setCurrentIndex(commandTab ? 1 : 0);
 }
 
 bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
@@ -1099,21 +1056,28 @@ bool ControlsPage::validateDrafts() {
             if (profile == int(ConsoleProfile::MegaDrive) &&
                 players[0].controllerType != ControllerType::Pad &&
                 players[0].controllerType != ControllerType::Mouse) {
+                selectFailure(profile, 0);
                 setFeedback(Localization::text(QStringLiteral("Для Mega Drive пистолет выбирается на порту 2.")), true);
                 return false;
             }
-            int mouseDevices = 0;
+            int firstMouse = -1;
+            int conflictingMouse = -1;
             for (int player = 0; player < 2; ++player)
                 if (players[player].connected &&
                     (isLightgun(players[player].controllerType) ||
                      isAnalogController(players[player].controllerType)) &&
-                    players[player].aimSource == AimSource::Mouse)
-                    ++mouseDevices;
+                    players[player].aimSource == AimSource::Mouse) {
+                    if (firstMouse >= 0) conflictingMouse = player;
+                    else firstMouse = player;
+                }
             if (profile == int(ConsoleProfile::MegaDrive) &&
                 players[1].connected && players[1].controllerType == ControllerType::Justifier &&
-                players[2].connected && players[2].aimSource == AimSource::Mouse)
-                ++mouseDevices;
-            if (mouseDevices > 1) {
+                players[2].connected && players[2].aimSource == AimSource::Mouse) {
+                if (firstMouse >= 0) conflictingMouse = 2;
+                else firstMouse = 2;
+            }
+            if (conflictingMouse >= 0) {
+                selectFailure(profile, conflictingMouse);
                 setFeedback(Localization::text(QStringLiteral(
                     "Одна мышь управляет одним устройством. Для другого выберите левый стик.")), true);
                 return false;
@@ -1152,6 +1116,7 @@ bool ControlsPage::validateDrafts() {
             const int assigned = it.value();
             if (!targets.contains(it.key()) || !assigned) continue;
             if (reservedKey(assigned) || keyboard.contains(assigned)) {
+                selectFailure(profile, player);
                 setFeedback(Localization::text(QStringLiteral("Проверьте клавиши: есть повтор или "
                                            "зарезервированная клавиша.")), true);
                 return false;
@@ -1166,6 +1131,7 @@ bool ControlsPage::validateDrafts() {
                 assigned.kind == PadBinding::Automatic) continue;
             for (const PadBinding& previous : pad) {
                 if (assigned == previous) {
+                    selectFailure(profile, player, it.key() >= 16);
                     setFeedback(Localization::text(QStringLiteral("Проверьте геймпад: один элемент "
                                                "назначен двум действиям.")), true);
                     return false;
@@ -1179,6 +1145,7 @@ bool ControlsPage::validateDrafts() {
                 const int button = mapping.mouse.value(int(type)).value(target, 0);
                 if (!button) continue;
                 if (mouseButtons.contains(button)) {
+                    selectFailure(profile, player);
                     setFeedback(Localization::text(QStringLiteral("Проверьте мышь: одна кнопка назначена двум действиям.")), true);
                     return false;
                 }
@@ -1222,6 +1189,7 @@ bool ControlsPage::apply() {
                           key % int(MaxControllerPlayers), drafts_[key]);
     dirty_.clear();
     input_.setBackgroundGamepadEnabled(backgroundGamepadBox_->isChecked());
+    input_.setMouseCaptureEnabled(mouseCaptureBox_->isChecked());
     return true;
 }
 

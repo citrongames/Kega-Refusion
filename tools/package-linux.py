@@ -173,6 +173,7 @@ Windows и Linux x86_64 используют общий контракт сет�
         (root / "third_party/GGPO-PROVENANCE.md", "GGPO-PROVENANCE.md"),
         (root / "third_party/Genesis-Plus-GX-LICENSE.txt", "Genesis-Plus-GX-LICENSE.txt"),
         (root / "third_party/SDL2-LICENSE.txt", "SDL2-LICENSE.txt"),
+        (root / "third_party/Wayland-Protocols-LICENSE.txt", "Wayland-Protocols-LICENSE.txt"),
         (Path("/usr/share/doc/libqt6core6t64/copyright"), "Qt-copyright.txt"),
         (Path("/usr/share/doc/libssl3t64/copyright"), "OpenSSL-copyright.txt"),
         (Path("/usr/share/doc/libavcodec62/copyright"), "FFmpeg-copyright.txt"),

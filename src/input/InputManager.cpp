@@ -281,6 +281,7 @@ struct InputManager::Impl {
         return connected(player) || (networkInputSourceEnabled && player == 0);
     }
     bool backgroundGamepadEnabled = false;
+    bool mouseCaptureEnabled = true;
     bool backgroundGamepadActive = false;
     std::array<unsigned, playerCount> masks{};
     std::array<unsigned, playerCount> previews{};
@@ -309,6 +310,7 @@ struct InputManager::Impl {
                 adapterSetting(profile), 0).toInt()));
         }
         backgroundGamepadEnabled = settings.value(QStringLiteral("input/backgroundGamepad"), false).toBool();
+        mouseCaptureEnabled = settings.value(QStringLiteral("input/mouseCapture"), true).toBool();
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
                     backgroundGamepadEnabled ? "1" : "0");
         for (int p = 0; p < 4; ++p) for (int player = 0; player < playerCount; ++player) {
@@ -1248,6 +1250,14 @@ void InputManager::setBackgroundGamepadEnabled(bool enabled) {
     settings.setValue(QStringLiteral("input/backgroundGamepad"), enabled);
     if (!enabled) setBackgroundGamepadActive(false);
     emit backgroundGamepadChanged(enabled);
+}
+bool InputManager::mouseCaptureEnabled() const { return d->mouseCaptureEnabled; }
+void InputManager::setMouseCaptureEnabled(bool enabled) {
+    if (d->mouseCaptureEnabled == enabled) return;
+    d->mouseCaptureEnabled = enabled;
+    QSettings settings(d->settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("input/mouseCapture"), enabled);
+    emit mouseCaptureChanged(enabled);
 }
 void InputManager::setBackgroundGamepadActive(bool active) {
     active = active && d->backgroundGamepadEnabled;

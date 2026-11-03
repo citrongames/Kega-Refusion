@@ -1,0 +1,16 @@
+{
+  "version": "0.19.1",
+  "date": "2026-11-03",
+  "passed": [
+    "Qt offscreen pointer-only: captured/free MD Mouse, Paddle and lightgun; activation click; buttons; Esc/focus release; virtual positions",
+    "Qt offscreen actual settings 1100x720: no outer scroll for six-button pad, Mouse, Paddle, Menacer, Justifier, Phaser; no six-button table scroll; visible sticky error + conflicting port selection",
+    "Windows and Linux builds; deployed executable/catalog hashes match; Linux archive executable hash matches"
+  ],
+  "notRun": [
+    "Live native Windows/X11/Wayland pointer lock; no Windows desktop takeover"
+  ],
+  "sha256": {
+    "KegaRefusion.exe": "8198e0247c3c6de1f2cce131258f150575c1efb34dcdd0bf01bef9441723a55e",
+    "KegaRefusion-0.19.1-linux-x86_64.tar.gz": "693764c1ed93c47a82df00ac56b22fe4992bb861d8d5a8eebf836e901de851db"
+  }
+}

@@ -212,6 +212,7 @@
     "Геймпад": "Gamepad",
     "Геймпад отключён: %1": "Gamepad disconnected: %1",
     "Геймпад подключён: %1": "Gamepad connected: %1",
+    "Захватывать мышь": "Capture mouse",
     "Геймпад работает в фоне": "Gamepad works in the background",
     "Геймпады недоступны: %1": "Gamepads unavailable: %1",
     "Готов": "Ready",
@@ -825,6 +826,8 @@
     "Хост закрыл сеанс.": "The host closed the session.",
     "Подключение отклонено: %1": "Connection rejected: %1",
     "Хост отключил вас от сеанса.": "The host removed you from the session.",
-    "Не удалось загрузить достижения": "Could not load achievements"
+    "Не удалось загрузить достижения": "Could not load achievements",
+    "Мышь захвачена · Esc — освободить": "Mouse captured · Esc to release",
+    "Захват мыши недоступен.": "Mouse capture is unavailable."
   }
 }

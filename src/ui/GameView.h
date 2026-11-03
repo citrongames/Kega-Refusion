@@ -18,6 +18,7 @@ class QPainter;
 class QMouseEvent;
 class QFocusEvent;
 class ShaderView;
+class WaylandMouseCapture;
 
 class GameView final : public QWidget {
     Q_OBJECT
@@ -67,6 +68,9 @@ public:
     void setMouseGunPlayer(int player); // -1 disables mouse aim; 0/1 select console ports; 2 selects the chained second Justifier.
     void setAnalogMousePlayer(int player, ControllerType type); // -1 disables desktop pointer input.
     void resetAnalogPointer();
+    void setMouseCaptureEnabled(bool enabled);
+    bool mouseCaptured() const { return mouseCaptured_; }
+    bool releaseMouseCapture();
     void setLightgunInputEnabled(bool enabled);
 
 signals:
@@ -107,6 +111,14 @@ private:
     bool analogMouseAvailable() const;
     void updateAnalogPointer(const QPointF& position);
     void clearAnalogMouse();
+    bool beginMouseCapture();
+    void capturedMouseMotion(double dx, double dy);
+    WaylandMouseCapture* waylandMouse_ = nullptr;
+    bool mouseCaptured_ = false;
+    bool mouseCaptureEnabled_ = true;
+    QPointF capturedPointer_{0.5, 0.5};
+    QPoint captureAnchor_;
+    QPoint captureReturnPosition_;
     ShaderView* shaderView_ = nullptr;
     ShaderPreset shaderPreset_;
     bool gpuFailed_ = false;

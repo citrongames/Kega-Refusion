@@ -2,6 +2,8 @@
 #include "core/VideoFrameGeometry.h"
 
 #include <QApplication>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QElapsedTimer>
 #include <QDir>
 #include <QEventLoop>
@@ -14,6 +16,7 @@
 #include <QTimer>
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 
@@ -161,6 +164,7 @@ void testAnalogPointerEvents() {
         QApplication::sendEvent(&view, &event);
     };
 
+    view.setMouseCaptureEnabled(false);
     view.setAnalogMousePlayer(0, ControllerType::Mouse);
     mouse(QEvent::MouseMove, QPointF(100, 100));
     require(motions.isEmpty(), "first MD Mouse move jumped instead of setting a baseline");
@@ -189,6 +193,117 @@ void testAnalogPointerEvents() {
             "Paddle did not follow the displayed rectangle to both horizontal extremes");
     require(correctPlayer, "analog pointer events used the wrong player");
     require(gunAims == 0, "analog pointer movement entered the lightgun aim path");
+}
+
+
+void testCapturedPointerEvents() {
+    GameView view;
+    view.resize(640, 480);
+    QImage frame(640, 480, QImage::Format_RGB32);
+    frame.fill(Qt::black);
+    VideoFrameGeometry::setNativeSize(frame, QSize(320, 240));
+    view.setFrame(frame, 4.0 / 3.0);
+    view.setAspectMode(GameView::AspectMode::Stretch);
+    view.setLightgunInputEnabled(true);
+    view.show();
+    QApplication::processEvents();
+
+    struct Motion { unsigned player; double x, y; };
+    struct Aim { unsigned player; double x, y; bool offscreen; };
+    QVector<Motion> motions;
+    QVector<Aim> aims;
+    QVector<int> buttons;
+    QVector<int> paddle;
+    bool correctPlayer = true;
+    QObject::connect(&view, &GameView::analogMouseMotion, &view,
+                     [&](unsigned player, double x, double y) { motions.append({player, x, y}); });
+    QObject::connect(&view, &GameView::gunAimChanged, &view,
+                     [&](unsigned player, double x, double y, bool offscreen) {
+                         aims.append({player, x, y, offscreen});
+                     });
+    QObject::connect(&view, &GameView::gunButtonsChanged, &view,
+                     [&](unsigned player, unsigned mask) {
+                         correctPlayer &= player == 0;
+                         buttons.append(int(mask));
+                     });
+    QObject::connect(&view, &GameView::analogPaddleMoved, &view,
+                     [&](unsigned player, int position) {
+                         correctPlayer &= player == 0;
+                         paddle.append(position);
+                     });
+    const auto click = [&view](QEvent::Type type, Qt::MouseButton button,
+                               Qt::MouseButtons held) {
+        const QPointF local(320, 240);
+        QMouseEvent event(type, local, QPointF(view.mapToGlobal(local.toPoint())),
+                          button, held, Qt::NoModifier);
+        QApplication::sendEvent(&view, &event);
+    };
+    const auto moveBy = [&view](int dx, int dy) {
+        const QPoint global = view.mapToGlobal(QPoint(320, 240)) + QPoint(dx, dy);
+        QMouseEvent event(QEvent::MouseMove, QPointF(view.mapFromGlobal(global)),
+                          QPointF(global), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&view, &event);
+    };
+    const auto near = [](double a, double b) { return std::abs(a-b) < 0.0001; };
+
+    view.setAnalogMousePlayer(0, ControllerType::Mouse);
+    click(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    require(view.mouseCaptured() && buttons.isEmpty(),
+            "first click did not capture or reached the MD Mouse");
+    click(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+    moveBy(12, -8);
+    require(motions.size() == 1 && motions.last().player == 0 &&
+            motions.last().x == 6.0 && motions.last().y == -4.0,
+            "captured MD Mouse delta did not scale to native game pixels");
+    click(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    require(buttons.size() == 1 && buttons.last() == int(Qt::LeftButton),
+            "second captured click did not reach the MD Mouse");
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(&view, &leave);
+    require(view.mouseCaptured() && buttons.last() == int(Qt::LeftButton),
+            "leaving the window released captured MD Mouse input");
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&view, &escape);
+    require(!view.mouseCaptured() && buttons.last() == 0,
+            "Escape did not release capture and emulated buttons");
+    click(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    require(view.mouseCaptured() && buttons.last() == 0,
+            "MD Mouse could not recapture after Escape");
+    click(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+    click(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    QFocusEvent focusOut(QEvent::FocusOut);
+    QApplication::sendEvent(&view, &focusOut);
+    require(!view.mouseCaptured() && buttons.last() == 0,
+            "focus loss did not release capture and emulated buttons");
+
+    view.setAnalogMousePlayer(0, ControllerType::Paddle);
+    click(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    require(view.mouseCaptured(), "Paddle did not capture mouse");
+    click(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+    moveBy(-400, 0);
+    require(!paddle.isEmpty() && paddle.last() == -32768,
+            "captured Paddle did not reach left endpoint");
+    moveBy(800, 0);
+    require(paddle.last() == 32767,
+            "captured Paddle did not reach right endpoint");
+    require(view.releaseMouseCapture() && !view.mouseCaptured(),
+            "explicit Paddle capture release failed");
+
+    view.setAnalogMousePlayer(-1, ControllerType::Pad);
+    view.setLightgunEnabled(0, true);
+    view.setMouseGunPlayer(0);
+    click(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    require(view.mouseCaptured(), "lightgun did not capture mouse");
+    click(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+    moveBy(100, 0);
+    require(!aims.isEmpty() && aims.last().player == 0 && !aims.last().offscreen &&
+            near(aims.last().x, 0.5 + 100.0/640.0) && near(aims.last().y, 0.5),
+            "captured lightgun did not use virtual relative aim");
+    moveBy(-500, 0);
+    require(aims.last().offscreen && near(aims.last().x, 0.0),
+            "captured lightgun lost its offscreen margin");
+    require(view.releaseMouseCapture(), "lightgun capture release failed");
+    require(correctPlayer, "captured pointer signals used the wrong player");
 }
 
 void testCleanScreenshot() {
@@ -699,7 +814,8 @@ int main(int argc, char** argv) {
     try {
         if (app.arguments().contains(QStringLiteral("--pointer-only"))) {
             testAnalogPointerEvents();
-            std::puts("MD Mouse and Paddle pointer events passed"); return 0;
+            testCapturedPointerEvents();
+            std::puts("MD Mouse, Paddle and lightgun free/captured pointer events passed"); return 0;
         }
         if (app.arguments().contains(QStringLiteral("--readiness-only"))) {
             testReadinessWaiting();

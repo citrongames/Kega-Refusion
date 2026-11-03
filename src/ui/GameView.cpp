@@ -1,5 +1,8 @@
 #include "i18n/Localization.h"
 #include "GameView.h"
+#include "WaylandMouseCapture.h"
+#include <QCursor>
+#include <QKeyEvent>
 #include "../core/VideoFrameGeometry.h"
 
 #include <QFontDatabase>
@@ -174,6 +177,9 @@ private:
 };
 
 GameView::GameView(QWidget* parent) : QWidget(parent) {
+    waylandMouse_ = new WaylandMouseCapture(this);
+    connect(waylandMouse_, &WaylandMouseCapture::motion, this, &GameView::capturedMouseMotion);
+    connect(waylandMouse_, &WaylandMouseCapture::lost, this, [this] { releaseMouseCapture(); });
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setMinimumSize(400, 280);
@@ -813,6 +819,7 @@ void GameView::setLightgunAim(unsigned player, QPointF normalized, bool offscree
 
 void GameView::setMouseGunPlayer(int player) {
     if (player < -1 || player >= int(kGunSlots) || mouseGunPlayer_ == player) return;
+    releaseMouseCapture();
     clearMouseGun();
     mouseGunPlayer_ = player;
 }
@@ -821,9 +828,87 @@ void GameView::setAnalogMousePlayer(int player, ControllerType type) {
     if (player < -1 || player >= int(kGunSlots) ||
         (player >= 0 && !isAnalogController(type))) return;
     if (analogMousePlayer_ == player && analogMouseType_ == type) return;
+    releaseMouseCapture();
     clearAnalogMouse();
     analogMousePlayer_ = player;
     analogMouseType_ = player >= 0 ? type : ControllerType::Pad;
+}
+
+void GameView::setMouseCaptureEnabled(bool enabled) {
+    if (mouseCaptureEnabled_ == enabled) return;
+    releaseMouseCapture();
+    mouseCaptureEnabled_ = enabled;
+    clearMouseGun(); clearAnalogMouse();
+}
+
+bool GameView::beginMouseCapture() {
+    if (mouseCaptured_) return true;
+    if (!mouseCaptureEnabled_ || (!analogMouseAvailable() && !mouseGunAvailable())) return false;
+    if (mouseGunAvailable()) capturedPointer_ = guns_[mouseGunPlayer_].aim;
+    else if (analogMouseType_ == ControllerType::Paddle)
+        capturedPointer_ = QPointF((analogPaddlePosition_ + 32768.0) / 65535.0, 0.5);
+    else capturedPointer_ = QPointF(0.5, 0.5);
+    resetAnalogPointer();
+    setFocus(Qt::MouseFocusReason);
+    const bool wayland = QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
+    if (wayland) {
+        if (!waylandMouse_->begin(this)) {
+            showOsd(Localization::text(QStringLiteral("Захват мыши недоступен.")));
+            return false;
+        }
+        setCursor(Qt::BlankCursor);
+    } else {
+        captureReturnPosition_ = QCursor::pos();
+        captureAnchor_ = mapToGlobal(gameRect().center().toPoint());
+        grabMouse(Qt::BlankCursor);
+        if (QWidget::mouseGrabber() != this) return false;
+    }
+    mouseCaptured_ = true;
+    if (!wayland) QCursor::setPos(captureAnchor_);
+    showOsd(Localization::text(QStringLiteral("Мышь захвачена · Esc — освободить")), 1800, QStringLiteral("mouse-capture"));
+    return true;
+}
+
+bool GameView::releaseMouseCapture() {
+    if (!mouseCaptured_) return false;
+    mouseCaptured_ = false;
+    if (waylandMouse_->active()) {
+        waylandMouse_->end();
+        unsetCursor();
+    } else {
+        if (QWidget::mouseGrabber() == this) releaseMouse();
+        // Do not move the pointer on another application after focus loss.
+        if (isActiveWindow() && isVisible() &&
+            !QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
+            QCursor::setPos(captureReturnPosition_);
+        unsetCursor();
+    }
+    clearMouseGun(); clearAnalogMouse();
+    notices_.erase(std::remove_if(notices_.begin(), notices_.end(), [](const Notice& notice) {
+        return notice.category == QLatin1String("mouse-capture");
+    }), notices_.end());
+    repaintView();
+    return true;
+}
+
+void GameView::capturedMouseMotion(double dx, double dy) {
+    if (!mouseCaptured_ || (!analogMouseAvailable() && !mouseGunAvailable())) return;
+    const QRectF game = gameRect();
+    if (game.isEmpty() || (dx == 0.0 && dy == 0.0)) return;
+    if (mouseGunAvailable()) {
+        // A small offscreen margin retains lightgun offscreen/reload behavior.
+        capturedPointer_.setX(std::clamp(capturedPointer_.x() + dx / game.width(), -0.05, 1.05));
+        capturedPointer_.setY(std::clamp(capturedPointer_.y() + dy / game.height(), -0.05, 1.05));
+        updateMouseAim(QPointF());
+    } else if (analogMouseType_ == ControllerType::Paddle) {
+        capturedPointer_.setX(std::clamp(capturedPointer_.x() + dx / game.width(), 0.0, 1.0));
+        updateAnalogPointer(QPointF());
+    } else {
+        const QSize native = VideoFrameGeometry::nativeSize(frame_);
+        emit analogMouseMotion(unsigned(analogMousePlayer_),
+                               dx * native.width() / game.width(),
+                               dy * native.height() / game.height());
+    }
 }
 
 void GameView::resetAnalogPointer() {
@@ -835,7 +920,7 @@ void GameView::resetAnalogPointer() {
 void GameView::setLightgunInputEnabled(bool enabled) {
     if (lightgunInputEnabled_ == enabled) return;
     lightgunInputEnabled_ = enabled;
-    if (!enabled) { clearMouseGun(); clearAnalogMouse(); }
+    if (!enabled) { releaseMouseCapture(); clearMouseGun(); clearAnalogMouse(); }
 }
 
 bool GameView::analogMouseAvailable() const {
@@ -844,9 +929,11 @@ bool GameView::analogMouseAvailable() const {
            !frame_.isNull() && !loading_;
 }
 
-void GameView::updateAnalogPointer(const QPointF& position) {
+void GameView::updateAnalogPointer(const QPointF& eventPosition) {
     if (!analogMouseAvailable()) return;
     const QRectF game = gameRect();
+    const QPointF position = mouseCaptured_
+        ? QPointF(game.left()+capturedPointer_.x()*game.width(), game.top()+capturedPointer_.y()*game.height()) : eventPosition;
     if (game.isEmpty() || !game.contains(position)) {
         if (analogBaselineValid_ || analogPaddlePositionValid_)
             resetAnalogPointer();
@@ -864,15 +951,17 @@ void GameView::updateAnalogPointer(const QPointF& position) {
         }
         return;
     }
+    if (mouseCaptured_ || mouseCaptureEnabled_) return;
     if (analogBaselineValid_) {
         const QSize native = VideoFrameGeometry::nativeSize(frame_);
         const QPointF delta = position - analogLastPosition_;
         const double dx = delta.x() * native.width() / game.width();
         const double dy = delta.y() * native.height() / game.height();
-        if (dx != 0.0 || dy != 0.0) emit analogMouseMotion(player, dx, dy);
+        if (dx != 0.0 || dy != 0.0) emit analogMouseMotion(unsigned(analogMousePlayer_), dx, dy);
     }
     analogLastPosition_ = position;
     analogBaselineValid_ = true;
+
 }
 
 void GameView::clearAnalogMouse() {
@@ -889,10 +978,12 @@ bool GameView::mouseGunAvailable() const {
            guns_[mouseGunPlayer_].enabled && !frame_.isNull() && !loading_;
 }
 
-void GameView::updateMouseAim(const QPointF& position) {
+void GameView::updateMouseAim(const QPointF& eventPosition) {
     if (!mouseGunAvailable()) return;
     const QRectF game = gameRect();
     if (game.isEmpty()) return;
+    const QPointF position = mouseCaptured_
+        ? QPointF(game.left()+capturedPointer_.x()*game.width(), game.top()+capturedPointer_.y()*game.height()) : eventPosition;
     const bool offscreen = !game.contains(position);
     const QPointF aim(qBound(0.0, (position.x() - game.left()) / game.width(), 1.0),
                       qBound(0.0, (position.y() - game.top()) / game.height(), 1.0));
@@ -929,6 +1020,12 @@ void GameView::mousePressEvent(QMouseEvent* event) {
     }
     const unsigned bit = unsigned(event->button()) & unsigned(Qt::LeftButton | Qt::RightButton |
         Qt::MiddleButton | Qt::BackButton | Qt::ForwardButton);
+    if (mouseCaptureEnabled_ && !mouseCaptured_ && bit &&
+        (mouseGunAvailable() || analogMouseAvailable())) {
+        // The activation click belongs to the window, not to the emulated device.
+        if (event->button() == Qt::LeftButton && gameRect().contains(event->position())) beginMouseCapture();
+        event->accept(); return;
+    }
     if (mouseGunAvailable() && bit) {
         updateMouseAim(event->position());
         if (!(mouseGunButtons_ & bit)) {
@@ -938,7 +1035,7 @@ void GameView::mousePressEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    if (analogMouseAvailable() && bit && gameRect().contains(event->position())) {
+    if (analogMouseAvailable() && bit && (mouseCaptured_ || gameRect().contains(event->position()))) {
         updateAnalogPointer(event->position());
         if (!(analogMouseButtons_ & bit)) {
             analogMouseButtons_ |= bit;
@@ -972,18 +1069,31 @@ void GameView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void GameView::mouseMoveEvent(QMouseEvent* event) {
-    if (mouseGunAvailable()) updateMouseAim(event->position());
-    if (analogMouseAvailable()) updateAnalogPointer(event->position());
+    if (mouseCaptured_) {
+        if (!waylandMouse_->active()) {
+            const QPointF delta = event->globalPosition() - QPointF(captureAnchor_);
+            capturedMouseMotion(delta.x(), delta.y());
+            if (!delta.isNull()) QCursor::setPos(captureAnchor_);
+        }
+        event->accept();
+        return;
+    }
+    if (!mouseCaptureEnabled_) {
+        if (mouseGunAvailable()) updateMouseAim(event->position());
+        if (analogMouseAvailable()) updateAnalogPointer(event->position());
+    }
     QWidget::mouseMoveEvent(event);
 }
 
 void GameView::leaveEvent(QEvent* event) {
+    if (mouseCaptured_) { QWidget::leaveEvent(event); return; }
     clearMouseGun();
     clearAnalogMouse();
     QWidget::leaveEvent(event);
 }
 
 void GameView::focusOutEvent(QFocusEvent* event) {
+    releaseMouseCapture();
     clearMouseGun();
     clearAnalogMouse();
     QWidget::focusOutEvent(event);
@@ -1068,6 +1178,7 @@ void GameView::paintRaster(QPainter& painter) {
 
 
 GameView::~GameView() {
+    releaseMouseCapture();
     delete shaderView_;
 }
 
@@ -1140,6 +1251,17 @@ void GameView::ensureGpu() {
 }
 
 bool GameView::event(QEvent* event) {
+    if (event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate)
+        releaseMouseCapture();
+    if (event->type() == QEvent::UngrabMouse && mouseCaptured_ && !waylandMouse_->active())
+        releaseMouseCapture();
+    if (mouseCaptured_ && (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier) {
+            if (event->type() == QEvent::KeyPress && !key->isAutoRepeat()) releaseMouseCapture();
+            event->accept(); return true;
+        }
+    }
     if (event->type() == QEvent::Enter) resetAnalogPointer();
     if (event->type() == QEvent::DevicePixelRatioChange) {
         resetAnalogPointer();
@@ -1155,6 +1277,7 @@ void GameView::showEvent(QShowEvent* event) {
 }
 
 void GameView::resizeEvent(QResizeEvent* event) {
+    releaseMouseCapture();
     QWidget::resizeEvent(event);
     resetAnalogPointer();
     if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();

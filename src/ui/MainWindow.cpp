@@ -200,6 +200,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     }
     connect(input_, &InputManager::configurationChanged, this, &MainWindow::updateGunConfiguration);
     connect(&session_, &EmulationSession::jcartChanged, input_, &InputManager::setJCart);
+    view_->setMouseCaptureEnabled(input_->mouseCaptureEnabled());
+    connect(input_, &InputManager::mouseCaptureChanged, view_, &GameView::setMouseCaptureEnabled);
     connect(input_, &InputManager::mouseMotion, this, &MainWindow::deliverMouseMotion);
     connect(input_, &InputManager::paddleMoved, this, [this](unsigned player, int position) {
         session_.setPaddlePosition(player, position);
@@ -1919,9 +1921,14 @@ void MainWindow::editSettings(int initialPage) {
         netplaySettings->setBannedPeers(netplay_->bannedPeers());
     });
     pages->addWidget(netplaySettings);
+    auto* controlsError = new QLabel(&dialog);
+    controlsError->setObjectName(QStringLiteral("settingsValidationError"));
+    controlsError->setWordWrap(true);
+    controlsError->setStyleSheet(QStringLiteral("color: #f08c82;"));
+    controlsError->hide();
     ControlsPage* controls = nullptr;
     connect(navigation, &QListWidget::currentRowChanged, &dialog,
-            [this, pages, controlsViewport, &controls, &biosCreated, createBiosPage](int row) {
+            [this, pages, controlsViewport, controlsError, &controls, &biosCreated, createBiosPage](int row) {
         if (pages->currentIndex() == kControlsSettingsPage && row != kControlsSettingsPage && controls)
             controls->cancelCapture();
         if (row == kBiosSettingsPage && !biosCreated) {
@@ -1930,12 +1937,18 @@ void MainWindow::editSettings(int initialPage) {
         }
         if (row == kControlsSettingsPage && !controls) {
             controls = new ControlsPage(*input_, controlsViewport);
+            connect(controls, &ControlsPage::feedbackChanged, controlsError,
+                    [controlsError](const QString& message, bool error) {
+                controlsError->setText(error ? message : QString());
+                controlsError->setVisible(error && !message.isEmpty());
+            });
             controls->setTopologyLocked(movieMode_ != 0 || moviePending_ || session_.networkClient() || session_.networkLinkCable());
             controlsViewport->setWidget(controls);
         }
         pages->setCurrentIndex(row);
     });
     navigation->setCurrentRow(qBound(0, initialPage, kNetplaySettingsPage));
+    layout->addWidget(controlsError);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
     buttons->button(QDialogButtonBox::Ok)->setText(Localization::text(QStringLiteral("ОК")));
@@ -2093,6 +2106,7 @@ void MainWindow::deliverMouseMotion(unsigned player, double dx, double dy) {
 }
 
 void MainWindow::resetAnalogMotion() {
+    view_->releaseMouseCapture();
     mouseMotionRemainder_.fill(QPointF());
     session_.clearMouseMotion();
     view_->resetAnalogPointer();
@@ -2494,6 +2508,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (commandAction == frameAdvanceAction_) {
             if (!keyEvent->isAutoRepeat()) setFrameAdvanceSource(true, pressed);
         } else if (pressed && !keyEvent->isAutoRepeat()) commandAction->trigger();
+        return true;
+    }
+    if (key == Qt::Key_Escape && modifiers == Qt::NoModifier && view_->mouseCaptured()) {
+        if (shortcutOverride) event->accept();
+        else if (pressed && !keyEvent->isAutoRepeat()) view_->releaseMouseCapture();
         return true;
     }
     if (key == Qt::Key_Escape && modifiers == Qt::NoModifier && isFullScreen()) {

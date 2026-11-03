@@ -2,20 +2,30 @@
 #include "i18n/Localization.h"
 #include "ui/DebugDialogs.h"
 #include "ui/MainWindow.h"
+#include "input/ControllerType.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QColor>
 #include <QDir>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QListWidget>
 #include <QMenu>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTableWidget>
+#include <QTabWidget>
+#include <QTimer>
 
 #include <algorithm>
 #include <cstdio>
@@ -37,6 +47,89 @@ void press(QWidget& target, int key, Qt::KeyboardModifiers modifiers = Qt::NoMod
     QKeyEvent event(QEvent::KeyPress, key, modifiers, QString(), repeat);
     QApplication::sendEvent(&target, &event);
 }
+
+void testControlsLayout(MainWindow& window) {
+    QString failure;
+    bool inspected = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("emulatorSettingsDialog"));
+        if (!dialog) {
+            failure = QStringLiteral("settings dialog did not open");
+            if (auto* active = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                active->reject();
+            inspected = true;
+            return;
+        }
+        const auto check = [&](bool okay, const QString& message) {
+            if (!okay && failure.isEmpty()) failure = message;
+        };
+        const auto finish = [&] { inspected = true; dialog->reject(); };
+        auto* navigation = dialog->findChild<QListWidget*>(QStringLiteral("settingsNavigation"));
+        if (!navigation) { check(false, QStringLiteral("settings navigation missing")); finish(); return; }
+        navigation->setCurrentRow(7);
+        QApplication::processEvents();
+        auto* viewport = dialog->findChild<QScrollArea*>(QStringLiteral("controlsPageViewport"));
+        auto* profile = dialog->findChild<QComboBox*>(QStringLiteral("profileBox"));
+        auto* player = dialog->findChild<QComboBox*>(QStringLiteral("playerBox"));
+        auto* type = dialog->findChild<QComboBox*>(QStringLiteral("deviceTypeBox"));
+        auto* tabs = dialog->findChild<QTabWidget*>(QStringLiteral("mappingTabs"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("settingsButtons"));
+        auto* error = dialog->findChild<QLabel*>(QStringLiteral("settingsValidationError"));
+        if (!viewport || !profile || !player || !type || !tabs || !buttons || !error) {
+            check(false, QStringLiteral("Controls page or settings footer is missing"));
+            finish();
+            return;
+        }
+        // Offscreen's virtual screen may be smaller than the normal desktop.
+        // Measure the real page at the dialog's intended default 1100×720.
+        dialog->resize(1100, 720);
+        QApplication::processEvents();
+        check(dialog->size() == QSize(1100, 720),
+              QStringLiteral("standard settings geometry was not applied"));
+        const auto outerFits = [&](const QString& kind) {
+            QApplication::processEvents();
+            check(viewport->verticalScrollBar()->maximum() == 0 &&
+                  viewport->horizontalScrollBar()->maximum() == 0,
+                  QStringLiteral("Controls page scrolls for %1").arg(kind));
+        };
+        const auto choose = [&](QComboBox* box, int value, const QString& label) {
+            const int index = box->findData(value);
+            check(index >= 0, QStringLiteral("%1 option is missing").arg(label));
+            if (index >= 0) box->setCurrentIndex(index);
+            QApplication::processEvents();
+        };
+        outerFits(QStringLiteral("default six-button pad"));
+        auto* gameTable = tabs->widget(0)->findChild<QTableWidget*>();
+        check(gameTable && gameTable->verticalScrollBar()->maximum() == 0,
+              QStringLiteral("default six-button pad button table scrolls"));
+
+        choose(type, int(ControllerType::Mouse), QStringLiteral("MD Mouse"));
+        outerFits(QStringLiteral("MD Mouse"));
+        choose(player, 1, QStringLiteral("MD port 2"));
+        choose(type, int(ControllerType::Menacer), QStringLiteral("Menacer"));
+        outerFits(QStringLiteral("Menacer"));
+        choose(type, int(ControllerType::Justifier), QStringLiteral("Justifier"));
+        outerFits(QStringLiteral("Justifier"));
+        choose(type, int(ControllerType::Menacer), QStringLiteral("Menacer"));
+        choose(profile, 1, QStringLiteral("Master System"));
+        choose(player, 0, QStringLiteral("SMS port 1"));
+        choose(type, int(ControllerType::Paddle), QStringLiteral("SMS Paddle"));
+        outerFits(QStringLiteral("SMS Paddle"));
+        choose(type, int(ControllerType::LightPhaser), QStringLiteral("Light Phaser"));
+        outerFits(QStringLiteral("Light Phaser"));
+
+        buttons->button(QDialogButtonBox::Ok)->click();
+        QApplication::processEvents();
+        check(dialog->isVisible() && error->isVisible() && !error->text().isEmpty(),
+              QStringLiteral("invalid controls did not show the sticky validation footer"));
+        check(profile->currentData().toInt() == 0 && player->currentData().toInt() == 1,
+              QStringLiteral("validation did not select the conflicting MD port"));
+        finish();
+    });
+    child<QAction>(window, "emulatorSettingsAction")->trigger();
+    require(inspected, "settings layout inspection did not run");
+    require(failure.isEmpty(), qPrintable(failure));
+}
 }
 
 int main(int argc, char** argv) {
@@ -56,6 +149,16 @@ int main(int argc, char** argv) {
         Localization::initialize(QString::fromLocal8Bit(argv[1]), data.path());
         require(Localization::currentLanguage() == QLatin1String("en"),
                 "English catalog did not load");
+
+        if (app.arguments().contains(QStringLiteral("--controls-layout"))) {
+            EmulationSession session(QString(), data.path());
+            MainWindow window(session, data.path(), true);
+            window.show();
+            QApplication::processEvents();
+            testControlsLayout(window);
+            std::puts("Controls layout and sticky validation footer passed");
+            return 0;
+        }
 
         {
             EmulationSession session(QString(), data.path());

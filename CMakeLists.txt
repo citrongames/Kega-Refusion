@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.19.0 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.19.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -49,9 +49,38 @@ target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE thi
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
 target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive kega_ggpo kega_libco Qt6::Network)
 add_library(video_renderer STATIC
-    src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h)
+    src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h
+    src/ui/WaylandMouseCapture.cpp src/ui/WaylandMouseCapture.h)
 target_include_directories(video_renderer PUBLIC src)
 target_link_libraries(video_renderer PUBLIC Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets localization)
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(WAYLAND_CLIENT QUIET IMPORTED_TARGET wayland-client)
+        pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
+        find_program(WAYLAND_SCANNER wayland-scanner)
+        set(WAYLAND_CAPTURE_XML_DIR "${WAYLAND_PROTOCOLS_DIR}/unstable")
+        if(WAYLAND_CLIENT_FOUND AND WAYLAND_SCANNER AND
+           EXISTS "${WAYLAND_CAPTURE_XML_DIR}/relative-pointer/relative-pointer-unstable-v1.xml" AND
+           EXISTS "${WAYLAND_CAPTURE_XML_DIR}/pointer-constraints/pointer-constraints-unstable-v1.xml")
+            set(WAYLAND_CAPTURE_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/wayland-capture")
+            foreach(protocol IN ITEMS relative-pointer pointer-constraints)
+                set(xml "${WAYLAND_CAPTURE_XML_DIR}/${protocol}/${protocol}-unstable-v1.xml")
+                set(header "${WAYLAND_CAPTURE_GEN_DIR}/${protocol}-unstable-v1-client-protocol.h")
+                set(code "${WAYLAND_CAPTURE_GEN_DIR}/${protocol}-unstable-v1-protocol.c")
+                add_custom_command(OUTPUT "${header}" "${code}"
+                    COMMAND ${CMAKE_COMMAND} -E make_directory "${WAYLAND_CAPTURE_GEN_DIR}"
+                    COMMAND ${WAYLAND_SCANNER} client-header "${xml}" "${header}"
+                    COMMAND ${WAYLAND_SCANNER} private-code "${xml}" "${code}"
+                    DEPENDS "${xml}" VERBATIM)
+                target_sources(video_renderer PRIVATE "${header}" "${code}")
+            endforeach()
+            target_include_directories(video_renderer PRIVATE "${WAYLAND_CAPTURE_GEN_DIR}")
+            target_link_libraries(video_renderer PRIVATE PkgConfig::WAYLAND_CLIENT)
+            target_compile_definitions(video_renderer PRIVATE KEGA_WAYLAND_CAPTURE=1)
+        endif()
+    endif()
+endif()
 add_executable(KegaRefusion WIN32
     assets/app.qrc
     src/ui/ControlsPage.cpp src/ui/ControlsPage.h
