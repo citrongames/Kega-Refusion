@@ -220,3 +220,8 @@ An optional core ABI enables an allocated raw scanline surface only during recor
 FFmpeg PNG RGB24 + AAC256 are muxed to fragmented MOV through Unicode-safe QFile AVIO, in one-second / 4MiB fragments. `skip_trailer` avoids retaining the complete fragment index. The video track clock is 60000 ticks/second; absolute frame timestamps are rescaled from exact core FPS to avoid long-term drift. Audio uses the original sample clock with encoder priming metadata. Resolution/rate changes open numbered parts without scaling, at most256 parts per recording. Queues are limited to8 frames of at most1M pixels plus bounded PCM; encoding retains no complete recording. NewOnly prevents replacing existing files.
 
 Authoritative nonempty controller snapshots update UI input mappings without echoing configuration commands back to the session. Clearing the override still reapplies the local profile. This prevents the spurious protected-recording OSD at start without removing protection against actual incompatible user changes.
+
+
+## Release packaging
+
+Both platform build scripts select CMake Release. Packaging strips non-runtime symbol/debug sections from staged copies of the application, cores and runtime libraries; development originals remain intact. PE files carrying Authenticode signatures are preserved unchanged. Neither the core implementations nor the dependency/plugin set is reduced. Link Cable's second module remains a separate physical file for loader isolation.

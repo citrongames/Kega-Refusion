@@ -109,7 +109,9 @@ add_executable(KegaRefusion WIN32
 target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
 add_custom_command(TARGET KegaRefusion POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/languages" "$<TARGET_FILE_DIR:KegaRefusion>/languages")
+        "${CMAKE_CURRENT_SOURCE_DIR}/languages" "$<TARGET_FILE_DIR:KegaRefusion>/languages"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/examples" "$<TARGET_FILE_DIR:KegaRefusion>/shaders")
 if(MSVC)
     target_compile_options(core_host PRIVATE /W4 /utf-8)
     target_compile_options(video_renderer PRIVATE /W4 /utf-8)
@@ -330,6 +332,7 @@ if(BUILD_TESTING)
 endif()
 install(TARGETS KegaRefusion RUNTIME DESTINATION .)
 install(DIRECTORY languages DESTINATION .)
+install(DIRECTORY assets/shaders/examples/ DESTINATION shaders)
 
 if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.ico")
     enable_language(RC)

@@ -291,3 +291,24 @@ The overlay now contains only one-decimal numbers: emulation `59.9`, game estima
 - MOV track timestamps use60000 ticks/second to avoid QuickTime's high-timescale warning while retaining exact regional timing. AAC priming is compensated; a decoder may expose up to one terminal AAC block of padding. Editor-specific import is not claimed tested; codec support is documented for DaVinci Resolve.
 
 - Final archive hash verification caught a stale Linux launch-tree core copy. The packager now takes both core modules from the canonical core build directory; the launch-tree copies were refreshed before publishing.
+
+
+## Release package size audit and Super Eagle example — 2026-11-03
+
+Both application builds now select CMake Release (`-O3 -DNDEBUG`). Windows already used Release; Linux previously used optimized RelWithDebInfo (`-O2 -g -DNDEBUG`). Core behavior and recording compatibility IDs are unchanged.
+
+Measured sizes exclude user data and the other platform's archive:
+
+| Package | Before (MiB) | Final (MiB) |
+|---|---:|---:|
+| Windows runtime + packaged documents | 129.47 | 100.72 |
+| Linux extracted distribution | 341.73 | 293.49 |
+| Linux gzip archive | 138.81 | 120.23 |
+
+- Largest avoidable Windows file: `libstdc++-6.dll` contained debug/symbol data, reduced from25.13 to2.09 MiB. Package stripping also reduces EXE, cores, OpenSSL and compiler runtimes. Only staged copies are modified; original development binaries remain. Signed PE binaries are preserved, and strip preserves dates to avoid rewriting PE timestamp/checksum on every package.
+- All allocated code/data/resource/import/export sections of all27 Windows binaries matched before/after stripping. Final deployed files match staging. Linux packaged app/core allocated sections match the current Release originals; an isolated offscreen startup/frame smoke using an original68000 loop ROM exited0. No Windows desktop control or broad repeated gameplay suites were used.
+- The original Linux archive contained246 files and206 dependency libraries. Closure analysis found no stray or missing libraries relative to the selected app/plugins. Removing individual linked codec libraries would break loading.
+- Candidate follow-up: Qt FFmpeg multimedia plugin and its exclusive Quick/QML/swscale dependencies occupy about16.76 MiB expanded. Qt6.10.2 fallback integration supports our QAudioSink/QMediaDevices use, but removal needs output-device validation on both platforms. The plugin remains in this build.
+- Main further opportunity: a purpose-built FFmpeg with PNG/AAC encoders and MOV muxing. About116.69 MiB of existing Linux libraries are exclusive to the full FFmpeg graph, including libraries that need replacement. This is NOT a promised saving; a minimal replacement must be built and measured. VideoRecorder directly requires FFmpeg even without the Qt plugin.
+- ICU data (about31.58 MiB) is a real QtCore dependency. Qt UI/network/audio/graphics, SDL controllers and OpenSSL/TLS remain required. Both core modules stay physically separate for Link Cable; hardlink deduplication could merge the loaded modules. Embedded controller PNGs total roughly12.6 MiB; optimizing these is a separate resource-quality task.
+- User-supplied Super Eagle GLSL/preset files are included unchanged in external `shaders/super-eagle`, with attribution and GPL text. First custom-shader selection defaults to the packaged shaders folder. A focused `shader_tests --external-preset` run compiled both passes and rendered successfully through llvmpipe OpenGL4.5. Archive/deployment checks confirmed all example files. Original user-supplied testbuild/super-eagle files were preserved.

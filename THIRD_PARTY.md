@@ -47,3 +47,8 @@ No game ROMs, Paprium soundtrack files, or console BIOS files are distributed. I
 The controller-port wiring and external interrupt approach were studied from [Linn1024/zero-tolerance-link](https://github.com/Linn1024/zero-tolerance-link), a Genesis Plus GX based prototype. Hardware changes are adapted for this core with separate IRQ arbitration, portable paired execution and canonical audio state. See `tools/patches/genesis-plus-gx-link-cable.README.md` and the existing Genesis Plus GX license.
 
 The x86-64 context switch implementation is libco by byuu (public domain), from libretro-common; its interface headers retain the RetroArch team's MIT notices. Exact provenance and notices are in `third_party/libco/README.txt` and `LICENSE.txt`.
+
+
+## Super Eagle custom shader example
+
+`assets/shaders/examples/super-eagle` contains the user-supplied Super Eagle preset and GLSL sources, retained unchanged. SuperEagle credits the DOSBox Team, guest(r), and Derek Liauw Kie Fa; its GNU GPL notice remains in the source and GPL-2 text is included as COPYING. The stock pass matches the style of [libretro/glsl-shaders](https://github.com/libretro/glsl-shaders/blob/master/stock.glsl). The files are shipped as editable external GLSL examples in `shaders/super-eagle`, not embedded in the executable.

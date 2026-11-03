@@ -7,6 +7,9 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+from package_symbols import strip_binary
 
 
 def imports(binary: Path) -> set[str]:
@@ -141,13 +144,17 @@ def main() -> None:
                 sources[Path(dependency.name)] = dependency
                 queue.append(dependency)
 
+    removed_symbols = 0
     for relative, source in sources.items():
         output = stage / relative
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, output)
+        removed_symbols += strip_binary(output, "x86_64-w64-mingw32-strip")
+    print(f"Removed {removed_symbols / 1048576:.2f} MiB of package-only debug/symbol data")
     # Plugin search paths are configured by the executable before QApplication starts.
 
     shutil.copytree(root / "languages", stage / "languages")
+    shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
     qtbase_ru = qt_root / "translations/qtbase_ru.qm"
     if not qtbase_ru.is_file():
         raise SystemExit(f"Missing Qt Russian translation: {qtbase_ru}")

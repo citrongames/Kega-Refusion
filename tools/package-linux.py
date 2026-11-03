@@ -10,6 +10,9 @@ import shutil
 import subprocess
 import tarfile
 from pathlib import Path
+import sys
+sys.dont_write_bytecode = True
+from package_symbols import strip_binary
 
 
 PLUGIN_FILES = (
@@ -66,6 +69,7 @@ def copy(source: Path, target: Path) -> None:
         raise RuntimeError(f"Missing package component: {source}")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
+    strip_binary(target, "strip")
 
 
 def archive_tree(stage: Path, target: Path) -> None:
@@ -114,6 +118,7 @@ def main() -> None:
     copy(core, stage / "cores/genesis_plus_gx_libretro.so")
     copy(build / "core/genesis_plus_gx_libretro_linkpeer.so", stage / "cores/genesis_plus_gx_libretro_linkpeer.so")
     shutil.copytree(root / "languages", stage / "languages")
+    shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
     qt_ru = Path("/usr/share/qt6/translations/qtbase_ru.qm")
     if qt_ru.is_file():
         copy(qt_ru, stage / "languages/qtbase_ru.qm")

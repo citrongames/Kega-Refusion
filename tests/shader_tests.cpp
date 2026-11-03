@@ -289,7 +289,8 @@ int main(int argc, char** argv) {
         QTemporaryDir directory;
         require(directory.isValid(), "shader test scratch unavailable");
         const bool resourceOnly = app.arguments().contains(QStringLiteral("--resource-only"));
-        if (!resourceOnly) parserTests(directory.path());
+        const int externalIndex = app.arguments().indexOf(QStringLiteral("--external-preset"));
+        if (!resourceOnly && externalIndex < 0) parserTests(directory.path());
         if (app.arguments().contains(QStringLiteral("--parser-only"))) {
             std::puts("Shader preset/parser tests passed");
             return 0;
@@ -308,6 +309,18 @@ int main(int argc, char** argv) {
         std::printf("GPU: %s; OpenGL: %s\n",
                     context.functions()->glGetString(GL_RENDERER),
                     context.functions()->glGetString(GL_VERSION));
+        if (externalIndex >= 0) {
+            require(externalIndex + 1 < app.arguments().size(), "external preset path missing");
+            ShaderPreset preset; QString error;
+            require(ShaderPreset::load(app.arguments()[externalIndex+1],preset,error),qPrintable(error));
+            ShaderPipeline pipeline;
+            require(pipeline.initialize(preset,error),qPrintable(error));
+            QImage image(32,32,QImage::Format_RGB32); image.fill(QColor(120,80,40));
+            const auto result=render(pipeline,image,QSize(64,64));
+            require(!result.isNull() && result.pixelColor(32,32).red()>0,"external preset produced no output");
+            std::puts("External shader preset compiled and rendered successfully");
+            return 0;
+        }
         if (resourceOnly) {
             memoryBudgetTests(directory.path());
             context.doneCurrent();

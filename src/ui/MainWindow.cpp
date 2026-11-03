@@ -981,7 +981,8 @@ void MainWindow::buildMenus() {
     connect(shaderLoad, &QAction::triggered, this, [this] {
         releaseInput();
         const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Загрузить GLSL-пресет")),
-            settings_.value(QStringLiteral("files/shaderDirectory")).toString(),
+            settings_.value(QStringLiteral("files/shaderDirectory"),
+                QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("shaders"))).toString(),
             Localization::text(QStringLiteral("GLSL-пресеты (*.glslp);;GLSL-шейдеры (*.glsl)")));
         if (!path.isEmpty() && applyShaderPreset(path))
             settings_.setValue(QStringLiteral("files/shaderDirectory"), QFileInfo(path).absolutePath());
