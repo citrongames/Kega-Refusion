@@ -9,6 +9,7 @@
 #include <QBuffer>
 #include <QImageReader>
 #include "MovieSession.h"
+#include "VideoRecorder.h"
 #include "AchievementsClient.h"
 #include <QtEndian>
 #include "RewindBuffer.h"
@@ -194,6 +195,11 @@ void EmulationSession::resumeMovieRecording(const QString& path) { enqueue({Type
 void EmulationSession::rerecordMovie(const QString& path) { enqueue({Type::MovieFork,path}); }
 void EmulationSession::takeOverMovie() { enqueue({Type::MovieTakeOver,{}}); }
 void EmulationSession::stopMovie() { enqueue({Type::MovieStop,{}}); }
+void EmulationSession::startVideoRecording(const QString& path) { enqueue({Type::VideoStart,path}); }
+void EmulationSession::exportMovieVideo(const QString& moviePath, const QString& videoPath) {
+    Command c{Type::VideoExport,videoPath}; c.bytes=moviePath.toUtf8(); enqueue(std::move(c));
+}
+void EmulationSession::stopVideoRecording() { enqueue({Type::VideoStop,{}}); }
 void EmulationSession::searchCheats(quint64 id, int width, int comparison, quint32 value, bool restart) {
     Command command{Type::CheatSearch,{}}; command.requestId = id;
     command.bytes = QJsonDocument(QJsonObject{{"width",width},{"comparison",comparison},
@@ -416,6 +422,14 @@ void EmulationSession::run() {
     LibretroHost host(corePath_,dataPath_);
     host.message = [this](const QString& message) { emit notification(message); };
     MovieSession movie(host, dataPath_);
+    VideoRecorder videoRecorder;
+    bool videoPending = false, videoExport = false;
+    QString videoPath;
+    qint64 nextVideoProgressNs = 0;
+    auto finishVideo = [&] {
+        host.setRecordingVideoEnabled(false);
+        videoRecorder.finish();
+    };
     AchievementsState achievementState;
     bool achievementEnabled = false, achievementHardcoreRequested = false;
     bool achievementHardcore = false, achievementResetRequested = false;
@@ -732,6 +746,17 @@ void EmulationSession::run() {
             emit actionNotice(Localization::text(QStringLiteral("Воспроизведение завершено")));
         } else movieStatus();
     };
+    auto captureVideo = [&] {
+        if (!videoPending || !videoRecorder.accepting()) return;
+        const auto image = host.recordingFrame();
+        if (image.isNull()) {
+            videoRecorder.abort(Localization::text(QStringLiteral("Не удалось получить исходный кадр игры.")));
+        } else if (!videoRecorder.submit(image,host.audio(),host.sampleRate(),host.fps())) {
+            if (videoRecorder.accepting()) videoRecorder.abort(Localization::text(QStringLiteral(
+                "Запись видео остановлена: кодирование или диск не успевают за игрой. Записанная часть сохранена.")));
+        }
+        if (!videoRecorder.accepting()) host.setRecordingVideoEnabled(false);
+    };
     auto captureHistory = [&] {
         const auto state = movie.active() ? movie.captureRewind() : host.captureRewindState();
         const auto progress = achievementSuppressed ? QByteArray() : achievements.saveProgress(false);
@@ -793,6 +818,13 @@ void EmulationSession::run() {
         if(!networkMode)frameRequested=false;
         for (const auto& command : pending) {
             QString error;
+            // Export is a read-only pass over a fixed recording. GUI changes,
+            // background pauses and input must not alter its deterministic timeline.
+            if (videoExport && command.type != Type::VideoStop &&
+                command.type != Type::AchievementsResponse && command.type != Type::AchievementsRefresh)
+                continue;
+            if ((command.type==Type::Load || command.type==Type::Close) && videoRecorder.accepting())
+                finishVideo();
             if (command.type==Type::Load || command.type==Type::Close || command.type==Type::NetMode)
                 cheatSearch.clear();
             if(networkMode && (command.type==Type::Load || command.type==Type::Close))networkTimeline.stop();
@@ -1074,6 +1106,46 @@ void EmulationSession::run() {
             case Type::AchievementsRefresh: achievements.refresh(); break;
             case Type::AchievementsResponse:
                 achievements.respond(command.requestId,command.value,command.bytes);
+                break;
+            case Type::VideoStart:
+            case Type::VideoExport: {
+                const bool exporting = command.type == Type::VideoExport;
+                if (videoPending || !host.loaded() ||
+                    (exporting && (networkMode || movie.active() || achievementHardcore))) {
+                    emit videoRecordingFinished(command.path,Localization::text(QStringLiteral(
+                        "Сначала откройте игру и завершите текущую запись или сетевую сессию.")));
+                    break;
+                }
+                if (exporting) {
+                    if (!movie.play(QString::fromUtf8(command.bytes),false,error)) {
+                        loaded_.store(host.loaded());
+                        if (!host.loaded()) emit gameClosed();
+                        emit videoRecordingFinished(command.path,error); break;
+                    }
+                    achievementSuppressed = true; achievements.reset(); achievements.refresh();
+                    releaseButtons(); optionsPending = false;
+                    paused = true; emit pausedChanged(true);
+                }
+                if (!videoRecorder.start(command.path,error)) {
+                    if (exporting) movieBoundary();
+                    emit videoRecordingFinished(command.path,error); break;
+                }
+                videoPending = true; videoExport = exporting; videoPath = command.path;
+                nextVideoProgressNs = 0;
+                if (!host.setRecordingVideoEnabled(true))
+                    videoRecorder.abort(Localization::text(QStringLiteral("Ядро не поддерживает запись исходного изображения.")));
+                emit videoRecordingChanged(true,exporting,videoPath);
+                if (exporting) {
+                    movieBoundary();
+                    if (!host.movieCompatibilityWarning().isEmpty())
+                        emit movieCompatibilityWarning(host.movieCompatibilityWarning());
+                    emit videoExportProgress(0,movie.length());
+                    if (!movie.length()) finishVideo();
+                }
+                break;
+            }
+            case Type::VideoStop:
+                if (videoPending) finishVideo();
                 break;
             case Type::MovieRecord:
             case Type::MoviePlay:
@@ -1410,6 +1482,46 @@ void EmulationSession::run() {
                 emit controllerTopologyChanged(effectiveAdapter,playerCount);
             }
         }
+        if (videoPending && videoRecorder.completed()) {
+            const auto result = videoRecorder.result();
+            host.setRecordingVideoEnabled(false);
+            if (videoExport) {
+                paused = true; emit pausedChanged(true); clearAudio();
+                movieStatus(true); pacer.reset(nowNs()); resetMetrics();
+            }
+            videoPending = false; videoExport = false;
+            emit videoRecordingChanged(false,false,videoPath);
+            if (result.paths.size() > 1) emit notification(Localization::text(QStringLiteral(
+                "Размер кадра изменился: видео сохранено в %1 частях.")).arg(result.paths.size()));
+            emit videoRecordingFinished(videoPath,result.error);
+        }
+        if (videoExport) {
+            if (!videoRecorder.accepting()) {
+                host.setRecordingVideoEnabled(false);
+                std::this_thread::sleep_for(std::chrono::milliseconds(2)); continue;
+            }
+            if (!videoRecorder.capacityAvailable()) {
+                // Backpressure only for offline export. Keep processing commands
+                // each iteration so cancellation and shutdown remain responsive.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1)); continue;
+            }
+            QString error;
+            if (!movie.beforeFrame({},error)) {
+                if (!error.isEmpty()) videoRecorder.abort(error);
+                else finishVideo();
+                continue;
+            }
+            host.runFrame(true,true);
+            captureVideo(); movie.afterFrame();
+            const auto now = nowNs();
+            if (now >= nextVideoProgressNs || movie.mode() == MovieSession::Finished) {
+                emit videoExportProgress(movie.position(),movie.length());
+                publishVideo(host.frame(),host.aspectRatio()); movieStatus();
+                nextVideoProgressNs = now + 100000000;
+            }
+            if (movie.mode() == MovieSession::Finished) finishVideo();
+            continue;
+        }
         if (networkMode == 1 && networkDirty) for (int i=0;i<networkRoster.size();++i) {
             auto peer=networkRoster[i].toObject();
             if (peer.value("role").toInt() > int(host.controllerPlayerCount())) {
@@ -1574,7 +1686,8 @@ void EmulationSession::run() {
             networkTimeline.setHistoryEnabled(historyEnabled&&networkMode==1);
             if (!beforeFrame()) continue;
             frameRequested=false;networkStepAnnounced=false;
-            host.runFrame(true,false); // Exactly one video frame; no burst of queued sound.
+            host.runFrame(true,videoPending && videoRecorder.accepting()); // Capture PCM for video, never queue a playback burst.
+            captureVideo();
             if (!achievementSuppressed && !networkMode) achievements.frame();
             afterFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
@@ -1602,7 +1715,9 @@ void EmulationSession::run() {
         if (!beforeFrame()) continue;
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
-        host.runFrame(!fast || present || optionsPending, !fast);
+        const bool capture = videoPending && videoRecorder.accepting();
+        host.runFrame(!fast || present || optionsPending || capture, !fast || capture);
+        captureVideo();
         if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
         if (!achievementSuppressed && !networkMode) achievements.frame();
         afterFrame();
@@ -1630,6 +1745,8 @@ void EmulationSession::run() {
             waiter.waitUntil(deadline);
         } else pacer.reset(nowNs());
     }
+    finishVideo();
+    // The encoder drains its bounded queue in its own destructor, after core shutdown.
     QString movieError;
     if (movie.active()) {
         if (!movie.finish(true,movieError)) emit errorOccurred(movieError);

@@ -47,6 +47,7 @@
 #include <QDialogButtonBox>
 #include <QListWidget>
 #include <QPushButton>
+#include <QProgressDialog>
 #include <QStyle>
 #include <QPainter>
 #include <QPainterPath>
@@ -59,6 +60,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QSignalBlocker>
+#include <QScopedValueRollback>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QScrollArea>
@@ -186,13 +188,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         if (port < padMasks_.size()) { padMasks_[port] = mask; session_.setButtons(port,mask | (port < gunMasks_.size() ? gunMasks_[port] : 0)); }
     });
     connect(input_, &InputManager::connectionChanged, this, [this](unsigned port, bool connected) {
-        session_.setControllerConnected(port, connected);
+        if (!applyingSessionControllers_) session_.setControllerConnected(port, connected);
     });
     connect(input_, &InputManager::controllerTypeChanged, this, [this](unsigned port, bool sixButton) {
-        session_.setControllerSixButton(port, sixButton);
+        if (!applyingSessionControllers_) session_.setControllerSixButton(port, sixButton);
     });
     connect(input_, &InputManager::adapterChanged, this, [this](int adapter) {
-        session_.setControllerAdapter(ControllerAdapter(adapter));
+        if (!applyingSessionControllers_) session_.setControllerAdapter(ControllerAdapter(adapter));
     });
     session_.setControllerAdapter(input_->adapter());
     for (unsigned port = 0; port < MaxControllerPlayers; ++port) {
@@ -317,7 +319,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         if (!menu) continue;
         connect(menu, &QMenu::aboutToShow, this, [this] {
             menuPauseActive_ = true;
-            if (!netplay_->active()) session_.setBackgroundPaused(true);
+            if (!netplay_->active() && !videoExporting_) session_.setBackgroundPaused(true);
             releaseInput();
         });
         connect(menu, &QMenu::aboutToHide, this, [this] {
@@ -337,6 +339,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     updateGunConfiguration();
     connect(&session_, &EmulationSession::movieHardwareChanged, this,
             [this](const QByteArray& controllersJson) {
+        // A nonempty snapshot already belongs to the core; an empty one restores local settings.
+        const QScopedValueRollback<bool> applying(applyingSessionControllers_, !controllersJson.isEmpty());
         input_->setMovieControllers(controllersJson);
     });
     connect(&session_, &EmulationSession::movieStatusChanged, this,
@@ -357,6 +361,66 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::movieCompatibilityWarning, this,
             [this](const QString& message) {
         view_->showOsd(message, 10000, QStringLiteral("recordingCompatibility"));
+    });
+    connect(&session_, &EmulationSession::videoRecordingChanged, this,
+            [this](bool active, bool exporting, const QString& path) {
+        const bool started = active && !videoActive_;
+        videoPending_ = false;
+        videoActive_ = active;
+        // Keep the export lock until the writer reports finalization.
+        if (active) videoExporting_ = exporting;
+        updateMovieActions();
+        updateDebugDialogs();
+        updateInputEnabled();
+        if (started && !exporting)
+            view_->showOsd(Localization::text(QStringLiteral("Идёт запись видео: %1"))
+                               .arg(QFileInfo(path).fileName()), 3000, QStringLiteral("video"));
+    });
+    connect(&session_, &EmulationSession::videoExportProgress, this,
+            [this](quint64 done, quint64 total) {
+        if (!videoProgress_ || videoStopping_) return;
+        if (!total) {
+            videoProgress_->setRange(0, 0);
+            return;
+        }
+        videoProgress_->setRange(0, 1000);
+        videoProgress_->setValue(int(std::min<long double>(1000,
+            static_cast<long double>(done) * 1000 / total)));
+        videoProgress_->setLabelText(Localization::text(QStringLiteral("Экспорт: %1 / %2 кадров"))
+                                        .arg(done).arg(total));
+    });
+    connect(&session_, &EmulationSession::videoRecordingFinished, this,
+            [this](const QString& path, const QString& error) {
+        const bool exporting = videoExporting_;
+        const bool stopped = videoStopping_;
+        videoActive_ = videoPending_ = videoExporting_ = videoStopping_ = false;
+        if (videoProgress_) {
+            videoProgress_->close();
+            videoProgress_->deleteLater();
+            videoProgress_ = nullptr;
+        }
+        updateMovieActions();
+        updateDebugDialogs();
+        updateInputEnabled();
+        if (!error.isEmpty()) {
+            qWarning("Video recording failed: %s", qPrintable(error));
+            if (!smokeTest_) {
+                auto* dialog = new QMessageBox(QMessageBox::Warning,
+                    Localization::text(QStringLiteral("Видео")), error, QMessageBox::Ok, this);
+                dialog->setTextFormat(Qt::PlainText);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->open();
+            }
+        } else if (!path.isEmpty()) {
+            const QString text = exporting && stopped
+                ? Localization::text(QStringLiteral("Экспорт остановлен. Готовая часть сохранена: %1"))
+                : Localization::text(QStringLiteral("Видео сохранено: %1"));
+            view_->showOsd(text.arg(QDir::toNativeSeparators(path)), 5000, QStringLiteral("video"));
+        }
+        if (closeAfterVideo_) {
+            closeAfterVideo_ = false;
+            QTimer::singleShot(0, this, [this] { close(); });
+        }
     });
     achievementNetwork_ = new AchievementNetwork(dataPath_, this);
     connect(&session_, &EmulationSession::achievementHttpRequest,
@@ -437,7 +501,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             [this](const CheatList& entries,int platform,bool supported,const QString& detail) {
         cheats_ = entries; cheatPlatform_ = Cheats::Platform(platform); cheatsSupported_ = supported;
         cheatsAction_->setEnabled(session_.hasGame() && supported && !loading_ &&
-                                  movieMode_ == 0 && !achievementsHardcore_);
+                                  movieMode_ == 0 && !videoExporting_ && !achievementsHardcore_);
         cheatsAction_->setToolTip(detail);
     });
     connect(&session_, &EmulationSession::discStateChanged, this,
@@ -556,14 +620,14 @@ void MainWindow::buildMenus() {
         addAction(action);
     };
     QMenu* fileMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Файл")));
-    QAction* openAction = fileMenu->addAction(Localization::text(QStringLiteral("Открыть игру…")));
-    openAction->setShortcut(QKeySequence::Open);
-    shortcut(openAction);
-    connect(openAction, &QAction::triggered, this, &MainWindow::openGameDialog);
+    openGameAction_ = fileMenu->addAction(Localization::text(QStringLiteral("Открыть игру…")));
+    openGameAction_->setShortcut(QKeySequence::Open);
+    shortcut(openGameAction_);
+    connect(openGameAction_, &QAction::triggered, this, &MainWindow::openGameDialog);
     closeGameAction_ = fileMenu->addAction(Localization::text(QStringLiteral("Закрыть игру")));
     closeGameAction_->setEnabled(false);
     connect(closeGameAction_, &QAction::triggered, this, [this] {
-        if (!session_.hasGame() || loading_) return;
+        if (!session_.hasGame() || loading_ || videoExporting_) return;
         releaseInput();
         loading_ = true; // Block new opens until the worker has flushed and unloaded.
         updateMovieActions();
@@ -572,7 +636,7 @@ void MainWindow::buildMenus() {
     });
     recentMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Недавние игры")));
     updateRecentMenu();
-    movieMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Запись")));
+    movieMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Запись управления")));
     movieMenu_->setObjectName(QStringLiteral("movieMenu"));
     movieRecordAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Начать запись…")));
     movieRecordAction_->setObjectName(QStringLiteral("movieRecord"));
@@ -643,6 +707,19 @@ void MainWindow::buildMenus() {
         session_.stopMovie();
         view_->setFocus();
     });
+    videoMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Видео")));
+    videoMenu_->setObjectName(QStringLiteral("videoMenu"));
+    videoStartAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Начать запись видео…")));
+    videoStartAction_->setObjectName(QStringLiteral("videoRecord"));
+    connect(videoStartAction_, &QAction::triggered, this, &MainWindow::startVideoCapture);
+    videoExportAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Экспортировать запись управления…")));
+    videoExportAction_->setObjectName(QStringLiteral("videoExport"));
+    videoExportAction_->setToolTip(Localization::text(QStringLiteral("Откройте игру, для которой сохранена запись управления.")));
+    connect(videoExportAction_, &QAction::triggered, this, &MainWindow::exportInputVideo);
+    videoMenu_->addSeparator();
+    videoStopAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Остановить запись видео")));
+    videoStopAction_->setObjectName(QStringLiteral("videoStop"));
+    connect(videoStopAction_, &QAction::triggered, this, &MainWindow::stopVideoCapture);
     updateMovieActions();
     QMenu* segaCdMenu = fileMenu->addMenu(QStringLiteral("Sega CD"));
     changeDiscAction_ = segaCdMenu->addAction(Localization::text(QStringLiteral("Сменить диск…")));
@@ -1050,6 +1127,8 @@ void MainWindow::buildMenus() {
     debugAudioAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Звуковые каналы…")));
     debugAudioAction_->setObjectName(QStringLiteral("debugAudioAction"));
     connect(debugAudioAction_, &QAction::triggered, this, &MainWindow::showDebugAudio);
+    exportBlockedMenus_ = {emulationMenu, onlineMenu, settingsMenu, debugMenu_};
+    updateVideoActions();
     QMenu* helpMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Справка")));
     QAction* aboutAction = helpMenu->addAction(Localization::text(QStringLiteral("О программе")));
     connect(aboutAction, &QAction::triggered, this, [this] {
@@ -1082,18 +1161,18 @@ void MainWindow::updateDebugDialogs() {
         debugVideoAvailable_ || debugAudioAvailable_);
     if (debugGraphicsAction_) {
         debugGraphicsAction_->setVisible(debugVideoAvailable_ != 0);
-        debugGraphicsAction_->setEnabled(!loading_ && !achievementsHardcore_);
+        debugGraphicsAction_->setEnabled(!loading_ && !videoExporting_ && !achievementsHardcore_);
     }
     if (debugAudioAction_) {
         debugAudioAction_->setVisible(debugAudioAvailable_ != 0);
-        debugAudioAction_->setEnabled(!loading_);
+        debugAudioAction_->setEnabled(!loading_ && !videoExporting_);
     }
     if (debugGraphicsDialog_)
         debugGraphicsDialog_->setControls(debugVideoAvailable_, debugVideoDisabled_,
-                                          achievementsHardcore_, !loading_, debugBackdropColor_);
+                                          achievementsHardcore_, !loading_ && !videoExporting_, debugBackdropColor_);
     if (debugAudioDialog_)
         debugAudioDialog_->setControls(debugAudioAvailable_, debugAudioDisabled_,
-                                       !loading_, debugAudioGains_);
+                                       !loading_ && !videoExporting_, debugAudioGains_);
 }
 
 void MainWindow::showDebugGraphics() {
@@ -1208,12 +1287,12 @@ void MainWindow::editShaderParameters() {
 void MainWindow::updateDiscMenu() {
     if (!discMenu_) return;
     const bool hasDisc = !discPaths_.isEmpty();
-    const bool discCommandsEnabled = hasDisc && movieMode_ == 0 && !moviePending_;
+    const bool discCommandsEnabled = hasDisc && movieMode_ == 0 && !moviePending_ && !videoExporting_;
     changeDiscAction_->setEnabled(discCommandsEnabled);
     ejectDiscAction_->setEnabled(discCommandsEnabled);
     ejectDiscAction_->setChecked(hasDisc && discEjected_);
     discMenu_->clear();
-    discMenu_->setEnabled(discPaths_.size() > 1 && movieMode_ == 0 && !moviePending_);
+    discMenu_->setEnabled(discPaths_.size() > 1 && movieMode_ == 0 && !moviePending_ && !videoExporting_);
     for (int index = 0; index < discPaths_.size(); ++index) {
         QAction* action = discMenu_->addAction(
             QStringLiteral("%1. %2").arg(index + 1).arg(QFileInfo(discPaths_[index]).fileName()));
@@ -1242,7 +1321,7 @@ void MainWindow::updateRecentMenu() {
         connect(action, &QAction::triggered, this, [this, path] { openRom(path); });
     }
     recentPaths_ = existing;
-    recentMenu_->setEnabled(!existing.isEmpty());
+    recentMenu_->setEnabled(!existing.isEmpty() && !videoExporting_);
 }
 
 void MainWindow::setSlot(int slot) {
@@ -1324,17 +1403,17 @@ void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
     loading_ = loading;
     updateDebugDialogs();
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading &&
-                                                  movieMode_ == 0 && !achievementsHardcore_);
+                                                  movieMode_ == 0 && !videoExporting_ && !achievementsHardcore_);
     updateMovieActions();
     if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() &&
-                                                       !loading && !achievementsHardcore_);
+                                                       !loading && !videoExporting_ && !achievementsHardcore_);
     if (loading) view_->setLightgunInputEnabled(false);
     view_->setLoading(loading, fileName);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading);
 }
 
 void MainWindow::openGameDialog() {
-    if (loading_) return;
+    if (loading_ || videoExporting_) return;
     releaseInput();
     const QString path = QFileDialog::getOpenFileName(
         this, Localization::text(QStringLiteral("Открыть игру")),
@@ -1345,7 +1424,7 @@ void MainWindow::openGameDialog() {
 }
 
 void MainWindow::openRom(const QString& path) {
-    if (loading_) return;
+    if (loading_ || videoExporting_) return;
     const QFileInfo file(path);
     if (!file.exists() || !file.isFile()) {
         const QString text = Localization::text(QStringLiteral("Файл не найден: %1")).arg(path);
@@ -1420,6 +1499,7 @@ void MainWindow::openRom(const QString& path) {
 }
 
 void MainWindow::editSettings(int initialPage) {
+    if (videoExporting_) return;
     releaseInput();
     input_->setEnabled(false);
     QDialog dialog(this, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
@@ -1627,7 +1707,7 @@ void MainWindow::editSettings(int initialPage) {
         "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно.")));
     // The history memory limit remains adjustable while a recording is active.
 
-    auto* recording = addPage(Localization::text(QStringLiteral("Запись")),
+    auto* recording = addPage(Localization::text(QStringLiteral("Запись управления")),
         Localization::text(QStringLiteral("Формат счётчика записи и воспроизведения на экране игры.")));
     const QString counterUnit = settings_.value(QStringLiteral("recording/counterUnit"),
         QStringLiteral("time")).toString();
@@ -2230,8 +2310,10 @@ void MainWindow::updateGunAim(unsigned player, QPointF position, bool offscreen)
 }
 
 void MainWindow::updateGunConfiguration() {
-    for (unsigned player=0;player<MaxControllerPlayers;++player)
-        session_.setControllerKind(player,input_->controllerType(player));
+    if (!applyingSessionControllers_) {
+        for (unsigned player=0;player<MaxControllerPlayers;++player)
+            session_.setControllerKind(player,input_->controllerType(player));
+    }
     updateGunPresentation();
 }
 
@@ -2353,9 +2435,122 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
     return path;
 }
 
+QString MainWindow::chooseVideoSavePath(bool exporting) {
+    releaseInput();
+    const QString fallback = QDir(dataPath_).filePath(QStringLiteral("videos"));
+    const QDir directory(settings_.value(QStringLiteral("video/lastDirectory"), fallback).toString());
+    if (!QDir().mkpath(directory.absolutePath())) {
+        QMessageBox::warning(this, Localization::text(QStringLiteral("Видео")),
+            Localization::text(QStringLiteral("Не удалось создать папку видео: %1"))
+                .arg(QDir::toNativeSeparators(directory.absolutePath())));
+        return {};
+    }
+    QString stem = currentGameName_.left(80);
+    for (qsizetype i = 0; i < stem.size(); ++i)
+        if (stem.at(i).unicode() < 32 || QStringLiteral("\\/:*?\"<>|").contains(stem.at(i)))
+            stem[i] = QLatin1Char('_');
+    if (stem.trimmed().isEmpty()) stem = QStringLiteral("game");
+    const QString proposal = directory.filePath(stem + QLatin1Char('_') +
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz")) +
+        QStringLiteral(".mov"));
+    QString path = QFileDialog::getSaveFileName(this,
+        exporting ? Localization::text(QStringLiteral("Экспортировать запись управления в видео"))
+                  : Localization::text(QStringLiteral("Начать запись видео")),
+        proposal, Localization::text(QStringLiteral("Видео MOV без потерь (*.mov)")), nullptr,
+        QFileDialog::DontConfirmOverwrite);
+    view_->setFocus();
+    if (path.isEmpty()) return {};
+    if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".mov");
+    const QFileInfo file(path);
+    if (file.exists()) {
+        QMessageBox::warning(this, Localization::text(QStringLiteral("Видео")),
+            Localization::text(QStringLiteral("Файл уже существует. Выберите новое имя: %1"))
+                .arg(QDir::toNativeSeparators(file.absoluteFilePath())));
+        return {};
+    }
+    settings_.setValue(QStringLiteral("video/lastDirectory"), file.absolutePath());
+    return file.absoluteFilePath();
+}
+
+void MainWindow::startVideoCapture() {
+    if (!session_.hasGame() || loading_ || videoActive_ || videoPending_ || videoExporting_) return;
+    const QString path = chooseVideoSavePath(false);
+    if (path.isEmpty()) return;
+    videoPending_ = true;
+    videoStopping_ = false;
+    updateVideoActions();
+    session_.startVideoRecording(path);
+}
+
+void MainWindow::exportInputVideo() {
+    if (!session_.hasGame() || loading_ || videoActive_ || videoPending_ || videoExporting_ || movieMode_ != 0 ||
+        moviePending_ || achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
+    releaseInput();
+    const QString source = QFileDialog::getOpenFileName(this,
+        Localization::text(QStringLiteral("Экспортировать запись управления в видео")),
+        QDir(dataPath_).filePath(QStringLiteral("movies")),
+        Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
+    view_->setFocus();
+    if (source.isEmpty()) return;
+    const QString path = chooseVideoSavePath(true);
+    if (path.isEmpty() || !session_.hasGame() || loading_ || movieMode_ != 0 ||
+        moviePending_ || achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
+    videoPending_ = true;
+    videoExporting_ = true;
+    videoStopping_ = false;
+    releaseInput();
+    updateMovieActions();
+    updateDebugDialogs();
+    updateInputEnabled();
+    videoProgress_ = new QProgressDialog(
+        Localization::text(QStringLiteral("Подготовка экспорта…")),
+        Localization::text(QStringLiteral("Отмена")), 0, 0, this);
+    videoProgress_->setObjectName(QStringLiteral("videoExportProgress"));
+    videoProgress_->setWindowTitle(Localization::text(QStringLiteral("Экспорт видео")));
+    videoProgress_->setWindowModality(Qt::NonModal);
+    videoProgress_->setMinimumDuration(0);
+    videoProgress_->setAutoClose(false);
+    videoProgress_->setAutoReset(false);
+    connect(videoProgress_, &QProgressDialog::canceled, this, &MainWindow::stopVideoCapture);
+    videoProgress_->show();
+    session_.exportMovieVideo(source, path);
+}
+
+void MainWindow::stopVideoCapture() {
+    if ((!videoActive_ && !videoPending_ && !videoExporting_) || videoStopping_) return;
+    videoStopping_ = true;
+    if (videoProgress_)
+        videoProgress_->setLabelText(Localization::text(QStringLiteral("Завершение видео…")));
+    updateVideoActions();
+    session_.stopVideoRecording();
+}
+
+void MainWindow::updateVideoActions() {
+    if (!videoMenu_) return;
+    const bool busy = videoActive_ || videoPending_ || videoExporting_;
+    const bool game = session_.hasGame() && !loading_;
+    const QString title = currentGameName_.isEmpty() ? QStringLiteral("Kega Refusion")
+        : QStringLiteral("%1 — Kega Refusion").arg(currentGameName_);
+    setWindowTitle(videoActive_ && !videoExporting_
+        ? title + Localization::text(QStringLiteral(" — запись видео")) : title);
+    videoMenu_->setEnabled(game || busy);
+    videoStartAction_->setEnabled(game && !busy);
+    videoStartAction_->setText(videoActive_ && !videoExporting_
+        ? Localization::text(QStringLiteral("Идёт запись видео"))
+        : Localization::text(QStringLiteral("Начать запись видео…")));
+    videoStartAction_->setToolTip(Localization::text(QStringLiteral(
+        "MOV: видео PNG без потерь в исходном разрешении, звук AAC 256 кбит/с; без OSD.")));
+    videoExportAction_->setEnabled(game && !busy && movieMode_ == 0 && !moviePending_ &&
+        !achievementsHardcore_ && !session_.networkActive() && !netplay_->active());
+    videoStopAction_->setEnabled(busy && !videoStopping_);
+    if (openGameAction_) openGameAction_->setEnabled(!loading_ && !videoExporting_);
+    if (recentMenu_) recentMenu_->setEnabled(!recentPaths_.isEmpty() && !loading_ && !videoExporting_);
+    for (QMenu* menu : exportBlockedMenus_) menu->setEnabled(!videoExporting_);
+}
+
 void MainWindow::updateMovieActions() {
     if (!movieMenu_) return;
-    const bool game = session_.hasGame() && !loading_;
+    const bool game = session_.hasGame() && !loading_ && !videoExporting_;
     const bool protectedMovie = movieMode_ != 0;
     const bool ready = game && !moviePending_;
     movieMenu_->setEnabled(game);
@@ -2371,7 +2566,7 @@ void MainWindow::updateMovieActions() {
         : Localization::text(QStringLiteral("Остановить воспроизведение"));
     if (movieStopAction_->text() != stopLabel) movieStopAction_->setText(stopLabel);
     if (regionMenu_) regionMenu_->setEnabled(!protectedMovie && !moviePending_ &&
-                                             !achievementsHardcore_);
+                                             !videoExporting_ && !achievementsHardcore_);
     if (resetAction_) resetAction_->setEnabled(game && !protectedMovie && !moviePending_);
     if (hardResetAction_) hardResetAction_->setEnabled(game && !protectedMovie && !moviePending_);
     if (cheatsAction_) cheatsAction_->setEnabled(game && cheatsSupported_ && !protectedMovie &&
@@ -2383,9 +2578,12 @@ void MainWindow::updateMovieActions() {
     if (loadFileAction_) loadFileAction_->setEnabled(namedStateAvailable && !achievementsHardcore_);
     if (rewindAction_) rewindAction_->setEnabled(game && rewindEnabled_ &&
                                                 !moviePending_ && !achievementsHardcore_);
-    if (changeDiscAction_) changeDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_);
-    if (ejectDiscAction_) ejectDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_);
-    if (discMenu_) discMenu_->setEnabled(discPaths_.size() > 1 && !protectedMovie && !moviePending_);
+    if (changeDiscAction_) changeDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_ && !videoExporting_);
+    if (ejectDiscAction_) ejectDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_ && !videoExporting_);
+    if (discMenu_) discMenu_->setEnabled(discPaths_.size() > 1 && !protectedMovie && !moviePending_ && !videoExporting_);
+    if (pauseAction_) pauseAction_->setEnabled(game);
+    if (fastForwardAction_) fastForwardAction_->setEnabled(game);
+    updateVideoActions();
 }
 
 void MainWindow::setFrameAdvanceSource(bool keyboard, bool pressed) {
@@ -2419,11 +2617,11 @@ void MainWindow::releaseInput() {
 }
 
 void MainWindow::updateInputEnabled() {
-    if (closeGameAction_) closeGameAction_->setEnabled(session_.hasGame() && !loading_);
+    if (closeGameAction_) closeGameAction_->setEnabled(session_.hasGame() && !loading_ && !videoExporting_);
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading_ &&
-                                                  movieMode_ == 0 && !achievementsHardcore_);
+                                                  movieMode_ == 0 && !videoExporting_ && !achievementsHardcore_);
     if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() &&
-        pauseAction_->isChecked() && !loading_ && !achievementsHardcore_);
+        pauseAction_->isChecked() && !loading_ && !videoExporting_ && !achievementsHardcore_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     const bool modalActive = QApplication::activeModalWidget();
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
@@ -2434,23 +2632,23 @@ void MainWindow::updateInputEnabled() {
             break;
         }
     }
-    session_.setBackgroundPaused(!netplay_->active() &&
+    session_.setBackgroundPaused(!videoExporting_ && !netplay_->active() &&
         (modalActive || popupActive || (pauseOnFocusLoss_ &&
         ((!isActiveWindow() && !debugWindowActive) ||
          QApplication::applicationState() != Qt::ApplicationActive))));
     const bool enabled = isActiveWindow() && view_->hasFocus() && session_.hasGame() &&
-                         !loading_ && !moviePending_ && !modalActive && !popupActive;
+                         !loading_ && !moviePending_ && !videoExporting_ && !modalActive && !popupActive;
     view_->setLightgunInputEnabled(enabled);
     input_->setEnabled(enabled);
     input_->setBackgroundGamepadActive(input_->backgroundGamepadEnabled() &&
-        session_.hasGame() && !loading_ && !moviePending_ &&
+        session_.hasGame() && !loading_ && !moviePending_ && !videoExporting_ &&
         !modalActive && !popupActive && !enabled);
     input_->poll();
 }
 
 void MainWindow::updateFastForward() {
-    const bool enabled = fastForwardHeld_ || fastForwardPadHeld_ ||
-                         (fastForwardAction_ && fastForwardAction_->isChecked());
+    const bool enabled = !videoExporting_ && (fastForwardHeld_ || fastForwardPadHeld_ ||
+                         (fastForwardAction_ && fastForwardAction_->isChecked()));
     view_->setFastForwardStatus(enabled && !(rewindEnabled_ && (rewindHeld_ || rewindPadHeld_ ||
         (rewindAction_ && rewindAction_->isChecked()))));
     if (fastForwardActive_ == enabled) return;
@@ -2460,7 +2658,7 @@ void MainWindow::updateFastForward() {
 }
 
 void MainWindow::updateRewind() {
-    const bool enabled = rewindEnabled_ && !achievementsHardcore_ && (rewindHeld_ || rewindPadHeld_ ||
+    const bool enabled = rewindEnabled_ && !videoExporting_ && !achievementsHardcore_ && (rewindHeld_ || rewindPadHeld_ ||
         (rewindAction_ && rewindAction_->isChecked()));
     session_.setRewind(enabled);
     updateFastForward();
@@ -2468,7 +2666,7 @@ void MainWindow::updateRewind() {
 
 void MainWindow::setPausedUi(bool paused) {
     if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(paused && session_.hasGame() &&
-                                                             !loading_ && !achievementsHardcore_);
+                                                             !loading_ && !videoExporting_ && !achievementsHardcore_);
     if (!paused) {
         frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
         session_.setFrameAdvanceHeld(false);
@@ -2518,6 +2716,7 @@ void MainWindow::showOsdDemo() {
 }
 
 void MainWindow::handleInputCommand(int command, bool pressed) {
+    if (videoExporting_) return;
     if (command == RewindCommand) { rewindPadHeld_ = pressed; updateRewind(); return; }
     if (command == FastForwardCommand) {
         fastForwardPadHeld_ = pressed;
@@ -2562,7 +2761,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         }
     }
     if (watched == this && event->type() == QEvent::WindowBlocked) {
-        if (!netplay_->active()) session_.setBackgroundPaused(true);
+        if (!netplay_->active() && !videoExporting_) session_.setBackgroundPaused(true);
         releaseInput();
     }
     if ((watched == this || watched == view_) &&
@@ -2647,7 +2846,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (pressed && !keyEvent->isAutoRepeat()) setFullscreenMode(!isFullScreen());
         return true;
     }
-    if (!session_.hasGame() || loading_ || !view_->hasFocus())
+    if (!session_.hasGame() || loading_ || videoExporting_ || !view_->hasFocus())
         return QMainWindow::eventFilter(watched, event);
     if (key >= Qt::Key_0 && key <= Qt::Key_9 && modifiers == Qt::NoModifier) {
         if (shortcutOverride) event->accept();
@@ -2689,7 +2888,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
-    if (loading_) { event->ignore(); return; }
+    if (loading_ || videoExporting_) { event->ignore(); return; }
     if (event->mimeData()->hasUrls()) {
         for (const QUrl& url : event->mimeData()->urls()) {
             if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
@@ -2702,7 +2901,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
 }
 
 void MainWindow::dropEvent(QDropEvent* event) {
-    if (loading_) { event->ignore(); return; }
+    if (loading_ || videoExporting_) { event->ignore(); return; }
     for (const QUrl& url : event->mimeData()->urls()) {
         if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
             openRom(url.toLocalFile());
@@ -2729,6 +2928,12 @@ void MainWindow::changeEvent(QEvent* event) {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     releaseInput();
+    if (videoActive_ || videoPending_ || videoExporting_) {
+        event->ignore();
+        closeAfterVideo_ = true;
+        stopVideoCapture();
+        return;
+    }
     if (movieMode_ == 1 || (moviePending_ && moviePendingMode_ == 1)) {
         event->ignore();
         if (!closeAfterMovie_) {

@@ -186,6 +186,10 @@ bool LibretroHost::startLinkedPair(QString& error) {
     { Activation scope(linkPeer_.get());
       for (unsigned channel=0;channel<debugAudioGains_.size();++channel)
           linkPeer_->setDebugAudioGain(channel,debugAudioGains_[channel]); }
+    if (recordingVideoEnabled_ && !setRecordingVideoEnabled(true)) {
+        error=Localization::text(QStringLiteral("Не удалось подготовить исходные кадры для записи видео."));
+        stopLinkedPair();return false;
+    }
     linkPair_->connect();applyControllerPorts(true);refreshRecordingIdentity();return true;
 }
 void LibretroHost::runLinkedFrame(bool video,bool audio) {linkPair_->run(video,audio);}

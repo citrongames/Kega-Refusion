@@ -99,7 +99,7 @@ def main() -> None:
     root = args.root.resolve()
     build = root / "build/linux"
     app = build / "bin/KegaRefusion"
-    core = build / "bin/cores/genesis_plus_gx_libretro.so"
+    core = build / "core/genesis_plus_gx_libretro.so"
     plugin_dir = Path(subprocess.run(["qtpaths6", "--plugin-dir"], check=True,
                                      capture_output=True, text=True).stdout.strip())
     stage = build / "package-linux" / "KegaRefusion-linux-x86_64"

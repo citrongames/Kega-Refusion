@@ -279,3 +279,15 @@ The overlay now contains only one-decimal numbers: emulation `59.9`, game estima
 - Linux and Windows application builds passed. Invitation fields use password echo mode in both lobby and join dialog; copy buttons still read original invitation data. No Windows desktop automation was used.
 - Legacy testbuild cleanup was performed only after confirming no KegaRefusion process was running: 38 old session directories and 3 old download directories were removed; one saved state was copied into ordinary storage and SHA-256 verified before deletion.
 - Published Windows EXE SHA-256: `9c6f79d06c3bcfe3b882ec87b3025ecd62ccaef066ce949ad3db4a4bab71eb56`. Application, both core modules and language files were matched against build sources on both platforms.
+
+
+## 0.21.0 — native video capture/export — 2026-11-03
+
+- `video_recording_tests` passed on Linux: PNG decode matches every RGB byte, AAC has actual generated sound, Unicode filenames work, and existing outputs are preserved. A real-core original ROM records90 PAL input frames; exported pixels across native resolution parts exactly match unfiltered playback despite Blargg being enabled. Regional cadence, background export, live paused stepping with audio, final pause and cancellation were checked.
+- `video_ui_tests` passed using offscreen Qt and an original ROM: separate input/video menus, valid action availability, no spurious protected-hardware notice at recording start, real forbidden changes still warn, and clearing the snapshot restores local controls.
+- Existing focused `core_integration_tests --video-geometry` and `core32x_video_integration_tests` passed with new raw-capture assertions, including native pixels before Blargg and 32X combined output. User BIOS files were read into isolated test directories, never committed.
+- Direct read-only probing of the existing Windows FFmpeg DLL confirmed PNG/AAC encoder availability. Windows and Linux application/core builds passed. Windows interactive validation remains with the user; no desktop control was used.
+- An initial fixture comparison covered only the first MOV part. The fixture changes192→224 raster height immediately after power-on; comparison was corrected to concatenate all parts, then exact pixels passed. No core pixel workaround was introduced.
+- MOV track timestamps use60000 ticks/second to avoid QuickTime's high-timescale warning while retaining exact regional timing. AAC priming is compensated; a decoder may expose up to one terminal AAC block of padding. Editor-specific import is not claimed tested; codec support is documented for DaVinci Resolve.
+
+- Final archive hash verification caught a stale Linux launch-tree core copy. The packager now takes both core modules from the canonical core build directory; the launch-tree copies were refreshed before publishing.

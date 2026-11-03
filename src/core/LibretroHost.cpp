@@ -182,6 +182,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->debug_gain = reinterpret_cast<decltype(api_->debug_gain)>(library_.resolve("retro_kegarefusion_debug_gain"));
     api_->debug_capabilities = reinterpret_cast<decltype(api_->debug_capabilities)>(library_.resolve("retro_kegarefusion_debug_capabilities"));
     api_->native_video_size = reinterpret_cast<decltype(api_->native_video_size)>(library_.resolve("retro_kegarefusion_native_video_size"));
+    api_->recording_video = reinterpret_cast<decltype(api_->recording_video)>(library_.resolve("retro_kegarefusion_recording_video"));
+    api_->recording_frame = reinterpret_cast<decltype(api_->recording_frame)>(library_.resolve("retro_kegarefusion_recording_frame"));
     api_->get_cd_header = reinterpret_cast<decltype(api_->get_cd_header)>(library_.resolve("retro_kegarefusion_cd_header"));
     api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
     api_->cheat_set = reinterpret_cast<decltype(api_->cheat_set)>(library_.resolve("retro_cheat_set"));
@@ -1152,6 +1154,61 @@ double LibretroHost::aspectRatio() const {
     return av_.geometry.base_height ? double(av_.geometry.base_width) / av_.geometry.base_height : 4.0 / 3.0;
 }
 QSize LibretroHost::nativeVideoSize() const { return VideoFrameGeometry::nativeSize(frame()); }
+bool LibretroHost::setRecordingVideoEnabled(bool enabled) {
+    if (enabled && !loaded_) return false;
+    if (initialized_ && api_->recording_video && api_->recording_frame) {
+        if (!api_->recording_video(enabled)) return false;
+    } else if (enabled) {
+        for (const char* key : {"genesis_plus_gx_blargg_ntsc_filter", "genesis_plus_gx_lcd_filter",
+                                "genesis_plus_gx_gun_cursor"}) {
+            const auto option = variables_.find(key);
+            if (option != variables_.end() && option->second != "disabled") return false;
+        }
+    }
+    if (linkPeer_) {
+        Activation scope(linkPeer_.get());
+        if (!linkPeer_->setRecordingVideoEnabled(enabled)) {
+            if (enabled && !recordingVideoEnabled_ && api_->recording_video)
+                api_->recording_video(false);
+            return false;
+        }
+    }
+    recordingVideoEnabled_ = enabled;
+    return true;
+}
+QImage LibretroHost::recordingFrame() const {
+    const auto* h = linkPeer_ && linkPresentationRole_ == 2 ? linkPeer_.get() : this;
+    if (!h->loaded_ || !h->recordingVideoEnabled_) return {};
+    if (!h->api_->recording_video || !h->api_->recording_frame) {
+        // Older binaries can provide exact native pixels only with their core
+        // filter disabled. Never reconstruct a raster from filtered samples.
+        for (const char* key : {"genesis_plus_gx_blargg_ntsc_filter", "genesis_plus_gx_lcd_filter",
+                                "genesis_plus_gx_gun_cursor"}) {
+            const auto option = h->variables_.find(key);
+            if (option != h->variables_.end() && option->second != "disabled") return {};
+        }
+        if (h->frame_.size() != VideoFrameGeometry::nativeSize(h->frame_)) return {};
+        return h->frame_;
+    }
+    const void* data = nullptr;
+    unsigned width = 0, height = 0, format = 0;
+    size_t pitch = 0;
+    if (!h->api_->recording_frame(&data,&width,&height,&pitch,&format) || !data ||
+        !width || !height || width > 4096 || height > 4096) return {};
+    QImage::Format imageFormat;
+    size_t bytesPerPixel = 2;
+    switch (format) {
+    case RETRO_PIXEL_FORMAT_RGB565: imageFormat = QImage::Format_RGB16; break;
+    case RETRO_PIXEL_FORMAT_0RGB1555: imageFormat = QImage::Format_RGB555; break;
+    case RETRO_PIXEL_FORMAT_XRGB8888: imageFormat = QImage::Format_RGB32; bytesPerPixel = 4; break;
+    default: return {};
+    }
+    if (pitch < width * bytesPerPixel || pitch > size_t(std::numeric_limits<qsizetype>::max())) return {};
+    const QImage wrapped(static_cast<const uchar*>(data),int(width),int(height),qsizetype(pitch),imageFormat);
+    // convertToFormat owns converted 16-bit pixels. A matching 32-bit format
+    // needs an explicit copy because the core rewrites its buffer next frame.
+    return imageFormat == QImage::Format_RGB32 ? wrapped.copy() : wrapped.convertToFormat(QImage::Format_RGB32);
+}
 QByteArray LibretroHost::netplayDigest() const {
     if (!loaded_) return {};
     QCryptographicHash hash(QCryptographicHash::Sha256);

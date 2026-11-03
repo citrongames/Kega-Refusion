@@ -244,6 +244,21 @@ int main(int argc,char** argv) {
             const QImage image=host.frame();
             require(!image.isNull() && image.width()<=640 && image.height()>=224 && image.height()<=480,
                     QStringLiteral("Fixture produced invalid video."));
+            if(change==Change::None) {
+                const QByteArray beforeCapture=host.serialize();
+                require(host.setRecordingVideoEnabled(true),QStringLiteral("Native 32X capture enable failed."));
+                require(host.serialize()==beforeCapture,QStringLiteral("Native capture changed 32X machine state."));
+                for(const int filter:{1,2,3,4}) {
+                    require(host.setBlarggFilter(filter,error),error);
+                    for(int i=0;i<4;++i)host.runFrame();
+                    const QImage presented=host.frame();
+                    require(presented.width()>image.width(),QStringLiteral("32X diagnostic filter did not expand video."));
+                    require(host.recordingFrame()==image,QStringLiteral("Native 32X capture retained filtered pixels or lost mixed detail."));
+                    require(host.frame()==presented,QStringLiteral("Reading native 32X capture changed presentation."));
+                }
+                require(host.setRecordingVideoEnabled(false),QStringLiteral("Native 32X capture stop failed."));
+                require(host.setBlarggFilter(0,error),error);host.runFrame();
+            }
             QJsonObject result{{"case",name},{"frames",framesPerCase},{"width",image.width()},{"height",image.height()},
                                {"video_sha256_rgba",QString::fromLatin1(videoHash(image))}};
             if(!output.isEmpty()) {

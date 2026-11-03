@@ -1470,6 +1470,16 @@ void testNativeVideoGeometry(const QString& corePath) {
         const int expectedWidth = name.endsWith(".gg") ? 160 : name.startsWith("wide") ? 320 : 256;
         require(native.width() == expectedWidth,"unexpected native diagnostic raster width");
         require(host.nativeVideoSize() == native,"unfiltered native geometry incorrect");
+        const QImage original = host.frame();
+        const QByteArray stateBeforeCapture = host.serialize();
+        const QByteArray compatibility = host.movieCoreIdentity();
+        require(host.recordingFrame().isNull(),"disabled native capture returned a frame");
+        require(host.setRecordingVideoEnabled(true),"native video capture enable failed");
+        require(host.serialize() == stateBeforeCapture && host.movieCoreIdentity() == compatibility,
+                "enabling native capture changed machine state or recording compatibility");
+        host.runFrame();
+        const QImage captured = host.recordingFrame();
+        require(captured == original,"native capture changed unfiltered pixels");
         for (int filter : {1,2,3,4}) {
             require(host.setBlarggFilter(filter,error),"geometry Blargg toggle failed");
             for (int i = 0; i < 3; ++i) host.runFrame();
@@ -1478,6 +1488,12 @@ void testNativeVideoGeometry(const QString& corePath) {
             require(host.nativeVideoSize() == native && VideoFrameGeometry::nativeSize(host.frame()) == native,
                     "Blargg metadata lost true native console geometry");
             require(std::abs(host.aspectRatio()-consoleAspect)<1e-6,"Blargg changed Console aspect ratio");
+            const QImage presented = host.frame();
+            const QByteArray beforeRead = host.serialize();
+            require(host.recordingFrame() == original,"native capture retained Blargg pixels or lost native detail");
+            require(host.frame() == presented && host.serialize() == beforeRead,
+                    "reading native capture changed presentation or machine state");
+            require(captured == original,"next frame overwrote an owned recording image");
             history.clear();
             require(history.capture(host.captureRewindState(),host.frame(),host.aspectRatio()),"filtered geometry capture failed");
             host.runFrame();
@@ -1490,6 +1506,11 @@ void testNativeVideoGeometry(const QString& corePath) {
         for (int i = 0; i < 3; ++i) host.runFrame();
         require(host.frame().size() == native && host.nativeVideoSize() == native,
                 "disabling filter retained expanded sample geometry");
+        require(host.hardReset(error),"native capture hard reset failed");
+        for (int i = 0; i < 3; ++i) host.runFrame();
+        require(host.recordingFrame() == original,"hard reset lost enabled native capture");
+        require(host.setRecordingVideoEnabled(false) && host.recordingFrame().isNull(),
+                "native video capture did not stop");
     }
 }
 

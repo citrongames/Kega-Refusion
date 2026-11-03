@@ -20,6 +20,7 @@
 #endif
 int kegarefusion_32x_attached;
 extern uint32_t kega_debug_video_mask;
+extern uint8_t *kega_recording_bitmap;
 /* GPX may redraw the previous row or render the next one early. Keep three
    tagged rows, never a frame-sized copy or a queue of register writes. */
 typedef struct Gpx32xVideoRow {
@@ -509,6 +510,8 @@ static int video_mix(Gpx32xVideoRow *row)
     line.md_transparent=ys;line.md_width=row->md_width;
     if(kega32x_mix_rgb565(mixed+row->border,320,&row->decoded,&line)!=KEGA32X_VIDEO_OK)return 0;
     for(i=0;i<row->border;i++)mixed[i]=mixed[row->border+320+i]=row->palette[0x40];
+    if(kega_recording_bitmap)
+        memcpy(kega_recording_bitmap+(size_t)row->output*bitmap.pitch,mixed,total*sizeof(uint16_t));
     if(config.ntsc) {
         if(!ctx->filter)return 0;
         return kega32x_ntsc565_row(ctx->filter,mixed,total,384,row->palette[0x40],

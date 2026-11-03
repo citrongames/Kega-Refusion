@@ -64,6 +64,9 @@ public:
     void rerecordMovie(const QString& path);
     void takeOverMovie();
     void stopMovie();
+    void startVideoRecording(const QString& path);
+    void exportMovieVideo(const QString& moviePath, const QString& videoPath);
+    void stopVideoRecording();
     void setCheats(const CheatList& cheats);
     void searchCheats(quint64 requestId, int width, int comparison, quint32 value, bool restart);
     void clearCheatSearch();
@@ -132,6 +135,9 @@ signals:
     void achievementNotice(const AchievementNotice& notice);
     void achievementHttpRequest(const AchievementHttpRequest& request);
     void achievementsHardcoreChanged(bool enabled);
+    void videoRecordingChanged(bool active, bool exporting, const QString& path);
+    void videoExportProgress(quint64 done, quint64 total);
+    void videoRecordingFinished(const QString& path, const QString& error);
     void movieCompatibilityWarning(const QString& message);
     void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length, double fps);
     void controllerTopologyChanged(int adapter, unsigned playerCount);
@@ -162,7 +168,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop};
     struct Command {
         Type type;
         QString path;

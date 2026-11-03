@@ -133,6 +133,10 @@ public:
     double aspectRatio() const;
     QSize nativeVideoSize() const;
     const QImage& frame() const;
+    // Capture pixels before core output filters. Enable before the first recorded
+    // runFrame; the returned image owns its pixels and follows the presented peer.
+    bool setRecordingVideoEnabled(bool enabled);
+    QImage recordingFrame() const;
     const QByteArray& audio() const;
     QString gamePath() const { return gamePath_; }
     QString contentName() const { return contentName_; }
@@ -250,6 +254,7 @@ private:
     QImage frame_;
     QByteArray audio_;
     bool videoEnabled_ = true, audioEnabled_ = true;
+    bool recordingVideoEnabled_ = false;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;
 };
