@@ -1,0 +1,66 @@
+UMKT H23 +TRACKS compatibility — 2026-11-04
+
+Problem and implementation
+--------------------------
+The 13 MiB +TRACKS image embeds PCM samples; it does not need external music
+files. Its patched Z80 driver reads sample data starting at A80000. The normal
+Mega Drive cartridge decoding ends below A00000, so these reads previously
+reached zbank_lockup_r and returned FF instead of samples. In the reproduced
+failure, the 68000 then remained at 3D760A waiting for the Z80 acknowledgment
+at A01B21 when starting a game.
+
+The compatibility profile requires all of:
+- exact size D00000 (13 MiB);
+- product GM T-097146-00;
+- canonical byte-order CRC32 FBD30D03 over driver bytes [7F0000,7F1800).
+It ignores filenames and the mutable header checksum. The detector reads only
+6 KiB once at cartridge initialization, uses a 256-byte stack buffer, and
+allocates no persistent memory.
+
+Only this profile's banked Z80 reads in A00000-DFFFFF use the linear ROM.
+Reads beyond the image return FF; missing data is not invented. The 68000
+memory map, local Z80 VDP access, bank writes and E00000-FFFFFF decoding keep
+their normal behavior. No ROM bytes or achievement hashes are rewritten.
+The immutable profile survives resets and states and clears on unload/new ROM.
+Native state layout is unchanged. Only matching ROMs get the umkt-tracks-v1
+recording/network compatibility suffix because their execution has changed.
+
+Verification (Linux real core; Windows gameplay left to the user)
+----------------------------------------------------------------
+10 MiB fixed, control
+  SHA256 b257f8348a284c6eabc8d5753d8bf53e7d076ae5d835456eb2b2f0fea421040a
+  1800 frames; 18 distinct sampled video frames.
+13 MiB +TRACKS_fixed
+  SHA256 58fd8fade53d89c3ff6ce5aa73b9a2ced8515643e85de85ce7d2e2a170bb9e0d
+  7200 frames; 146 distinct sampled video frames.
+13 MiB +TRACKS
+  SHA256 a189ab9a219e8f816a2c5e8406ffafadb48ad664bf530374b5170654402855b4
+  7200 frames; 146 distinct sampled video frames.
+
+The ordinary 10 MiB ROM's 1800-frame video sequence, complete PCM output and
+CPU checkpoints are byte-for-byte identical before/after this patch.
+Both 13 MiB files differ only at header bytes 18E-18F. With the same input
+schedule they produce identical complete audio, video sequence and CPU
+checkpoints through 7200 frames. Visual inspection confirms an active Kano/Jax
+fight at frame 7200. The old 3600-frame run stayed in the Z80 acknowledgment
+wait from frame 2400 onward; the corrected run reaches the ladder screen and
+continues into combat. Intro PCM starts at frame 921 instead of invalid reads.
+This is intro/selection/first-fight coverage, not a complete playthrough or an
+audit of every embedded track. Some driver entries point beyond the ROM end;
+those remain bounded FF reads rather than accessing unrelated device registers.
+
+Reproduction input schedule (zero-based frame:duration:libretro mask):
+1800:12:8 2000:12:8 2200:12:8 2400:12:256 2600:12:8 3800:12:256
+4300:12:8 4800:120:128 5000:30:256 5400:120:64 5600:30:1
+6200:120:128 6400:30:2
+
+Generated original-ROM regression:
+python3 tests/umkt_tracks_tests.py --core build/linux/core/genesis_plus_gx_libretro.so
+Passed: size-only rejection; lower/upper sample boundaries; unchanged 68000
+mapping; local VDP reads; deterministic continuation with native+audio state;
+soft/hard reset; profile cleared when loading the next ordinary ROM.
+The fixture explicitly injects the private ELF flag to exercise the bus without
+copying game code. Positive fingerprint recognition is covered by the supplied
+ROM runs above. No game/BIOS content is stored in the repository.
+
+Linux and Windows optimized core builds and Windows application build passed.

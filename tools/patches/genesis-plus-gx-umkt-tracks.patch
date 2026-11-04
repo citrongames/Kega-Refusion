@@ -1,0 +1,94 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -616,9 +616,33 @@
+   md_cart_aq93c_map();
+ }
+ 
++/* The H23 +TRACKS sound driver expects a flat 13 MiB ROM on its Z80
++ * sample bus, beyond the normal cartridge area. This is an emulator-specific
++ * format, not general Mega Drive hardware. Identify executable code rather
++ * than a mutable filename/header checksum. */
++int md_cart_umkt_tracks_active;
++static int md_cart_umkt_tracks_detect(void)
++{
++  static const char product[] = "GM T-097146-00";
++  uint8 block[256];
++  uint32 crc = 0;
++  unsigned offset, i;
++  if (cart.romsize != 0xd00000) return 0;
++  for (i = 0; i < sizeof(product) - 1; i++)
++    if (READ_BYTE(cart.rom, 0x180 + i) != (uint8)product[i]) return 0;
++  for (offset = 0x7f0000; offset < 0x7f1800; offset += sizeof(block))
++  {
++    for (i = 0; i < sizeof(block); i++) block[i] = READ_BYTE(cart.rom, offset + i);
++    crc = crc32(crc, block, sizeof(block));
++  }
++  return crc == 0xfbd30d03;
++}
++
+ void md_cart_init(void)
+ {
+   int i;
++
++  md_cart_umkt_tracks_active = md_cart_umkt_tracks_detect();
+ 
+   /***************************************************************************************************************
+                 CARTRIDGE ROM MIRRORING                                                                                   
+--- a/core/cart_hw/md_cart.h
++++ b/core/cart_hw/md_cart.h
+@@ -120,6 +120,7 @@
+ extern int md_cart_sdk99_compat_active;
+ extern int md_cart_poker_compat_active;
+ extern int md_cart_barver_compat_active;
++extern int md_cart_umkt_tracks_active;
+ 
+ /* Function prototypes */
+ extern int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum);
+--- a/core/memz80.c
++++ b/core/memz80.c
+@@ -152,6 +152,11 @@
+ 
+       /* read from 68k banked area */
+       address = zbank | (address & 0x7FFF);
++      /* Only the identified UMKT PCM driver gets this extended sample bus.
++       * Keep 68k I/O, local Z80 VDP access and E0-FF RAM decoding unchanged.
++       * The immutable ROM profile survives resets and native state restores. */
++      if (md_cart_umkt_tracks_active && address >= 0xa00000 && address < 0xe00000)
++        return address < cart.romsize ? READ_BYTE(cart.rom, address) : 0xff;
+       if (zbank_memory_map[address >> 16].read)
+       {
+         return (*zbank_memory_map[address >> 16].read)(address);
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3801,6 +3801,7 @@
+    if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v1";
+    return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
+ }
+ 
+@@ -3827,6 +3828,7 @@
+    if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v1";
+    return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+           "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
+ #else
+@@ -3984,6 +3986,7 @@
+    md_cart_sdk99_compat_active = 0;
+    md_cart_poker_compat_active = 0;
+    md_cart_barver_compat_active = 0;
++   md_cart_umkt_tracks_active = 0;
+    content_path[0] = '\0';
+    content_ext[0]  = '\0';
+ 
+@@ -4316,6 +4319,7 @@
+    md_cart_sdk99_compat_active = 0;
+    md_cart_poker_compat_active = 0;
+    md_cart_barver_compat_active = 0;
++   md_cart_umkt_tracks_active = 0;
+    system_hw = 0;
+ }
+ 
