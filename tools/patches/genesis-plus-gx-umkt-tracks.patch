@@ -1,11 +1,72 @@
+--- a/core/genesis.c
++++ b/core/genesis.c
+@@ -343,6 +343,8 @@
+       }
+     }
+ 
++    md_cart_umkt_tracks_map();
++
+     /* reset MAIN-CPU */
+     m68k_pulse_reset();
+   }
+@@ -435,6 +437,7 @@
+       zbank_memory_map[i].write   = zbank_lockup_w;
+     }
+   }
++  md_cart_umkt_tracks_map();
+ }
+ 
+ void gen_bankswitch_w(unsigned int data)
+@@ -576,6 +579,7 @@
+ 
+     /* update Z80 bus status */
+     zstate &= 2;
++    if (md_cart_umkt_tracks_active) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
+   }
+ }
+ 
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3801,6 +3801,7 @@
+    if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v3";
+    return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
+ }
+ 
+@@ -3827,6 +3828,7 @@
+    if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v3";
+    return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+           "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
+ #else
+@@ -3984,6 +3986,7 @@
+    md_cart_sdk99_compat_active = 0;
+    md_cart_poker_compat_active = 0;
+    md_cart_barver_compat_active = 0;
++   md_cart_umkt_tracks_active = 0;
+    content_path[0] = '\0';
+    content_ext[0]  = '\0';
+ 
+@@ -4316,6 +4319,7 @@
+    md_cart_sdk99_compat_active = 0;
+    md_cart_poker_compat_active = 0;
+    md_cart_barver_compat_active = 0;
++   md_cart_umkt_tracks_active = 0;
+    system_hw = 0;
+ }
+ 
 --- a/core/cart_hw/md_cart.c
 +++ b/core/cart_hw/md_cart.c
-@@ -616,9 +616,33 @@
+@@ -616,9 +616,52 @@
    md_cart_aq93c_map();
  }
  
-+/* The H23 +TRACKS sound driver expects a flat 13 MiB ROM on its Z80
-+ * sample bus, beyond the normal cartridge area. This is an emulator-specific
++/* The H23 +TRACKS sound driver expects Gens' packed 13 MiB
++ * cartridge map, beyond the normal cartridge area. This is an emulator-specific
 + * format, not general Mega Drive hardware. Identify executable code rather
 + * than a mutable filename/header checksum. */
 +int md_cart_umkt_tracks_active;
@@ -26,6 +87,25 @@
 +  return crc == 0xfbd30d03;
 +}
 +
++/* Gens 13 MiB format packs samples around the two 512 KiB I/O windows:
++ * A8-BF -> file A0-B7, C8-DF -> file B8-CF. Keep A0-A7 and C0-C7 hardware. */
++void md_cart_umkt_tracks_map(void)
++{
++  unsigned bank;
++  if (!md_cart_umkt_tracks_active) return;
++  for (bank = 0xa8; bank < 0xe0; bank++)
++  {
++    if (bank >= 0xc0 && bank < 0xc8) continue;
++    m68k.memory_map[bank].base = cart.rom + ((bank - (bank < 0xc0 ? 8 : 16)) << 16);
++    m68k.memory_map[bank].read8 = NULL;
++    m68k.memory_map[bank].read16 = NULL;
++    m68k.memory_map[bank].write8 = m68k_unused_8_w;
++    m68k.memory_map[bank].write16 = m68k_unused_16_w;
++    zbank_memory_map[bank].read = NULL;
++    zbank_memory_map[bank].write = zbank_unused_w;
++  }
++}
++
  void md_cart_init(void)
  {
    int i;
@@ -34,101 +114,69 @@
  
    /***************************************************************************************************************
                  CARTRIDGE ROM MIRRORING                                                                                   
+@@ -1404,12 +1447,14 @@
+     /* initialize PCM and CD-DA audio */
+     audio_set_rate(snd.sample_rate, snd.frame_rate);
+   }
++  md_cart_umkt_tracks_map();
+ }
+ 
+ /* hardware that need to be reseted on power on */
+ void md_cart_reset(int hard_reset)
+ {
+   int i;
++  if (md_cart_umkt_tracks_active) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
+   if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
+   md_cart_sonic6_reset();
+ 
+@@ -1640,6 +1685,7 @@
+     bufferptr += punchium_context_load(&state[bufferptr]);
+   }
+ 
++  md_cart_umkt_tracks_map();
+   return bufferptr;
+ }
+ 
 --- a/core/cart_hw/md_cart.h
 +++ b/core/cart_hw/md_cart.h
-@@ -120,6 +120,7 @@
+@@ -120,6 +120,10 @@
  extern int md_cart_sdk99_compat_active;
  extern int md_cart_poker_compat_active;
  extern int md_cart_barver_compat_active;
++/* Native cart register slot is unused by this fixed map and already saved. */
++#define MD_CART_UMKT_DRIVER_PENDING_REG 3
 +extern int md_cart_umkt_tracks_active;
++extern void md_cart_umkt_tracks_map(void);
  
  /* Function prototypes */
  extern int md_cart_preserve_header_checksum(const uint8 *rom, size_t size, unsigned calculated_checksum);
---- a/core/memz80.c
-+++ b/core/memz80.c
-@@ -152,6 +152,11 @@
- 
-       /* read from 68k banked area */
-       address = zbank | (address & 0x7FFF);
-+      /* Only the identified UMKT PCM driver gets this extended sample bus.
-+       * Keep 68k I/O, local Z80 VDP access and E0-FF RAM decoding unchanged.
-+       * The immutable ROM profile survives resets and native state restores. */
-+      if (md_cart_umkt_tracks_active && address >= 0xa00000 && address < 0xe00000)
-+        return address < cart.romsize ? READ_BYTE(cart.rom, address) : 0xff;
-       if (zbank_memory_map[address >> 16].read)
-       {
-         return (*zbank_memory_map[address >> 16].read)(address);
-@@ -214,6 +219,10 @@
- 
-       /* write to 68k banked area */
-       address = zbank | (address & 0x7FFF);
-+      /* The extended PCM sample bus is read-only, including during driver
-+       * replacement. A write to ROM must not halt the sound processor. */
-+      if (md_cart_umkt_tracks_active && address >= 0xa00000 && address < 0xe00000)
-+        return;
-       if (zbank_memory_map[address >> 16].write)
-       {
-         (*zbank_memory_map[address >> 16].write)(address, data);
---- a/libretro/libretro.c
-+++ b/libretro/libretro.c
-@@ -3801,6 +3801,7 @@
-    if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
-    if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
-    if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
-+   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v2";
-    return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
- }
- 
-@@ -3827,6 +3828,7 @@
-    if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
-    if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
-    if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
-+   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v2";
-    return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
-           "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
- #else
-@@ -3984,6 +3986,7 @@
-    md_cart_sdk99_compat_active = 0;
-    md_cart_poker_compat_active = 0;
-    md_cart_barver_compat_active = 0;
-+   md_cart_umkt_tracks_active = 0;
-    content_path[0] = '\0';
-    content_ext[0]  = '\0';
- 
-@@ -4316,6 +4319,7 @@
-    md_cart_sdk99_compat_active = 0;
-    md_cart_poker_compat_active = 0;
-    md_cart_barver_compat_active = 0;
-+   md_cart_umkt_tracks_active = 0;
-    system_hw = 0;
- }
- 
---- a/core/membnk.c
-+++ b/core/membnk.c
-@@ -62,12 +62,16 @@
- #endif
- }
- 
-+/* The emulator-targeted UMKT PCM loader can briefly execute the replaced
-+ * Z80 driver before its reset. It expects invalid sound-bus cycles to complete
-+ * with open bus/no write, not latch RESET forever. Keep this tolerance local
-+ * to the identified ROM and Z80; valid I/O and the 68000 bus are unchanged. */
- unsigned int zbank_lockup_r(unsigned int address)
+--- a/core/mem68k.c
++++ b/core/mem68k.c
+@@ -212,6 +212,11 @@
+       
+     default: /* ZRAM */
+     {
++      /* UMKT replaces the program while BUSREQ is held, then resets it.
++       * An intervening IRQ may release BUSREQ before that reset. Defer the
++       * new program rather than execute it with the previous driver's PC. */
++      if (md_cart_umkt_tracks_active && !(address & 0x1fff))
++        cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 1;
+       zram[address & 0x1FFF] = data;
+       return;
+     }
+--- a/core/z80/z80.c
++++ b/core/z80/z80.c
+@@ -3419,6 +3419,13 @@
+  ****************************************************************************/
+ void z80_run(unsigned int cycles)
  {
- #ifdef LOGERROR
-   error("Z80 bank lockup read %06X (%x)\n", address, Z80.pc.d);
- #endif
--  if (!config.force_dtack)
-+  if (!config.force_dtack && !md_cart_umkt_tracks_active)
++  if (md_cart_umkt_tracks_active && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG])
++  {
++    /* Keep the scheduler advancing and BUSACK functional during handoff. */
++    if (Z80.cycles < cycles) Z80.cycles = ((cycles + 14) / 15) * 15;
++    return;
++  }
++
+   while( Z80.cycles < cycles )
    {
-     Z80.cycles = 0xFFFFFFFF;
-     zstate = 0;
-@@ -80,7 +84,7 @@
- #ifdef LOGERROR
-   error("Z80 bank lockup write %06X = %02X (%x)\n", address, data, Z80.pc.d);
- #endif
--  if (!config.force_dtack)
-+  if (!config.force_dtack && !md_cart_umkt_tracks_active)
-   {
-     Z80.cycles = 0xFFFFFFFF;
-     zstate = 0;
+     /* check for IRQs before each instruction */

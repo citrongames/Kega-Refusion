@@ -1,105 +1,88 @@
-UMKT H23 +TRACKS compatibility — 2026-11-04
+UMKT H23 +TRACKS — corrected compatibility, 2026-11-04
 
-Problem and implementation
---------------------------
-The 13 MiB +TRACKS image embeds PCM samples; it does not need external music
-files. Its patched Z80 driver reads sample data starting at A80000. The normal
-Mega Drive cartridge decoding ends below A00000, so these reads previously
-reached zbank_lockup_r and returned FF instead of samples. In the reproduced
-failure, the 68000 then remained at 3D760A waiting for the Z80 acknowledgment
-at A01B21 when starting a game.
+Scope and identification
+------------------------
+This profile is for the emulator-targeted 13 MiB +TRACKS version, identified by
+size D00000, product GM T-097146-00, and canonical CRC32 FBD30D03 of executable
+bytes [7F0000,7F1800). Names and header checksum do not participate. Detection
+reads 6 KiB once, with a 256-byte stack buffer. ROM files are never modified.
 
-The compatibility profile requires all of:
-- exact size D00000 (13 MiB);
-- product GM T-097146-00;
-- canonical byte-order CRC32 FBD30D03 over driver bytes [7F0000,7F1800).
-It ignores filenames and the mutable header checksum. The detector reads only
-6 KiB once at cartridge initialization, uses a 256-byte stack buffer, and
-allocates no persistent memory.
+Supplied images:
++TRACKS_fixed SHA256 58fd8fade53d89c3ff6ce5aa73b9a2ced8515643e85de85ce7d2e2a170bb9e0d
++TRACKS       SHA256 a189ab9a219e8f816a2c5e8406ffafadb48ad664bf530374b5170654402855b4
+These differ only in header checksum bytes 18E-18F. The 10 MiB edition does not
+receive this profile (SHA256 b257f8348a284c6eabc8d5753d8bf53e7d076ae5d835456eb2b2f0fea421040a).
 
-Only this profile's banked Z80 reads in A00000-DFFFFF use the linear ROM.
-Reads beyond the image return FF; missing data is not invented. The 68000
-memory map, local Z80 VDP access, E00000-FFFFFF decoding keep
-their normal behavior. Extended sample-bus writes are ignored as ROM writes.
-Invalid Z80-only bus cycles complete with open bus/ignored write for this
-profile instead of permanently halting the sound CPU; valid I/O is unchanged. No ROM bytes or achievement hashes are rewritten.
-The immutable profile survives resets and states and clears on unload/new ROM.
-Native state layout is unchanged. Only matching ROMs get the umkt-tracks-v2
-recording/network compatibility suffix because their execution has changed.
+Correct memory map
+------------------
+The appended music is raw unsigned 8-bit PCM packed around hardware windows:
+  CPU A80000-BFFFFF -> file A00000-B7FFFF
+  CPU C80000-DFFFFF -> file B80000-CFFFFF
+A00000-A7FFFF and C00000-C7FFFF keep ZRAM/control/VDP decoding. Both processors
+use the same mapped, read-only ROM pages. All embedded track pointers fit the
+13 MiB image with this mapping; they were not evidence of missing ROM data.
+The map is restored after power/reset, TMSS changes and native state load.
 
-Initial verification (incomplete: observer forced DTACK; see follow-up)
-----------------------------------------------------------------
-10 MiB fixed, control
-  SHA256 b257f8348a284c6eabc8d5753d8bf53e7d076ae5d835456eb2b2f0fea421040a
-  1800 frames; 18 distinct sampled video frames.
-13 MiB +TRACKS_fixed
-  SHA256 58fd8fade53d89c3ff6ce5aa73b9a2ced8515643e85de85ce7d2e2a170bb9e0d
-  7200 frames; 146 distinct sampled video frames.
-13 MiB +TRACKS
-  SHA256 a189ab9a219e8f816a2c5e8406ffafadb48ad664bf530374b5170654402855b4
-  7200 frames; 146 distinct sampled video frames.
+Reference: static disassembly of the supplied-era Gens 13 MiB modification,
+https://dlf.emu-land.net/megadrive/GensRR_11_15MHz_CPU_13Mb_ROM_Kaillera.zip
+Archive SHA256 3b5f09cbc7173ac324aa725b4c5576154fe8ec3bd69cd3254bd42a4684e6e593.
+The byte-read dispatch table at VA778640 maps A8/B0/B8 to functions
+5049A0/5049C0/5049E0 and C8/D0/D8 to 504A00/504A20/504A40, with the packed
+file offsets above. A0 remains control and C0 remains VDP. The binary was
+inspected, not executed. No third-party binary or ROM code is committed.
 
-The ordinary 10 MiB ROM's 1800-frame video sequence, complete PCM output and
-CPU checkpoints are byte-for-byte identical before/after this patch.
-Both 13 MiB files differ only at header bytes 18E-18F. With the same input
-schedule they produce identical complete audio, video sequence and CPU
-checkpoints through 7200 frames. Visual inspection confirms an active Kano/Jax
-fight at frame 7200. The old 3600-frame run stayed in the Z80 acknowledgment
-wait from frame 2400 onward; the corrected run reaches the ladder screen and
-continues into combat. Intro PCM starts at frame 921 instead of invalid reads.
-This is intro/selection/first-fight coverage, not a complete playthrough or an
-audit of every embedded track. Some driver entries point beyond the ROM end;
-those remain bounded FF reads rather than accessing unrelated device registers.
+Sound-driver replacement race
+-----------------------------
+A bounded native trace caught the original-driver upload at frame 1737:
+68K PC3D7680 writes F3 to ZRAM[0] while Z80 PC is still0039 and BUSREQ is held.
+At frame1739 an IRQ releases BUSREQ at PC3D7604 before the intended reset at
+PC3D76CC. Z80 executes the newly replaced code from the old PC, corrupting RAM.
+The eventual reset starts an already damaged driver. Timing changes determine
+whether this produces a hang, a held tone or noise; suppressing illegal bus
+accesses cannot repair the corrupted program.
 
-Reproduction input schedule (zero-based frame:duration:libretro mask):
-1800:12:8 2000:12:8 2200:12:8 2400:12:256 2600:12:8 3800:12:256
-4300:12:8 4800:120:128 5000:30:256 5400:120:64 5600:30:1
-6200:120:128 6400:30:2
+For this identified ROM, a 68K write to the ZRAM reset vector marks a pending
+handoff. Z80 time and BUSACK keep advancing, but instructions wait until RESET
+is asserted. The flag clears after reset synchronization, never before it.
+It uses otherwise-free cart.hw.regs[3], already serialized by native states;
+soft/hard reset clears it. No new buffers or state trailer are needed. The
+recording/network compatibility suffix is umkt-tracks-v3 because mapping and
+execution changed. Other ROMs keep their existing compatibility IDs.
+
+The previous broad read override and tolerant illegal-bus workaround are gone.
+Invalid accesses still halt normally; valid hardware decoding is preserved.
+
+Verification and limits
+-----------------------
+Both supplied variants ran 9000 frames with force_dtack=disabled. The fixed
+ROM run used no observer hooks and crossed intro/menu/selection into combat.
+The original-ROM run used earlier Start presses plus a forwarding FM write
+observer. It also crossed these transitions; Z80 stayed running at all sampled
+checkpoints. These are bounded transition/first-fight checks, not a complete
+playthrough or proof of every controller timing and ending.
+
+PCM proof: 518600 DAC bytes from the custom PCM program matched the packed
+source bytes exactly, with 0 mismatches. Observed track starts:
+  frame923: CPU A80000 -> file A00000
+  frame1535: CPU C80000 -> file B80000
+  frame2571: CPU B90000 -> file B10000
+PCM-stream SHA256 aae56000cbd819f2fd5df6d36858e909ef0e917405d0d46db01d4201d17b406f.
+This validates the music data itself rather than merely counting nonzero audio.
 
 Generated original-ROM regression:
 python3 tests/umkt_tracks_tests.py --core build/linux/core/genesis_plus_gx_libretro.so
-Passed: size-only rejection; lower/upper sample boundaries; unchanged 68000
-mapping; local VDP reads; deterministic continuation with native+audio state;
-soft/hard reset; profile cleared when loading the next ordinary ROM.
-The fixture explicitly injects the private ELF flag to exercise the bus without
-copying game code. Positive fingerprint recognition is covered by the supplied
-ROM runs above. No game/BIOS content is stored in the repository.
+Passed: size-only rejection; all packed map boundaries and both CPU views;
+read-only ROM; preserved hardware windows; state continuation; IRQ release and
+reacquisition of BUSREQ during handoff; save/load while handoff is pending;
+soft/hard reset; TMSS remapping; strict illegal bus; unload isolation.
+The generated fixture injects the local profile flag to avoid bundling game
+code. Positive recognition is covered by the two supplied-image runs.
 
-Linux and Windows optimized core builds and Windows application build passed.
-
-Press Start regression follow-up — 2026-11-04
--------------------------------------------
-The user reported a freeze with a held tone on the START GAME / OPTIONS screen.
-The initial observer forced genesis_plus_gx_force_dtack=enabled, unlike the
-application's default disabled value. It masked a second fault; the previous
-report did not establish normal-setting compatibility. The supplied screenshot
-and a no-hooks/default-DTACK reproduction confirm the regression.
-
-GDB caught the first failure as zbank_lockup_w(AAAE9F,55). During replacement
-of the PCM player by the original Z80 driver, PC remains 0039 while the opcode
-has become LD (HL),E. HL=AE9F and DE=0155 explain the write exactly. Ignoring
-extended-ROM writes fixes the menu but reveals a later local read at 7F11
-(write-only PSG) during another driver replacement. An illegal Z80 cycle set
-zstate=0; the next 68000 BUSREQ made it 2 and the ROM waited forever for BUSACK
-at 3D763A/3D7642. No BUSACK hardware change is needed.
-
-The profile now treats its extended sample bus as read-only and tolerates
-otherwise-fatal Z80 bus cycles during unsynchronized driver replacement.
-This compatibility behavior is confined to the identified emulator-targeted
-ROM; it does not enable global force-DTACK or change the 68000 bus. No driver
-code is patched and no extra persistent state is introduced. Ordinary ROMs
-retain the original strict invalid-access behavior.
-
-Both supplied +TRACKS variants completed 9000 frames with no observation hooks
-and force_dtack=disabled. The fixed version uses the schedule above; the other
-uses earlier Start presses at frames 1200 and 1500, then 2000 and 2200. Both
-pass START GAME, character/ladder selection and active combat; Z80 remains in
-running state at every checkpoint through frame 9000. Fixed/original runs have
-205/206 distinct sampled video frames. Coverage is these transitions and the
-first fight, not a complete playthrough. Generated regression additionally
-checks ROM writes, invalid local PSG reads, ordinary-ROM strict behavior,
-reset/state continuation and unloading. Linux and Windows core builds pass.
-
-UI follow-up: accepting a supported dropped file raises and activates the main
-window before opening it. Rejected/busy drops do not request activation. This
-uses the normal Qt window request, without timers or OS focus workarounds.
+Correction to earlier reports
+-----------------------------
+977c7b7 wrongly assumed a linear sample map. Its observer also forced DTACK,
+masking the driver-replacement failure. fface47 tolerated illegal Z80 cycles
+and could reach combat, but still allowed corruption and read wrong music.
+The user's subsequent reports invalidated those claims of a complete fix.
+The present change replaces both assumptions with the reference map and the
+traced handoff correction. Original-ROM, BIOS and user-save files are retained.
