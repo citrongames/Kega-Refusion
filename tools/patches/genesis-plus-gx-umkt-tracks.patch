@@ -17,11 +17,27 @@
  }
  
  void gen_bankswitch_w(unsigned int data)
-@@ -576,6 +579,7 @@
+@@ -476,7 +479,10 @@
+  * Select handlers at bus transitions; no compatibility branch per access. */
+ void gen_set_z80_bus_access(int granted)
+ {
+-  if (granted || gen_z80_bus_unlocked)
++  /* Keep an in-progress UMKT upload writable if an IRQ releases BUSREQ.
++   * Z80 instruction execution is already deferred until the loader's reset. */
++  if (granted || gen_z80_bus_unlocked ||
++      (md_cart_umkt_tracks_active && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG]))
+   {
+     m68k.memory_map[0xa0].read8   = z80_read_byte;
+     m68k.memory_map[0xa0].read16  = z80_read_word;
+@@ -576,6 +582,11 @@
  
      /* update Z80 bus status */
      zstate &= 2;
-+    if (md_cart_umkt_tracks_active) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
++    if (md_cart_umkt_tracks_active)
++    {
++      cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
++      gen_set_z80_bus_access(0);
++    }
    }
  }
  
@@ -31,7 +47,7 @@
     if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
     if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
     if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
-+   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v3";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v4";
     return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
  }
  
@@ -39,7 +55,7 @@
     if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
     if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
     if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
-+   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v3";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v4";
     return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
            "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
  #else
@@ -65,7 +81,7 @@
    md_cart_aq93c_map();
  }
  
-+/* The H23 +TRACKS sound driver expects Gens' packed 13 MiB
++/* The H20/H22/H23 +TRACKS sound drivers expect Gens' packed 13 MiB
 + * cartridge map, beyond the normal cartridge area. This is an emulator-specific
 + * format, not general Mega Drive hardware. Identify executable code rather
 + * than a mutable filename/header checksum. */
@@ -84,7 +100,7 @@
 +    for (i = 0; i < sizeof(block); i++) block[i] = READ_BYTE(cart.rom, offset + i);
 +    crc = crc32(crc, block, sizeof(block));
 +  }
-+  return crc == 0xfbd30d03;
++  return (crc == 0xfbd30d03) || (crc == 0x5a6206ae); /* H23 / H20-H22 */
 +}
 +
 +/* Gens 13 MiB format packs samples around the two 512 KiB I/O windows:
@@ -129,11 +145,12 @@
    if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
    md_cart_sonic6_reset();
  
-@@ -1640,6 +1685,7 @@
+@@ -1640,6 +1685,8 @@
      bufferptr += punchium_context_load(&state[bufferptr]);
    }
  
 +  md_cart_umkt_tracks_map();
++  if (md_cart_umkt_tracks_active) gen_set_z80_bus_access(zstate == 3);
    return bufferptr;
  }
  

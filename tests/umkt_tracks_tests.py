@@ -21,6 +21,8 @@ def check(path):
     for _, offset, value in samples:
         rom[offset] = value
     core = Core(path, bytes(rom))
+    core.options["genesis_plus_gx_force_dtack"] = "disabled"
+    core.function("check_variables", None, C.c_bool)(False)
     try:
         active = C.c_int.from_address(core.address("md_cart_umkt_tracks_active"))
         require(active.value == 0, "size alone must not match")
@@ -65,9 +67,13 @@ def check(path):
         z80.cycles = 0
         bus(1, 0)
         z80.regs[0] = 0x80
-        for index, value in enumerate((0xf3, 0x04, 0x18, 0xfd)):  # DI; INC B; JR INC B
-            upload(0xa00000 + index, value)
-        bus(0, 0)
+        upload(0xa00000, 0xf3)  # DI begins the replacement.
+        bus(0, 0)  # IRQ releases BUSREQ in the middle of the upload.
+        mapped_write = C.CFUNCTYPE(None, U, U)(core.cpu.mapping[0xa0 * 5 + 3])
+        for index, value in enumerate((0x04, 0x18, 0xfd), 1):  # INC B; JR INC B
+            mapped_write(0xa00000 + index, value)
+        require(C.string_at(core.address("zram"), 4) == bytes((0xf3, 0x04, 0x18, 0xfd)),
+                "IRQ must not discard the remaining upload")
         run(300)
         require(z80.regs[0] == 0x80 and z80.cycles >= 300, "handoff defers old PC")
         bus(1, 400)
@@ -77,6 +83,8 @@ def check(path):
         pending = core.snapshot()
         def finish_handoff():
             reset(0, z80.cycles + 300)
+            require(core.cpu.mapping[0xa0 * 5 + 3] == core.address("m68k_unused_8_w"),
+                    "reset revokes temporary upload access")
             reset(1, z80.cycles + 600)
             require(z80.regs[0] == 0, "reset starts at new vector")
             run(z80.cycles + 600)
@@ -84,6 +92,8 @@ def check(path):
             return tuple(z80.regs), z80.cycles
         finished = finish_handoff()
         core.restore(pending)
+        require(core.cpu.mapping[0xa0 * 5 + 3] == core.address("z80_write_byte"),
+                "pending upload access restored from state")
         run(z80.cycles + 300)
         require(z80.regs[0] == 0x80, "pending survives saved state")
         core.restore(pending)
@@ -96,6 +106,7 @@ def check(path):
             core.function("gen_tmss_w", None, U, U)(offset, word)
         samples_match()
         # The old global-tolerance workaround is gone, even in this profile.
+        zstate.value = 1
         core.function("zbank_lockup_r", U, U)(0x7f11)
         require(zstate.value == 0, "illegal sound bus remains strict")
     finally:

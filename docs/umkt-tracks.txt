@@ -1,10 +1,10 @@
-UMKT H23 +TRACKS — corrected compatibility, 2026-11-04
+UMKT H20/H22/H23 +TRACKS — corrected compatibility, 2026-11-04
 
 Scope and identification
 ------------------------
 This profile is for the emulator-targeted 13 MiB +TRACKS version, identified by
-size D00000, product GM T-097146-00, and canonical CRC32 FBD30D03 of executable
-bytes [7F0000,7F1800). Names and header checksum do not participate. Detection
+size D00000, product GM T-097146-00, and canonical CRC32 of executable
+bytes [7F0000,7F1800): FBD30D03 for H23 or 5A6206AE for H20/H22. Names and header checksum do not participate. Detection
 reads 6 KiB once, with a 256-byte stack buffer. ROM files are never modified.
 
 Supplied images:
@@ -46,18 +46,18 @@ handoff. Z80 time and BUSACK keep advancing, but instructions wait until RESET
 is asserted. The flag clears after reset synchronization, never before it.
 It uses otherwise-free cart.hw.regs[3], already serialized by native states;
 soft/hard reset clears it. No new buffers or state trailer are needed. The
-recording/network compatibility suffix is umkt-tracks-v3 because mapping and
-execution changed. Other ROMs keep their existing compatibility IDs.
+recording/network compatibility suffix is umkt-tracks-v4 because mapping and
+handoff behavior changed. Other ROMs keep their existing compatibility IDs.
 
 The previous broad read override and tolerant illegal-bus workaround are gone.
 Invalid accesses still halt normally; valid hardware decoding is preserved.
 
 Verification and limits
 -----------------------
-Both supplied variants ran 9000 frames with force_dtack=disabled. The fixed
-ROM run used no observer hooks and crossed intro/menu/selection into combat.
-The original-ROM run used earlier Start presses plus a forwarding FM write
-observer. It also crossed these transitions; Z80 stayed running at all sampled
+The fixed H23 ROM ran 9000 frames with force_dtack=disabled and no observer
+hooks, crossing intro/menu/selection into combat. The original-ROM audio run
+used the helper default DTACK setting, earlier Start presses and a forwarding
+FM write observer; a later H23 control below explicitly disables DTACK. It also crossed these transitions; Z80 stayed running at all sampled
 checkpoints. These are bounded transition/first-fight checks, not a complete
 playthrough or proof of every controller timing and ending.
 
@@ -86,3 +86,34 @@ and could reach combat, but still allowed corruption and read wrong music.
 The user's subsequent reports invalidated those claims of a complete fix.
 The present change replaces both assumptions with the reference map and the
 traced handoff correction. Original-ROM, BIOS and user-save files are retained.
+
+H20/H22 follow-up — 2026-11-04
+-----------------------------
+H20 (4824) and H22 (5015) share exactly the same driver block (CRC5A6206AE),
+which differs from H23; the old detector therefore rejected them. Their 25 PCM
+players and original sound-driver upload routines use the same packed map and
+handoff protocol. Recognition adds this executable fingerprint, not filenames
+or an unrestricted 13 MiB rule. Musical data is checked against each ROM.
+
+H20 SHA256 f6a17366fef3ec8d762677f6b37e2405333e4fd0b4bbbdbb7d1b6dcd99414870
+H22 SHA256 82434a5da73e00a1d27ac7aac09024c90121a0311eba1d96e8702cd847cc4db5
+
+The first H20 run exposed an IRQ in the middle of a PCM upload after combat.
+GDB caught a discarded write to A00021 at PC7F0278, source7F02D2, zstate1.
+Deferring execution alone did not protect remaining 68K writes after the IRQ
+released BUSREQ. While an identified upload is pending, A0 now remains writable
+by the 68K as well. RESET clears that temporary permission after synchronization.
+State load recomputes permission after restoring cart.hw.regs. Hardware access
+outside this brief handoff remains unchanged; invalid bus cycles stay strict.
+
+Final runs explicitly applied force_dtack=disabled before the first frame:
+  H20: 9000 frames, 578285 PCM writes, 0 mismatches; fight and continue screen.
+  H22: 9000 frames, 746104 PCM writes, 0 mismatches; fight and continue screen.
+  H23 control: 9000 frames, 573184 PCM writes, 0 mismatches; combat transitions.
+All five H20 PCM uploads observed immediately before RESET matched their full
+256-byte ROM programs exactly, including the formerly interrupted upload.
+The generated fixture checks a bus release DURING copying, restored upload
+permission from a pending state, revocation on RESET, and strict-bus behavior.
+Its strict-bus assertion now starts with a running Z80 and explicitly disables
+forced DTACK instead of relying on the shared helper's defaults.
+These remain bounded transition checks, not a full playthrough of each revision.
