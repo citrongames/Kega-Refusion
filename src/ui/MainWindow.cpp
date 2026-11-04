@@ -2945,6 +2945,8 @@ void MainWindow::dropEvent(QDropEvent* event) {
     if (loading_ || videoExporting_) { event->ignore(); return; }
     for (const QUrl& url : event->mimeData()->urls()) {
         if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
+            raise();
+            activateWindow();
             openRom(url.toLocalFile());
             event->acceptProposedAction();
             return;

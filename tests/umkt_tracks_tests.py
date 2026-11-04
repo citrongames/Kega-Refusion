@@ -34,6 +34,14 @@ def check(path):
                 require(read(0x8000 | (address & 0x7fff)) == value,
                         f"Z80 sample at {address:06x}")
         samples_match()
+        write = core.function("z80_memory_w", None, U, C.c_ubyte)
+        zstate = U.from_address(core.address("zstate"))
+        for address in (0xa00000, 0xaaae9f, 0xb8ffff, 0xc00004, 0xdfffff):
+            bank.value = address & 0xff8000
+            before = zstate.value
+            write(0x8000 | (address & 0x7fff), 0x55)
+            require(zstate.value == before, "sample ROM write must not halt Z80")
+        samples_match()  # Writes did not modify the samples or touch VDP I/O.
         require(bytes(core.cpu.mapping) == maps, "68000 mappings unchanged")
         # Local Z80 VDP reads still use the real VDP, even when the sample bank
         # points at ROM occupying the same numerical 68000 address.
@@ -42,6 +50,11 @@ def check(path):
         expected = core.function("zbank_read_vdp", U, U)(0x7f04)
         status.value = before
         require(read(0x7f04) == (expected & 255), "local VDP remains hardware")
+        # Driver replacement can also issue an invalid local PSG read. Valid
+        # VDP behavior was checked above; only the illegal cycle is tolerated.
+        before = zstate.value
+        require(read(0x7f11) == 255, "invalid sound-bus read returns open bus")
+        require(zstate.value == before, "invalid sound-bus read must not halt Z80")
         core.frame()
         saved = core.snapshot()
         expected_trace = core.trace(5)
@@ -59,10 +72,13 @@ def check(path):
     try:
         require(C.c_int.from_address(core.address("md_cart_umkt_tracks_active")).value == 0,
                 "next ordinary ROM clears profile")
+        core.function("zbank_lockup_r", U, U)(0x7f11)
+        require(U.from_address(core.address("zstate")).value == 0,
+                "ordinary ROM retains strict illegal-bus behavior")
     finally:
         core.close()
-    return {"status": "passed", "checks": ["size-only rejection", "sample boundaries",
-            "68000 mapping unchanged", "local VDP", "state continuation",
+    return {"status": "passed", "checks": ["size-only rejection", "sample boundaries", "read-only sample writes",
+            "68000 mapping unchanged", "local VDP", "invalid sound bus", "ordinary strict bus", "state continuation",
             "soft/hard reset", "unload isolation"]}
 
 

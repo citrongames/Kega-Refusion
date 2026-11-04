@@ -19,13 +19,15 @@ allocates no persistent memory.
 
 Only this profile's banked Z80 reads in A00000-DFFFFF use the linear ROM.
 Reads beyond the image return FF; missing data is not invented. The 68000
-memory map, local Z80 VDP access, bank writes and E00000-FFFFFF decoding keep
-their normal behavior. No ROM bytes or achievement hashes are rewritten.
+memory map, local Z80 VDP access, E00000-FFFFFF decoding keep
+their normal behavior. Extended sample-bus writes are ignored as ROM writes.
+Invalid Z80-only bus cycles complete with open bus/ignored write for this
+profile instead of permanently halting the sound CPU; valid I/O is unchanged. No ROM bytes or achievement hashes are rewritten.
 The immutable profile survives resets and states and clears on unload/new ROM.
-Native state layout is unchanged. Only matching ROMs get the umkt-tracks-v1
+Native state layout is unchanged. Only matching ROMs get the umkt-tracks-v2
 recording/network compatibility suffix because their execution has changed.
 
-Verification (Linux real core; Windows gameplay left to the user)
+Initial verification (incomplete: observer forced DTACK; see follow-up)
 ----------------------------------------------------------------
 10 MiB fixed, control
   SHA256 b257f8348a284c6eabc8d5753d8bf53e7d076ae5d835456eb2b2f0fea421040a
@@ -64,3 +66,40 @@ copying game code. Positive fingerprint recognition is covered by the supplied
 ROM runs above. No game/BIOS content is stored in the repository.
 
 Linux and Windows optimized core builds and Windows application build passed.
+
+Press Start regression follow-up — 2026-11-04
+-------------------------------------------
+The user reported a freeze with a held tone on the START GAME / OPTIONS screen.
+The initial observer forced genesis_plus_gx_force_dtack=enabled, unlike the
+application's default disabled value. It masked a second fault; the previous
+report did not establish normal-setting compatibility. The supplied screenshot
+and a no-hooks/default-DTACK reproduction confirm the regression.
+
+GDB caught the first failure as zbank_lockup_w(AAAE9F,55). During replacement
+of the PCM player by the original Z80 driver, PC remains 0039 while the opcode
+has become LD (HL),E. HL=AE9F and DE=0155 explain the write exactly. Ignoring
+extended-ROM writes fixes the menu but reveals a later local read at 7F11
+(write-only PSG) during another driver replacement. An illegal Z80 cycle set
+zstate=0; the next 68000 BUSREQ made it 2 and the ROM waited forever for BUSACK
+at 3D763A/3D7642. No BUSACK hardware change is needed.
+
+The profile now treats its extended sample bus as read-only and tolerates
+otherwise-fatal Z80 bus cycles during unsynchronized driver replacement.
+This compatibility behavior is confined to the identified emulator-targeted
+ROM; it does not enable global force-DTACK or change the 68000 bus. No driver
+code is patched and no extra persistent state is introduced. Ordinary ROMs
+retain the original strict invalid-access behavior.
+
+Both supplied +TRACKS variants completed 9000 frames with no observation hooks
+and force_dtack=disabled. The fixed version uses the schedule above; the other
+uses earlier Start presses at frames 1200 and 1500, then 2000 and 2200. Both
+pass START GAME, character/ladder selection and active combat; Z80 remains in
+running state at every checkpoint through frame 9000. Fixed/original runs have
+205/206 distinct sampled video frames. Coverage is these transitions and the
+first fight, not a complete playthrough. Generated regression additionally
+checks ROM writes, invalid local PSG reads, ordinary-ROM strict behavior,
+reset/state continuation and unloading. Linux and Windows core builds pass.
+
+UI follow-up: accepting a supported dropped file raises and activates the main
+window before opening it. Rejected/busy drops do not request activation. This
+uses the normal Qt window request, without timers or OS focus workarounds.

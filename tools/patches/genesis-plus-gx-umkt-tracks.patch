@@ -58,13 +58,24 @@
        if (zbank_memory_map[address >> 16].read)
        {
          return (*zbank_memory_map[address >> 16].read)(address);
+@@ -214,6 +219,10 @@
+ 
+       /* write to 68k banked area */
+       address = zbank | (address & 0x7FFF);
++      /* The extended PCM sample bus is read-only, including during driver
++       * replacement. A write to ROM must not halt the sound processor. */
++      if (md_cart_umkt_tracks_active && address >= 0xa00000 && address < 0xe00000)
++        return;
+       if (zbank_memory_map[address >> 16].write)
+       {
+         (*zbank_memory_map[address >> 16].write)(address, data);
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
 @@ -3801,6 +3801,7 @@
     if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
     if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
     if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
-+   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v1";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v2";
     return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
  }
  
@@ -72,7 +83,7 @@
     if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
     if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
     if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
-+   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v1";
++   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v2";
     return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
            "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
  #else
@@ -92,3 +103,32 @@
     system_hw = 0;
  }
  
+--- a/core/membnk.c
++++ b/core/membnk.c
+@@ -62,12 +62,16 @@
+ #endif
+ }
+ 
++/* The emulator-targeted UMKT PCM loader can briefly execute the replaced
++ * Z80 driver before its reset. It expects invalid sound-bus cycles to complete
++ * with open bus/no write, not latch RESET forever. Keep this tolerance local
++ * to the identified ROM and Z80; valid I/O and the 68000 bus are unchanged. */
+ unsigned int zbank_lockup_r(unsigned int address)
+ {
+ #ifdef LOGERROR
+   error("Z80 bank lockup read %06X (%x)\n", address, Z80.pc.d);
+ #endif
+-  if (!config.force_dtack)
++  if (!config.force_dtack && !md_cart_umkt_tracks_active)
+   {
+     Z80.cycles = 0xFFFFFFFF;
+     zstate = 0;
+@@ -80,7 +84,7 @@
+ #ifdef LOGERROR
+   error("Z80 bank lockup write %06X = %02X (%x)\n", address, data, Z80.pc.d);
+ #endif
+-  if (!config.force_dtack)
++  if (!config.force_dtack && !md_cart_umkt_tracks_active)
+   {
+     Z80.cycles = 0xFFFFFFFF;
+     zstate = 0;
