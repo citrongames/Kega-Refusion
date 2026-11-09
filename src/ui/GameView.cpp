@@ -48,7 +48,7 @@ QString runTimerTime(quint64 microseconds) {
 QString formatRunTimer(GameView::RunTimerMode mode, quint64 frames, quint64 microseconds) {
     if (mode == GameView::RunTimerMode::Time) return runTimerTime(microseconds);
     if (mode == GameView::RunTimerMode::Frames)
-        return Localization::text(QStringLiteral("Кадр %1")).arg(frames);
+        return QString::number(frames);
     return {};
 }
 

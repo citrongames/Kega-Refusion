@@ -883,7 +883,7 @@ void MainWindow::buildMenus() {
         updateInputEnabled();
     });
     emulationMenu->addSeparator();
-    saveAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сохранить состояние")));
+    saveAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Быстрое сохранение")));
     saveAction_->setShortcut(QKeySequence(QStringLiteral("F5")));
     saveAction_->setAutoRepeat(false);
     saveAction_->setEnabled(false);
@@ -891,7 +891,7 @@ void MainWindow::buildMenus() {
     connect(saveAction_, &QAction::triggered, this, [this] {
         session_.saveState(stateSlot_);
     });
-    loadAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Загрузить состояние")));
+    loadAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Быстрая загрузка")));
     loadAction_->setShortcut(QKeySequence(QStringLiteral("F8")));
     loadAction_->setAutoRepeat(false);
     loadAction_->setEnabled(false);

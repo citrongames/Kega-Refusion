@@ -35,8 +35,8 @@ QString commandName(int command) {
     switch (command) {
     case PauseCommand: return Localization::text(QStringLiteral("Пауза"));
     case FastForwardCommand: return Localization::text(QStringLiteral("Ускорение (удерживать)"));
-    case SaveCommand: return Localization::text(QStringLiteral("Сохранить состояние"));
-    case LoadCommand: return Localization::text(QStringLiteral("Загрузить состояние"));
+    case SaveCommand: return Localization::text(QStringLiteral("Быстрое сохранение"));
+    case LoadCommand: return Localization::text(QStringLiteral("Быстрая загрузка"));
     case ResetCommand: return Localization::text(QStringLiteral("Сброс"));
     case HardResetCommand: return Localization::text(QStringLiteral("Перезапуск питания"));
     case FrameAdvanceCommand: return Localization::text(QStringLiteral("Следующий кадр"));
