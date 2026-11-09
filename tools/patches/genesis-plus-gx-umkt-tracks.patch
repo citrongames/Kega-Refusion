@@ -25,7 +25,7 @@
 +  /* Keep an in-progress UMKT upload writable if an IRQ releases BUSREQ.
 +   * Z80 instruction execution is already deferred until the loader's reset. */
 +  if (granted || gen_z80_bus_unlocked ||
-+      (md_cart_umkt_tracks_active && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG]))
++      (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG]))
    {
      m68k.memory_map[0xa0].read8   = z80_read_byte;
      m68k.memory_map[0xa0].read16  = z80_read_word;
@@ -33,7 +33,7 @@
  
      /* update Z80 bus status */
      zstate &= 2;
-+    if (md_cart_umkt_tracks_active)
++    if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD)
 +    {
 +      cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
 +      gen_set_z80_bus_access(0);
@@ -43,23 +43,25 @@
  
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -3801,6 +3801,7 @@
+@@ -3801,6 +3801,8 @@
     if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
     if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
     if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
++   if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return "kegarefusion-recording-v3-peripherals-v1-umkt-packed-v1";
 +   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v4";
     return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
  }
  
-@@ -3827,6 +3828,7 @@
+@@ -3827,6 +3829,8 @@
     if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
     if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
     if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
++   if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-packed-v1";
 +   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v4";
     return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
            "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
  #else
-@@ -3984,6 +3986,7 @@
+@@ -3984,6 +3988,7 @@
     md_cart_sdk99_compat_active = 0;
     md_cart_poker_compat_active = 0;
     md_cart_barver_compat_active = 0;
@@ -67,7 +69,7 @@
     content_path[0] = '\0';
     content_ext[0]  = '\0';
  
-@@ -4316,6 +4319,7 @@
+@@ -4316,6 +4321,7 @@
     md_cart_sdk99_compat_active = 0;
     md_cart_poker_compat_active = 0;
     md_cart_barver_compat_active = 0;
@@ -77,42 +79,105 @@
  
 --- a/core/cart_hw/md_cart.c
 +++ b/core/cart_hw/md_cart.c
-@@ -616,9 +616,52 @@
+@@ -616,9 +616,115 @@
    md_cart_aq93c_map();
  }
  
-+/* The H20/H22/H23 +TRACKS sound drivers expect Gens' packed 13 MiB
-+ * cartridge map, beyond the normal cartridge area. This is an emulator-specific
-+ * format, not general Mega Drive hardware. Identify executable code rather
-+ * than a mutable filename/header checksum. */
++/* UMKT revisions change individual songs and loader addresses. Identify the
++ * 68000 upload and the actual Z80 DAC program it loads, in canonical ROM order. */
 +int md_cart_umkt_tracks_active;
++
++static int umkt_rom_matches(unsigned offset, const uint8 *pattern, unsigned length)
++{
++  unsigned i;
++  if (offset > cart.romsize || length > cart.romsize - offset) return 0;
++  for (i = 0; i < length; i++)
++    if (READ_BYTE(cart.rom, offset + i) != pattern[i]) return 0;
++  return 1;
++}
++
++static unsigned umkt_rom_pointer(unsigned at)
++{
++  return (unsigned)READ_BYTE(cart.rom, at) << 24 |
++         (unsigned)READ_BYTE(cart.rom, at + 1) << 16 |
++         (unsigned)READ_BYTE(cart.rom, at + 2) << 8 | READ_BYTE(cart.rom, at + 3);
++}
++
++/* The older player selects between two copies of the stock sound driver.
++ * Its sample descriptors can point beyond the 10 MiB linear cartridge area. */
++static int umkt_extended_samples(void)
++{
++  static const uint8 jsr[] = {0x4e,0xb9};
++  static const uint8 selector[] = {0x30,0x39,0x00,0xff,0xf8,0x6e,0x0c,0x40,0xcc,0xcc};
++  static const uint8 second[] = {0x4e,0x75,0x41,0xf9};
++  static const uint8 driver[] = {0xf3,0xed,0x56,0x31,0x20,0x1b};
++  const unsigned table = 0x3c9830;
++  unsigned target, at;
++  if (!umkt_rom_matches(0x3d7666, jsr, sizeof(jsr))) return 0;
++  target = umkt_rom_pointer(0x3d7668);
++  if (target > cart.romsize - 32 ||
++      !umkt_rom_matches(target, selector, sizeof(selector)) ||
++      !umkt_rom_matches(target + 22, second, sizeof(second))) return 0;
++  if (!umkt_rom_matches(umkt_rom_pointer(target + 26), driver, sizeof(driver))) return 0;
++  /* Twelve-byte descriptors store a little-endian 24-bit offset from the table.
++   * A padded linear ROM can contain this selector too. Require a backed sample
++   * in one of the packed windows before installing the extra banks. */
++  for (at = table; at < table + 96 * 12; at += 12)
++  {
++    unsigned address, offset, length;
++    if (READ_BYTE(cart.rom, at) != 8) continue;
++    address = (table + (READ_BYTE(cart.rom, at + 1) |
++               (unsigned)READ_BYTE(cart.rom, at + 2) << 8 |
++               (unsigned)READ_BYTE(cart.rom, at + 3) << 16)) & 0xffffff;
++    if (address >= 0xa80000 && address < 0xc00000) offset = address - 0x80000;
++    else if (address >= 0xc80000 && address < 0xe00000) offset = address - 0x100000;
++    else continue;
++    length = READ_BYTE(cart.rom, at + 6) | (unsigned)READ_BYTE(cart.rom, at + 7) << 8;
++    if (length && offset < cart.romsize && length <= cart.romsize - offset) return 1;
++  }
++  return 0;
++}
++
 +static int md_cart_umkt_tracks_detect(void)
 +{
-+  static const char product[] = "GM T-097146-00";
-+  uint8 block[256];
-+  uint32 crc = 0;
-+  unsigned offset, i;
-+  if (cart.romsize != 0xd00000) return 0;
-+  for (i = 0; i < sizeof(product) - 1; i++)
-+    if (READ_BYTE(cart.rom, 0x180 + i) != (uint8)product[i]) return 0;
-+  for (offset = 0x7f0000; offset < 0x7f1800; offset += sizeof(block))
++  static const uint8 product[] = "GM T-097146-00";
++  /* Request the sound bus, release reset, then LEA the driver source into A0. */
++  static const uint8 load[] = {0x33,0xfc,0x01,0x00,0x00,0xa1,0x11,0x00,
++                               0x33,0xfc,0x01,0x00,0x00,0xa1,0x12,0x00,0x41,0xf9};
++  /* Copy 256 bytes from (A0)+ to ZRAM. */
++  static const uint8 copy[] = {0x22,0x7c,0x00,0xa0,0x00,0x00,0x30,0x3c,
++                               0x01,0x00,0x12,0xd8,0x53,0x40,0x66,0xfa};
++  /* Z80 program sets its stack and pans channel 6, then enables the YM2612 DAC. */
++  static const uint8 pcm[] = {0xf3,0x31,0xff,0x1f,0x3e,0xb4,0x32,0x02,0x40,
++                              0x3e,0xc0,0x32,0x03,0x40,0x3e,0x2b,0x32,0x00,
++                              0x40,0x3e,0x80,0x32,0x01,0x40};
++  unsigned at, src;
++  if (cart.romsize <= 0xa00000 || !umkt_rom_matches(0x180, product, sizeof(product)-1))
++    return 0;
++  if (umkt_extended_samples()) return MD_CART_UMKT_PACKED_ONLY;
++  for (at = 0x7f0000; at < 0x7f1800; at += 2)
 +  {
-+    for (i = 0; i < sizeof(block); i++) block[i] = READ_BYTE(cart.rom, offset + i);
-+    crc = crc32(crc, block, sizeof(block));
++    if (!umkt_rom_matches(at, load, sizeof(load)) ||
++        !umkt_rom_matches(at + sizeof(load) + 4, copy, sizeof(copy))) continue;
++    src = umkt_rom_pointer(at + sizeof(load));
++    if (src <= cart.romsize - 256 && umkt_rom_matches(src, pcm, sizeof(pcm)))
++      return MD_CART_UMKT_UPLOAD;
 +  }
-+  return (crc == 0xfbd30d03) || (crc == 0x5a6206ae); /* H23 / H20-H22 */
++  return 0;
 +}
 +
 +/* Gens 13 MiB format packs samples around the two 512 KiB I/O windows:
 + * A8-BF -> file A0-B7, C8-DF -> file B8-CF. Keep A0-A7 and C0-C7 hardware. */
 +void md_cart_umkt_tracks_map(void)
 +{
-+  unsigned bank;
++  unsigned bank, offset;
 +  if (!md_cart_umkt_tracks_active) return;
 +  for (bank = 0xa8; bank < 0xe0; bank++)
 +  {
 +    if (bank >= 0xc0 && bank < 0xc8) continue;
-+    m68k.memory_map[bank].base = cart.rom + ((bank - (bank < 0xc0 ? 8 : 16)) << 16);
++    offset = (bank - (bank < 0xc0 ? 8 : 16)) << 16;
++    if (offset >= cart.romsize) break;
++    m68k.memory_map[bank].base = cart.rom + offset;
 +    m68k.memory_map[bank].read8 = NULL;
 +    m68k.memory_map[bank].read16 = NULL;
 +    m68k.memory_map[bank].write8 = m68k_unused_8_w;
@@ -130,7 +195,7 @@
  
    /***************************************************************************************************************
                  CARTRIDGE ROM MIRRORING                                                                                   
-@@ -1404,12 +1447,14 @@
+@@ -1404,12 +1510,14 @@
      /* initialize PCM and CD-DA audio */
      audio_set_rate(snd.sample_rate, snd.frame_rate);
    }
@@ -141,27 +206,28 @@
  void md_cart_reset(int hard_reset)
  {
    int i;
-+  if (md_cart_umkt_tracks_active) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
++  if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
    if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
    md_cart_sonic6_reset();
  
-@@ -1640,6 +1685,8 @@
+@@ -1640,6 +1748,8 @@
      bufferptr += punchium_context_load(&state[bufferptr]);
    }
  
 +  md_cart_umkt_tracks_map();
-+  if (md_cart_umkt_tracks_active) gen_set_z80_bus_access(zstate == 3);
++  if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD) gen_set_z80_bus_access(zstate == 3);
    return bufferptr;
  }
  
 --- a/core/cart_hw/md_cart.h
 +++ b/core/cart_hw/md_cart.h
-@@ -120,6 +120,10 @@
+@@ -120,6 +120,11 @@
  extern int md_cart_sdk99_compat_active;
  extern int md_cart_poker_compat_active;
  extern int md_cart_barver_compat_active;
 +/* Native cart register slot is unused by this fixed map and already saved. */
 +#define MD_CART_UMKT_DRIVER_PENDING_REG 3
++enum { MD_CART_UMKT_UPLOAD = 1, MD_CART_UMKT_PACKED_ONLY };
 +extern int md_cart_umkt_tracks_active;
 +extern void md_cart_umkt_tracks_map(void);
  
@@ -176,7 +242,7 @@
 +      /* UMKT replaces the program while BUSREQ is held, then resets it.
 +       * An intervening IRQ may release BUSREQ before that reset. Defer the
 +       * new program rather than execute it with the previous driver's PC. */
-+      if (md_cart_umkt_tracks_active && !(address & 0x1fff))
++      if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD && !(address & 0x1fff))
 +        cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 1;
        zram[address & 0x1FFF] = data;
        return;
@@ -187,7 +253,7 @@
   ****************************************************************************/
  void z80_run(unsigned int cycles)
  {
-+  if (md_cart_umkt_tracks_active && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG])
++  if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG])
 +  {
 +    /* Keep the scheduler advancing and BUSACK functional during handoff. */
 +    if (Z80.cycles < cycles) Z80.cycles = ((cycles + 14) / 15) * 15;

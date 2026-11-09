@@ -20,17 +20,32 @@ def check(path):
                (0xd00000, 0xc00000, 0x87), (0xdfffff, 0xcfffff, 0x98)]
     for _, offset, value in samples:
         rom[offset] = value
+    # Relocate the small loader and its target inside an original fixture.
+    # A plausible loader pointing past EOF must not match even with the product ID.
+    rom[0x180:0x18e] = b"GM T-097146-00"
+    loader = 0x7f1400
+    rom[loader:loader+38] = bytes.fromhex(
+        "33fc010000a11100 33fc010000a11200 41f9 ffffff00 "
+        "227c00a00000 303c0100 12d8 5340 66fa")
+    target = 0x740400
+    pcm = bytes.fromhex("f331ff1f 3eb4320240 3ec0320340 3e2b320040 3e80320140")
+    rom[target:target+len(pcm)] = pcm
+    negative = Core(path, bytes(rom))
+    try:
+        require(C.c_int.from_address(negative.address("md_cart_umkt_tracks_active")).value == 0,
+                "an unreferenced PCM program cannot identify the cartridge")
+        hardware = {b: tuple(negative.cpu.mapping[b*5+1:b*5+5]) for b in (0xa0, 0xa1, 0xc0)}
+    finally:
+        negative.close()
+    rom[loader+18:loader+22] = target.to_bytes(4, "big")
     core = Core(path, bytes(rom))
     core.options["genesis_plus_gx_force_dtack"] = "disabled"
     core.function("check_variables", None, C.c_bool)(False)
     try:
         active = C.c_int.from_address(core.address("md_cart_umkt_tracks_active"))
-        require(active.value == 0, "size alone must not match")
-        hardware = {b: tuple(core.cpu.mapping[b*5:b*5+5]) for b in (0xa0, 0xa1, 0xc0)}
-        active.value = 1  # Test-only ELF injection; no production override.
-        core.function("md_cart_umkt_tracks_map", None)()
-        require(all(tuple(core.cpu.mapping[b*5:b*5+5]) == m for b,m in hardware.items()),
-                "ZRAM, control and VDP windows preserved")
+        require(active.value == 1, "linked loader and PCM driver select upload profile")
+        require(all(tuple(core.cpu.mapping[b*5+1:b*5+5]) == m for b,m in hardware.items()),
+                "ZRAM, control and VDP handlers preserved")
         bank = U.from_address(core.address("zbank"))
         read = core.function("z80_memory_r", C.c_ubyte, U)
         write = core.function("z80_memory_w", None, U, C.c_ubyte)
@@ -117,7 +132,7 @@ def check(path):
                 "ordinary ROM clears profile")
     finally:
         core.close()
-    return {"status": "passed", "checks": ["size-only rejection", "packed sample map",
+    return {"status": "passed", "checks": ["unlinked driver rejection", "relocated driver detection", "packed sample map",
             "read-only ROM", "hardware windows", "state continuation",
             "IRQ handoff/BUSACK", "pending state restore", "soft/hard reset", "TMSS", "strict bus", "unload"]}
 

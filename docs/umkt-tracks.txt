@@ -1,12 +1,25 @@
-UMKT H20/H22/H23 +TRACKS — corrected compatibility, 2026-11-04
+UMK3H and UMKT music cartridge compatibility
 
 Scope and identification
 ------------------------
-This profile is for the emulator-targeted 13 MiB +TRACKS version, identified by
-size D00000, product GM T-097146-00, and canonical CRC32 of executable
-bytes [7F0000,7F1800): FBD30D03 for H23 or 5A6206AE for H20/H22. Names and header checksum do not participate. Detection
-reads 6 KiB once, with a 256-byte stack buffer. ROM files are never modified.
+The core selects music hardware behavior when the cartridge is opened.
+Up to 10 MiB, the normal linear map already covers all sample addresses.
+For larger ROMs with product GM T-097146-00, the core checks two structures:
 
+* The older player calls a selector for two Z80 drivers. Its sample table has
+  12-byte descriptors with 24-bit relative addresses. A descriptor pointing
+  to a backed sample beyond the linear area enables the packed map (H13/H14).
+* The newer player has 68000 upload code in a small region near 7F0000. The
+  detector follows the loader's source address and recognizes the Z80 program
+  that sets up the YM2612 DAC. This enables the packed map and the protected
+  driver handoff described below (H15 through H23).
+
+Names, header checksum and per-version CRCs are unused. The detection runs
+once on ROM load and needs no heap buffer. Unsupported revisions that relocate
+the entire loader region or use different driver code require further analysis.
+
+Original H23 investigation
+--------------------------
 Supplied images:
 +TRACKS_fixed SHA256 58fd8fade53d89c3ff6ce5aa73b9a2ced8515643e85de85ce7d2e2a170bb9e0d
 +TRACKS       SHA256 a189ab9a219e8f816a2c5e8406ffafadb48ad664bf530374b5170654402855b4
@@ -21,7 +34,8 @@ The appended music is raw unsigned 8-bit PCM packed around hardware windows:
 A00000-A7FFFF and C00000-C7FFFF keep ZRAM/control/VDP decoding. Both processors
 use the same mapped, read-only ROM pages. All embedded track pointers fit the
 13 MiB image with this mapping; they were not evidence of missing ROM data.
-The map is restored after power/reset, TMSS changes and native state load.
+Only banks with data in the image are mapped. The map is restored after
+power/reset, TMSS changes and native state load.
 
 Reference: static disassembly of the supplied-era Gens 13 MiB modification,
 https://dlf.emu-land.net/megadrive/GensRR_11_15MHz_CPU_13Mb_ROM_Kaillera.zip
@@ -117,3 +131,59 @@ permission from a pending state, revocation on RESET, and strict-bus behavior.
 Its strict-bus assertion now starts with a running Z80 and explicitly disables
 forced DTACK instead of relying on the shared helper's defaults.
 These remain bounded transition checks, not a full playthrough of each revision.
+
+
+Collection check, 2026-11-09
+----------------------------
+40 unique loose BINs from H1 through H23 were opened with neutral filenames
+in the Linux core. Mode below is the actual selection after loading. Frames
+give the longest run in this audit with that result. A one-frame entry only
+verifies loading and identification. Longer runs used scripted pad input.
+Early H2/H3/H4/H6 PCM and the H12 alternate driver fit the linear map.
+H13/H14 previously stopped waiting on the sound CPU. On both, a packed map
+alone resolved the wait. Each ran 3900 frames, and Z80 reads at A80068 and
+C80068 and the final 16 ROM bytes matched their physical file contents.
+Only the newer player gets the protected handoff and its tracks-v4 ID.
+Portable H7/H8/H9 music BINs were unavailable in the EXE distributions.
+
+Revision  SHA256 prefix      Native mode      Frames  File
+H1        ea9db75d2881fb14   linear             1  (187) UMK 3.bin
+H2        c5a7e16d9bcbdfdc   linear          3000  (374) UMK 3 + TRACK MORTAL(1).bin
+H3        141c4e632547d187   linear          2100  (701) UMK 3 + TRACK MK.bin
+H4        4042182e4a99c573   linear          2100  (866) UMK 3 + TRACK MK.bin
+H4        0a497352f806fc62   linear             1  (866) UMK 3.bin
+H5        3c607c8e9a09906c   linear             1  (996) UMK 3.bin
+H6        18b8759a07b1d916   linear          3000  (1053) UMK 3 + TRACK MK.bin
+H6        4b0f2424efcf07d1   linear             1  (1053) UMK 3.bin
+H7        553fe19852baad4c   linear             1  (1217) UMK 3.bin
+H8        f84750749b433ed7   linear             1  (1331) UMK 3.bin
+H8        eb273056ae2ecca9   linear             1  (1331) UMK 3.bin
+H9        153e4869b154b73f   linear             1  (1635) UMK 3 !!!.bin
+H10       90eabcfe6dabd78a   linear             1  Ultimate Mortal Kombat 3, Hack (1938).bin
+H11       b53e399ddfd1fd31   linear             1  Ultimate Mortal Kombat 3, Hack (2225).bin
+H12       93943bfa8efd3702   linear          3000  Ultimate Mortal Kombat 3, Hack (2535) [Track MK].bin
+H12       a71cd0aca7b92751   linear             1  Ultimate Mortal Kombat 3, Hack (2535).bin
+H13       1cfc38588cb18d67   packed          3900  Ultimate Mortal Kombat 3 Trilogy (Hack) (2710) [MK Tracks].bin
+H13       ae680c372d747c55   linear             1  Ultimate Mortal Kombat 3 Trilogy (Hack) (2710).bin
+H14       6db2a740dad93a2a   packed          3900  Ultimate Mortal Kombat 3 Trilogy (Hack) (2821) [MK Tracks].bin
+H14       19d6199b93d601c6   linear             1  Ultimate Mortal Kombat 3 Trilogy (Hack) (2821).bin
+H15       b3cab32cdf51cfb9   packed+upload   3000  (3055) UMKT  (HACK 15) + NEW  TRACKS.bin
+H15       52c2179d0e52a58f   linear             1  (3055) UMKT  (HACK 15).bin
+H16       fd3e35078454fe96   packed+upload      1  (3520) UMKT (HACK 16)+TRACKS.bin
+H16       871f430523d39ac3   linear             1  (3520) UMKT (HACK 16).bin
+H17       b642a3bf3e4c9807   packed+upload      1  (4077) UMKT (HACK 17)+TRACKS.bin
+H17       9ca358aa365330a7   linear             1  (4077) UMKT (HACK 17).bin
+H18       c4636bd5199eb134   packed+upload   3000  (4401)UMKT_HACK_18+TRACKS_FIXED.bin
+H18       c5c4c91bdefbc60a   linear             1  (4401)UMKT_HACK_18_FIXED.bin
+H19       00d16ec0f8830382   packed+upload      1  (4643)UMKT+TRACKS.bin
+H19       caeededaa35b8490   linear             1  (4643)UMKT.bin
+H20       a07e4c41e3efb2e3   linear             1  (4824)UMKT(HACK20).bin
+H20       f6a17366fef3ec8d   packed+upload      1  (4824)UMKT+TRACKS(HACK20).bin
+H21       0e9f75682eb4785e   packed+upload      1  (4978)UMKT_(HACK 21)+TRACKS.bin
+H21       d5165dadc4a39fbc   linear             1  (4978)UMKT_(HACK 21).bin
+H22       82434a5da73e00a1   packed+upload      1  (5015)UMKT(HACK_22)+TRACKS.bin
+H22       22af58f2ea91a2a1   linear             1  (5015)UMKT(HACK_22).bin
+H23       58fd8fade53d89c3   packed+upload      1  (5125)UMKT(HACK_23)+TRACKS_fixed.bin
+H23       b257f8348a284c6e   linear             1  (5125)UMKT(HACK_23)_fixed.bin
+H23       a189ab9a219e8f81   packed+upload      1  (5125)UMKT+TRACKS.bin
+H23       294bb22088c63fdb   linear             1  (5125)UMKT.bin
