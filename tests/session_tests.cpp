@@ -1,4 +1,5 @@
 #include "core/EmulationSession.h"
+#include "core/MovieTape.h"
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>
@@ -8,12 +9,54 @@
 #include <QUrlQuery>
 #include <QtEndian>
 #include <atomic>
+#include <array>
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
 void require(bool ok,const char* text){if(!ok)throw std::runtime_error(text);}
 void waitFor(const std::function<bool()>& predicate,const char* description="session timeout"){
  QElapsedTimer t;t.start();bool ready=predicate();while(!ready && t.elapsed()<4000){QCoreApplication::processEvents();QThread::msleep(2);ready=predicate();}require(ready,description);
+}
+// Original 68000 fixture: change CRAM every VBlank and sample the pad into
+// system RAM and cartridge SRAM. Distinct pictures expose stale frame restores;
+// input-sensitive native state exposes replay/branch mistakes.
+QByteArray frameBackRom(){
+ QByteArray rom(64*1024,char(0xff));
+ const auto put=[&](int at,quint32 value){qToBigEndian(value,rom.data()+at);};
+ put(0,0x00ff0000);put(4,0x200);
+ rom.replace(0x100,16,"SEGA GENESIS    ");rom.replace(0x120,16,"FRAME BACK TEST ");
+ rom.replace(0x150,16,"FRAME BACK TEST ");rom.replace(0x180,2,"GM");
+ put(0x1a0,0);put(0x1a4,quint32(rom.size()-1));put(0x1a8,0x00ff0000);put(0x1ac,0x00ffffff);
+ rom.replace(0x1f0,1,"U");rom.replace(0x1b0,2,"RA");rom[0x1b2]=char(0xf8);rom[0x1b3]=char(0x20);
+ put(0x1b4,0x00200000);put(0x1b8,0x0020ffff);
+ int pc=0x200;
+ const auto word=[&](quint16 value){rom[pc++]=char(value>>8);rom[pc++]=char(value);};
+ word(0x33fc);word(0x8004);word(0x00c0);word(0x0004);
+ word(0x33fc);word(0x8144);word(0x00c0);word(0x0004);
+ word(0x33fc);word(0x8700);word(0x00c0);word(0x0004);
+ word(0x13fc);word(0x0040);word(0x00a1);word(0x0009);
+ word(0x13fc);word(0x0040);word(0x00a1);word(0x0003);
+ word(0x7400);
+ const int waitOn=pc;
+ word(0x3239);word(0x00c0);word(0x0004);word(0x0241);word(0x0008);
+ const int branchOn=pc;word(0x6700);
+ word(0x5442); // ADDQ.W #2,D2: CRAM changes on every frame.
+ word(0x23fc);word(0xc000);word(0x0000);word(0x00c0);word(0x0004);
+ word(0x33c2);word(0x00c0);word(0x0000);
+ word(0x1039);word(0x00a1);word(0x0003);
+ word(0x33c0);word(0x00ff);word(0x0000);
+ word(0x13c0);word(0x0020);word(0x0000);
+ const int waitOff=pc;
+ word(0x3239);word(0x00c0);word(0x0004);word(0x0241);word(0x0008);
+ const int branchOff=pc;word(0x6600);
+ const int branchAgain=pc;word(0x6000);
+ const int branches[][2]={{branchOn,waitOn},{branchOff,waitOff},{branchAgain,waitOn}};
+ for(const auto& branch:branches){
+  const int displacement=branch[1]-(branch[0]+2);
+  require(displacement>=-128 && displacement<=127 && displacement!=0,"frame-back fixture branch");
+  rom[branch[0]+1]=char(displacement&0xff);
+ }
+ return rom;
 }
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
@@ -23,10 +66,12 @@ int main(int argc,char** argv){
  const bool spriteOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--sprite-ownership");
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
+ const bool frameBackOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--frame-back");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
+ if(frameBackOnly)rom=frameBackRom();
  if(spriteOnly){
   const auto program=QByteArray::fromHex("33fc800400c0000433fc814400c0000460fe");
   rom.replace(0x200,program.size(),program);
@@ -169,6 +214,134 @@ int main(int argc,char** argv){
   return 0;
  }
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(frameBackOnly){
+  struct Shot { QByteArray state;QImage frame;double aspect=0; };
+  const auto read=[&](const QString& target){
+   QFile saved(target);require(saved.open(QIODevice::ReadOnly),"frame-back state read");
+   return saved.readAll();
+  };
+  int serial=0;
+  const auto state=[&]{
+   const auto target=temp.filePath(QStringLiteral("reverse-%1.krs").arg(serial++));
+   const int completed=actions+1;session.saveStateToFile(target);
+   waitFor([&]{return actions>=completed && QFile::exists(target);},"frame-back state save timed out");
+   return read(target);
+  };
+  QImage image;double aspect=0;
+  const auto take=[&]{
+   require(session.takeVideoFrame(image,aspect) && !image.isNull(),"frame-back image missing");
+  };
+  const auto step=[&](bool backwards){
+   session.takeVideoFrame(image,aspect);const int before=frames.load();
+   if(backwards)session.backFrame();else session.advanceFrame();
+   waitFor([&]{return frames.load()>before;},"frame-back step timed out");
+   require(frames.load()==before+1,"single frame command published multiple frames");
+   take();require(paused,"frame command left explicit pause");
+  };
+  const auto compare=[&](const Shot& expected,const char* why){
+   require(image==expected.frame && aspect==expected.aspect,why);
+   require(state()==expected.state,why);
+  };
+  session.setPaused(true);waitFor([&]{return paused;},"frame-back initial pause");
+  session.takeVideoFrame(image,aspect);
+
+  // Save reference states on the worker's publication boundary while it really
+  // runs at normal speed. These commands are drained before its next runFrame.
+  std::array<Shot,6> live;
+  std::array<QString,6> livePaths;
+  for(int i=0;i<int(livePaths.size());++i)
+   livePaths[size_t(i)]=temp.filePath(QStringLiteral("live-%1.krs").arg(i));
+  std::atomic<int> liveCount{0};std::atomic<bool> captureLive{false},pauseNext{false};
+  const auto liveConnection=QObject::connect(&session,&EmulationSession::videoFrame,&app,
+   [&](const QImage& frame,double frameAspect){
+    if(pauseNext.exchange(false))session.setPaused(true);
+    if(!captureLive.load())return;
+    const int i=liveCount.fetch_add(1);
+    if(i>=int(live.size()))return;
+    live[size_t(i)].frame=frame;live[size_t(i)].aspect=frameAspect;
+    session.saveStateToFile(livePaths[size_t(i)]);
+    if(i+1==int(live.size())){captureLive=false;session.setPaused(true);}
+   },Qt::DirectConnection);
+  const int liveActions=actions+int(live.size());
+  captureLive=true;session.setPaused(false);
+  waitFor([&]{return paused && liveCount.load()==int(live.size()) && actions>=liveActions;},
+          "realtime frame-back references timed out");
+  take();
+  for(int i=0;i<int(live.size());++i)live[size_t(i)].state=read(livePaths[size_t(i)]);
+  require(live.front().frame!=live.back().frame,"frame-back fixture pictures are static");
+  compare(live.back(),"realtime final reference does not match pause boundary");
+  for(int i=int(live.size())-2;i>=0;--i){
+   step(true);compare(live[size_t(i)],"realtime reverse skipped or mismatched a frame");
+  }
+
+  // Manual frame editing must work even when ordinary rewind recording is off.
+  session.setRewindEnabled(false);state();QThread::msleep(12);
+  std::array<Shot,5> manual;
+  manual[0]={state(),image,aspect};
+  for(int i=1;i<int(manual.size());++i){
+   session.setButtons(0,unsigned((i&1)?1u<<4:1u<<5));step(false);
+   manual[size_t(i)]={state(),image,aspect};
+  }
+  for(int i=int(manual.size())-2;i>=0;--i){
+   step(true);compare(manual[size_t(i)],"disabled-rewind manual history lost an exact frame");
+  }
+  const int oldest=frames.load();session.backFrame();state();
+  require(frames.load()==oldest,"manual reverse passed its oldest frame");
+  session.setButtons(0,1u<<6);step(false);
+  require(state()!=manual[1].state,"divergent input reused the discarded future");
+  step(true);compare(manual[0],"manual branch did not return to its exact origin");
+
+  // A background pause alone must not authorize manual frame edits.
+  session.setBackgroundPaused(true);session.setPaused(false);state();
+  const auto backgroundState=state();const int backgroundFrames=frames.load();
+  session.backFrame();session.advanceFrame();session.setFrameBackHeld(true);
+  QElapsedTimer held;held.start();
+  while(held.elapsed()<420){QCoreApplication::processEvents();QThread::msleep(2);}
+  session.setFrameBackHeld(false);require(state()==backgroundState && frames.load()==backgroundFrames,
+          "background pause authorized manual frame edits");
+  session.setPaused(true);session.setBackgroundPaused(false);state();
+  require(paused,"explicit pause was lost after background-pause guard");
+
+  // Movie snapshots include cursor, native/battery state and preview. Returning
+  // and branching must update all three while ordinary rewind remains disabled.
+  std::atomic<int> movieMode{0};
+  QObject::connect(&session,&EmulationSession::movieStatusChanged,&app,
+   [&](int mode,const QString&,quint64,quint64,double){movieMode=mode;},Qt::DirectConnection);
+  const auto moviePath=temp.filePath("reverse.krm");
+  pauseNext=true;const int movieStart=frames.load();session.startMovieRecording(moviePath);
+  waitFor([&]{return movieMode.load()==1 && paused && frames.load()>movieStart;},"frame-back movie start");
+  // The queued pause must have completed, rather than observing its old value.
+  state();waitFor([&]{return paused;},"frame-back movie pause");take();
+  const auto cursor=[&](const QByteArray& saved){
+   require(saved.startsWith("KRMSLOT1") && saved.size()>76,"movie frame-back snapshot format");
+   const auto native=qFromBigEndian<quint32>(saved.constData()+40);
+   const qsizetype prefix=76+qsizetype(native);
+   require(prefix+20<=saved.size() && saved.mid(prefix,8)=="KRMCHK01","movie frame-back checkpoint");
+   return qFromLittleEndian<quint64>(saved.constData()+prefix+12);
+  };
+  std::array<Shot,5> movie;
+  movie[0]={state(),image,aspect};const quint64 initialCursor=cursor(movie[0].state);
+  for(int i=1;i<int(movie.size());++i){
+   session.setButtons(0,unsigned((i&1)?1u<<4:1u<<5));step(false);
+   movie[size_t(i)]={state(),image,aspect};
+   require(cursor(movie[size_t(i)].state)==initialCursor+quint64(i),"movie manual cursor skipped a frame");
+  }
+  for(int i=3;i>=1;--i){
+   step(true);compare(movie[size_t(i)],"movie backward state, preview or cursor mismatch");
+  }
+  session.setButtons(0,1u<<6);step(false);
+  const auto branch=state();
+  require(cursor(branch)==initialCursor+2 && branch!=movie[2].state,"movie backward branch cursor or input mismatch");
+  session.stopMovie();waitFor([&]{return movieMode.load()==0;},"frame-back movie stop");
+  MovieTape tape;QString error;require(tape.load(moviePath,error),qPrintable(error));
+  require(tape.size()==initialCursor+2 && tape.resumeFrame()==tape.size(),"movie retained the discarded future");
+  MovieInput input;require(tape.inputAt(tape.size()-1,input) && input.buttons[0]==(1u<<6),
+                          "movie branch did not record divergent input");
+  QObject::disconnect(liveConnection);
+  require(errors==0,"frame-back worker reported a core error");session.shutdown();
+  std::puts("Frame back: realtime exact history, disabled-rewind manual steps, branches, pause guard and movie cursor passed");
+  return 0;
+ }
  if(achievementsOnly){
   int requests=0, gameNotices=0;AchievementsState achievementState;bool hardcore=false;
   QObject::connect(&session,&EmulationSession::achievementsChanged,&app,[&](const AchievementsState& s){achievementState=s;});

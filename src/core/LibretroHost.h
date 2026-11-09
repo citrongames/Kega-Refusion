@@ -133,6 +133,7 @@ public:
     double aspectRatio() const;
     QSize nativeVideoSize() const;
     const QImage& frame() const;
+    void restoreFramePreview(const QImage& frame, double aspect);
     // Presentation-only sidecar; pixels remain separate from clean captures.
     void setSpriteOwnershipEnabled(bool enabled);
     const QImage& spriteOwnership() const;

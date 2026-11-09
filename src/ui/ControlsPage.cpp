@@ -27,7 +27,8 @@ namespace {
 const QVector<int> commands = {
     PauseCommand, FastForwardCommand, SaveCommand, LoadCommand,
     ResetCommand, FullscreenCommand, MuteCommand,
-    NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand, FrameAdvanceCommand
+    NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand,
+    FrameAdvanceCommand, FrameBackCommand
 };
 
 QString commandName(int command) {
@@ -39,6 +40,7 @@ QString commandName(int command) {
     case ResetCommand: return Localization::text(QStringLiteral("Сброс"));
     case HardResetCommand: return Localization::text(QStringLiteral("Перезапуск питания"));
     case FrameAdvanceCommand: return Localization::text(QStringLiteral("Следующий кадр"));
+    case FrameBackCommand: return Localization::text(QStringLiteral("Предыдущий кадр"));
     case FullscreenCommand: return Localization::text(QStringLiteral("Полный экран"));
     case MuteCommand: return Localization::text(QStringLiteral("Без звука"));
     case NextSlotCommand: return Localization::text(QStringLiteral("Следующий слот"));
@@ -59,6 +61,7 @@ QString commandShortcut(int command) {
     case ResetCommand: return QStringLiteral("Ctrl+R");
     case HardResetCommand: return QStringLiteral("Ctrl+Shift+R");
     case FrameAdvanceCommand: return QStringLiteral(".");
+    case FrameBackCommand: return QStringLiteral(",");
     case FullscreenCommand: return QStringLiteral("Alt+Enter");
     case MuteCommand: return QStringLiteral("M");
     default: return QStringLiteral("—");
@@ -1006,7 +1009,7 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
     if (sequence.count() > 1 || modifiers != Qt::NoModifier)
         error = Localization::text(QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift."));
     else if (reservedKey(key))
-        error = Localization::text(QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8, F12 и точка зарезервированы."));
+        error = Localization::text(QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8, F12, запятая и точка зарезервированы."));
     if (!error.isEmpty()) {
         auto* editor = qobject_cast<QKeySequenceEdit*>(sender());
         if (editor) {

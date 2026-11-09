@@ -184,6 +184,8 @@ void EmulationSession::setGunAim(unsigned player, int x, int y, bool offscreen) 
     gunPositions_[player].store(packed);
 }
 void EmulationSession::advanceFrame() { enqueue({Type::FrameAdvance,{}}); }
+void EmulationSession::backFrame() { enqueue({Type::FrameBack,{}}); }
+void EmulationSession::setFrameBackHeld(bool held) { frameBackHeld_.store(held); }
 void EmulationSession::setFrameAdvanceHeld(bool held) {
     if (networkMode_.load()) {
         if (networkStepRequested_.exchange(held) != held) enqueue({Type::NetStepHold,{},held?1:0});
@@ -547,12 +549,12 @@ void EmulationSession::run() {
     bool historyEnabled = rewindEnabled_.load();
     int historyMemoryMiB = rewindMemoryMiB_.load();
     bool historyHealthy = true;
-    unsigned captureFrame = 0;
+    bool manualHistory = false;
     auto clearHistory = [&] {
         history.setByteLimit(qsizetype(historyMemoryMiB) * 1024 * 1024);
-        history.configure(historyEnabled);
+        history.configure(true);
         historyHealthy = true;
-        captureFrame = 0;
+        manualHistory = false;
     };
     clearHistory();
     bool paused = false, effectivePaused = false, rewindLatched = false, rewinding = false;
@@ -675,7 +677,8 @@ void EmulationSession::run() {
     bool optionsPending = false, fastLatched = false;
     qint64 nextPresentationNs = 0;
     qint64 nextMovieStatusNs = 0, nextHeldFrameNs = 0;
-    bool stepHeldLatched = false;
+    bool stepHeldLatched = false, backHeldLatched = false;
+    qint64 nextBackFrameNs = 0;
     auto slotStatus = [&](int selected = -1) {
         emit stateSlotsChanged(selected, networkMode==2?networkSlots:movie.active() ? movie.occupiedSlots() : host.occupiedStateSlots());
     };
@@ -812,12 +815,49 @@ void EmulationSession::run() {
             }
             return true;
         }
-        if(++captureFrame%2)return true;
         return history.capture(captureHistory(),host.frame(),host.aspectRatio());
+    };
+    // Capture the pre-input state once when a new local timeline starts.
+    // At power-on the core has not delivered its first picture yet.
+    auto seedHistory = [&] {
+        if (history.size() || !historyHealthy) return;
+        QImage frame = host.frame();
+        if (frame.isNull()) {
+            frame = QImage(1,1,QImage::Format_RGB32);
+            frame.fill(Qt::black);
+        }
+        historyHealthy = history.capture(captureHistory(),frame,host.aspectRatio());
+    };
+    auto restorePreviousFrame = [&](bool exactStep) {
+        QByteArray state;
+        QImage frame;
+        double aspect = 4.0 / 3.0;
+        if (!history.stepBack(state,frame,aspect)) return false;
+        QString error;
+        if (!restoreHistory(state,error)) {
+            clearHistory(); historyHealthy = false;
+            emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
+            return false;
+        }
+        if (!networkMode) host.restoreFramePreview(frame,aspect);
+        const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
+        if (!selected.isNull()) publishVideo(selected,aspect);
+        if (networkMode) { networkRewindImage = frame; networkRewindAspect = aspect; }
+        movieStatus(exactStep && movie.active());
+        return true;
     };
     while (!quitting_.load()) {
         std::deque<Command> pending;
-        { std::lock_guard<std::mutex> lock(mutex_); pending.swap(commands_); queuedCheatBytes_=0; }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            while (!commands_.empty()) {
+                queuedCheatBytes_ -= commands_.front().retainedCheatBytes;
+                pending.push_back(std::move(commands_.front()));
+                commands_.pop_front();
+                // Execute a queued forward step before a following back, save or reset.
+                if (!networkMode && pending.back().type == Type::FrameAdvance) break;
+            }
+        }
         // Read after the command boundary so a GUI shader switch preceding a
         // queued load/step applies to that frame, including while paused.
         // Presentation-only: never enters recordings or network commands.
@@ -846,7 +886,7 @@ void EmulationSession::run() {
                command.type!=Type::Port && command.type!=Type::ControllerType && command.type!=Type::ControllerKind)
                 networkDirty=true;
             if (achievementHardcore) {
-                const bool prohibited = command.type == Type::Restore || command.type == Type::RestoreFile || command.type == Type::FrameAdvance ||
+                const bool prohibited = command.type == Type::Restore || command.type == Type::RestoreFile || command.type == Type::FrameAdvance || command.type == Type::FrameBack ||
                     command.type == Type::MoviePlay || command.type == Type::MovieResume || command.type == Type::MovieFork ||
                     command.type == Type::Cheats || command.type == Type::Region ||
                     (command.type == Type::Checksum && command.value) ||
@@ -1265,6 +1305,13 @@ void EmulationSession::run() {
                 pacer.reset(nowNs()); resetMetrics();
                 emit gameClosed();
                 break;
+            case Type::FrameBack:
+                if (!networkMode && host.loaded() && paused && !backgroundPaused_.load() &&
+                    !rewind_.load() && !optionsPending) {
+                    if (restorePreviousFrame(true)) clearAudio();
+                    else if (historyHealthy) emit actionNotice(Localization::text(QStringLiteral("Нет предыдущего кадра")));
+                }
+                break;
             case Type::FrameAdvance:
                 if (movie.mode() == MovieSession::Finished) {
                     if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
@@ -1625,9 +1672,8 @@ void EmulationSession::run() {
         if (reverse != rewindLatched) {
             rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
             if (reverse) {
-                // Checkpoints are recorded every two emulated frames. Freeze
-                // this hold's origin while the remaining step count decreases.
-                rewindStepMs = 2000.0 / host.fps();
+                // Network history contains every second confirmed frame.
+                rewindStepMs = (networkMode ? 2000.0 : 1000.0) / host.fps();
                 rewindTotalMs = rewindAvailableMs();
                 rewindLastProgressMs = rewindTotalMs;
                 nextRewindProgressNs = nowNs() + 100000000;
@@ -1641,21 +1687,7 @@ void EmulationSession::run() {
         }
         if (reverse) {
             rewindStatus(true);
-            QByteArray state;
-            QImage frame;
-            double aspect = 4.0 / 3.0;
-            if (history.stepBack(state,frame,aspect)) {
-                QString restoreError;
-                if (restoreHistory(state,restoreError)) {
-                    captureFrame = 0;
-                    const auto selected=selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
-                    if(!selected.isNull())publishVideo(selected,aspect);
-                    movieStatus();networkRewindImage=frame;networkRewindAspect=aspect;
-                } else {
-                    clearHistory(); historyHealthy = false;
-                    emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
-                }
-            }
+            restorePreviousFrame(false);
             const qint64 remainingMs = std::min(rewindTotalMs,rewindAvailableMs());
             const qint64 progressNow = nowNs();
             if (remainingMs != rewindLastProgressMs && progressNow >= nextRewindProgressNs) {
@@ -1668,7 +1700,7 @@ void EmulationSession::run() {
                 nextNetworkRewind=progressNow+100000000;
             }
             // Hold at the oldest checkpoint rather than inadvertently running forward.
-            const auto deadline = pacer.next(nowNs(),qint64(2000000000.0 / host.fps()));
+            const auto deadline = pacer.next(nowNs(),qint64(rewindStepMs * 1000000.0));
             waiter.waitUntil(deadline);
             continue;
         }
@@ -1681,6 +1713,14 @@ void EmulationSession::run() {
             if (!host.pollSaveRam(milliseconds, error)) emit notification(error);
             lastBatteryCheck = batteryNow;
         }
+        const bool backHeld = frameBackHeld_.load() && !networkMode && paused && host.loaded() &&
+            !background && !achievementHardcore && !optionsPending;
+        if (backHeld && !backHeldLatched) nextBackFrameNs = nowNs() + 350000000;
+        if (backHeld && backHeldLatched && nowNs() >= nextBackFrameNs) {
+            restorePreviousFrame(true);
+            nextBackFrameNs = nowNs() + 33333333;
+        }
+        backHeldLatched = backHeld;
         const bool stepHeld = networkMode!=2 && frameAdvanceHeld_.load() && host.loaded() && paused && !background && !achievementHardcore;
         if (stepHeld && !stepHeldLatched) nextHeldFrameNs = nowNs() + 350000000;
         if (stepHeld && stepHeldLatched && nowNs() >= nextHeldFrameNs) {
@@ -1692,6 +1732,10 @@ void EmulationSession::run() {
                 networkStepAnnounced=true;emit networkStepRequested(networkEpoch);
             }
             networkTimeline.setHistoryEnabled(historyEnabled&&networkMode==1);
+            if (!networkMode && !optionsPending) {
+                manualHistory = !historyEnabled;
+                seedHistory();
+            }
             if (!beforeFrame()) continue;
             frameRequested=false;networkStepAnnounced=false;
             host.runFrame(true,videoPending && videoRecorder.accepting()); // Capture PCM for video, never queue a playback burst.
@@ -1700,7 +1744,7 @@ void EmulationSession::run() {
             afterFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
             if (optionsPending) { optionsPending = false; clearHistory(); }
-            if (historyEnabled && historyHealthy && !recordHistory()) {
+            if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
                 history.clear(); historyHealthy = false;
             }
             publishVideo(host.frame(),host.aspectRatio(),host.spriteOwnership());
@@ -1708,6 +1752,7 @@ void EmulationSession::run() {
             continue;
         }
         if (!host.loaded() || nowPaused || networkRemoteRewinding) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
+        if (manualHistory) clearHistory();
         const bool fast = fastForward_.load();
         if (fast != fastLatched) {
             fastLatched = fast; clearAudio(); pacer.reset(nowNs()); nextPresentationNs = 0;
@@ -1720,6 +1765,7 @@ void EmulationSession::run() {
         const bool finalMovieFrame = movie.readOnly() && movie.position() + 1 >= movie.length();
         const bool present = !fast || finalMovieFrame || nowNs() >= nextPresentationNs;
         networkTimeline.setHistoryEnabled(historyEnabled&&networkMode==1&&!fast);
+        if (!networkMode && !fast && historyEnabled && !optionsPending) seedHistory();
         if (!beforeFrame()) continue;
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.

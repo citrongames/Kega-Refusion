@@ -17,7 +17,7 @@
 
 namespace {
 constexpr int playerCount = int(MaxControllerPlayers); // Slot 2 also stores the legacy chained Justifier.
-constexpr int targetCount = FrameAdvanceCommand + 1;
+constexpr int targetCount = FrameBackCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
 
@@ -1028,6 +1028,7 @@ QString InputManager::targetName(ConsoleProfile profile, int target, ControllerT
     case ResetCommand: return Localization::text(QStringLiteral("Сброс"));
     case HardResetCommand: return Localization::text(QStringLiteral("Перезапуск питания"));
     case FrameAdvanceCommand: return Localization::text(QStringLiteral("Следующий кадр"));
+    case FrameBackCommand: return Localization::text(QStringLiteral("Предыдущий кадр"));
     case FullscreenCommand: return Localization::text(QStringLiteral("Полный экран"));
     case MuteCommand: return Localization::text(QStringLiteral("Без звука"));
     case NextSlotCommand: return Localization::text(QStringLiteral("Следующий слот"));
@@ -1346,7 +1347,7 @@ bool InputManager::reservedKeyboardKey(int key) {
            key == Qt::Key_Tab || key == Qt::Key_Escape ||
            key == Qt::Key_P || key == Qt::Key_M || key == Qt::Key_R ||
            key == Qt::Key_F5 || key == Qt::Key_F8 || key == Qt::Key_F12 ||
-           key == Qt::Key_Period || key == Qt::Key_Plus ||
+           key == Qt::Key_Period || key == Qt::Key_Comma || key == Qt::Key_Plus ||
            key == Qt::Key_Equal || key == Qt::Key_Minus;
 }
 bool InputManager::keyEvent(int key, bool pressed) {

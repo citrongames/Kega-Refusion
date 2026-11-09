@@ -522,6 +522,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         if (enabled) {
             frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
             session_.setFrameAdvanceHeld(false);
+            frameBackHeld_ = frameBackPadHeld_ = false;
+            session_.setFrameBackHeld(false);
             rewindHeld_ = rewindPadHeld_ = false;
             if (rewindAction_->isChecked()) rewindAction_->setChecked(false);
             updateRewind();
@@ -839,6 +841,12 @@ void MainWindow::buildMenus() {
     frameAdvanceAction_->setEnabled(false);
     shortcut(frameAdvanceAction_);
     connect(frameAdvanceAction_, &QAction::triggered, this, [this] { session_.advanceFrame(); });
+    frameBackAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Предыдущий кадр")));
+    frameBackAction_->setShortcut(QKeySequence(Qt::Key_Comma));
+    frameBackAction_->setAutoRepeat(false);
+    frameBackAction_->setEnabled(false);
+    shortcut(frameBackAction_);
+    connect(frameBackAction_, &QAction::triggered, this, [this] { session_.backFrame(); });
     QAction* achievementsAction = emulationMenu->addAction(Localization::text(QStringLiteral("Достижения…")));
     achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
     connect(achievementsAction, &QAction::triggered, this, &MainWindow::showAchievements);
@@ -1530,8 +1538,7 @@ void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading &&
                                                   movieMode_ == 0 && !videoExporting_ && !achievementsHardcore_);
     updateMovieActions();
-    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() && pauseAction_->isChecked() &&
-                                                       !loading && !videoExporting_ && !achievementsHardcore_);
+    updateFrameActions();
     if (loading) view_->setLightgunInputEnabled(false);
     view_->setLoading(loading, fileName);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading);
@@ -1965,7 +1972,7 @@ void MainWindow::editSettings(int initialPage) {
         updateAccountControls();
     });
     const QString hardcoreHelp = AchievementsHardcoreApproved
-        ? Localization::text(QStringLiteral("Hardcore отключает загрузку состояния, перемотку и следующий кадр; "
+        ? Localization::text(QStringLiteral("Hardcore отключает загрузку состояния, перемотку и покадровые шаги; "
                          "включение режима перезапускает текущую игру."))
         : Localization::text(QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. "
                          "Сейчас доступен Softcore."));
@@ -2756,7 +2763,21 @@ void MainWindow::updateMovieActions() {
     if (discMenu_) discMenu_->setEnabled(discPaths_.size() > 1 && !protectedMovie && !moviePending_ && !videoExporting_);
     if (pauseAction_) pauseAction_->setEnabled(game);
     if (fastForwardAction_) fastForwardAction_->setEnabled(game);
+    updateFrameActions();
     updateVideoActions();
+}
+
+void MainWindow::updateFrameActions() {
+    const bool ready = session_.hasGame() && pauseAction_ && pauseAction_->isChecked() &&
+        !loading_ && !videoExporting_ && !achievementsHardcore_;
+    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(ready);
+    const bool backReady = ready && !moviePending_ && !session_.networkActive() &&
+        (!netplay_ || !netplay_->active());
+    if (frameBackAction_) frameBackAction_->setEnabled(backReady);
+    if (!backReady && (frameBackHeld_ || frameBackPadHeld_)) {
+        frameBackHeld_ = frameBackPadHeld_ = false;
+        session_.setFrameBackHeld(false);
+    }
 }
 
 void MainWindow::setFrameAdvanceSource(bool keyboard, bool pressed) {
@@ -2771,6 +2792,18 @@ void MainWindow::setFrameAdvanceSource(bool keyboard, bool pressed) {
     session_.setFrameAdvanceHeld(held);
 }
 
+void MainWindow::setFrameBackSource(bool keyboard, bool pressed) {
+    bool& source = keyboard ? frameBackHeld_ : frameBackPadHeld_;
+    if (pressed && (!frameBackAction_ || !frameBackAction_->isEnabled())) return;
+    if (source == pressed) return;
+    const bool wasHeld = frameBackHeld_ || frameBackPadHeld_;
+    source = pressed;
+    const bool held = frameBackHeld_ || frameBackPadHeld_;
+    if (held == wasHeld) return;
+    if (held) session_.backFrame();
+    session_.setFrameBackHeld(held);
+}
+
 void MainWindow::releaseInput() {
     view_->setLightgunInputEnabled(false);
     resetAnalogMotion();
@@ -2778,6 +2811,8 @@ void MainWindow::releaseInput() {
     fastForwardPadHeld_ = false;
     frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
     session_.setFrameAdvanceHeld(false);
+    frameBackHeld_ = frameBackPadHeld_ = false;
+    session_.setFrameBackHeld(false);
     rewindHeld_ = rewindPadHeld_ = false;
     if (rewindAction_ && rewindAction_->isChecked()) rewindAction_->setChecked(false);
     updateRewind();
@@ -2793,8 +2828,7 @@ void MainWindow::updateInputEnabled() {
     if (closeGameAction_) closeGameAction_->setEnabled(session_.hasGame() && !loading_ && !videoExporting_);
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading_ &&
                                                   movieMode_ == 0 && !videoExporting_ && !achievementsHardcore_);
-    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(session_.hasGame() &&
-        pauseAction_->isChecked() && !loading_ && !videoExporting_ && !achievementsHardcore_);
+    updateFrameActions();
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     const bool modalActive = QApplication::activeModalWidget();
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
@@ -2838,8 +2872,6 @@ void MainWindow::updateRewind() {
 }
 
 void MainWindow::setPausedUi(bool paused) {
-    if (frameAdvanceAction_) frameAdvanceAction_->setEnabled(paused && session_.hasGame() &&
-                                                             !loading_ && !videoExporting_ && !achievementsHardcore_);
     if (!paused) {
         frameAdvanceHeld_ = frameAdvancePadHeld_ = false;
         session_.setFrameAdvanceHeld(false);
@@ -2848,6 +2880,7 @@ void MainWindow::setPausedUi(bool paused) {
         const QSignalBlocker blocker(pauseAction_);
         pauseAction_->setChecked(paused);
     }
+    updateFrameActions();
 }
 
 void MainWindow::setFullscreenMode(bool enabled) {
@@ -2898,6 +2931,10 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
     }
     if (command == FrameAdvanceCommand) {
         setFrameAdvanceSource(false, pressed);
+        return;
+    }
+    if (command == FrameBackCommand) {
+        setFrameBackSource(false, pressed);
         return;
     }
     if (!pressed) return;
@@ -2968,6 +3005,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         setFrameAdvanceSource(true, false);
         return true;
     }
+    if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() &&
+        key == Qt::Key_Comma && frameBackHeld_) {
+        setFrameBackSource(true, false);
+        return true;
+    }
     const bool volumeUp = (key == Qt::Key_Equal || key == Qt::Key_Plus) &&
         (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier);
     const bool volumeDown = key == Qt::Key_Minus && modifiers == Qt::NoModifier;
@@ -2984,6 +3026,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (modifiers == Qt::NoModifier) {
         if (key == Qt::Key_P) commandAction = pauseAction_;
         else if (key == Qt::Key_Period) commandAction = frameAdvanceAction_;
+        else if (key == Qt::Key_Comma) commandAction = frameBackAction_;
         else if (key == Qt::Key_M) commandAction = muteAction_;
         else if (key == Qt::Key_F5) commandAction = saveAction_;
         else if (key == Qt::Key_F8) commandAction = loadAction_;
@@ -2997,6 +3040,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         if (shortcutOverride) event->accept();
         else if (commandAction == frameAdvanceAction_) {
             if (!keyEvent->isAutoRepeat()) setFrameAdvanceSource(true, pressed);
+        } else if (commandAction == frameBackAction_) {
+            if (!keyEvent->isAutoRepeat()) setFrameBackSource(true, pressed);
         } else if (pressed && !keyEvent->isAutoRepeat()) commandAction->trigger();
         return true;
     }

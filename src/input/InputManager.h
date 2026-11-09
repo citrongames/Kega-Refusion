@@ -15,7 +15,8 @@ enum class KeyboardScanCodes { Native, Windows, Xkb, Unavailable };
 enum class ConsoleProfile { MegaDrive, MasterSystem, GameGear, SG1000 };
 enum InputCommand { PauseCommand=16, FastForwardCommand, SaveCommand, LoadCommand,
                     ResetCommand, FullscreenCommand, MuteCommand, NextSlotCommand,
-                    PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand, FrameAdvanceCommand };
+                    PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand, FrameAdvanceCommand,
+                    FrameBackCommand };
 struct PadBinding {
     enum Kind { None, Button, Axis, Hat, Automatic };
     Kind kind = None;

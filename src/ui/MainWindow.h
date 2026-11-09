@@ -88,7 +88,9 @@ private:
     void exportInputVideo();
     void stopVideoCapture();
     QString chooseVideoSavePath(bool exporting);
+    void updateFrameActions();
     void setFrameAdvanceSource(bool keyboard, bool pressed);
+    void setFrameBackSource(bool keyboard, bool pressed);
     QString chooseMovieSavePath(bool branch);
     void updateInputEnabled();
     void updateFastForward();
@@ -152,6 +154,7 @@ private:
     QAction* closeGameAction_ = nullptr;
     QAction* pauseAction_ = nullptr;
     QAction* frameAdvanceAction_ = nullptr;
+    QAction* frameBackAction_ = nullptr;
     QAction* cheatsAction_ = nullptr;
     QAction* cheatSearchAction_ = nullptr;
     QPointer<CheatSearchDialog> cheatSearchDialog_;
@@ -216,6 +219,7 @@ private:
     bool menuPauseActive_ = false;
     bool rewindHeld_ = false, rewindPadHeld_ = false;
     bool frameAdvanceHeld_ = false, frameAdvancePadHeld_ = false;
+    bool frameBackHeld_ = false, frameBackPadHeld_ = false;
     bool fastForwardHeld_ = false;
     bool fastForwardPadHeld_ = false;
     bool fastForwardActive_ = false;

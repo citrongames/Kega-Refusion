@@ -1173,6 +1173,11 @@ void LibretroHost::applyControllerPorts(bool force) {
         }
     }
 }
+void LibretroHost::restoreFramePreview(const QImage& frame, double aspect) {
+    frame_ = frame;
+    spriteOwnership_ = {};
+    av_.geometry.aspect_ratio = float(aspect);
+}
 double LibretroHost::aspectRatio() const {
     if (linkPeer_ && linkPresentationRole_==2) return linkPeer_->aspectRatio();
     if (av_.geometry.aspect_ratio > 0) return av_.geometry.aspect_ratio;

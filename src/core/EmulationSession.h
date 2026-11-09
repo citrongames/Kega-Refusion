@@ -58,6 +58,8 @@ public:
     void clearMouseMotion();
     void setPaddlePosition(unsigned player, int position);
     void advanceFrame();
+    void backFrame();
+    void setFrameBackHeld(bool held);
     void setFrameAdvanceHeld(bool held);
     void startMovieRecording(const QString& path);
     void playMovie(const QString& path);
@@ -169,7 +171,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack};
     struct Command {
         Type type;
         QString path;
@@ -204,7 +206,7 @@ private:
     qsizetype queuedCheatBytes_ = 0;
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
-    std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false};
+    std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false}, frameBackHeld_{false};
     std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
     // Local hold edges are separate from the shared state applied by the host.
     std::atomic<bool> networkFastRequested_{false}, networkRewindRequested_{false};
