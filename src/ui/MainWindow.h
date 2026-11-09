@@ -159,6 +159,7 @@ private:
     AchievementsState achievementsState_;
     bool achievementsHardcore_ = false;
     bool achievementNotifications_ = true;
+    bool hideAchievementAvailability_ = true;
     bool achievementSound_ = true;
     int achievementPosition_ = 0;
     Cheats::Platform cheatPlatform_ = Cheats::Platform::MegaDrive;

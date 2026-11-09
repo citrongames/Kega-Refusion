@@ -29,6 +29,7 @@ struct AchievementNotice {
     quint32 points = 0;
     double rarity = 0.0;
     bool hardcore = false;
+    bool availabilityNotice = false;
 };
 struct AchievementHttpRequest {
     quint64 id = 0;

@@ -77,7 +77,7 @@ int main() {
         auto state = client.snapshot();
         require(state.gameId == 1234 && state.gameTitle == QStringLiteral("Sample Game"), "identified game");
         require(state.total == 1 && state.entries.size() == 1, "achievement list");
-        require(notices.size() == 1 && notices[0].kind == AchievementNotice::GameReady,
+        require(notices.size() == 1 && notices[0].kind == AchievementNotice::GameReady && !notices[0].availabilityNotice,
                 "only game-ready placard emitted on load");
 
         client.changeMedia(QStringLiteral("6a2305a2b6675a97ff792709be1ca857"), 17);
@@ -92,7 +92,7 @@ int main() {
         client.frame(); // Let a false initial condition leave its waiting state.
         memory[1] = 3;
         client.frame();
-        require(notices.size() >= 2 && notices[1].kind == AchievementNotice::Unlocked,
+        require(notices.size() >= 2 && notices[1].kind == AchievementNotice::Unlocked && !notices[1].availabilityNotice,
                 "unlock notification emitted");
         req = take(requests);
         client.respond(req.id, 200,
@@ -158,6 +158,23 @@ int main() {
         require(!client.loading() && client.snapshot().gameId == 2345 &&
                 client.snapshot().total == 0 && loadFailures() == 0,
                 "recognized game with no achievements must not report a load failure");
+
+        require(!notices.isEmpty() && notices.last().kind == AchievementNotice::GameReady &&
+                notices.last().availabilityNotice, "empty-set notice can be hidden");
+
+        notices.clear();
+        client.loadGame(QStringLiteral("44444444444444444444444444444444"), 17);
+        req = take(requests);
+        client.respond(req.id, 200, QByteArray(kGame).replace("5501", "101000001"));
+        req = take(requests);
+        client.respond(req.id, 200, "{\"Success\":true}");
+        client.idle();
+        memory[1] = 0;
+        client.frame();
+        memory[1] = 3;
+        client.frame();
+        require(notices.size() >= 2 && notices[1].kind == AchievementNotice::Unlocked &&
+                notices[1].availabilityNotice, "server warning can be hidden independently of unlocks");
 
         client.loadGame(QStringLiteral("33333333333333333333333333333333"), 17);
         req = take(requests);

@@ -251,6 +251,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         settings_.remove(QStringLiteral("emulation/rewindSeconds"));
     }
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
+    hideAchievementAvailability_ = settings_.value(QStringLiteral("achievements/hideAvailabilityNotices"), true).toBool();
     achievementNotifications_ = settings_.value(QStringLiteral("achievements/notifications"), true).toBool();
     achievementSound_ = settings_.value(QStringLiteral("achievements/sound"), true).toBool();
     smsFmEnabled_ = settings_.value(QStringLiteral("audio/smsFmEnabled"), true).toBool();
@@ -489,6 +490,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::achievementNotice, this,
             [this](const AchievementNotice& notice) {
         if (!achievementNotifications_ || !osdAction_->isChecked() ||
+            (hideAchievementAvailability_ && notice.availabilityNotice) ||
             (notice.kind == AchievementNotice::Completed && !notice.hardcore)) return;
         if (notice.kind == AchievementNotice::LoadFailed) {
             view_->showOsd(notice.title, 3500, QStringLiteral("achievementLoadFailed"));
@@ -1862,6 +1864,12 @@ void MainWindow::editSettings(int initialPage) {
     achievementToasts->setChecked(achievementNotifications_);
     achievementToasts->setToolTip(Localization::text(QStringLiteral("При выключенных уведомлениях достижения продолжают засчитываться.")));
     achievements->addRow(achievementToasts);
+    auto* hideAvailability = new QCheckBox(Localization::text(QStringLiteral("Скрывать уведомления об отсутствии достижений или Hardcore")), &dialog);
+    hideAvailability->setObjectName(QStringLiteral("hideAchievementAvailability"));
+    hideAvailability->setChecked(hideAchievementAvailability_);
+    hideAvailability->setEnabled(achievementToasts->isChecked());
+    connect(achievementToasts, &QCheckBox::toggled, hideAvailability, &QWidget::setEnabled);
+    achievements->addRow(hideAvailability);
     auto* achievementSound = new QCheckBox(Localization::text(QStringLiteral("Звук открытия достижения")), &dialog);
     achievementSound->setObjectName(QStringLiteral("achievementSound"));
     achievementSound->setChecked(achievementSound_);
@@ -2298,6 +2306,10 @@ void MainWindow::editSettings(int initialPage) {
             achievementNotifications_ = achievementToasts->isChecked();
             settings_.setValue(QStringLiteral("achievements/notifications"), achievementNotifications_);
             if (!achievementNotifications_) view_->clearAchievementNotices();
+        }
+        if (hideAvailability->isChecked() != hideAchievementAvailability_) {
+            hideAchievementAvailability_ = hideAvailability->isChecked();
+            settings_.setValue(QStringLiteral("achievements/hideAvailabilityNotices"), hideAchievementAvailability_);
         }
         if (achievementSound->isChecked() != achievementSound_) {
             achievementSound_ = achievementSound->isChecked();

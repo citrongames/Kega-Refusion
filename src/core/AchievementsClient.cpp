@@ -21,6 +21,8 @@
 #include <utility>
 
 namespace {
+// rcheevos reserves this range for server warnings and excludes it from game totals.
+constexpr quint32 kFirstClientWarningId = 101000001;
 constexpr qsizetype kMaxCredentialFile = 64 * 1024;
 constexpr qsizetype kMaxHttpBody = 8 * 1024 * 1024;
 constexpr size_t kMaxPending = 32;
@@ -221,6 +223,7 @@ struct AchievementsClient::Impl {
         impl->rebuild();
         AchievementNotice notice;
         notice.kind = AchievementNotice::GameReady;
+        notice.availabilityNotice = impl->state.total == 0;
         notice.title = impl->state.gameTitle;
         notice.badgeUrl = fromUtf8(game->badge_url);
         notice.description = Localization::text(QStringLiteral("Открыто %1 из %2")).arg(impl->state.unlocked).arg(impl->state.total);
@@ -265,6 +268,7 @@ struct AchievementsClient::Impl {
             if (!event->achievement) break;
             AchievementNotice notice;
             notice.kind = AchievementNotice::Unlocked;
+            notice.availabilityNotice = event->achievement->id >= kFirstClientWarningId;
             notice.title = fromUtf8(event->achievement->title);
             notice.description = fromUtf8(event->achievement->description);
             notice.badgeUrl = fromUtf8(event->achievement->badge_url);
