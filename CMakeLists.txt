@@ -103,6 +103,7 @@ add_executable(KegaRefusion WIN32
     src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
     src/ui/CheatSearchDialog.cpp src/ui/CheatSearchDialog.h
     src/ui/AchievementsDialog.cpp src/ui/AchievementsDialog.h
+    src/ui/AchievementPositionPicker.cpp src/ui/AchievementPositionPicker.h
     src/ui/AchievementNetwork.cpp src/ui/AchievementNetwork.h
     src/ui/ControllerDiagram.cpp src/ui/ControllerDiagram.h
     src/net/NetTransport.cpp src/net/NetTransport.h

@@ -6,6 +6,7 @@
 #include "CheatsDialog.h"
 #include "CheatSearchDialog.h"
 #include "AchievementsDialog.h"
+#include "AchievementPositionPicker.h"
 #include "AchievementNetwork.h"
 #include "NetplaySettingsPage.h"
 #include "UpdateDialog.h"
@@ -1876,12 +1877,7 @@ void MainWindow::editSettings(int initialPage) {
     achievementSound->setEnabled(achievementToasts->isChecked());
     connect(achievementToasts, &QCheckBox::toggled, achievementSound, &QWidget::setEnabled);
     achievements->addRow(achievementSound);
-    auto* achievementPosition = new QComboBox(&dialog);
-    achievementPosition->setObjectName(QStringLiteral("achievementPosition"));
-    achievementPosition->addItems({Localization::text(QStringLiteral("Сверху слева")), Localization::text(QStringLiteral("Сверху по центру")),
-        Localization::text(QStringLiteral("Сверху справа")), Localization::text(QStringLiteral("Снизу слева")),
-        Localization::text(QStringLiteral("Снизу по центру")), Localization::text(QStringLiteral("Снизу справа"))});
-    achievementPosition->setCurrentIndex(achievementPosition_);
+    auto* achievementPosition = new AchievementPositionPicker(achievementPosition_, &dialog);
     achievements->addRow(Localization::text(QStringLiteral("Положение уведомлений:")), achievementPosition);
     auto* accountStatus = new QLabel(achievementsState_.status.isEmpty()
         ? Localization::text(QStringLiteral("Войдите в RetroAchievements.")) : achievementsState_.status, &dialog);
@@ -2315,8 +2311,8 @@ void MainWindow::editSettings(int initialPage) {
             achievementSound_ = achievementSound->isChecked();
             settings_.setValue(QStringLiteral("achievements/sound"), achievementSound_);
         }
-        if (achievementPosition->currentIndex() != achievementPosition_) {
-            achievementPosition_ = achievementPosition->currentIndex();
+        if (achievementPosition->position() != achievementPosition_) {
+            achievementPosition_ = achievementPosition->position();
             settings_.setValue(QStringLiteral("achievements/position"), achievementPosition_);
             view_->setAchievementPosition(achievementPosition_);
         }
