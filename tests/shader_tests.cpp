@@ -174,6 +174,28 @@ void gpuTests(const QString& directory) {
     require(filteredRamp.pixelColor(39, 2) == base &&
             filteredRamp.pixelColor(40, 12) == outline,
             "dither smoothing crossed a hard silhouette");
+    // A scrolling striped plane ends at a foreign-color silhouette. Every
+    // pixel at that cut should translate exactly when the scene moves by one.
+    const auto movingStripes = [&](int shift) {
+        QImage scene(38, 18, QImage::Format_RGB32);
+        scene.fill(outline);
+        for (int y = 0; y < scene.height(); ++y) {
+            const int end = 23 - y / 4;
+            for (int x = 4; x < end; ++x)
+                scene.setPixelColor(x + shift, y, x % 2 ? ink : base);
+        }
+        return render(dither, scene, scene.size());
+    };
+    const QImage first = movingStripes(0);
+    const QImage moved = movingStripes(1);
+    for (int y = 2; y < first.height() - 2; ++y) {
+        const int cut = 23 - y / 4;
+        for (int x = cut - 3; x <= cut; ++x)
+            require(first.pixel(x, y) == moved.pixel(x + 1, y), "stripe edge shimmered after scrolling");
+        require(first.pixelColor(cut, y) == outline, "stripe crossed a foreground silhouette");
+    }
+    require(qAbs(first.pixelColor(21, 6).red() - (ink.red() + base.red()) / 2) <= 1,
+            "last striped pixel next to silhouette was left unblended");
     QImage details(35, 19, QImage::Format_RGB32);
     details.fill(dark);
     constexpr const char* digits[] = {"1110111", "0010101", "0110111", "0010101", "1110111"};
@@ -184,6 +206,13 @@ void gpuTests(const QString& directory) {
         details.setPixelColor(x, 14, light);
     const QImage kept = render(dither, details, details.size());
     require(kept.convertToFormat(details.format()) == details, "thin digits or isolated stippling changed");
+    // Use the same geometry at the contrast of widely spaced palette shades.
+    for (int y = 0; y < details.height(); ++y)
+        for (int x = 0; x < details.width(); ++x)
+            details.setPixelColor(x, y, details.pixelColor(x, y) == dark ?
+                                  QColor(99, 69, 66) : QColor(173, 138, 173));
+    require(render(dither, details, details.size()).convertToFormat(details.format()) == details,
+            "wider palette steps softened an isolated glyph or dotted line");
 
     memoryBudgetTests(directory);
     write(directory + QStringLiteral("/lut.glsl"), shader("uniform sampler2D LUT; void main() { gl_FragColor=texture2D(LUT,tc); }"));
