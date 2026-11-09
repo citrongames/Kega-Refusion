@@ -39,9 +39,9 @@ varying vec2 tc;
 void parserTests(const QString& directory) {
     QString error;
     ShaderPreset preset;
-    require(ShaderPreset::load(QStringLiteral(":/shaders/gdapt.glslp"), preset, error), qPrintable(error));
-    require(preset.passes.size() == 2 && preset.parameters.size() == 5, "real gdapt passes/parameters missing");
-    require(preset.parameters[0].id == QStringLiteral("MODE"), "gdapt pragma parameter order changed");
+    require(ShaderPreset::load(QStringLiteral(":/shaders/refusion-dither.glslp"), preset, error), qPrintable(error));
+    require(preset.passes.size() == 1 && preset.parameters.size() == 1, "real dither passes/parameters missing");
+    require(preset.parameters[0].id == QStringLiteral("DITHER_STRENGTH"), "dither pragma parameter order changed");
     require(!ShaderPreset::load(QStringLiteral("unsupported.slangp"), preset, error) && error.contains("Slang"), "unsupported Slang was accepted");
     const QString bad = directory + QStringLiteral("/bad.glslp");
     write(bad, "shaders=2\nshader0=missing.glsl\nshader1=missing.glsl\n");
@@ -118,22 +118,52 @@ void gpuTests(const QString& directory) {
     require(qAbs(corner.red() - 20) <= 1 && qAbs(corner.blue() - 240) <= 1,
             "GPU frame was vertically flipped or channel-swapped");
 
-    require(ShaderPreset::load(QStringLiteral(":/shaders/gdapt.glslp"), preset, error), qPrintable(error));
-    ShaderPipeline gdapt;
-    require(gdapt.initialize(preset, error), qPrintable(error));
-    require(gdapt.setParameter(QStringLiteral("MODE"), 1.0f), "gdapt parameter cannot be changed");
-    require(!gdapt.setParameter(QStringLiteral("unknown"), 1.0f), "unknown parameter was accepted");
+    require(ShaderPreset::load(QStringLiteral(":/shaders/refusion-dither.glslp"), preset, error), qPrintable(error));
+    ShaderPipeline dither;
+    require(dither.initialize(preset, error), qPrintable(error));
+    require(dither.setParameter(QStringLiteral("DITHER_STRENGTH"), 1.0f), "dither parameter cannot be changed");
+    require(!dither.setParameter(QStringLiteral("unknown"), 1.0f), "unknown parameter was accepted");
     QImage stripes(32, 16, QImage::Format_RGB32);
     for (int y = 0; y < stripes.height(); ++y)
         for (int x = 0; x < stripes.width(); ++x)
             stripes.setPixelColor(x, y, x % 2 ? QColor(220, 40, 20) : QColor(20, 40, 220));
-    const QImage blended = render(gdapt, stripes, stripes.size());
+    const QImage blended = render(dither, stripes, stripes.size());
     const QColor blend = blended.pixelColor(16, 8);
     require(qAbs(blend.red() - 120) <= 2 && qAbs(blend.green() - 40) <= 1 &&
-            qAbs(blend.blue() - 120) <= 2, "gdapt did not merge detected alternating pixels");
+            qAbs(blend.blue() - 120) <= 2, "dither did not merge detected alternating pixels");
     stripes.fill(QColor(37, 58, 81));
-    const QImage flat = render(gdapt, stripes, QSize(64, 32));
-    require(flat.pixelColor(32, 16) == QColor(37, 58, 81), "gdapt changed a flat, nondithered area");
+    const QImage flat = render(dither, stripes, QSize(64, 32));
+    require(flat.pixelColor(32, 16) == QColor(37, 58, 81), "dither changed a flat, nondithered area");
+    // No title-specific fixtures: the same geometry must work in either phase.
+    const QColor dark(20, 40, 220), light(220, 40, 20);
+    for (int pattern = 0; pattern < 4; ++pattern) {
+        QImage tile(16, 16, QImage::Format_RGB32);
+        for (int y = 0; y < tile.height(); ++y) {
+            for (int x = 0; x < tile.width(); ++x) {
+                const bool bright = pattern == 0 ? (x + y) % 2 :
+                                    pattern == 1 ? y % 2 :
+                                    pattern == 2 ? (x % 2 && y % 2) : (x % 2 || y % 2);
+                tile.setPixelColor(x, y, bright ? light : dark);
+            }
+        }
+        const QImage mixed = render(dither, tile, tile.size());
+        const QColor expected = pattern == 2 ? QColor(70, 40, 170) :
+                                pattern == 3 ? QColor(170, 40, 70) : QColor(120, 40, 120);
+        for (int y = 0; y < tile.height(); ++y)
+            for (int x = 0; x < tile.width(); ++x)
+                require(mixed.pixelColor(x, y) == expected, "solid pattern did not blend up to its edge");
+    }
+    QImage details(35, 19, QImage::Format_RGB32);
+    details.fill(dark);
+    constexpr const char* digits[] = {"1110111", "0010101", "0110111", "0010101", "1110111"};
+    for (int y = 0; y < 5; ++y)
+        for (int x = 0; x < 7; ++x)
+            if (digits[y][x] == '1') details.setPixelColor(3+x, 5+y, light);
+    for (int x = 0; x < details.width(); x += 2)
+        details.setPixelColor(x, 14, light);
+    const QImage kept = render(dither, details, details.size());
+    require(kept.convertToFormat(details.format()) == details, "thin digits or isolated stippling changed");
+
     memoryBudgetTests(directory);
     write(directory + QStringLiteral("/lut.glsl"), shader("uniform sampler2D LUT; void main() { gl_FragColor=texture2D(LUT,tc); }"));
     require(ShaderPreset::load(directory + QStringLiteral("/lut.glsl"), preset, error), qPrintable(error));
@@ -169,8 +199,8 @@ void screenshotWidgetTests() {
             source.setPixelColor(x, y, x % 2 ? QColor(220, 40, 20) : QColor(20, 40, 220));
     view.setFrame(source, 4.0 / 3.0);
     QString error;
-    require(view.setShaderPreset(QStringLiteral(":/shaders/gdapt.glslp"), &error), qPrintable(error));
-    require(view.setShaderParameter(QStringLiteral("MODE"), 1), "screenshot shader parameter unavailable");
+    require(view.setShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp"), &error), qPrintable(error));
+    require(view.setShaderParameter(QStringLiteral("DITHER_STRENGTH"), 1), "screenshot shader parameter unavailable");
     const QImage baseline = capture(view);
     view.setPausedStatus(true);
     view.showOsd(QStringLiteral("Screenshot saved"));
@@ -183,7 +213,7 @@ void screenshotWidgetTests() {
             "clean native screenshot retained OSD or changed filtered output");
     const QColor centre = clean.pixelColor(clean.width()/2, clean.height()/2);
     require(qAbs(centre.red()-120) <= 2 && qAbs(centre.blue()-120) <= 2,
-            "clean native screenshot omitted the GDAPT shader");
+            "clean native screenshot omitted the dither filter shader");
     require(view.captureImage() == overlays, "clean native screenshot changed visible OSD");
 }
 
@@ -198,16 +228,16 @@ void widgetTests(const QString& directory) {
     const QImage stock = capture(view);
     require(stock.pixelColor(0, stock.height() / 2) == QColor(Qt::black), "native GameView pillarbox is not black");
     QString error;
-    require(view.setShaderPreset(QStringLiteral(":/shaders/gdapt.glslp"), &error), qPrintable(error));
-    require(view.setShaderParameter(QStringLiteral("MODE"), 1), "native GDAPT parameter cannot be set");
+    require(view.setShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp"), &error), qPrintable(error));
+    require(view.setShaderParameter(QStringLiteral("DITHER_STRENGTH"), 1), "native dither filter parameter cannot be set");
     const QImage filtered = capture(view);
     const QColor center = filtered.pixelColor(filtered.width() / 2, filtered.height() / 2);
-    require(qAbs(center.red() - 120) <= 2 && qAbs(center.blue() - 120) <= 2, "GameView did not present GDAPT output");
+    require(qAbs(center.red() - 120) <= 2 && qAbs(center.blue() - 120) <= 2, "GameView did not present dither filter output");
     require(filtered.pixelColor(0, filtered.height() / 2) == QColor(Qt::black), "shader colored GameView borders");
 
     require(!view.setShaderPreset(directory + QStringLiteral("/broken.glsl"), &error) && !error.isEmpty(),
             "GameView accepted a broken shader without an error");
-    require(view.shaderPreset() == QStringLiteral(":/shaders/gdapt.glslp"), "failed shader replaced the working preset");
+    require(view.shaderPreset() == QStringLiteral(":/shaders/refusion-dither.glslp"), "failed shader replaced the working preset");
     require(capture(view) == filtered, "failed shader damaged the active pipeline");
 
     view.setPausedStatus(true);
@@ -236,8 +266,8 @@ void widgetTests(const QString& directory) {
     if (!captureDirectory.isEmpty()) {
         QDir().mkpath(captureDirectory);
         require(stock.save(captureDirectory + QStringLiteral("/gpu-stock.png")) &&
-                filtered.save(captureDirectory + QStringLiteral("/gpu-gdapt.png")) &&
-                shaderOsd.save(captureDirectory + QStringLiteral("/gpu-gdapt-osd.png")) &&
+                filtered.save(captureDirectory + QStringLiteral("/gpu-dither.png")) &&
+                shaderOsd.save(captureDirectory + QStringLiteral("/gpu-dither-osd.png")) &&
                 rasterOsd.save(captureDirectory + QStringLiteral("/raster-osd.png")),
                 "cannot save requested native GPU captures");
     }
@@ -276,8 +306,8 @@ void widgetTests(const QString& directory) {
     GameView restored;
     restored.resize(920,620);
     restored.setFrame(stripes,4.0/3.0);
-    require(restored.setShaderPreset(QStringLiteral(":/shaders/gdapt.glslp"), &error), qPrintable(error));
-    require(restored.setShaderParameter(QStringLiteral("MODE"),1), "startup shader parameter restore failed");
+    require(restored.setShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp"), &error), qPrintable(error));
+    require(restored.setShaderParameter(QStringLiteral("DITHER_STRENGTH"),1), "startup shader parameter restore failed");
     require(capture(restored) == filtered, "shader preset/parameters set before showing were lost");
     restored.close();
 }
@@ -331,7 +361,7 @@ int main(int argc, char** argv) {
         gpuTests(directory.path());
         context.doneCurrent();
         widgetTests(directory.path());
-        std::puts("Native GameView, unfiltered OSD, integer scaling and GLSL parser, GPU multipass, alpha, orientation, borders and genuine GDAPT tests passed");
+        std::puts("Native GameView, unfiltered OSD, integer scaling and GLSL parser, GPU multipass, alpha, orientation, borders and native dither blending tests passed");
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Shader test failed: %s\n", e.what());

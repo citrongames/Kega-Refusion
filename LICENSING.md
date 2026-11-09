@@ -9,7 +9,8 @@ the **GNU General Public License, version 3 or (at your option) any later versio
 with the additional permission in [LICENSE-EXCEPTION](LICENSE-EXCEPTION) for
 combining with the identified emulation core. The complete GPL text is in
 [LICENSE](LICENSE). This grant applies only to contributions for which the
-project's copyright holder can grant these rights.
+project's copyright holder can grant these rights. This includes the original
+built-in Dither blending GLSL shader and preset in `assets/shaders/refusion-dither.*`.
 
 Kega Refusion is distributed without any warranty; see the GPL for details.
 The core exception does not turn third-party code into GPL code and does not
@@ -30,9 +31,6 @@ respective material. In particular:
   `third_party/` and individual source headers.
 - **Fonts, shaders and other third-party assets:** retain their component
   notices. The GPL grant for original code does not replace asset licenses.
-  GDAPT has no explicit license grant in its upstream files; its terms remain
-  unconfirmed, as recorded in `third_party/gdapt-NOTICE.txt`. It is not represented
-  as GPL-covered or as having confirmed GPL-compatible redistribution terms.
 - **Qt, FFmpeg, SDL and other packaged libraries:** retain their own licenses
   and source obligations. Binary packages include a `licenses/` directory.
 

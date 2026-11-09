@@ -185,7 +185,6 @@ Windows и Linux x86_64 используют общий контракт сет�
         (root / "third_party/libarchive-LICENSE.txt", "libarchive-LICENSE.txt"),
         (root / "third_party/liblzma-LICENSE.txt", "liblzma-LICENSE.txt"),
         (root / "third_party/zlib-LICENSE.txt", "zlib-LICENSE.txt"),
-        (root / "third_party/gdapt-NOTICE.txt", "gdapt-NOTICE.txt"),
         (root / "third_party/libco/LICENSE.txt", "libco-LICENSE.txt"),
         (root / "third_party/libco/README.txt", "libco-PROVENANCE.txt"),
         (root / "tools/patches/genesis-plus-gx-link-cable.README.md", "LinkCable-PROVENANCE.md"),

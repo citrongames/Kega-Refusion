@@ -150,7 +150,7 @@ def main() -> None:
     shutil.copy2(root / "third_party/SDL2-LICENSE.txt", notices / "SDL2-LICENSE.txt")
     shutil.copy2(root / "third_party/minimp3/LICENSE", notices / "minimp3-CC0.txt")
     shutil.copy2(root / "third_party/rcheevos/LICENSE", notices / "rcheevos-LICENSE.txt")
-    for name in ("GGPO-LICENSE.txt", "GGPO-PROVENANCE.md", "libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt", "gdapt-NOTICE.txt"):
+    for name in ("GGPO-LICENSE.txt", "GGPO-PROVENANCE.md", "libarchive-LICENSE.txt", "liblzma-LICENSE.txt", "zlib-LICENSE.txt"):
         shutil.copy2(root / "third_party" / name, notices / name)
 
     for source, name in (
@@ -174,7 +174,8 @@ def main() -> None:
     # Native QAudioSink/device enumeration does not require a media playback plugin.
     for relative in ("plugins/multimedia/ffmpegmediaplugin.dll",
                      "plugins/multimedia/windowsmediaplugin.dll", "swscale-8.dll",
-                     "swresample-5.dll", "licenses/FFmpeg-LGPL-2.1.txt"):
+                     "swresample-5.dll", "licenses/FFmpeg-LGPL-2.1.txt",
+                     "licenses/gdapt-NOTICE.txt"):
         target = destination / relative
         if target.is_symlink() or not target.resolve().is_relative_to(destination):
             raise SystemExit(f"Refusing to remove unsafe retired component: {target}")

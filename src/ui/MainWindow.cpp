@@ -552,7 +552,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateShaderActions();
         if (!smokeTest_) QMessageBox::warning(this, Localization::text(QStringLiteral("Шейдер")), error);
     });
-    const QString shader = settings_.value(QStringLiteral("view/shaderPreset")).toString();
+    QString shader = settings_.value(QStringLiteral("view/shaderPreset")).toString();
+    if (shader == QLatin1String(":/shaders/gdapt.glslp")) {
+        // Only the retired built-in resource migrates. External presets retain
+        // their own paths and parameters, even if their filename is gdapt.glslp.
+        settings_.remove(shaderParameterPrefix(shader));
+        shader = QStringLiteral(":/shaders/refusion-dither.glslp");
+    }
     if (!shader.isEmpty() && !applyShaderPreset(shader)) {
         settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
         updateShaderActions();
@@ -1003,15 +1009,16 @@ void MainWindow::buildMenus() {
         });
     }
     shaderMenu->addSeparator();
-    shaderGdaptAction_ = shaderMenu->addAction(QStringLiteral("GDAPT"));
-    shaderGdaptAction_->setObjectName(QStringLiteral("shaderGdapt"));
+    shaderDitherAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Сглаживание дизеринга")));
+    shaderDitherAction_->setObjectName(QStringLiteral("shaderDither"));
     shaderCustomAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Пользовательский")));
-    for (QAction* action : {shaderGdaptAction_, shaderCustomAction_}) {
+    shaderCustomAction_->setObjectName(QStringLiteral("shaderCustom"));
+    for (QAction* action : {shaderDitherAction_, shaderCustomAction_}) {
         action->setCheckable(true); shaderGroup->addAction(action);
     }
     shaderCustomAction_->setEnabled(false);
     connect(shaderOffAction_, &QAction::triggered, this, [this] { applyShaderPreset({}); });
-    connect(shaderGdaptAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/gdapt.glslp")); });
+    connect(shaderDitherAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp")); });
     shaderMenu->addSeparator();
     QAction* shaderLoad = shaderMenu->addAction(Localization::text(QStringLiteral("Загрузить GLSL-пресет…")));
     connect(shaderLoad, &QAction::triggered, this, [this] {
@@ -1025,6 +1032,7 @@ void MainWindow::buildMenus() {
         view_->setFocus();
     });
     shaderParametersAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Параметры…")));
+    shaderParametersAction_->setObjectName(QStringLiteral("shaderParameters"));
     connect(shaderParametersAction_, &QAction::triggered, this, &MainWindow::editShaderParameters);
     updateShaderActions();
     viewMenu->addSeparator();
@@ -1362,8 +1370,8 @@ void MainWindow::updateShaderActions() {
     if (blarggFilter_ >= 2 && blarggFilter_ <= 4)
         blarggActions_[blarggFilter_]->setChecked(true);
     else if (path.isEmpty()) shaderOffAction_->setChecked(true);
-    else if (path == QLatin1String(":/shaders/gdapt.glslp"))
-        shaderGdaptAction_->setChecked(true);
+    else if (path == QLatin1String(":/shaders/refusion-dither.glslp"))
+        shaderDitherAction_->setChecked(true);
     else shaderCustomAction_->setChecked(true);
     shaderParametersAction_->setEnabled(!view_->shaderParameters().isEmpty());
 }
@@ -1373,6 +1381,7 @@ void MainWindow::editShaderParameters() {
     if (parameters.isEmpty()) return;
     releaseInput();
     QDialog dialog(this, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
+    dialog.setObjectName(QStringLiteral("shaderParametersDialog"));
     dialog.setWindowTitle(Localization::text(QStringLiteral("Параметры шейдера")));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
@@ -1385,7 +1394,7 @@ void MainWindow::editShaderParameters() {
         value->setSingleStep(parameter.step);
         value->setValue(parameter.value);
         value->setObjectName(parameter.id);
-        form->addRow(parameter.label, value);
+        form->addRow(Localization::text(parameter.label), value);
         connect(value, &QDoubleSpinBox::valueChanged, &dialog, [this, prefix, id = parameter.id](double selected) {
             if (view_->setShaderParameter(id, float(selected))) settings_.setValue(prefix + id, selected);
         });

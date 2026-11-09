@@ -176,7 +176,7 @@ private:
     QAction* hardResetAction_ = nullptr;
     std::array<QAction*, 5> blarggActions_{};
     QAction* shaderOffAction_ = nullptr;
-    QAction* shaderGdaptAction_ = nullptr;
+    QAction* shaderDitherAction_ = nullptr;
     QAction* shaderCustomAction_ = nullptr;
     QAction* shaderParametersAction_ = nullptr;
     QAction* screenshotAction_ = nullptr;

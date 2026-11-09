@@ -16,9 +16,6 @@ No game ROMs, Paprium soundtrack files, or console BIOS files are distributed. I
 - **XZ Utils / liblzma 5.8.4**: 7z LZMA/LZMA2 compression support, statically linked; https://tukaani.org/xz/. The linked liblzma is BSD Zero Clause licensed; notices preserved in third_party/liblzma-LICENSE.txt. XZ command-line tools are not bundled.
 - **zlib 1.3.2**: ZIP Deflate compression support, statically linked; https://zlib.net/. License preserved in third_party/zlib-LICENSE.txt.
 
-- **GDAPT v1.3**, Sp00kyFox (2014): unmodified two-pass GLSL from https://github.com/libretro/glsl-shaders at `cba01a48b0974a1232bea68d999a7c21bc4c233e`. Attribution, source hashes and the absence of an explicit upstream license grant are recorded in `third_party/gdapt-NOTICE.txt`, included with the Windows package. No RetroArch frontend implementation was copied.
-
-
 ## minimp3
 
 - Source: https://github.com/lieff/minimp3
