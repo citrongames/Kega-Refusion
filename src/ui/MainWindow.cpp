@@ -1081,7 +1081,7 @@ void MainWindow::buildMenus() {
     });
     session_.setGameFpsEnabled(gameFpsAction_->isChecked());
     view_->setGameFpsEnabled(gameFpsAction_->isChecked());
-    QMenu* runTimerMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Таймер забега")));
+    QMenu* runTimerMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Время игры")));
     runTimerMenu->setObjectName(QStringLiteral("runTimerMenu"));
     auto* runTimerGroup = new QActionGroup(this);
     runTimerGroup->setExclusive(true);

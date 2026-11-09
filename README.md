@@ -26,7 +26,7 @@ Supply your own games and required BIOS files. Neither is included.
 - **Stay in control:** pause, single-frame steps in both directions, adjustable fast-forward, memory-limited rewind, ten quick-save slots and save/load to a chosen file. Battery saves keep one backup.
 - **Tune the picture and sound:** console or square-pixel aspect, integer scaling, Blargg filters, built-in dither blending, GLSL presets, output-device selection and live audio latency profiles. Normal latency is the default.
 - **Play together:** invitation-based direct netplay using GGPO rollback, Windows/Linux interoperability, spectators, shared controller roles and optional game-file transfer. Link Cable mode supports compatible Mega Drive cartridges.
-- **Record and export:** a run timer showing elapsed game time or frames since reset, replayable input recordings, screenshots, live video capture and input-recording export. Video uses native-resolution lossless PNG frames with AAC audio in MOV, without OSD.
+- **Record and export:** a game time display in the upper-right corner showing elapsed time or frames since reset, replayable input recordings, screenshots, live video capture and input-recording export. Video uses native-resolution lossless PNG frames with AAC audio in MOV, without OSD.
 - **Explore games:** Game Genie / Action Replay, CHT import/export, manual cheat search and graphics/audio-channel debugging windows.
 - **Achievements:** RetroAchievements integration, a sortable achievement list and optional notifications. Sign-in is required to fetch achievement sets; netplay supports Softcore.
 - **Keep it portable:** settings and saves beside the application; English and Russian included, with external JSON translations and English fallback.

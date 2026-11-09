@@ -105,6 +105,17 @@ void testFpsOverlays() {
     view.setPerformanceMetricsEnabled(false);
     view.setGameFpsEnabled(false);
     require(render(view) == baseline, "FPS did not disappear after disabling both counters");
+    view.setOsdEnabled(true);
+    view.setRunTimerMode(GameView::RunTimerMode::Time);
+    view.setRunTimer(60,1000000);
+    const auto timer = changedBounds(baseline, render(view));
+    require(timer.top() == bounds.top() && timer.right() == bounds.right() && timer.left() > view.width()/2,
+            "Game time should occupy the upper-right corner");
+    view.setPerformanceMetricsEnabled(true);
+    view.setGameFpsEnabled(true);
+    const auto stacked = changedBounds(baseline, render(view));
+    require(stacked.bottom() >= bounds.bottom() + timer.height() && stacked.right() == timer.right(),
+            "Game time should stack below both FPS counters");
 }
 
 void testGameBorders() {

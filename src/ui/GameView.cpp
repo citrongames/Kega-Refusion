@@ -674,12 +674,13 @@ void GameView::paintOsd(QPainter& painter) {
     const int pad = qBound(5, height() / 95, 9);
     const int lineHeight = fm.height() + 2;
     const int maxTextWidth = qMax(60, width() - 2 * margin - 2 * pad);
-    auto drawPanel = [&](const QStringList& lines, int x, int y, bool accent) {
+    auto drawPanel = [&](const QStringList& lines, int y, bool accent, Qt::AlignmentFlag align = Qt::AlignLeft) {
         int textWidth = 0;
         for (const QString& line : lines)
             textWidth = qMax(textWidth, fm.horizontalAdvance(line));
         const int panelWidth = qMin(width() - 2 * margin, textWidth + 2 * pad);
         const int panelHeight = lines.size() * lineHeight + 2 * pad;
+        const int x = align == Qt::AlignRight ? width() - margin - panelWidth : margin;
         const QRect box(x, y, panelWidth, panelHeight);
         painter.fillRect(box, QColor(0, 0, 0, 218));
         painter.setPen(accent ? QColor(126, 224, 233) : QColor(129, 142, 159));
@@ -695,13 +696,12 @@ void GameView::paintOsd(QPainter& painter) {
         return panelHeight;
     };
 
-    if (metricsOsd) {
-        int textWidth = 0;
-        for (const QString& line : metricsLines_) textWidth = qMax(textWidth, fm.horizontalAdvance(line));
-        const int panelWidth = qMin(width() - 2 * margin, textWidth + 2 * pad);
-        drawPanel(metricsLines_, qMax(margin, width() - margin - panelWidth), margin, true);
-    }
+    int rightY = margin;
+    if (metricsOsd)
+        rightY += drawPanel(metricsLines_, rightY, true, Qt::AlignRight) + 4;
     if (!osdEnabled_) return;
+    if (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty())
+        drawPanel({runTimerText_}, rightY, true, Qt::AlignRight);
 
     int y = margin;
     const auto counter = [this](quint64 frame) {
@@ -710,27 +710,25 @@ void GameView::paintOsd(QPainter& painter) {
     const QString unit = movieCounterAsTime_ ? Localization::text(QStringLiteral("ВРЕМЯ")) : Localization::text(QStringLiteral("КАДР"));
     if (movieMode_ == 1)
         y += drawPanel({Localization::text(QStringLiteral("ЗАПИСЬ")),
-                        QStringLiteral("%1 %2").arg(unit, counter(movieFrame_))}, margin, y, true) + 4;
+                        QStringLiteral("%1 %2").arg(unit, counter(movieFrame_))}, y, true) + 4;
     else if (movieMode_ == 2)
         y += drawPanel({Localization::text(QStringLiteral("ВОСПРОИЗВЕДЕНИЕ")),
                         QStringLiteral("%1 %2 / %3").arg(unit, counter(movieFrame_), counter(movieLength_))},
-                       margin, y, true) + 4;
-    if (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty())
-        y += drawPanel({runTimerText_}, margin, y, true) + 4;
+                       y, true) + 4;
     if (connectionWaiting_)
-        y += drawPanel({Localization::text(QStringLiteral("СВЯЗЬ ПОТЕРЯНА"))}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("СВЯЗЬ ПОТЕРЯНА"))}, y, true) + 4;
     else if (readinessWaiting_)
         y += drawPanel({Localization::text(QStringLiteral("ОЖИДАНИЕ ИГРОКА")),
-                        Localization::text(QStringLiteral("Загрузка игры или синхронизация"))}, margin, y, true) + 4;
+                        Localization::text(QStringLiteral("Загрузка игры или синхронизация"))}, y, true) + 4;
     if (paused_)
-        y += drawPanel({Localization::text(QStringLiteral("ПАУЗА"))}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("ПАУЗА"))}, y, true) + 4;
     if (fastForward_)
         y += drawPanel({fastForwardFactor_ ? Localization::text(QStringLiteral("УСКОРЕНИЕ ×%1")).arg(fastForwardFactor_) : Localization::text(QStringLiteral("УСКОРЕНИЕ МАКС."))},
-                       margin, y, true) + 4;
+                       y, true) + 4;
     if (rewinding_)
-        y += drawPanel({Localization::text(QStringLiteral("ПЕРЕМОТКА НАЗАД")), rewindTime_}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("ПЕРЕМОТКА НАЗАД")), rewindTime_}, y, true) + 4;
     if (muted_)
-        y += drawPanel({Localization::text(QStringLiteral("ЗВУК ВЫКЛЮЧЕН"))}, margin, y, true) + 4;
+        y += drawPanel({Localization::text(QStringLiteral("ЗВУК ВЫКЛЮЧЕН"))}, y, true) + 4;
     if (stateSlots_.expiresAt) {
         // Ten compact cells, as in FCEUX: filled occupied slots and a selected outline.
         // Keep the row inside narrow windows even when their height requests a large font.
@@ -793,7 +791,7 @@ void GameView::paintOsd(QPainter& painter) {
         }
         const int panelHeight = lines.size() * lineHeight + 2 * pad;
         if (y + panelHeight > height() - margin) break;
-        y += drawPanel(lines, margin, y, false) + 4;
+        y += drawPanel(lines, y, false) + 4;
     }
     // Achievement cards intentionally cover ordinary OSD until their timeout.
     if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
