@@ -35,6 +35,23 @@ QString movieTime(quint64 frame, double fps) {
         .arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
+QString runTimerTime(quint64 microseconds) {
+    const quint64 milliseconds = microseconds / 1000;
+    const quint64 seconds = milliseconds / 1000;
+    return QStringLiteral("%1:%2:%3.%4")
+        .arg(seconds / 3600)
+        .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0'))
+        .arg(seconds % 60, 2, 10, QLatin1Char('0'))
+        .arg(milliseconds % 1000, 3, 10, QLatin1Char('0'));
+}
+
+QString formatRunTimer(GameView::RunTimerMode mode, quint64 frames, quint64 microseconds) {
+    if (mode == GameView::RunTimerMode::Time) return runTimerTime(microseconds);
+    if (mode == GameView::RunTimerMode::Frames)
+        return Localization::text(QStringLiteral("Кадр %1")).arg(frames);
+    return {};
+}
+
 QStringList wrapOsd(const QString& text, const QFontMetrics& metrics,
                     int maxWidth, int maxLines) {
     QStringList lines;
@@ -255,6 +272,9 @@ void GameView::clearGame() {
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
     notices_.clear(); stateSlots_.expiresAt = 0; clearAchievementNotices(); osdTimer_.stop();
     movieMode_ = 0; movieFrame_ = movieLength_ = 0;
+    runTimerReady_ = false;
+    runTimerFrames_ = runTimerMicroseconds_ = 0;
+    runTimerText_.clear();
     metricsReady_ = gameFpsAvailable_ = false;
     rebuildPerformanceMetrics();
     setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
@@ -461,6 +481,10 @@ void GameView::rebuildAchievementPixmap() {
 
 void GameView::setOsdEnabled(bool enabled) {
     osdEnabled_ = enabled;
+    if (!enabled) {
+        runTimerReady_ = false;
+        runTimerText_.clear();
+    }
     notices_.clear();
     stateSlots_.expiresAt = 0;
     clearAchievementNotices();
@@ -568,6 +592,28 @@ void GameView::setMovieStatus(int mode, quint64 frame, quint64 length, double fp
     if (changed && osdEnabled_) repaintView();
 }
 
+void GameView::setRunTimerMode(RunTimerMode mode) {
+    if (runTimerMode_ == mode) return;
+    runTimerMode_ = mode;
+    if (mode == RunTimerMode::Off) runTimerReady_ = false;
+    const QString text = runTimerReady_
+        ? formatRunTimer(mode, runTimerFrames_, runTimerMicroseconds_) : QString();
+    if (runTimerText_ == text) return;
+    runTimerText_ = text;
+    if (osdEnabled_ && !frame_.isNull() && !loading_) repaintView();
+}
+
+void GameView::setRunTimer(quint64 frames, quint64 microseconds) {
+    if (!osdEnabled_ || runTimerMode_ == RunTimerMode::Off) return;
+    runTimerFrames_ = frames;
+    runTimerMicroseconds_ = microseconds;
+    runTimerReady_ = true;
+    const QString text = formatRunTimer(runTimerMode_, frames, microseconds);
+    if (runTimerText_ == text) return;
+    runTimerText_ = text;
+    if (osdEnabled_ && !frame_.isNull() && !loading_) repaintView();
+}
+
 void GameView::setRewindProgress(qint64 remainingMs, qint64 totalMs) {
     auto time = [](qint64 ms) {
         const qint64 tenths = qMax<qint64>(0, ms) / 100;
@@ -609,7 +655,9 @@ void GameView::paintOsd(QPainter& painter) {
     if (capturingGame_) return;
     const QRect achievementRect = osdEnabled_ ? achievementPopupRect() : QRect();
     const bool ordinaryOsd = osdEnabled_ && (!notices_.isEmpty() || stateSlots_.expiresAt ||
-        paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ || movieMode_ == 1 || movieMode_ == 2);
+        paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
+        movieMode_ == 1 || movieMode_ == 2 ||
+        (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty()));
     const bool metricsOsd = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
     if (!ordinaryOsd && !metricsOsd) {
         if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
@@ -667,6 +715,8 @@ void GameView::paintOsd(QPainter& painter) {
         y += drawPanel({Localization::text(QStringLiteral("ВОСПРОИЗВЕДЕНИЕ")),
                         QStringLiteral("%1 %2 / %3").arg(unit, counter(movieFrame_), counter(movieLength_))},
                        margin, y, true) + 4;
+    if (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty())
+        y += drawPanel({runTimerText_}, margin, y, true) + 4;
     if (connectionWaiting_)
         y += drawPanel({Localization::text(QStringLiteral("СВЯЗЬ ПОТЕРЯНА"))}, margin, y, true) + 4;
     else if (readinessWaiting_)

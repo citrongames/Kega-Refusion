@@ -334,6 +334,20 @@ bool MovieTape::inputAt(quint64 frame, MovieInput& input) const {
     return true;
 }
 
+quint64 MovieTape::framesSinceReset(quint64 cursor) const {
+    if (!isValid() || cursor > frameCount_ || cursor == 0) return 0;
+    auto it = std::lower_bound(runs_.begin(), runs_.end(), cursor,
+        [](const Run& run, quint64 target) { return run.endFrame < target; });
+    if (it == runs_.end()) return cursor;
+    for (;;) {
+        if (it->input.commands & SoftReset)
+            return cursor - std::min(cursor,it->endFrame) + 1;
+        if (it == runs_.begin()) break;
+        --it;
+    }
+    return cursor;
+}
+
 bool MovieTape::truncate(quint64 frameCount) {
     if (!isValid() || frameCount > frameCount_) return false;
     if (frameCount == frameCount_) return true;

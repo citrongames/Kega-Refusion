@@ -120,7 +120,7 @@ void checkEightPlayerRoundTrip(const QTemporaryDir& directory) {
     MovieTape tape;
     check(tape.create(QJsonObject{}, QByteArray("state", 5), error), "create eight-player tape");
     MovieInput p3, p4, p8, read;
-    p3.buttons[2] = 0x0303; p4.buttons[3] = 0x0404; p8.buttons[7] = 0x0808;
+    p3.buttons[2] = 0x0303; p4.buttons[3] = 0x0404; p4.commands = MovieTape::SoftReset; p8.buttons[7] = 0x0808;
     p8.aim[2] = 0x10000'ffffULL;
     for (int i = 0; i < 4; ++i) check(tape.append(p3, error), "append player three");
     check(tape.append(p4, error) && tape.append(p4, error), "append player four");
@@ -130,6 +130,9 @@ void checkEightPlayerRoundTrip(const QTemporaryDir& directory) {
     check(tape.save(path, error), "save eight-player tape");
     MovieTape loaded;
     check(loaded.load(path, error) && loaded.size() == 7, "load eight-player tape");
+    check(loaded.framesSinceReset(4) == 4 && loaded.framesSinceReset(5) == 1 &&
+          loaded.framesSinceReset(6) == 1 && loaded.framesSinceReset(7) == 2,
+          "clock follows the last reset in a repeated run after loading");
     check(loaded.inputAt(3, read) && read == p3 && loaded.inputAt(4, read) && read == p4 &&
           loaded.inputAt(6, read) && read == p8, "all eight button slots round trip");
     quint64 cursor = 0;
@@ -168,6 +171,9 @@ int main() {
     for (int i = 0; i < 3; ++i) check(tape.append(b, error), "append second run");
     check(tape.append(c, error) && tape.append(c, error), "append reset run");
     check(tape.size() == 105, "frame count");
+    check(tape.framesSinceReset(0) == 0 && tape.framesSinceReset(103) == 103 &&
+          tape.framesSinceReset(104) == 1 && tape.framesSinceReset(105) == 1,
+          "reset within a repeated input run starts the frame count at one");
     MovieInput read;
     check(tape.inputAt(0, read) && read == a, "first input");
     check(tape.inputAt(99, read) && read == a, "last first run");

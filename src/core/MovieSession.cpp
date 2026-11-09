@@ -44,6 +44,12 @@ void restorePreviousSession(LibretroHost& host, const QByteArray& state,
     host.setMoviePlayback(false);
     if (!restored) error += Localization::text(QStringLiteral("\nНе удалось восстановить прежнюю сессию: %1")).arg(recovery);
 }
+void restoreLegacyClock(LibretroHost& host, const MovieTape& tape, quint64 cursor) {
+    const double rate = tape.metadata().value(QStringLiteral("frameRate")).toDouble(host.fps());
+    const quint64 frames = tape.framesSinceReset(cursor);
+    const quint64 ticksPerFrame = quint64(std::llround(4294967296.0 / rate));
+    host.setRunClock({frames,frames * ticksPerFrame});
+}
 void applyInput(LibretroHost& host, const MovieInput& input) {
     if (input.commands & MovieTape::SoftReset) host.reset();
     for (unsigned p = 0; p < input.buttons.size(); ++p)
@@ -103,12 +109,15 @@ bool MovieSession::play(const QString& path, bool resumeRecording, QString& erro
     if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи.")); return false; }
     host_.setMoviePlayback(true); // Preparing replay must not flush imported movie battery data.
     const bool prepared = host_.prepareMovie(candidate.metadata(), error);
+    bool restoredClock = false;
     if (!prepared || !host_.restoreMovieState(
-            resumeRecording ? candidate.resumeState() : candidate.initialState(), error)) {
+            resumeRecording ? candidate.resumeState() : candidate.initialState(),
+            error, false, &restoredClock)) {
         restorePreviousSession(host_, previous, previousDisc, prepared, error);
         return false;
     }
     cursor_ = resumeRecording ? candidate.resumeFrame() : 0;
+    if (!restoredClock) restoreLegacyClock(host_, candidate, cursor_);
     tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
     mode_ = resumeRecording ? Recording : (tape_.size() ? Playback : Finished);
     host_.setMoviePlayback(true);
@@ -267,7 +276,9 @@ bool MovieSession::loadFile(const QString& path, QImage& frame, double& aspect, 
     MovieTape candidate = tape_;
     quint64 target = 0;
     if (!candidate.restoreCheckpoint(payload.mid(header + stateSize, prefixSize), target, readOnly(), error)) return false;
-    if (!host_.restoreMovieState(payload.mid(header,stateSize), error)) return false;
+    bool restoredClock = false;
+    if (!host_.restoreMovieState(payload.mid(header,stateSize), error, false, &restoredClock)) return false;
+    if (!restoredClock) restoreLegacyClock(host_, candidate, target);
     tape_ = std::move(candidate); cursor_ = target;
     if (readOnly()) mode_ = cursor_ == tape_.size() ? Finished : Playback;
     frame = savedFrame; aspect = ratio;

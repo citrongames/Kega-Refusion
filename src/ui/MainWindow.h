@@ -204,6 +204,7 @@ private:
     QString currentGameName_;
     QByteArray windowedGeometry_;
     int stateSlot_ = 0;
+    int runTimerMode_ = 0;
     int fastForwardFactor_ = 4;
     bool rewindEnabled_ = true;
     bool smsFmEnabled_ = true;

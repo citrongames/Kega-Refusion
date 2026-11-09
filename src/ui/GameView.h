@@ -24,6 +24,7 @@ class GameView final : public QWidget {
     Q_OBJECT
 public:
     enum class AspectMode { Console, SquarePixels, Stretch };
+    enum class RunTimerMode { Off, Time, Frames };
 
     explicit GameView(QWidget* parent = nullptr);
     ~GameView() override;
@@ -61,6 +62,8 @@ public:
     void setRewindProgress(qint64 remainingMs, qint64 totalMs);
     void setMovieCounterAsTime(bool enabled);
     void setMovieStatus(int mode, quint64 frame, quint64 length, double fps);
+    void setRunTimerMode(RunTimerMode mode);
+    void setRunTimer(quint64 frames, quint64 microseconds);
     void setLightgunEnabled(unsigned player, bool enabled, unsigned gunNumber = 1);
     // Aim coordinates are normalized to [0, 1] within the displayed gameRect.
     void setCrosshairVisible(unsigned player, bool visible);
@@ -200,6 +203,11 @@ private:
     quint64 movieFrame_ = 0, movieLength_ = 0;
     double movieFps_ = 60.0;
     bool movieCounterAsTime_ = true;
+    RunTimerMode runTimerMode_ = RunTimerMode::Off;
+    bool runTimerReady_ = false;
+    quint64 runTimerFrames_ = 0;
+    quint64 runTimerMicroseconds_ = 0;
+    QString runTimerText_;
     QString rewindTime_;
     StateSlots stateSlots_;
     QVector<Notice> notices_;

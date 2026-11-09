@@ -88,7 +88,7 @@ public:
     QByteArray captureNetworkState(bool checksum = true) const;
     QByteArray networkCompatibility() const;
     // trusted is only for snapshots retained inside RewindBuffer, never files.
-    bool restoreMovieState(const QByteArray& state, QString& error, bool trusted = false);
+    bool restoreMovieState(const QByteArray& state, QString& error, bool trusted = false, bool* restoredClock = nullptr);
     QJsonObject movieConfiguration(bool forPowerReset = false) const;
     bool prepareNetwork(const QJsonObject& configuration, QString& error);
     bool restoreNetworkState(const QByteArray& state, QString& error);
@@ -128,6 +128,15 @@ public:
     void setGunAim(unsigned player, int x, int y, bool offscreen);
     void setPointer(unsigned player, int x, int y);
     bool loaded() const { return loaded_; }
+    struct RunClock {
+        quint64 frames = 0;
+        quint64 ticks = 0; // 2^32 ticks per second, independent of video mode.
+        quint64 microseconds() const {
+            return (ticks >> 32) * 1000000 + (((ticks & 0xffffffffULL) * 1000000) >> 32);
+        }
+    };
+    RunClock runClock() const { return runClock_; }
+    void setRunClock(RunClock clock) { runClock_ = clock; }
     double fps() const { return av_.timing.fps; }
     int sampleRate() const { return int(av_.timing.sample_rate); }
     double aspectRatio() const;
@@ -167,6 +176,12 @@ private:
     quint32 debugVideoMask_ = 0, debugBackdrop_ = 0xff00ff;
     quint64 debugAudioMask_ = 0;
     std::array<quint8,38> debugAudioGains_ = [] { std::array<quint8,38> gains{}; gains.fill(100); return gains; }();
+    RunClock runClock_;
+    double runRate_ = 0;
+    quint64 ticksPerFrame_ = 0;
+    QByteArray serializeCore(bool includeClock) const;
+    QByteArray captureMoviePayload(bool checksum, bool includeClock) const;
+    bool restoreCore(const char* data, qsizetype size, bool transactional = true);
     struct Api;
     bool initialize(QString& error);
     void prepareCoreContent();

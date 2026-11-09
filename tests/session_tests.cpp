@@ -67,8 +67,9 @@ int main(int argc,char** argv){
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool frameBackOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--frame-back");
+ const bool timerOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--run-timer");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || timerOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  if(frameBackOnly)rom=frameBackRom();
@@ -214,6 +215,62 @@ int main(int argc,char** argv){
   return 0;
  }
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(timerOnly){
+  quint64 timerFrames=0,timerUs=0;int timerEvents=0;
+  QObject::connect(&session,&EmulationSession::runTimerChanged,&app,
+   [&](quint64 count,quint64 microseconds){
+    timerFrames=count;timerUs=microseconds;++timerEvents;
+   });
+  session.setPaused(true);waitFor([&]{return paused;},"timer initial pause");
+  QImage image;double aspect=0;session.takeVideoFrame(image,aspect);
+  session.setRunTimerEnabled(true);
+  const auto reset=[&](bool hard){
+   const int completed=actions+1,before=timerEvents;
+   if(hard)session.hardResetGame();else session.resetGame();
+   waitFor([&]{return actions>=completed && timerEvents>before && timerFrames==0 && timerUs==0;},
+           hard?"timer hard reset":"timer soft reset");
+   require(paused,"timer reset left explicit pause");
+  };
+  reset(false);
+  const auto step=[&](bool backward,quint64 expected){
+   session.takeVideoFrame(image,aspect);
+   const int beforeFrame=frames.load(),beforeTimer=timerEvents;
+   if(backward)session.backFrame();else session.advanceFrame();
+   waitFor([&]{return frames.load()>beforeFrame && timerEvents>beforeTimer;},
+           backward?"timer backward step":"timer forward step");
+   require(frames.load()==beforeFrame+1 && timerFrames==expected,
+           "timer step skipped or counted a frame twice");
+   require(paused,"timer step left explicit pause");
+  };
+  const int frozen=frames.load(),frozenEvents=timerEvents;
+  QElapsedTimer idle;idle.start();
+  while(idle.elapsed()<100){QCoreApplication::processEvents();QThread::msleep(2);}
+  require(frames.load()==frozen && timerEvents==frozenEvents && timerFrames==0,
+          "paused timer advanced without an emulated frame");
+  step(false,1);const quint64 oneUs=timerUs;
+  require(oneUs>=16000 && oneUs<=17000,"timer did not use emulated NTSC frame duration");
+  step(false,2);const quint64 savedUs=timerUs;
+  require(savedUs>oneUs && savedUs<2*oneUs+2,"timer duration did not follow frame count");
+  const auto savedPath=temp.filePath("timer.krs");
+  const int saved=actions+1;session.saveStateToFile(savedPath);
+  waitFor([&]{return actions>=saved && QFile::exists(savedPath);},"timer state save");
+  step(false,3);step(false,4);
+  step(true,3);step(true,2);
+  require(timerUs==savedUs,"backward step did not restore elapsed time");
+  step(false,3);
+  const int restored=actions+1,beforeRestore=timerEvents;
+  session.loadStateFromFile(savedPath);
+  waitFor([&]{return actions>=restored && timerEvents>beforeRestore && timerFrames==2;},
+          "timer state restore");
+  require(timerUs==savedUs && paused,"state restore did not restore timer and pause");
+  step(false,3);
+  reset(false);step(false,1);
+  reset(true);
+  require(errors==0,"timer session reported a core error");
+  session.shutdown();
+  std::puts("Run timer: paused hold, frame steps, reverse, state restore and resets passed");
+  return 0;
+ }
  if(frameBackOnly){
   struct Shot { QByteArray state;QImage frame;double aspect=0; };
   const auto read=[&](const QString& target){

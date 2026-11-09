@@ -274,6 +274,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
                                  settings_.value(QStringLiteral("emulation/attach32x"), false).toBool());
     connect(&session_, &EmulationSession::performanceMetricsChanged,
             view_, &GameView::setPerformanceMetrics);
+    connect(&session_, &EmulationSession::runTimerChanged,
+            view_, &GameView::setRunTimer);
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setRewindEnabled(rewindEnabled_);
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
@@ -1047,6 +1049,7 @@ void MainWindow::buildMenus() {
     connect(shaderParametersAction_, &QAction::triggered, this, &MainWindow::editShaderParameters);
     updateShaderActions();
     viewMenu->addSeparator();
+    runTimerMode_ = qBound(0, settings_.value(QStringLiteral("view/runTimerMode"), 0).toInt(), 2);
     osdAction_ = viewMenu->addAction(Localization::text(QStringLiteral("Экранные сообщения (OSD)")));
     osdAction_->setObjectName(QStringLiteral("osdAction"));
     osdAction_->setCheckable(true);
@@ -1054,6 +1057,7 @@ void MainWindow::buildMenus() {
     connect(osdAction_, &QAction::toggled, this, [this](bool enabled) {
         settings_.setValue(QStringLiteral("view/osd"), enabled);
         view_->setOsdEnabled(enabled);
+        session_.setRunTimerEnabled(enabled && runTimerMode_ != 0);
     });
     fpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS эмуляции")));
     fpsAction_->setObjectName(QStringLiteral("emulationFpsAction"));
@@ -1077,6 +1081,32 @@ void MainWindow::buildMenus() {
     });
     session_.setGameFpsEnabled(gameFpsAction_->isChecked());
     view_->setGameFpsEnabled(gameFpsAction_->isChecked());
+    QMenu* runTimerMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Таймер забега")));
+    runTimerMenu->setObjectName(QStringLiteral("runTimerMenu"));
+    auto* runTimerGroup = new QActionGroup(this);
+    runTimerGroup->setExclusive(true);
+    const QStringList runTimerLabels{
+        Localization::text(QStringLiteral("Выключен")),
+        Localization::text(QStringLiteral("Время")),
+        Localization::text(QStringLiteral("Кадры"))};
+    const QStringList runTimerActionNames{
+        QStringLiteral("runTimerOffAction"), QStringLiteral("runTimerTimeAction"),
+        QStringLiteral("runTimerFramesAction")};
+    for (int mode = 0; mode < runTimerLabels.size(); ++mode) {
+        QAction* action = runTimerMenu->addAction(runTimerLabels.at(mode));
+        action->setObjectName(runTimerActionNames.at(mode));
+        action->setCheckable(true);
+        action->setChecked(mode == runTimerMode_);
+        runTimerGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, mode] {
+            runTimerMode_ = mode;
+            settings_.setValue(QStringLiteral("view/runTimerMode"), mode);
+            view_->setRunTimerMode(static_cast<GameView::RunTimerMode>(mode));
+            session_.setRunTimerEnabled(osdAction_->isChecked() && mode != 0);
+        });
+    }
+    view_->setRunTimerMode(static_cast<GameView::RunTimerMode>(runTimerMode_));
+    session_.setRunTimerEnabled(osdAction_->isChecked() && runTimerMode_ != 0);
     viewMenu->addSeparator();
     fullscreenAction_ = viewMenu->addAction(Localization::text(QStringLiteral("Полный экран")));
     fullscreenAction_->setShortcut(QKeySequence(QStringLiteral("Alt+Return")));

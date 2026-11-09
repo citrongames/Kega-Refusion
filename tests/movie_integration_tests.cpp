@@ -313,6 +313,9 @@ void integration(const QString& core) {
     require(movie.position()==10 && !savedFrame.isNull() && aspect>0,
             "movie slot did not restore its prefix and frame");
     for (int i=10;i<14;++i) expected.push_back(step(movie,host,memory,inputFor(i,true),error));
+    const auto savedClock=host.runClock();
+    require(savedClock.frames==movie.position() && savedClock.ticks>0,
+            "movie finish did not capture its elapsed frame clock");
     require(movie.finish(false,error),qPrintable(error));
     require(readFile(normalState)==normalBytes,"movie slot changed a normal quick state");
     require(host.movieConfiguration()==recordedConfig,"recording left a configuration overlay");
@@ -347,6 +350,9 @@ void integration(const QString& core) {
     require(host.load(romPath,error),qPrintable(error));
     require(movie.play(moviePath,true,error),qPrintable(error));
     require(movie.recording() && movie.position()==expected.size(),"resume cursor mismatch");
+    const auto resumedClock=host.runClock();
+    require(resumedClock.frames==savedClock.frames && resumedClock.ticks==savedClock.ticks,
+            "movie resume did not restore the clock saved at finish");
     for (int i=14;i<17;++i) expected.push_back(step(movie,host,memory,inputFor(i),error));
     require(movie.finish(false,error),qPrintable(error));
     require(movie.play(moviePath,false,error),qPrintable(error));

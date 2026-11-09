@@ -56,6 +56,8 @@ public:
 
     bool isValid() const { return id_.size() == 16; }
     quint64 size() const { return frameCount_; }
+    // Count executed frames after the most recent reset command before cursor.
+    quint64 framesSinceReset(quint64 cursor) const;
     QJsonObject metadata() const { return metadata_; }
     QByteArray initialState() const { return initialState_; }
     QByteArray id() const { return id_; }

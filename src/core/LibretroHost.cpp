@@ -58,6 +58,8 @@ bool smsControllerHardware(unsigned system) {
 }
 const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
+constexpr qsizetype runClockBytes = 24;
+constexpr char runClockMagic[] = "KRTIMER1";
 const QByteArray stateMagic("KRSTATE1", 8);
 bool validGeometry(const retro_game_geometry& geometry) {
     return geometry.base_width && geometry.base_height && geometry.base_width <= 4096 &&
@@ -565,6 +567,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     return true;
 }
 void LibretroHost::unload() {
+    runClock_ = {};
     stopLinkedPair();
     debugVideoMask_ = 0; debugAudioMask_ = 0;
     for (unsigned channel=0; channel<debugAudioGains_.size(); ++channel)
@@ -645,6 +648,12 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
         spriteOwnership_ = {};
         if (linkPeer_) linkPeer_->spriteOwnership_ = {};
     }
+    if (runRate_ != fps()) {
+        runRate_ = fps();
+        ticksPerFrame_ = quint64(std::llround(4294967296.0 / runRate_));
+    }
+    ++runClock_.frames;
+    runClock_.ticks += ticksPerFrame_;
     if (linkPair_) { runLinkedFrame(renderVideo,captureAudio); return; }
     videoEnabled_ = renderVideo; audioEnabled_ = captureAudio;
     audio_.clear(); api_->run();
@@ -653,6 +662,7 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     videoEnabled_ = audioEnabled_ = true;
 }
 void LibretroHost::reset() {
+    runClock_ = {};
     spriteOwnership_ = {};
     if (linkPeer_) { resetLinkedPair(); return; }
     if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
@@ -758,6 +768,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     loaded_ = true;
+    runClock_ = {};
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
     if (!discs_.isEmpty() && !CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
@@ -1268,21 +1279,48 @@ QByteArray LibretroHost::unpackNetworkState(const QByteArray& packed) {
         reinterpret_cast<const Bytef*>(packed.constData()+4),uLong(packed.size()-4))!=Z_OK||actual!=length)return {};
     return result;
 }
-QByteArray LibretroHost::serialize() const {
+QByteArray LibretroHost::serialize() const { return serializeCore(false); }
+QByteArray LibretroHost::serializeCore(bool includeClock) const {
     if (!loaded_) return {};
-    if (linkPeer_) return captureLinkedState();
-    const size_t size = api_->serialize_size();
-    if (!size || size > size_t(maxStateSize)) return {};
-    QByteArray result(qsizetype(size), '\0');
-    if (!api_->serialize(result.data(), size)) return {};
+    const qsizetype size = serializedSize();
+    if (size <= 0 || size > maxStateSize - (includeClock ? runClockBytes : 0)) return {};
+    QByteArray result;
+    if (linkPeer_) {
+        result = captureLinkedState();
+        if (result.size() != size) return {};
+        if (includeClock) result.resize(size + runClockBytes);
+    } else {
+        result = QByteArray(size + (includeClock ? runClockBytes : 0), char(0));
+        if (!api_->serialize(result.data(),size_t(size))) return {};
+    }
+    if (includeClock) {
+        char* tail = result.data() + size;
+        std::memcpy(tail,runClockMagic,8);
+        qToBigEndian(runClock_.frames,tail+8);
+        qToBigEndian(runClock_.ticks,tail+16);
+    }
     return result;
 }
 bool LibretroHost::unserialize(const QByteArray& state) {
+    return restoreCore(state.constData(),state.size());
+}
+bool LibretroHost::restoreCore(const char* data, qsizetype size, bool transactional) {
+    const auto nativeSize = serializedSize();
+    if (!loaded_ || !nativeSize) return false;
+    RunClock clock;
+    if (size == nativeSize + runClockBytes) {
+        const char* tail = data + nativeSize;
+        if (std::memcmp(tail,runClockMagic,8)) return false;
+        clock = {qFromBigEndian<quint64>(tail+8),qFromBigEndian<quint64>(tail+16)};
+    } else if (size != nativeSize) return false;
     spriteOwnership_ = {};
-    if (linkPeer_) return restoreLinkedState(state);
-    if (!loaded_ || size_t(state.size()) != api_->serialize_size() ||
-        !api_->unserialize(state.constData(), size_t(state.size()))) return false;
-    applyControllerPorts();
+    if (linkPeer_) {
+        if (!restoreLinkedState(QByteArray::fromRawData(data,nativeSize),transactional)) return false;
+    } else {
+        if (!api_->unserialize(data,size_t(nativeSize))) return false;
+        applyControllerPorts();
+    }
+    runClock_ = clock;
     return true;
 }
 QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + (linkRequested_ ? QStringLiteral(".link") : QString()) + QStringLiteral(".slot%1.krs").arg(slot); }
@@ -1304,7 +1342,7 @@ unsigned LibretroHost::occupiedStateSlots() const {
     return mask;
 }
 QByteArray LibretroHost::captureRewindState() const {
-    const auto core = serialize();
+    const auto core = serializeCore(true);
     if (core.isEmpty()) return {};
     qsizetype total = core.size() + 20;
     for (auto size : saveMemorySizes_) {
@@ -1331,19 +1369,22 @@ bool LibretroHost::restoreRewindState(const QByteArray& state) {
     const auto coreSize = qFromBigEndian<quint32>(state.constData() + 8);
     const auto ramSize = qFromBigEndian<quint32>(state.constData() + 12);
     const auto rtcSize = qFromBigEndian<quint32>(state.constData() + 16);
-    if (coreSize != serializedSize() || ramSize != saveMemorySizes_[0] || rtcSize != saveMemorySizes_[1] ||
+    if (ramSize != saveMemorySizes_[0] || rtcSize != saveMemorySizes_[1] ||
         quint64(coreSize) + ramSize + rtcSize + 20 != quint64(state.size())) return false;
     void* ram = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
     void* rtc = api_->get_memory_data(RETRO_MEMORY_RTC);
     if ((ramSize && !ram) || (rtcSize && !rtc)) return false;
-    if (!unserialize(state.mid(20, coreSize))) return false;
+    if (!restoreCore(state.constData()+20,coreSize)) return false;
     if (ramSize) std::memcpy(ram, state.constData() + 20 + coreSize, ramSize);
     if (rtcSize) std::memcpy(rtc, state.constData() + 20 + coreSize + ramSize, rtcSize);
     audio_.clear();
     return true;
 }
 QByteArray LibretroHost::captureMovieState(bool checksum) const {
-    const auto core = serialize();
+    return captureMoviePayload(checksum,true);
+}
+QByteArray LibretroHost::captureMoviePayload(bool checksum, bool includeClock) const {
+    const auto core = serializeCore(includeClock);
     if (core.isEmpty() || exactCoreHash_.size() != 32 || romHash_.size() != 32) return {};
     std::array<const void*,4> memory{};
     std::array<size_t,5> sizes{size_t(core.size()),saveMemorySizes_[0],saveMemorySizes_[1],0,0};
@@ -1394,12 +1435,13 @@ QByteArray LibretroHost::networkCompatibility() const {
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
     const auto identity = networkCompatibility();
     if (identity.size() != 32) return {};
-    auto state = captureMovieState(checksum);
+    // The network packet carries the clock in metadata so older peers can read the core state.
+    auto state = captureMoviePayload(checksum,false);
     if (state.size() < 128 || !state.startsWith("KRMOV002")) return {};
     state.replace(40,32,identity);
     return state;
 }
-bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bool trusted) {
+bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bool trusted, bool* restoredClock) {
     error.clear();
     constexpr quint64 maxMovieStateSize = 128ull * 1024 * 1024;
     const bool legacy = state.startsWith("KRMOV001");
@@ -1422,7 +1464,7 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
             return state.mid(96,32) == hash.result();
         }();
     if (total != quint64(state.size()) || bramMask > 3 ||
-        sizes[0] != serializedSize() || sizes[1] != saveMemorySizes_[0] ||
+        (sizes[0] != serializedSize() && sizes[0] != serializedSize()+runClockBytes) || sizes[1] != saveMemorySizes_[0] ||
         sizes[2] != saveMemorySizes_[1] ||
         (bool(bramMask & 1u) != bool(sizes[3])) ||
         (bool(bramMask & 2u) != bool(sizes[4])) || !hashValid) {
@@ -1447,15 +1489,14 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
         }
         memory[index+2] = const_cast<void*>(data);
     }
-    const auto previous = serialize();
+    const auto previous = serializeCore(true);
     if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи.")); return false; }
     spriteOwnership_ = {};
-    if (!(linkPeer_ ? restoreLinkedState(state.mid(128,sizes[0]),false) : api_->unserialize(state.constData()+128,size_t(sizes[0])))) {
+    if (!restoreCore(state.constData()+128,sizes[0],false)) {
         if (!unserialize(previous)) error = Localization::text(QStringLiteral("Ядро отклонило состояние записи; восстановить прежнее состояние не удалось."));
         else error = Localization::text(QStringLiteral("Ядро отклонило состояние записи."));
         return false;
     }
-    applyControllerPorts();
     // Native deserialization may rebuild memory regions; never use pointers
     // obtained before it. A failed postcheck leaves battery bytes untouched.
     memory[0] = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
@@ -1478,6 +1519,7 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
         if (sizes[index+1]) std::memcpy(memory[index],state.constData()+offset,sizes[index+1]);
         offset += sizes[index+1];
     }
+    if (restoredClock) *restoredClock = sizes[0] == serializedSize() + runClockBytes;
     audio_.clear();
     return true;
 }
@@ -2181,7 +2223,7 @@ bool LibretroHost::saveState(int slot, QString& error) {
 bool LibretroHost::saveStateToFile(const QString& path, QString& error) {
     if (!loaded_ || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет игры или не выбран файл сохранения.")); return false; }
     if (isCd() && discEjected()) { error = Localization::text(QStringLiteral("Закройте привод перед сохранением состояния.")); return false; }
-    QByteArray payload = serialize();
+    QByteArray payload = serializeCore(true);
     if (payload.isEmpty()) { error = Localization::text(QStringLiteral("Ядро не смогло сохранить состояние.")); return false; }
     const QByteArray progress = captureAchievementProgress ? captureAchievementProgress() : QByteArray();
     if (progress.size() > maxAchievementProgressSize ||
