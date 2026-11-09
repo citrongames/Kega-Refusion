@@ -1,10 +1,12 @@
 #include "net/NetFileTransfer.h"
 #include <QCoreApplication>
+#include <QDataStream>
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
 #include <cstdlib>
 #include <cstdio>
+#include <utility>
 
 namespace {
 void check(bool ok, const char* label) {
@@ -14,6 +16,35 @@ void put(const QString& path, const QByteArray& contents) {
     QFile file(path);
     check(file.open(QIODevice::WriteOnly), "create fixture");
     check(file.write(contents) == contents.size(), "write fixture");
+}
+QByteArray storedRomArchive(const QByteArray& name, const QByteArray& data) {
+    // A generated, uncompressed ZIP keeps archive coverage self-contained.
+    quint32 crc = 0xffffffffu;
+    for (const char value : data) {
+        crc ^= quint8(value);
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    crc ^= 0xffffffffu;
+    QByteArray bytes;
+    QDataStream zip(&bytes, QIODevice::WriteOnly);
+    zip.setByteOrder(QDataStream::LittleEndian);
+    const quint32 size = quint32(data.size());
+    const quint16 nameSize = quint16(name.size());
+    zip << quint32(0x04034b50) << quint16(20) << quint16(0) << quint16(0)
+        << quint16(0) << quint16(0) << crc << size << size << nameSize << quint16(0);
+    zip.writeRawData(name.constData(), name.size());
+    zip.writeRawData(data.constData(), data.size());
+    const quint32 directoryOffset = quint32(bytes.size());
+    zip << quint32(0x02014b50) << quint16(20) << quint16(20) << quint16(0)
+        << quint16(0) << quint16(0) << quint16(0) << crc << size << size << nameSize
+        << quint16(0) << quint16(0) << quint16(0) << quint16(0) << quint32(0) << quint32(0);
+    zip.writeRawData(name.constData(), name.size());
+    const quint32 directorySize = quint32(bytes.size()) - directoryOffset;
+    zip << quint32(0x06054b50) << quint16(0) << quint16(0) << quint16(1)
+        << quint16(1) << directorySize << directoryOffset << quint16(0);
+    check(zip.status() == QDataStream::Ok, "write generated ROM archive");
+    return bytes;
 }
 QString transfer(NetFileTransfer::Prepared prepared, const QString& destination) {
     QString error;
@@ -140,6 +171,65 @@ int main(int argc, char** argv) {
         check(file.name != "unrelated.mp3", "exclude unrelated music");
     }
     check(theme && select, "Paprium MP3 names preserved");
+
+    // Numbered soundtracks follow cartridge hardware, independent of ROM name.
+    check(root.mkpath("numbered/nested"), "numbered soundtrack directory");
+    QByteArray yx5200Rom(0x10000, '\0');
+    const QByteArray uartWriter = QByteArray::fromHex(
+        "43f900a130001010122f000f00410100e34974097601c601020000fe80031280e249363c004751cbfffe51caffe8");
+    yx5200Rom.replace(0x400, uartWriter.size(), uartWriter);
+    put(directory.filePath("numbered/renamed.GEN"), yx5200Rom);
+    const QByteArray numberedAudio(12000, 'N');
+    for (const auto* name : {"01.mp3", "50.mp3", "7.mp3", "0099.mp3", "2999.mp3"})
+        put(directory.filePath(QStringLiteral("numbered/") + name), numberedAudio);
+    for (const auto* name : {"00.mp3", "3000.mp3", "00001.mp3", "music.mp3", "12.MP3", "13.mp3.bak"})
+        put(directory.filePath(QStringLiteral("numbered/") + name), QByteArray(100, 'X'));
+    put(directory.filePath("numbered/nested/02.mp3"), QByteArray(100, 'X'));
+    check(QFile::link(directory.filePath("media/track.bin"),
+                      directory.filePath("numbered/11.mp3")), "numbered soundtrack symlink fixture");
+    auto numbered = NetFileTransfer::prepare(directory.filePath("numbered/renamed.GEN"), {}, &error);
+    check(bool(numbered) && numbered->manifest.files.size() == 6,
+          "structural YX5200 ROM includes only supported adjacent numbered tracks");
+    check(numbered->manifest.entry == "game.gen", "GEN transfer preserves supported ROM extension");
+    const QString numberedPath = transfer(std::move(*numbered), directory.filePath("downloads"));
+    QFile downloadedTrack(QFileInfo(numberedPath).absolutePath() + "/01.mp3");
+    check(downloadedTrack.open(QIODevice::ReadOnly) && downloadedTrack.readAll() == numberedAudio,
+          "received numbered track remains beside ROM with original padding and bytes");
+    auto nearMiss = yx5200Rom;
+    nearMiss[0x405] = char(0xf0); // An ordinary cartridge register, not the YX5200 UART.
+    put(directory.filePath("numbered/Death & Lead.gen"), nearMiss);
+    auto ordinaryCart = NetFileTransfer::prepare(directory.filePath("numbered/Death & Lead.gen"), {}, &error);
+    check(bool(ordinaryCart) && ordinaryCart->manifest.files.size() == 1,
+          "game filename never enables unrelated numbered soundtrack transfer");
+    auto swapped = yx5200Rom;
+    for (qsizetype byte = 0; byte < swapped.size(); byte += 2)
+        std::swap(swapped[byte], swapped[byte + 1]);
+    put(directory.filePath("numbered/swapped.bin"), swapped);
+    auto swappedTransfer = NetFileTransfer::prepare(directory.filePath("numbered/swapped.bin"), {}, &error);
+    check(bool(swappedTransfer) && swappedTransfer->manifest.files.size() == 6,
+          "word-swapped YX5200 ROM includes numbered tracks");
+    QByteArray smd(yx5200Rom.size() + 512, '\0');
+    for (qsizetype block = 0; block < yx5200Rom.size(); block += 0x4000) {
+        for (qsizetype byte = 0; byte < 0x2000; ++byte) {
+            smd[512 + block + byte] = yx5200Rom[block + byte * 2 + 1];
+            smd[512 + block + 0x2000 + byte] = yx5200Rom[block + byte * 2];
+        }
+    }
+    put(directory.filePath("numbered/interleaved.smd"), smd);
+    auto smdTransfer = NetFileTransfer::prepare(directory.filePath("numbered/interleaved.smd"), {}, &error);
+    check(bool(smdTransfer) && smdTransfer->manifest.files.size() == 6,
+          "SMD YX5200 ROM includes numbered tracks");
+
+    const QString archivePath = directory.filePath("numbered/anonymous.ZIP");
+    put(archivePath, storedRomArchive("nested/anonymous.GEN", yx5200Rom));
+    const auto archiveEntries = RomArchive::list(archivePath, &error);
+    check(archiveEntries.size() == 1, "list generated nested GEN archive");
+    auto archived = NetFileTransfer::prepare(archivePath, archiveEntries.front(), &error);
+    check(bool(archived) && archived->manifest.files.size() == 6 &&
+          archived->manifest.entry == "game.gen",
+          "archived YX5200 ROM includes numbered tracks adjacent to archive");
+    check(archived->sources.front().contents == yx5200Rom,
+          "archive transfer preserves canonical ROM bytes");
 
     put(directory.filePath("media/escape.cue"),
         "FILE \"../outside.bin\" BINARY\nTRACK 01 MODE1/2352\n");

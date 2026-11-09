@@ -37,6 +37,8 @@ Extract the entire package into a writable folder. On Windows, run `KegaRefusion
 
 Open a game with **Ctrl+O**, drag it onto the window, or click the central **+** area. ZIP/7z cartridge archives can be opened directly. Configure BIOS files, controllers, audio and other preferences in **Settings → Emulator settings**.
 
+For Kaiser Wave cartridges such as *Death & Lead* and *The Secret of the Four Winds*, keep the numbered MP3 files (`01.mp3`, `02.mp3`, …) beside the ROM or its archive. Four Winds offers **Enhanced Music** and **FM Music** after language selection. Keep the complete soundtrack for both options. Netplay includes those tracks when transferring the cartridge.
+
 Settings and saves live in `data/`. Keep this folder when updating; use `--data /path/to/folder` to choose another location. Save names follow the game filename, so identically named games share their save location.
 
 | Default shortcut | Action |

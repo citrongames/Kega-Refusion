@@ -1,0 +1,213 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -47,6 +47,7 @@
+ #include "eeprom_spi.h"
+ #include "flash_cfi.h"
+ #include "yx5200.h"
++#include "../kegayx5200/yx5200_detect.h"
+ #include "megasd.h"
+ #include "../kegapaprium/paprium.h"
+ 
+@@ -724,6 +725,12 @@
+ {
+   int i;
+ 
++#ifdef LSB_FIRST
++  const unsigned rom_byte_xor = 1;
++#else
++  const unsigned rom_byte_xor = 0;
++#endif
++  const int kaiserwave = yx5200_detect(cart.rom, cart.romsize, rom_byte_xor);
+   md_cart_umkt_tracks_active = md_cart_umkt_tracks_detect();
+ 
+   /***************************************************************************************************************
+@@ -855,6 +862,13 @@
+           BACKUP MEMORY 
+   ***********************************************/
+   sram_init();
++  if (kaiserwave && yx5200_flash_save(cart.rom, cart.romsize, rom_byte_xor))
++  {
++    sram.on = sram.detected = 1;
++    sram.start = 0x3f0000;
++    sram.end = 0x3fffff;
++    sram.type = FLASH_MEMORY + S29GL064N_04;
++  }
+   eeprom_i2c_init();
+ 
+   md_cart_aq93c_active = (cart.romsize == 0x100000) &&
+@@ -1206,8 +1220,7 @@
+     zbank_memory_map[0x00].read   = zbank_memory_map[0x3f].read   = mapper_flash_r8;
+     zbank_memory_map[0x00].write  = zbank_memory_map[0x3f].write  = mapper_flash_w8;
+   }
+-  else if (strstr(rominfo.ROMType,"GM") && strstr(rominfo.product,"00000000-00") && 
+-           (((rominfo.checksum == 0x45c1) && (rominfo.realchecksum == 0xc613))))  /*  The Secret Of The Four Winds */
++  else if (kaiserwave)
+   {
+     /* KAISER WAVE board !TIME handler */ 
+     cart.hw.time_w = mapper_kaiserwave_w;
+@@ -1222,44 +1235,20 @@
+     /* initialize YX5200 audio */
+     yx5200_init(snd.sample_rate);
+ 
+-    /* initialize CFI flash memory hardware */
+-    flash_cfi_init(S29GL064N_04, NULL);
+-
+-    /* custom flash-save mapper (4MB ROM with backup RAM mapped in last 64KB bank) */
+-    m68k.memory_map[0x3f].base    = sram.sram;
+-    m68k.memory_map[0x00].read8   = m68k.memory_map[0x3f].read8   = mapper_flash_r8;
+-    m68k.memory_map[0x00].read16  = m68k.memory_map[0x3f].read16  = mapper_flash_r16;
+-    m68k.memory_map[0x00].write8  = m68k.memory_map[0x3f].write8  = mapper_flash_w8;
+-    m68k.memory_map[0x00].write16 = m68k.memory_map[0x3f].write16 = mapper_flash_w16;
+-    zbank_memory_map[0x00].read   = zbank_memory_map[0x3f].read   = mapper_flash_r8;
+-    zbank_memory_map[0x00].write  = zbank_memory_map[0x3f].write  = mapper_flash_w8;
+-
+-    /* 64M extension mapping (upper 4MB of flash memory is apparently unused but still accessible as cartridge board uses same signals as described in https://gitlab.com/doragasu/flatmap64) */
+-    for (i=0x40; i<0x80; i++)
+-    {
+-      m68k.memory_map[i].read8    = NULL;
+-      m68k.memory_map[i].read16   = NULL;
+-      m68k.memory_map[i].write8   = m68k_unused_8_w;
+-      m68k.memory_map[i].write16  = m68k_unused_16_w;
+-      zbank_memory_map[i].read    = NULL;
+-      zbank_memory_map[i].write   = zbank_unused_w;
+-    }
+-  }
+-  else if (strstr(rominfo.ROMType, "GM") && strstr(rominfo.product, "00000000-00") &&
+-            ((rominfo.checksum == 0x2284) && (rominfo.realchecksum == 0x8dcf))) /* Death & Lead */
+-  {
+-    /* KAISER WAVE board !TIME handler */
+-    cart.hw.time_w = mapper_kaiserwave_w;
+-
+-    /* enable YX5200 hardware */
+-    cart.special |= HW_YX5200;
+-
+-    /* allocate & clear blip buffer for YX5200 audio stream */
+-    snd.blips[3] = blip_new(snd.sample_rate / 10);
+-    if (snd.blips[3]) blip_clear(snd.blips[3]);
+-
+-    /* initialize YX5200 audio */
+-    yx5200_init(snd.sample_rate);
++    if (sram.type == FLASH_MEMORY + S29GL064N_04)
++    {
++      /* initialize CFI flash memory hardware */
++      flash_cfi_init(S29GL064N_04, NULL);
++
++      /* custom flash-save mapper (4MB ROM with backup RAM mapped in last 64KB bank) */
++      m68k.memory_map[0x3f].base    = sram.sram;
++      m68k.memory_map[0x00].read8   = m68k.memory_map[0x3f].read8   = mapper_flash_r8;
++      m68k.memory_map[0x00].read16  = m68k.memory_map[0x3f].read16  = mapper_flash_r16;
++      m68k.memory_map[0x00].write8  = m68k.memory_map[0x3f].write8  = mapper_flash_w8;
++      m68k.memory_map[0x00].write16 = m68k.memory_map[0x3f].write16 = mapper_flash_w16;
++      zbank_memory_map[0x00].read   = zbank_memory_map[0x3f].read   = mapper_flash_r8;
++      zbank_memory_map[0x00].write  = zbank_memory_map[0x3f].write  = mapper_flash_w8;
++    }
+ 
+     /* 64M extension mapping (upper 4MB of flash memory is apparently unused but still accessible as cartridge board uses same signals as described in https://gitlab.com/doragasu/flatmap64) */
+     for (i=0x40; i<0x80; i++)
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -91,6 +91,7 @@
+ #define Z80_MAX_CYCLES 345
+ #define OVERCLOCK_FRAME_DELAY 100
+ #include "../core/kegapaprium/bridge.h"
++#include "../core/cart_hw/yx5200.h"
+ 
+ #ifdef M68K_OVERCLOCK_SHIFT
+ #ifndef HAVE_OVERCLOCK
+@@ -3801,6 +3802,7 @@
+    if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
++   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200)) return "kegarefusion-recording-v3-peripherals-v1-kaiserwave-v1";
+    if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return "kegarefusion-recording-v3-peripherals-v1-umkt-packed-v1";
+    if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v4";
+    return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
+@@ -3829,6 +3831,7 @@
+    if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+    if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
+    if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
++   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200)) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-kaiserwave-v1";
+    if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-packed-v1";
+    if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v4";
+    return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+@@ -3971,6 +3974,47 @@
+    return kegarefusion_32x_prepare_filter() != 0;
+ }
+ #endif
++
++/* The legacy rompath is truncated at 255 bytes. Retain just the directory
++ * supplied by the frontend for the lifetime of a Kaiser Wave cartridge. */
++static char *kr_yx5200_directory;
++
++const char *kr_yx5200_rom_directory(void)
++{
++   return kr_yx5200_directory;
++}
++
++static void kr_yx5200_close(void)
++{
++   yx5200_reset();
++   free(kr_yx5200_directory);
++   kr_yx5200_directory = NULL;
++}
++
++static void kr_yx5200_set_directory(const struct retro_game_info_ext *ext, const char *path)
++{
++   size_t length;
++   const char *source;
++   if (ext && ext->dir && *ext->dir)
++   {
++      source = ext->dir;
++      length = strlen(source);
++   }
++   else if (path)
++   {
++      source = path;
++      length = strlen(path);
++      while (length && path[length-1] != '/' && path[length-1] != '\\') --length;
++   }
++   else return;
++   if (!length) { source = "."; length = 1; }
++   kr_yx5200_directory = malloc(length + 2);
++   if (!kr_yx5200_directory) return;
++   memcpy(kr_yx5200_directory, source, length);
++   if (source[length-1] != '/' && source[length-1] != '\\')
++      kr_yx5200_directory[length++] = '/';
++   kr_yx5200_directory[length] = 0;
++}
+ 
+ bool retro_load_game(const struct retro_game_info *info)
+ {
+@@ -4237,6 +4281,8 @@
+ 
+    audio_init(SOUND_FREQUENCY, 0);
+    system_init();
++   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200))
++      kr_yx5200_set_directory(info_ext, info ? info->path : NULL);
+    system_reset();
+ #ifdef KEGAREFUSION_32X
+    if (!kegarefusion_load_32x(dir, content_ext)) goto error;
+@@ -4262,6 +4308,7 @@
+    return true;
+ 
+ error:
++   kr_yx5200_close();
+ #ifdef KEGAREFUSION_32X
+    kegarefusion_32x_detach();
+ #endif
+@@ -4317,6 +4364,7 @@
+       free(sms_ntsc);
+    sms_ntsc  = NULL;
+ 
++   kr_yx5200_close();
+    paprium_shutdown();
+    md_cart_sdk99_compat_active = 0;
+    md_cart_poker_compat_active = 0;
+@@ -4431,6 +4479,7 @@
+ void retro_deinit(void)
+ {
+    retro_kegarefusion_recording_video(false);
++   kr_yx5200_close();
+    paprium_shutdown();
+    libretro_supports_option_categories = false;
+    libretro_supports_bitmasks          = false;

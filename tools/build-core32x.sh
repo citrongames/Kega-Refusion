@@ -55,8 +55,10 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-controller-devices.patch"
   "$root/tools/patches/genesis-plus-gx-recording-video.patch"
   "$root/tools/patches/genesis-plus-gx-large-ssf.patch"
-  "$root/tools/patches/genesis-plus-gx-umkt-tracks.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch .kegarefusion-umkt-tracks-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-umkt-tracks.patch"
+  "$root/tools/patches/genesis-plus-gx-kaiserwave.patch"
+  "$root/tools/patches/genesis-plus-gx-yx5200-stream.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch .kegarefusion-umkt-tracks-applied.patch .kegarefusion-kaiserwave-applied.patch .kegarefusion-yx5200-stream-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -66,7 +68,7 @@ for patch in "${required_patches[@]}"; do
 done
 required_sources=(src/core32x third_party/picodrive32x third_party/blargg)
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
-  required_sources+=(src/paprium)
+  required_sources+=(src/paprium src/yx5200)
 fi
 for source in "${required_sources[@]}"; do
   [[ -d "$root/$source" ]] || { echo "Required source directory is missing: $source" >&2; exit 1; }
@@ -229,6 +231,7 @@ copy_tree "$root/third_party/picodrive32x" "$checkout/third_party/picodrive32x"
 copy_tree "$root/third_party/blargg" "$checkout/third_party/blargg"
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   copy_tree "$root/src/paprium" "$checkout/core/kegapaprium"
+  copy_tree "$root/src/yx5200" "$checkout/core/kegayx5200"
 fi
 
 python3 - "$checkout" "$use_drc" <<'PY'

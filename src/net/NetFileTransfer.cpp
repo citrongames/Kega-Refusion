@@ -1,5 +1,6 @@
 #include "NetFileTransfer.h"
 #include "../core/PapriumMusic.h"
+#include "../yx5200/yx5200_detect.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -12,6 +13,7 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QSet>
+#include <QMap>
 #include <algorithm>
 #include <utility>
 
@@ -158,6 +160,73 @@ bool isPapriumRom(const QString& path) {
     if (!file.open(QIODevice::ReadOnly) || file.size() != 0x800000 ||
         !file.seek(0x182)) return false;
     return file.read(12) == " T-574120-00";
+}
+// The board addresses at most 8 MiB. An interleaved SMD dump can have a copier header.
+constexpr unsigned kMaxKaiserWaveDump = 0x800000 + 512;
+bool isYx5200Rom(const unsigned char* rom, unsigned size) {
+    if (size > kMaxKaiserWaveDump) return false;
+    if (yx5200_detect(rom, size, 0) || yx5200_detect(rom, size, 1)) return true;
+    // Match the core's optional 512-byte SMD header and 16 KiB interleave.
+    if (size < 512 + 0x4000 || (size % 512) || !((size / 512) & 1) ||
+        ((size - 512) % 0x4000)) return false;
+    QByteArray canonical(size - 512, Qt::Uninitialized);
+    for (unsigned block = 0; block < size - 512; block += 0x4000) {
+        for (unsigned byte = 0; byte < 0x2000; ++byte) {
+            canonical.data()[block + byte * 2] = char(rom[512 + block + 0x2000 + byte]);
+            canonical.data()[block + byte * 2 + 1] = char(rom[512 + block + byte]);
+        }
+    }
+    return yx5200_detect(reinterpret_cast<const unsigned char*>(canonical.constData()),
+                         unsigned(canonical.size()), 0) != 0;
+}
+bool isYx5200Rom(const QByteArray& rom) {
+    return rom.size() <= kMaxKaiserWaveDump &&
+        isYx5200Rom(reinterpret_cast<const unsigned char*>(rom.constData()), unsigned(rom.size()));
+}
+bool isYx5200Rom(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() < 512 ||
+        file.size() > kMaxKaiserWaveDump) return false;
+    // Inspect the existing ROM without keeping another full copy in memory.
+    if (auto* rom = file.map(0, file.size())) {
+        const bool active = isYx5200Rom(rom, unsigned(file.size()));
+        file.unmap(rom);
+        return active;
+    }
+    return isYx5200Rom(file.read(file.size()));
+}
+bool isYx5200TrackName(const QString& name) {
+    if (!name.endsWith(QStringLiteral(".mp3"))) return false;
+    const QString number = name.left(name.size() - 4);
+    if (number.isEmpty() || number.size() > 4) return false;
+    for (const QChar digit : number)
+        if (digit < QLatin1Char('0') || digit > QLatin1Char('9')) return false;
+    const unsigned index = number.toUInt();
+    return index > 0 && index <= 2999;
+}
+bool addYx5200Tracks(Transfer::Prepared* output, const QString& romPath,
+                     QString* error) {
+    // The native player tries 1-, 2-, 3- and 4-digit root-directory names.
+    // Keep the chosen padding so playback resolves identically after transfer.
+    QDirIterator entries(QFileInfo(romPath).absolutePath(),
+                         QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks);
+    QMap<QString, QString> tracks;
+    int examined = 0;
+    while (entries.hasNext()) {
+        if (output->cancelled && output->cancelled->load()) {
+            fail(error, "Media preparation cancelled"); return false;
+        }
+        if (++examined > 16384) {
+            fail(error, "Too many files beside cartridge soundtrack"); return false;
+        }
+        entries.next();
+        const QFileInfo info = entries.fileInfo();
+        if (!isYx5200TrackName(info.fileName())) continue;
+        tracks.insert(info.fileName(), info.absoluteFilePath());
+    }
+    for (auto track = tracks.cbegin(); track != tracks.cend(); ++track)
+        if (!addDisk(output, track.key(), track.value(), error)) return false;
+    return true;
 }
 bool addPapriumTracks(Transfer::Prepared* output, const QString& romPath,
                       QString* error) {
@@ -499,8 +568,10 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
         source.file = {result.manifest.entry, rom.size(), hashBytes(rom)};
         source.contents = std::move(rom);
         const bool paprium = isPapriumRom(source.contents);
+        const bool yx5200 = isYx5200Rom(source.contents);
         result.sources.append(std::move(source));
-        if (paprium && !addPapriumTracks(&result, path, error)) return std::nullopt;
+        if ((paprium && !addPapriumTracks(&result, path, error)) ||
+            (yx5200 && !addYx5200Tracks(&result, path, error))) return std::nullopt;
     } else if (selected.suffix().compare("m3u", Qt::CaseInsensitive) == 0) {
         QFile playlist(path);
         if (!playlist.open(QIODevice::ReadOnly) || playlist.size() <= 0 || playlist.size() > 65536) {
@@ -532,7 +603,8 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
     } else {
         result.manifest.entry = "game." + suffix(path);
         if (!addDisk(&result, result.manifest.entry, path, error) ||
-            (isPapriumRom(path) && !addPapriumTracks(&result, path, error)))
+            (isPapriumRom(path) && !addPapriumTracks(&result, path, error)) ||
+            (isYx5200Rom(path) && !addYx5200Tracks(&result, path, error)))
             return std::nullopt;
     }
     for (const auto& source : result.sources) {
