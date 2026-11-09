@@ -150,6 +150,47 @@ void writerRoundTrip(const QString& dir, bool encodeOnly = false) {
     require(decode(path)==expected,"existing output was damaged");
     std::printf("MOV: exact RGB pixels, AAC sound, Unicode path and existing-file protection passed\n");
 }
+// Keep the real emulation thread alive across encoder thread exits, as in a live game.
+void liveStop(const QString& core, const QString& dir) {
+    const QString romPath = dir + "/live-stop.md";
+    QFile rom(romPath);
+    const auto bytes = makeInputRom();
+    require(rom.open(QIODevice::WriteOnly) && rom.write(bytes) == bytes.size(), "fixture write failed");
+    rom.close();
+    int frames = 0, audio = 0;
+    QRgb color = 0;
+    bool finished = false;
+    QString failure;
+    EmulationSession session(core, dir);
+    QObject::connect(&session, &EmulationSession::videoFrame, &session, [&](const QImage& frame, double) {
+        color = frame.pixel(frame.width() / 2, frame.height() / 2);
+        ++frames;
+    }, Qt::QueuedConnection);
+    QObject::connect(&session, &EmulationSession::audioSamples, &session, [&](const QByteArray& pcm, int) {
+        if (!pcm.isEmpty()) ++audio;
+    }, Qt::QueuedConnection);
+    QObject::connect(&session, &EmulationSession::videoRecordingFinished, &session,
+        [&](const QString&, const QString& error) { failure = error; finished = true; }, Qt::QueuedConnection);
+    session.loadGame(romPath);
+    waitFor([&] { return frames >= 8 && audio > 0; });
+    for (int pass = 0; pass < 2; ++pass) {
+        const QString path = dir + QString("/live-stop-%1.mov").arg(pass);
+        finished = false;
+        const int startFrame = frames;
+        session.startVideoRecording(path);
+        waitFor([&] { return frames >= startFrame + 12 || finished; });
+        session.stopVideoRecording();
+        waitFor([&] { return finished; });
+        require(failure.isEmpty(), qPrintable(failure));
+        require(QFileInfo(path).size() > 0, "missing live MOV");
+        const auto previousColor = color;
+        const int previousAudio = audio;
+        session.setButton(0, 5, pass == 0);
+        waitFor([&] { return color != previousColor && audio > previousAudio + 2; });
+    }
+    session.shutdown();
+    std::puts("Two live MOV stops passed with ongoing video, audio and game input");
+}
 void sessionExport(const QString& core,const QString& dir) {
     const QString romPath=dir+"/fixture.md",moviePath=dir+"/fixture.krm",videoPath=dir+"/export.mov";
     QFile rom(romPath);const auto bytes=makeInputRom();
@@ -207,10 +248,20 @@ void sessionExport(const QString& core,const QString& dir) {
 int main(int argc,char**argv) {
     QCoreApplication app(argc,argv);
     try {
+        if (argc == 3 && QString::fromLocal8Bit(argv[1]) == "--live-stop") {
+            QTemporaryDir dir;
+            require(dir.isValid(), "temporary directory failed");
+            liveStop(QString::fromLocal8Bit(argv[2]), dir.path());
+            return 0;
+        }
         if (argc==3 && QString::fromLocal8Bit(argv[1])=="--encode-only") {
             writerRoundTrip(QString::fromLocal8Bit(argv[2]), true); return 0;
         }
         require(argc==2,"core path required");QTemporaryDir dir;require(dir.isValid(),"temporary directory failed");
-        writerRoundTrip(dir.path());sessionExport(QString::fromLocal8Bit(argv[1]),dir.path());return 0;
+        const auto core = QString::fromLocal8Bit(argv[1]);
+        writerRoundTrip(dir.path());
+        sessionExport(core, dir.path());
+        liveStop(core, dir.path());
+        return 0;
     } catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}
 }

@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QThread>
 #include <QtEndian>
 #include <cerrno>
 #include <cmath>
@@ -11,7 +12,6 @@
 #include <deque>
 #include <exception>
 #include <mutex>
-#include <thread>
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -390,13 +390,34 @@ private:
 };
 } // namespace
 
-struct VideoRecorder::Impl {
+struct VideoRecorder::Impl final : QThread {
     mutable std::mutex mutex;
     std::condition_variable wake;
     std::deque<InputFrame> queue;
-    std::thread worker;
     Result output;
     bool running = false, accepting = false, finished = false;
+
+    bool shuttingDown = false;
+
+    void run() override {
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                wake.wait(lock, [this] { return running || shuttingDown; });
+                if (!running) return;
+            }
+            try {
+                work();
+            } catch (const std::exception&) {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (output.error.isEmpty())
+                    output.error = Localization::text(QStringLiteral("Не удалось завершить запись видео."));
+                queue.clear();
+                accepting = running = false;
+                finished = true;
+            }
+        }
+    }
 
     void work() {
         std::unique_ptr<Segment> segment;
@@ -455,8 +476,13 @@ struct VideoRecorder::Impl {
 
 VideoRecorder::VideoRecorder() : impl_(std::make_unique<Impl>()) {}
 VideoRecorder::~VideoRecorder() {
-    finish();
-    if (impl_->worker.joinable()) impl_->worker.join();
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->shuttingDown = true;
+        impl_->accepting = false;
+        impl_->wake.notify_one();
+    }
+    impl_->wait();
 }
 
 bool VideoRecorder::start(const QString& path, QString& error) {
@@ -467,7 +493,6 @@ bool VideoRecorder::start(const QString& path, QString& error) {
             return false;
         }
     }
-    if (impl_->worker.joinable()) impl_->worker.join();
     if (path.isEmpty() || QFileInfo::exists(path)) {
         error = path.isEmpty() ? Localization::text(QStringLiteral("Выберите файл для записи видео."))
                               : Localization::text(QStringLiteral("Файл для записи видео уже существует."));
@@ -480,24 +505,17 @@ bool VideoRecorder::start(const QString& path, QString& error) {
         impl_->queue.clear();
         impl_->running = impl_->accepting = true;
         impl_->finished = false;
-    }
-    try {
-        impl_->worker = std::thread([this] {
-            try { impl_->work(); }
-            catch (const std::exception&) {
-                std::lock_guard<std::mutex> lock(impl_->mutex);
-                if (impl_->output.error.isEmpty())
-                    impl_->output.error = Localization::text(QStringLiteral("Не удалось завершить запись видео."));
-                impl_->queue.clear();
-                impl_->accepting = impl_->running = false;
-                impl_->finished = true;
+        // Keep the Qt thread asleep between captures. Stopping a live MOV
+        // closes all media resources without triggering native thread teardown.
+        if (!impl_->isRunning()) {
+            impl_->start();
+            if (!impl_->isRunning()) {
+                impl_->running = impl_->accepting = false;
+                error = Localization::text(QStringLiteral("Не удалось запустить запись видео."));
+                return false;
             }
-        });
-    } catch (const std::exception&) {
-        std::lock_guard<std::mutex> lock(impl_->mutex);
-        impl_->running = impl_->accepting = false;
-        error = Localization::text(QStringLiteral("Не удалось запустить запись видео."));
-        return false;
+        }
+        impl_->wake.notify_one();
     }
     error.clear();
     return true;
