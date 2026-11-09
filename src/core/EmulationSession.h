@@ -78,6 +78,7 @@ public:
     void setFastForwardFactor(int factor);
     void setRewind(bool enabled);
     void setRewindEnabled(bool enabled);
+    void setRewindSpeed(bool accelerate, int fixedFactor);
     void setRewindMemoryMiB(int mebibytes);
     void setBackgroundPaused(bool paused);
     void setRunTimerEnabled(bool enabled);
@@ -210,6 +211,8 @@ private:
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
     std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false}, frameBackHeld_{false};
     std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
+    // Zero selects acceleration based on how long rewind is held.
+    std::atomic<int> rewindFactor_{0};
     // Local hold edges are separate from the shared state applied by the host.
     std::atomic<bool> networkFastRequested_{false}, networkRewindRequested_{false};
     std::atomic<bool> networkStepRequested_{false};

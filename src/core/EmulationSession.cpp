@@ -286,6 +286,9 @@ void EmulationSession::setRewind(bool enabled) {
     } else rewind_.store(enabled);
 }
 void EmulationSession::setRewindEnabled(bool enabled) { rewindEnabled_.store(enabled); }
+void EmulationSession::setRewindSpeed(bool accelerate, int fixedFactor) {
+    rewindFactor_.store(accelerate ? 0 : std::clamp(fixedFactor,1,16));
+}
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
 void EmulationSession::setSmsFmEnabled(bool enabled) { enqueue({Type::SmsFm,{},enabled?1:0}); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
@@ -598,6 +601,7 @@ void EmulationSession::run() {
     auto nowNs = [] { return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count(); };
     qint64 rewindTotalMs = 0, rewindLastProgressMs = 0, nextRewindProgressNs = 0;
     double rewindStepMs = 0;
+    qint64 rewindStartedNs = 0;
     auto rewindAvailableMs = [&] {
         const size_t checkpoints = history.size();
         return qint64(std::llround(double(checkpoints ? checkpoints-1 : 0) * rewindStepMs));
@@ -855,11 +859,11 @@ void EmulationSession::run() {
         }
         historyHealthy = history.capture(captureHistory(),frame,host.aspectRatio());
     };
-    auto restorePreviousFrame = [&](bool exactStep) {
+    auto restorePreviousFrame = [&](bool exactStep, int steps = 1) {
         QByteArray state;
         QImage frame;
         double aspect = 4.0 / 3.0;
-        if (!history.stepBack(state,frame,aspect)) return false;
+        if (!history.stepBack(state,frame,aspect,steps)) return false;
         QString error;
         if (!restoreHistory(state,error)) {
             clearHistory(); historyHealthy = false;
@@ -1710,7 +1714,8 @@ void EmulationSession::run() {
                 rewindStepMs = (networkMode ? 2000.0 : 1000.0) / host.fps();
                 rewindTotalMs = rewindAvailableMs();
                 rewindLastProgressMs = rewindTotalMs;
-                nextRewindProgressNs = nowNs() + 100000000;
+                rewindStartedNs = nowNs();
+                nextRewindProgressNs = rewindStartedNs + 100000000;
                 networkRewindImage=host.frame();networkRewindAspect=host.aspectRatio();networkRewindLinkPreview.clear();
                 if(host.linkCableEnabled())networkRewindImage=combineLinkPreview(host.frameForLinkRole(1),host.aspectRatioForLinkRole(1),
                     host.frameForLinkRole(2),host.aspectRatioForLinkRole(2),networkRewindLinkPreview);
@@ -1721,7 +1726,12 @@ void EmulationSession::run() {
         }
         if (reverse) {
             rewindStatus(true);
-            restorePreviousFrame(false);
+            int factor = rewindFactor_.load();
+            if (factor == 0) {
+                const auto doublings = std::min<qint64>((nowNs() - rewindStartedNs) / 2000000000LL,4);
+                factor = 1 << doublings;
+            }
+            restorePreviousFrame(false,factor);
             const qint64 remainingMs = std::min(rewindTotalMs,rewindAvailableMs());
             const qint64 progressNow = nowNs();
             if (remainingMs != rewindLastProgressMs && progressNow >= nextRewindProgressNs) {

@@ -251,6 +251,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         settings_.setValue(QStringLiteral("emulation/rewindEnabled"), rewindEnabled_);
         settings_.remove(QStringLiteral("emulation/rewindSeconds"));
     }
+    rewindAccelerate_ = settings_.value(QStringLiteral("emulation/rewindSpeedMode"),
+        QStringLiteral("accelerating")).toString() != QLatin1String("fixed");
+    rewindFixedFactor_ = settings_.value(QStringLiteral("emulation/rewindFixedFactor"), 1).toInt();
+    if (!QList<int>{1, 2, 4, 8, 16}.contains(rewindFixedFactor_)) rewindFixedFactor_ = 1;
     pauseOnFocusLoss_ = settings_.value(QStringLiteral("emulation/pauseOnFocusLoss"), true).toBool();
     hideAchievementAvailability_ = settings_.value(QStringLiteral("achievements/hideAvailabilityNotices"), true).toBool();
     achievementNotifications_ = settings_.value(QStringLiteral("achievements/notifications"), true).toBool();
@@ -278,6 +282,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             view_, &GameView::setRunTimer);
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setRewindEnabled(rewindEnabled_);
+    session_.setRewindSpeed(rewindAccelerate_, rewindFixedFactor_);
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
     netplay_ = new NetplayController(session_, dataPath_, settings_, this);
@@ -1865,6 +1870,25 @@ void MainWindow::editSettings(int initialPage) {
     rewindMemory->setSuffix(Localization::text(QStringLiteral(" МиБ")));
     rewindMemory->setValue(memoryMiB);
     rewind->addRow(Localization::text(QStringLiteral("Память перемотки:")), rewindMemory);
+    auto* rewindSpeedMode = new QComboBox(&dialog);
+    rewindSpeedMode->setObjectName(QStringLiteral("rewindSpeedMode"));
+    rewindSpeedMode->addItem(Localization::text(QStringLiteral("Ускорять при удержании")), true);
+    rewindSpeedMode->addItem(Localization::text(QStringLiteral("Постоянная")), false);
+    rewindSpeedMode->setToolTip(Localization::text(QStringLiteral(
+        "Скорость удваивается каждые 2 секунды от 1× до 16×.")));
+    rewindSpeedMode->setCurrentIndex(rewindAccelerate_ ? 0 : 1);
+    rewind->addRow(Localization::text(QStringLiteral("Режим скорости:")), rewindSpeedMode);
+    auto* rewindFixedSpeed = new QComboBox(&dialog);
+    rewindFixedSpeed->setObjectName(QStringLiteral("rewindFixedSpeed"));
+    for (int factor : {1, 2, 4, 8, 16})
+        rewindFixedSpeed->addItem(QStringLiteral("%1×").arg(factor), factor);
+    rewindFixedSpeed->setCurrentIndex(rewindFixedSpeed->findData(rewindFixedFactor_));
+    rewindFixedSpeed->setEnabled(!rewindAccelerate_);
+    connect(rewindSpeedMode, &QComboBox::currentIndexChanged, rewindFixedSpeed,
+            [rewindSpeedMode, rewindFixedSpeed] {
+        rewindFixedSpeed->setEnabled(!rewindSpeedMode->currentData().toBool());
+    });
+    rewind->addRow(Localization::text(QStringLiteral("Постоянная скорость:")), rewindFixedSpeed);
     auto* rewindHelp = new QLabel(Localization::text(QStringLiteral(
         "История ограничена только памятью. При заполнении удаляются старые кадры. "
         "Изменение лимита очищает историю; память выделяется по мере накопления.")), &dialog);
@@ -2405,6 +2429,17 @@ void MainWindow::editSettings(int initialPage) {
         if (rewindMemory->value() != memoryMiB) {
             settings_.setValue(QStringLiteral("emulation/rewindMemoryMiB"), rewindMemory->value());
             session_.setRewindMemoryMiB(rewindMemory->value());
+        }
+        const bool selectedRewindAccelerate = rewindSpeedMode->currentData().toBool();
+        const int selectedRewindFixedFactor = rewindFixedSpeed->currentData().toInt();
+        if (selectedRewindAccelerate != rewindAccelerate_ ||
+            selectedRewindFixedFactor != rewindFixedFactor_) {
+            rewindAccelerate_ = selectedRewindAccelerate;
+            rewindFixedFactor_ = selectedRewindFixedFactor;
+            settings_.setValue(QStringLiteral("emulation/rewindSpeedMode"),
+                rewindAccelerate_ ? QStringLiteral("accelerating") : QStringLiteral("fixed"));
+            settings_.setValue(QStringLiteral("emulation/rewindFixedFactor"), rewindFixedFactor_);
+            session_.setRewindSpeed(rewindAccelerate_, rewindFixedFactor_);
         }
         setSmsFmEnabled(smsFmBox->isChecked());
         const QByteArray selectedOutputId = outputDevice->currentData().toByteArray();

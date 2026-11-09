@@ -12,7 +12,7 @@ public:
     void setByteLimit(qsizetype byteLimit);
     void clear();
     bool capture(const QByteArray& state, const QImage& frame, double aspect);
-    bool stepBack(QByteArray& state, QImage& frame, double& aspect);
+    bool stepBack(QByteArray& state, QImage& frame, double& aspect, int steps = 1);
     size_t size() const { return currentState_.isEmpty() ? 0 : entries_.size() + 1; }
     // Counts retained byte-array capacities, raw anchors and live Entry metadata.
     // Transient encode/decode/image work, Qt control blocks, deque storage and
@@ -22,7 +22,7 @@ private:
     struct Patch { QByteArray bytes; qsizetype restoredSize = 0; bool delta = false; };
     struct Entry { Patch state, pixels; QSize size, nativeSize; double aspect; };
     static Patch encode(const QByteArray& older, const QByteArray& newer);
-    static QByteArray decode(const Patch& patch, const QByteArray& newer);
+    static QByteArray decode(const Patch& patch, QByteArray newer);
     static qsizetype entryBytes(const Entry& entry);
     std::deque<Entry> entries_;
     QByteArray currentState_, currentPixels_;

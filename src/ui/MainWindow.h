@@ -207,6 +207,8 @@ private:
     int runTimerMode_ = 0;
     int fastForwardFactor_ = 4;
     bool rewindEnabled_ = true;
+    bool rewindAccelerate_ = true;
+    int rewindFixedFactor_ = 1;
     bool smsFmEnabled_ = true;
     quint32 debugVideoAvailable_ = 0;
     quint32 debugVideoDisabled_ = 0;

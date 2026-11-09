@@ -1,6 +1,7 @@
 #include "core/RewindBuffer.h"
 #include <QCoreApplication>
 #include <QRandomGenerator>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -30,6 +31,14 @@ int main(int argc,char** argv) {
  require(!buffer.stepBack(actual,image,aspect),"rewound past oldest");
  require(buffer.capture(shots[5].state,shots[5].frame,shots[5].aspect),"branch capture");
  require(buffer.stepBack(actual,image,aspect) && actual==shots[0].state,"future branch leaked");
+ buffer.clear();
+ for(const auto& shot:shots)require(buffer.capture(shot.state,shot.frame,shot.aspect),"batch fixture capture");
+ for(int pos=int(shots.size())-1;pos>0;) {
+   pos=std::max(0,pos-16);
+   require(buffer.stepBack(actual,image,aspect,16),"accelerated step failed");
+   require(actual==shots[pos].state && image==shots[pos].frame && aspect==shots[pos].aspect,"wrong accelerated landing frame");
+ }
+ require(!buffer.stepBack(actual,image,aspect,16),"accelerated rewind passed oldest frame");
  RewindBuffer bounded(45000);bounded.configure(true);
  for(const auto& shot:shots) { require(bounded.capture(shot.state,shot.frame,shot.aspect),"bounded capture");require(bounded.bytesUsed()<=45000,"memory cap exceeded"); }
  while(bounded.stepBack(actual,image,aspect))require(bounded.bytesUsed()<=45000,"reverse memory cap exceeded");

@@ -47,7 +47,7 @@ Settings and saves live in `data/`. Keep this folder when updating; use `--data 
 | P | Pause / resume |
 | Ctrl+R · Ctrl+Shift+R | Reset · power restart |
 | `,` · `.` | Previous frame · next frame while paused (hold to repeat) |
-| Tab · R | Hold fast-forward · hold rewind |
+| Tab · R | Hold fast-forward · hold rewind (doubles every 2 seconds up to 16× by default) |
 | 0–9 · F5/F8 | Select save slot · save/load slot |
 | Alt+Enter · Esc | Fullscreen · show/hide fullscreen menu or release captured mouse |
 | + / − · F12 | Master volume · screenshot |
