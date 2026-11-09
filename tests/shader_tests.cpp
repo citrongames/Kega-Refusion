@@ -153,6 +153,27 @@ void gpuTests(const QString& directory) {
             for (int x = 0; x < tile.width(); ++x)
                 require(mixed.pixelColor(x, y) == expected, "solid pattern did not blend up to its edge");
     }
+    // Sparse dots flank a denser field, with a hard contour at its right.
+    // Both phases of a sparse row should converge towards its local density.
+    QImage ramp(48, 20, QImage::Format_RGB32);
+    const QColor base(88, 112, 144), ink(128, 136, 168), outline(12, 20, 24);
+    ramp.fill(base);
+    for (int y = 0; y < ramp.height(); ++y) {
+        for (int x = 0; x < ramp.width(); ++x) {
+            if (x >= 40) ramp.setPixelColor(x, y, outline);
+            else if ((y == 5 && x % 8 == 0) || (y == 7 && x % 4 == 0) ||
+                     (y >= 9 && y < 15 && (x + y) % 2 == 0))
+                ramp.setPixelColor(x, y, ink);
+        }
+    }
+    const QImage filteredRamp = render(dither, ramp, ramp.size());
+    const int dot = filteredRamp.pixelColor(16, 5).red();
+    const int next = filteredRamp.pixelColor(17, 5).red();
+    require(dot > base.red() && dot < base.red() + 15 && next > base.red(),
+            "sparse dithering did not blend across both phases");
+    require(filteredRamp.pixelColor(39, 2) == base &&
+            filteredRamp.pixelColor(40, 12) == outline,
+            "dither smoothing crossed a hard silhouette");
     QImage details(35, 19, QImage::Format_RGB32);
     details.fill(dark);
     constexpr const char* digits[] = {"1110111", "0010101", "0110111", "0010101", "1110111"};
