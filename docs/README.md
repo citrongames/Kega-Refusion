@@ -7,6 +7,7 @@ Start with the overview for current features and basic use, or the build guide f
 ## Build and development
 
 - [Building, packaging and focused checks](building.md)
+- [Release versions, assets and update notes](releasing.md)
 - [Architecture and resource-management rules](architecture.md)
 - [Verification record](verification.md)
 - [Adding an interface translation](../languages/README.md)

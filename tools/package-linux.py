@@ -12,6 +12,7 @@ import tarfile
 from pathlib import Path
 import sys
 sys.dont_write_bytecode = True
+from package_manifest import write_manifest
 from package_symbols import strip_binary
 from package_notices import copy_core32x_notices
 
@@ -115,6 +116,7 @@ def main() -> None:
     stage.mkdir(parents=True)
 
     copy(app, stage / "KegaRefusion")
+    copy(build / "bin/KegaRefusionUpdater", stage / "KegaRefusionUpdater")
     copy(core, stage / "cores/genesis_plus_gx_libretro.so")
     copy(build / "core/genesis_plus_gx_libretro_linkpeer.so", stage / "cores/genesis_plus_gx_libretro_linkpeer.so")
     shutil.copytree(root / "languages", stage / "languages")
@@ -202,6 +204,7 @@ Windows и Linux x86_64 используют общий контракт сет�
 
     destination = args.destination.absolute()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    write_manifest(stage)
     archive_tree(stage, destination)
     shutil.rmtree(parent)
     print(f"Created {destination} ({destination.stat().st_size:,} bytes), {len(libraries)} bundled libraries")

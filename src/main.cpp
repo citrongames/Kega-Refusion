@@ -1,6 +1,7 @@
 #include "i18n/Localization.h"
 #include "core/EmulationSession.h"
 #include "ui/MainWindow.h"
+#include "update/UpdateInstaller.h"
 
 #include <QApplication>
 #include <QCommandLineOption>
@@ -72,6 +73,7 @@ int main(int argc, char* argv[]) {
     if(QSslSocket::availableBackends().contains(QStringLiteral("openssl")))
         QSslSocket::setActiveBackend(QStringLiteral("openssl"));
     QApplication::setApplicationName(QStringLiteral("Kega Refusion"));
+    QApplication::setApplicationVersion(QStringLiteral(KEGA_VERSION));
     QApplication::setOrganizationName(QStringLiteral("Kega Refusion"));
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
     const QString appDirectory = QCoreApplication::applicationDirPath();
@@ -82,6 +84,7 @@ int main(int argc, char* argv[]) {
     parser.setApplicationDescription(
         Localization::text(QStringLiteral("Kega Refusion — Mega Drive, Sega CD и Master System")));
     parser.addHelpOption();
+    parser.addVersionOption();
     QCommandLineOption performanceOption(QStringList{QStringLiteral("performance-check")},
         Localization::text(QStringLiteral("Измерить работу окна в течение 10 секунд")));
     parser.addOption(performanceOption);
@@ -183,6 +186,22 @@ int main(int argc, char* argv[]) {
 
     MainWindow window(session, dataPath, smokeTest);
     window.show();
+    if (!smokeTest && !parser.isSet(performanceOption)) {
+        QTimer::singleShot(0, &window, [&window] {
+            const QString failure = UpdateInstaller::takeFailureReport().trimmed();
+            if (failure.isEmpty()) return;
+            auto* dialog = new QMessageBox(QMessageBox::Warning,
+                Localization::text(QStringLiteral("Обновление Kega Refusion")),
+                Localization::text(QStringLiteral("Предыдущее обновление завершилось с ошибкой.")) +
+                    QStringLiteral("\n\n") + failure.left(8192), QMessageBox::Ok, &window);
+            dialog->setObjectName(QStringLiteral("updateFailureDialog"));
+            dialog->setTextFormat(Qt::PlainText);
+            dialog->setWindowModality(Qt::NonModal);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->show();
+        });
+        QTimer::singleShot(1500, &window, [&window] { window.checkForUpdates(false); });
+    }
     if (parser.isSet(performanceOption)) {
         QTimer::singleShot(500, &app,[&] {
             if (auto* gpu = window.findChild<QOpenGLWidget*>(QStringLiteral("gpuVideo")))

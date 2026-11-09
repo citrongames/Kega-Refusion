@@ -8,6 +8,8 @@
 #include "AchievementsDialog.h"
 #include "AchievementNetwork.h"
 #include "NetplaySettingsPage.h"
+#include "UpdateDialog.h"
+#include "update/UpdateService.h"
 #include "net/NetplayController.h"
 #include "net/NetplayTimeline.h"
 #include <algorithm>
@@ -298,6 +300,35 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) { updateGunPresentation(); });
     debugAudioGains_.fill(100);
     buildMenus();
+    updateService_ = new UpdateService(this);
+    connect(updateService_, &UpdateService::checked, this,
+            [this](const QString& version, const QString& notes) {
+        checkingForUpdates_ = false;
+        availableUpdateVersion_ = version;
+        availableUpdateNotes_ = notes;
+        updateError_.clear();
+        // Background checks only open a window when there is an actual update.
+        if (!version.isEmpty() || updateCheckInteractive_) showUpdateDialog(updateCheckInteractive_);
+        else refreshUpdateDialog();
+    });
+    connect(updateService_, &UpdateService::failed, this, [this](const QString& message) {
+        checkingForUpdates_ = false;
+        installingUpdate_ = false;
+        updateError_ = message;
+        if (updateCheckInteractive_) showUpdateDialog();
+        else refreshUpdateDialog();
+    });
+    connect(updateService_, &UpdateService::progress, this, [this](qint64 received, qint64 total) {
+        updateBytesReceived_ = received;
+        updateBytesTotal_ = total;
+        if (updateDialog_ && installingUpdate_ && !restartingUpdate_)
+            updateDialog_->setProgress(received, total);
+    });
+    connect(updateService_, &UpdateService::restarting, this, [this] {
+        restartingUpdate_ = true;
+        refreshUpdateDialog();
+        close(); // The ordinary close path finalizes recordings, settings and saves.
+    });
     connect(&session_, &EmulationSession::debugControlsChanged, this,
             [this](quint32 videoAvailable, quint64 audioAvailable) {
         const bool changed = debugVideoAvailable_ != videoAvailable ||
@@ -1133,12 +1164,19 @@ void MainWindow::buildMenus() {
     exportBlockedMenus_ = {emulationMenu, onlineMenu, settingsMenu, debugMenu_};
     updateVideoActions();
     QMenu* helpMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Справка")));
+    auto* updatesAction = helpMenu->addAction(Localization::text(QStringLiteral("Проверить обновления…")));
+    updatesAction->setObjectName(QStringLiteral("checkUpdatesAction"));
+    connect(updatesAction, &QAction::triggered, this, [this] { checkForUpdates(); });
+    helpMenu->addSeparator();
     QAction* aboutAction = helpMenu->addAction(Localization::text(QStringLiteral("О программе")));
+    aboutAction->setObjectName(QStringLiteral("aboutAction"));
     connect(aboutAction, &QAction::triggered, this, [this] {
         QMessageBox about(QMessageBox::Information, Localization::text(QStringLiteral("О Kega Refusion")),
             Localization::text(QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
             "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
             "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.")) +
+            QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Версия: %1"))
+                .arg(QApplication::applicationVersion().toHtmlEscaped()) +
             QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Авторы:")) +
             QStringLiteral("<br>vova791 — Салата Владимир<br>Codex ChatGPT<br><br>") +
             Localization::text(QStringLiteral("Оригинальный код: GPLv3+ с исключением для ядра. Без гарантий.")) +
@@ -1152,6 +1190,71 @@ void MainWindow::buildMenus() {
                              Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
         about.exec();
     });
+}
+
+void MainWindow::checkForUpdates(bool interactive) {
+    if (!interactive && !settings_.value(QStringLiteral("updates/checkOnStartup"), true).toBool()) return;
+    if (installingUpdate_ || restartingUpdate_) {
+        if (interactive) showUpdateDialog();
+        return;
+    }
+    if (checkingForUpdates_) {
+        if (interactive) {
+            updateCheckInteractive_ = true;
+            showUpdateDialog();
+        }
+        return;
+    }
+    updateCheckInteractive_ = interactive;
+    checkingForUpdates_ = true;
+    availableUpdateVersion_.clear();
+    availableUpdateNotes_.clear();
+    updateError_.clear();
+    if (interactive) showUpdateDialog();
+    else refreshUpdateDialog();
+    updateService_->check();
+}
+
+void MainWindow::showUpdateDialog(bool activate) {
+    if (!updateDialog_) {
+        updateDialog_ = new UpdateDialog(this);
+        updateDialog_->setCheckOnStartup(settings_.value(QStringLiteral("updates/checkOnStartup"), true).toBool());
+        connect(updateDialog_, &UpdateDialog::checkOnStartupChanged, this, [this](bool enabled) {
+            if (settings_.value(QStringLiteral("updates/checkOnStartup"), true).toBool() != enabled)
+                settings_.setValue(QStringLiteral("updates/checkOnStartup"), enabled);
+        });
+        connect(updateDialog_, &UpdateDialog::checkRequested, this, [this] { checkForUpdates(); });
+        connect(updateDialog_, &UpdateDialog::installRequested, this, [this] {
+            if (checkingForUpdates_ || installingUpdate_ || restartingUpdate_ || availableUpdateVersion_.isEmpty()) return;
+            updateCheckInteractive_ = true;
+            installingUpdate_ = true;
+            updateError_.clear();
+            updateBytesReceived_ = updateBytesTotal_ = 0;
+            refreshUpdateDialog();
+            updateService_->install();
+        });
+    }
+    refreshUpdateDialog();
+    updateDialog_->setAttribute(Qt::WA_ShowWithoutActivating, !activate);
+    updateDialog_->show();
+    if (activate) {
+        updateDialog_->raise();
+        updateDialog_->activateWindow();
+    }
+}
+
+void MainWindow::refreshUpdateDialog() {
+    if (!updateDialog_) return;
+    if (checkingForUpdates_) {
+        updateDialog_->setChecking();
+        return;
+    }
+    if (!availableUpdateVersion_.isEmpty())
+        updateDialog_->setRelease(availableUpdateVersion_, availableUpdateNotes_);
+    else updateDialog_->setNoUpdate();
+    if (restartingUpdate_) updateDialog_->setRestarting();
+    else if (installingUpdate_) updateDialog_->setProgress(updateBytesReceived_, updateBytesTotal_);
+    else if (!updateError_.isEmpty()) updateDialog_->setError(updateError_, !availableUpdateVersion_.isEmpty());
 }
 
 void MainWindow::applyDebugMasks() {
@@ -1588,6 +1691,11 @@ void MainWindow::editSettings(int initialPage) {
         "Изменение языка применяется после перезапуска. Если перевода нет, используется английский.")), &dialog);
     languageHelp->setWordWrap(true);
     general->addRow(languageHelp);
+    const bool checkUpdatesOnStartup = settings_.value(QStringLiteral("updates/checkOnStartup"), true).toBool();
+    auto* startupUpdates = new QCheckBox(Localization::text(QStringLiteral("Проверять обновления при запуске")), &dialog);
+    startupUpdates->setObjectName(QStringLiteral("checkUpdatesOnStartup"));
+    startupUpdates->setChecked(checkUpdatesOnStartup);
+    general->addRow(startupUpdates);
     auto* emulationFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS эмуляции")), &dialog);
     emulationFps->setObjectName(QStringLiteral("emulationFps"));
     emulationFps->setChecked(fpsAction_->isChecked());
@@ -2158,6 +2266,10 @@ void MainWindow::editSettings(int initialPage) {
         hasControlsViewState_ = true;
     }
     if (result == QDialog::Accepted) {
+        if (startupUpdates->isChecked() != checkUpdatesOnStartup) {
+            settings_.setValue(QStringLiteral("updates/checkOnStartup"), startupUpdates->isChecked());
+            if (updateDialog_) updateDialog_->setCheckOnStartup(startupUpdates->isChecked());
+        }
         const QString selectedNickname = netplaySettings->nickname();
         if (!selectedNickname.isEmpty() && selectedNickname != netplay_->nickname())
             netplay_->setNickname(selectedNickname);

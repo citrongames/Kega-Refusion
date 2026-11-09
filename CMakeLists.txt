@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.21.1 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.21.2 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -85,7 +85,19 @@ if(UNIX AND NOT APPLE)
         endif()
     endif()
 endif()
+add_library(update_archive STATIC src/update/UpdateArchive.cpp)
+target_include_directories(update_archive PUBLIC src)
+target_link_libraries(update_archive PRIVATE kega_archive)
+add_executable(KegaRefusionUpdater src/update/UpdateHelper.cpp)
+target_link_libraries(KegaRefusionUpdater PRIVATE update_archive)
+if(MINGW)
+    target_link_options(KegaRefusionUpdater PRIVATE -static -municode)
+    target_link_libraries(KegaRefusionUpdater PRIVATE user32 shell32)
+endif()
 add_executable(KegaRefusion WIN32
+    src/update/UpdateService.cpp src/update/UpdateService.h
+    src/update/UpdateInstaller.cpp src/update/UpdateInstaller.h
+    src/ui/UpdateDialog.cpp src/ui/UpdateDialog.h
     assets/app.qrc
     src/ui/ControlsPage.cpp src/ui/ControlsPage.h
     src/ui/CheatsDialog.cpp src/ui/CheatsDialog.h
@@ -106,7 +118,9 @@ add_executable(KegaRefusion WIN32
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
-target_link_libraries(KegaRefusion PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
+add_dependencies(KegaRefusion KegaRefusionUpdater)
+target_compile_definitions(KegaRefusion PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
+target_link_libraries(KegaRefusion PRIVATE update_archive core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
 add_custom_command(TARGET KegaRefusion POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/languages" "$<TARGET_FILE_DIR:KegaRefusion>/languages"
@@ -126,6 +140,14 @@ if(WIN32)
     target_link_libraries(KegaRefusion PRIVATE iphlpapi ws2_32)
 endif()
 if(BUILD_TESTING)
+    add_executable(update_installer_tests tests/update_installer_tests.cpp)
+    target_link_libraries(update_installer_tests PRIVATE update_archive kega_archive)
+    if(MSVC)
+        target_compile_options(update_installer_tests PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(update_installer_tests PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME update_installer_tests COMMAND update_installer_tests)
     add_executable(audio_backend_probe tests/audio_backend_probe.cpp)
     target_link_libraries(audio_backend_probe PRIVATE Qt6::Core Qt6::Multimedia)
     add_executable(video_recording_tests tests/video_recording_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
@@ -150,12 +172,12 @@ if(BUILD_TESTING)
     get_target_property(KEGA_DEBUG_UI_SOURCES KegaRefusion SOURCES)
     list(FILTER KEGA_DEBUG_UI_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
     add_executable(video_ui_tests tests/video_ui_tests.cpp ${KEGA_DEBUG_UI_SOURCES})
-    target_link_libraries(video_ui_tests PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
+    target_link_libraries(video_ui_tests PRIVATE update_archive core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
     if(WIN32)
         target_link_libraries(video_ui_tests PRIVATE iphlpapi ws2_32)
     endif()
     add_executable(debug_menu_tests tests/debug_menu_tests.cpp ${KEGA_DEBUG_UI_SOURCES})
-    target_link_libraries(debug_menu_tests PRIVATE core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
+    target_link_libraries(debug_menu_tests PRIVATE update_archive core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)
     if(WIN32)
         target_link_libraries(debug_menu_tests PRIVATE iphlpapi ws2_32)
     endif()

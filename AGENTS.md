@@ -29,3 +29,9 @@
 - Keep a per-ROM ledger for collection audits. Inventory, database recognition and startup smoke are distinct from individual mapper/protection analysis.
 - Never claim all ROMs or all groups are fully reviewed because representative samples passed. Report exact coverage and remaining entries.
 - Continue authorized batch work until every requested unique ROM has evidence-backed disposition and confirmed core defects are resolved, or explain a concrete external blocker without claiming completion.
+
+## Release compatibility
+
+- Follow [release versions, assets and update notes](docs/releasing.md) for every release. The CMake project version is the single source; the tag is `vX.Y.Z` and packaged applications must report `X.Y.Z` on both platforms.
+- Keep the updater's binary asset contract: `KegaRefusion-X.Y.Z-windows-x86_64.zip` and `KegaRefusion-X.Y.Z-linux-x86_64.tar.gz`, each with a matching `sha256:<64 hex digits>` GitHub asset digest. Include corresponding `KegaRefusion-X.Y.Z-source.tar.gz`, `SHA256SUMS.txt` and `update.json`. Generate the fifth asset with `tools/release-update-metadata.py` from the authenticated draft release ID after the first four uploads; regenerate after body/binary changes and publish only with all five assets. Runtime discovery uses the public latest-release redirect and tagged `update.json`, without REST quota or tokens.
+- The updater displays the published release body directly. Write concise, readable Markdown bullets about this version's completed changes; avoid a repeated project overview, long boilerplate or large tables. Record required upgrade actions and material limitations clearly.

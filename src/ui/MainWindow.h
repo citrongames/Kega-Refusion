@@ -31,6 +31,8 @@ class CheatSearchDialog;
 class DebugAudioDialog;
 class InputManager;
 class NetplayController;
+class UpdateService;
+class UpdateDialog;
 enum class ConsoleProfile;
 
 class MainWindow final : public QMainWindow {
@@ -42,6 +44,7 @@ public:
     void openRom(const QString& path);
     void setFullscreenMode(bool enabled);
     void showOsdDemo();
+    void checkForUpdates(bool interactive = true);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -52,6 +55,8 @@ protected:
 
 private:
     void buildMenus();
+    void showUpdateDialog(bool activate = true);
+    void refreshUpdateDialog();
     void setSmsFmEnabled(bool enabled);
     void flushVolumePreference();
     void updateDebugDialogs();
@@ -102,6 +107,17 @@ private:
     GameView* view_ = nullptr;
     AudioOutput* audio_ = nullptr;
     AchievementNetwork* achievementNetwork_ = nullptr;
+    UpdateService* updateService_ = nullptr;
+    QPointer<UpdateDialog> updateDialog_;
+    QString availableUpdateVersion_;
+    QString availableUpdateNotes_;
+    QString updateError_;
+    qint64 updateBytesReceived_ = 0;
+    qint64 updateBytesTotal_ = 0;
+    bool checkingForUpdates_ = false;
+    bool updateCheckInteractive_ = false;
+    bool installingUpdate_ = false;
+    bool restartingUpdate_ = false;
     InputManager* input_ = nullptr;
     NetplayController* netplay_ = nullptr;
     QAction* netplayLeaveAction_ = nullptr;

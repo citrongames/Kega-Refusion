@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 import sys
 sys.dont_write_bytecode = True
+from package_manifest import write_manifest
 from package_symbols import strip_binary
 from package_notices import copy_core32x_notices
 
@@ -59,6 +60,7 @@ def main() -> None:
     sources = {
         Path("SDL2.dll"): sdl_root / "bin/SDL2.dll",
         Path("KegaRefusion.exe"): executable,
+        Path("KegaRefusionUpdater.exe"): build / "bin/KegaRefusionUpdater.exe",
         Path("cores/genesis_plus_gx_libretro.dll"): core,
         Path("cores/genesis_plus_gx_libretro_linkpeer.dll"): build / "core/genesis_plus_gx_libretro_linkpeer.dll",
         Path("plugins/platforms/qwindows.dll"): qt_root / "plugins/platforms/qwindows.dll",
@@ -157,6 +159,7 @@ def main() -> None:
         if source.is_file():
             shutil.copy2(source, notices / name)
 
+    write_manifest(stage)
     destination.mkdir(parents=True, exist_ok=True)
     for source in stage.rglob("*"):
         if source.is_file():
