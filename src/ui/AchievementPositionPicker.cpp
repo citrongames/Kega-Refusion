@@ -5,8 +5,7 @@
 #include <QGridLayout>
 #include <QPainter>
 #include <QRadioButton>
-#include <QStyle>
-#include <QStyleOptionFocusRect>
+#include <QPainterPath>
 #include <array>
 
 namespace {
@@ -25,24 +24,41 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        const QSize badge(29, 13);
-        const int x = (width() - badge.width()) * (position_ % 3) / 2;
-        const int y = position_ < 3 ? 0 : height() - badge.height();
-        const QRectF card(x + 0.5, y + 0.5, badge.width() - 1, badge.height() - 1);
-        const auto colors = palette();
-        const QColor edge = colors.color(isChecked() || underMouse() ? QPalette::Highlight : QPalette::Mid);
-        painter.setPen(edge);
-        painter.setBrush(colors.color(isChecked() ? QPalette::Highlight : QPalette::Base));
-        painter.drawRoundedRect(card, 2, 2);
-        painter.setPen(colors.color(isChecked() ? QPalette::HighlightedText : QPalette::Text));
-        painter.drawRect(QRectF(x + 4, y + 4, 4, 4));
-        painter.drawLine(x + 12, y + 5, x + 24, y + 5);
-        painter.drawLine(x + 12, y + 8, x + 20, y + 8);
-        if (hasFocus()) {
-            QStyleOptionFocusRect focus;
-            focus.initFrom(this);
-            focus.rect = rect().adjusted(1, 1, -1, -1);
-            style()->drawPrimitive(QStyle::PE_FrameFocusRect, &focus, &painter, this);
+        const bool dark = qGray(palette().color(QPalette::Base).rgb()) < 128;
+        const QColor ink = dark ? QColor(239, 241, 244) : QColor(36, 41, 48);
+        const QColor paper = dark ? Qt::black : Qt::white;
+        const QRectF zone = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
+
+        if (isChecked()) {
+            painter.setPen(QPen(ink, 2));
+            painter.setBrush(ink);
+            painter.drawRoundedRect(zone, 4, 4);
+
+            const QPointF center = zone.center();
+            QPainterPath check(center + QPointF(-8, 0));
+            check.lineTo(center + QPointF(-2, 6));
+            check.lineTo(center + QPointF(9, -6));
+            painter.setPen(QPen(paper, 3.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.drawPath(check);
+        } else {
+            const QSize badge(29, 13);
+            const int x = (width() - badge.width()) * (position_ % 3) / 2;
+            const int y = position_ < 3 ? 0 : height() - badge.height();
+            const QRectF card(x + 0.5, y + 0.5, badge.width() - 1, badge.height() - 1);
+            QColor outline = ink;
+            outline.setAlpha(underMouse() ? 215 : 140);
+            painter.setPen(outline);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRoundedRect(card, 2, 2);
+            painter.drawRect(QRectF(x + 4, y + 4, 4, 4));
+            painter.drawLine(x + 12, y + 5, x + 24, y + 5);
+            painter.drawLine(x + 12, y + 8, x + 20, y + 8);
+        }
+
+        if (hasFocus() && testAttribute(Qt::WA_KeyboardFocusChange)) {
+            painter.setPen(QPen(isChecked() ? paper : ink, 1, Qt::DotLine));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRoundedRect(zone.adjusted(2, 2, -2, -2), 2, 2);
         }
     }
 
