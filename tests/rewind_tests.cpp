@@ -52,8 +52,10 @@ int main(int argc,char** argv) {
  require(compressedBudget.capture(large,tiny,1.0),"large capacity fixture capture");
  QByteArray small(1,'s');
  require(compressedBudget.capture(small,tiny,1.0),"size-changing capacity fixture capture");
- require(compressedBudget.bytesUsed()>=compressed.capacity()+small.capacity()+tiny.sizeInBytes(),
-         "compressed patch capacity was omitted from memory accounting");
+ require(compressedBudget.bytesUsed()>=compressed.size()+small.capacity()+tiny.sizeInBytes(),
+         "compressed patch was omitted from memory accounting");
+ require(compressedBudget.bytesUsed()<compressed.capacity(),
+         "compressed patch retained qCompress allocation slack");
  require(compressedBudget.stepBack(actual,image,aspect) && actual==large,"capacity-aware history restore");
  require(compressedBudget.bytesUsed()>=large.capacity()+tiny.sizeInBytes(),"restored anchor capacity was omitted");
  RewindBuffer identical;identical.configure(true);

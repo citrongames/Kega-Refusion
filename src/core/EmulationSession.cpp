@@ -25,6 +25,39 @@
 #include <thread>
 
 namespace {
+// Device playback follows the chosen speed. Keep fractional sample position
+// across video frames; the recorder continues to consume the original core PCM.
+class PlaybackResampler {
+public:
+    QByteArray convert(const QByteArray& pcm, int percent) {
+        const qsizetype count = pcm.size() / 4;
+        if (!count) return {};
+        const qsizetype outputs = (count * 100 - phase_ + percent - 1) / percent;
+        QByteArray result(outputs * 4,Qt::Uninitialized);
+        char* out = result.data();
+        for (qsizetype i = 0; i < count; ++i) {
+            std::array<qint16,2> next;
+            std::memcpy(next.data(),pcm.constData()+4*i,4);
+            if (!started_) { previous_ = next; started_ = true; }
+            while (phase_ < 100) {
+                std::array<qint16,2> sample;
+                for (int ch = 0; ch < 2; ++ch)
+                    sample[ch] = qint16(previous_[ch] + (next[ch]-previous_[ch])*phase_/100);
+                std::memcpy(out,sample.data(),4);
+                out += 4;
+                phase_ += percent;
+            }
+            phase_ -= 100;
+            previous_ = next;
+        }
+        return result;
+    }
+private:
+    std::array<qint16,2> previous_{};
+    int phase_ = 0;
+    bool started_ = false;
+};
+
 constexpr int LinkPreviewBytes = 48;
 struct LinkPreviewGeometry {
     QSize size[2], native[2];
@@ -275,6 +308,9 @@ void EmulationSession::setFastForward(bool enabled) {
     if (networkMode_.load()) {
         if (networkFastRequested_.exchange(enabled) != enabled) enqueue({Type::NetFast,{},enabled?1:0});
     } else fastForward_.store(enabled);
+}
+void EmulationSession::setGameSpeedPercent(int percent) {
+    gameSpeedPercent_.store(std::clamp(percent,5,200) / 5 * 5);
 }
 void EmulationSession::setFastForwardFactor(int factor) {
     factor=factor==0?0:std::clamp(factor,2,32);
@@ -618,7 +654,14 @@ void EmulationSession::run() {
     FramePacer pacer;
     FrameWaiter waiter;
     pacer.reset(nowNs());
-    auto clearAudio = [&] { audioClockAvailable_.store(false); emit audioReset(); };
+    PlaybackResampler resampler;
+    QByteArray slowAudio;
+    qsizetype slowOffset = 0;
+    qint64 slowStartNs = 0, slowDeadlineNs = 0;
+    auto clearAudio = [&] {
+        slowAudio.clear(); slowDeadlineNs = 0; resampler = {};
+        audioClockAvailable_.store(false); emit audioReset();
+    };
     NetRollbackSession networkTimeline;
     bool networkAchievementTracking=false;
     const auto resetNetworkAchievements = [&] {
@@ -706,6 +749,7 @@ void EmulationSession::run() {
     };
     auto lastBatteryCheck = Clock::now();
     bool optionsPending = false, fastLatched = false;
+    int previousSpeedPercent = 100;
     qint64 nextPresentationNs = 0;
     qint64 nextMovieStatusNs = 0, nextHeldFrameNs = 0;
     bool stepHeldLatched = false, backHeldLatched = false;
@@ -1798,12 +1842,39 @@ void EmulationSession::run() {
         if (!host.loaded() || nowPaused || networkRemoteRewinding) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
         if (manualHistory) clearHistory();
         const bool fast = fastForward_.load();
-        if (fast != fastLatched) {
+        const int requestedPercent = gameSpeedPercent_.load();
+        const int speedPercent = (fast || networkMode) ? 100 :
+            std::max(achievementHardcore ? 100 : 5,requestedPercent);
+        if (fast != fastLatched || speedPercent != previousSpeedPercent) {
+            previousSpeedPercent = speedPercent;
             fastLatched = fast; clearAudio(); pacer.reset(nowNs()); nextPresentationNs = 0;
             resetMetrics();
             // Fast-forward creates a gap: discard the old timeline so rewind
             // cannot jump across it when normal recording resumes.
             if (fast) clearHistory();
+        }
+        // At 5% a PAL frame lasts 400 ms. Feed the device small chunks
+        // throughout that interval and service commands between them.
+        if (slowDeadlineNs) {
+            const auto now = nowNs();
+            if (now < slowDeadlineNs) {
+                qint64 wake = slowDeadlineNs;
+                if (slowOffset < slowAudio.size()) {
+                    const auto chunkDue = [&] {
+                        return slowStartNs + (slowDeadlineNs-slowStartNs)*slowOffset/slowAudio.size();
+                    };
+                    if (now >= chunkDue()) {
+                        const auto bytes = std::min<qsizetype>(slowAudio.size()-slowOffset,
+                                                               4 * std::max(1,host.sampleRate()/100));
+                        emit audioSamples(slowAudio.mid(slowOffset,bytes),host.sampleRate());
+                        slowOffset += bytes;
+                    }
+                    wake = chunkDue();
+                }
+                waiter.waitUntil(std::min<qint64>(wake,now+10000000));
+                continue;
+            }
+            slowDeadlineNs = 0;
         }
         const int factor = fast ? fastForwardFactor_.load() : 1;
         const bool finalMovieFrame = movie.readOnly() && movie.position() + 1 >= movie.length();
@@ -1835,12 +1906,21 @@ void EmulationSession::run() {
             presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership());
             nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
         }
-        if (!fast && !paused && !host.audio().isEmpty()) emit audioSamples(host.audio(),host.sampleRate());
+        if (!fast && !paused && !host.audio().isEmpty()) {
+            if (speedPercent == 100) emit audioSamples(host.audio(),host.sampleRate());
+            else if (speedPercent > 100) emit audioSamples(resampler.convert(host.audio(),speedPercent),host.sampleRate());
+            else slowAudio = resampler.convert(host.audio(),speedPercent);
+        } else slowAudio.clear();
         const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
             audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
         if (factor != 0) {
-            const auto deadline = pacer.next(nowNs(),qint64(1000000000.0 * clockScale / (host.fps() * factor)));
-            waiter.waitUntil(deadline);
+            const auto period = qint64(100000000000.0 * clockScale / (host.fps() * factor * speedPercent));
+            const auto deadline = pacer.next(nowNs(),period);
+            if (speedPercent < 100 && !paused) {
+                slowDeadlineNs = deadline;
+                slowStartNs = deadline - period;
+                slowOffset = 0;
+            } else waiter.waitUntil(deadline);
         } else pacer.reset(nowNs());
     }
     finishVideo();

@@ -28,7 +28,8 @@ const QVector<int> commands = {
     PauseCommand, FastForwardCommand, SaveCommand, LoadCommand,
     ResetCommand, FullscreenCommand, MuteCommand,
     NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand,
-    FrameAdvanceCommand, FrameBackCommand
+    FrameAdvanceCommand, FrameBackCommand,
+    SpeedDecreaseCommand, SpeedIncreaseCommand, SpeedResetCommand
 };
 
 QString commandName(int command) {
@@ -41,6 +42,9 @@ QString commandName(int command) {
     case HardResetCommand: return Localization::text(QStringLiteral("Перезапуск питания"));
     case FrameAdvanceCommand: return Localization::text(QStringLiteral("Следующий кадр"));
     case FrameBackCommand: return Localization::text(QStringLiteral("Предыдущий кадр"));
+    case SpeedDecreaseCommand: return Localization::text(QStringLiteral("Замедлить на 5%"));
+    case SpeedIncreaseCommand: return Localization::text(QStringLiteral("Ускорить на 5%"));
+    case SpeedResetCommand: return Localization::text(QStringLiteral("Вернуть 100%"));
     case FullscreenCommand: return Localization::text(QStringLiteral("Полный экран"));
     case MuteCommand: return Localization::text(QStringLiteral("Без звука"));
     case NextSlotCommand: return Localization::text(QStringLiteral("Следующий слот"));
@@ -62,6 +66,8 @@ QString commandShortcut(int command) {
     case HardResetCommand: return QStringLiteral("Ctrl+Shift+R");
     case FrameAdvanceCommand: return QStringLiteral(".");
     case FrameBackCommand: return QStringLiteral(",");
+    case SpeedDecreaseCommand: return QStringLiteral("[");
+    case SpeedIncreaseCommand: return QStringLiteral("]");
     case FullscreenCommand: return QStringLiteral("Alt+Enter");
     case MuteCommand: return QStringLiteral("M");
     default: return QStringLiteral("—");

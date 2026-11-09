@@ -75,6 +75,7 @@ public:
     void clearCheatSearch();
     void releaseButtons();
     void setFastForward(bool enabled);
+    void setGameSpeedPercent(int percent);
     void setFastForwardFactor(int factor);
     void setRewind(bool enabled);
     void setRewindEnabled(bool enabled);
@@ -210,7 +211,7 @@ private:
     std::atomic<bool> quitting_{false}, loaded_{false}, fastForward_{false};
     std::atomic<bool> rewind_{false}, backgroundPaused_{false};
     std::atomic<bool> rewindEnabled_{true}, frameAdvanceHeld_{false}, frameBackHeld_{false};
-    std::atomic<int> fastForwardFactor_{4}, rewindMemoryMiB_{128};
+    std::atomic<int> gameSpeedPercent_{100}, fastForwardFactor_{4}, rewindMemoryMiB_{128};
     // Zero selects acceleration based on how long rewind is held.
     std::atomic<int> rewindFactor_{0};
     // Local hold edges are separate from the shared state applied by the host.

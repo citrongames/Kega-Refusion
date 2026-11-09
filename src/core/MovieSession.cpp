@@ -2,6 +2,7 @@
 #include "MovieSession.h"
 #include "LibretroHost.h"
 #include "VideoFrameGeometry.h"
+#include "StateFile.h"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
@@ -9,7 +10,6 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QSaveFile>
 #include <QtEndian>
 #include <cmath>
 #include <cstring>
@@ -21,16 +21,6 @@ constexpr qsizetype MaxPrefix = 72 * 1024 * 1024;
 constexpr qsizetype MaxPixels = 16 * 1024 * 1024;
 constexpr qsizetype MaxSlot = MaxSnapshot + MaxPrefix + MaxPixels + 256;
 QByteArray hash(const QByteArray& bytes) { return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256); }
-bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
-    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
-        error = Localization::text(QStringLiteral("Не удалось создать папку сохранения записи.")); return false;
-    }
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        error = Localization::text(QStringLiteral("Не удалось записать сохранение записи: %1")).arg(file.errorString()); return false;
-    }
-    return true;
-}
 // Failure recovery only: successful takeover keeps the current game/disc running.
 void restorePreviousSession(LibretroHost& host, const QByteArray& state,
                             int disc, bool wasPrepared, QString& error) {
@@ -203,9 +193,12 @@ unsigned MovieSession::occupiedSlots() const {
 
 bool MovieSession::saveSlot(int slot, QString& error) {
     if (!active() || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет активной записи.")); return false; }
-    return saveFile(slotPath(slot), error);
+    return saveSlotFile(slotPath(slot), error, true);
 }
 bool MovieSession::saveFile(const QString& path, QString& error) {
+    return saveSlotFile(path, error, false);
+}
+bool MovieSession::saveSlotFile(const QString& path, QString& error, bool keepPrevious) {
     if (!active() || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет активной записи или не выбран файл сохранения.")); return false; }
     const auto state = host_.captureMovieState();
     const auto prefix = tape_.checkpoint(cursor_, error);
@@ -226,7 +219,10 @@ bool MovieSession::saveFile(const QString& path, QString& error) {
     stream.writeRawData(state.constData(), state.size());
     stream.writeRawData(prefix.constData(), prefix.size());
     stream.writeRawData(pixels.constData(), pixels.size());
-    return atomicWrite(path, QByteArrayLiteral("KRMSLOT1") + hash(payload) + payload, error);
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+        error = Localization::text(QStringLiteral("Не удалось создать папку сохранения записи.")); return false;
+    }
+    return StateFile::write(path,QByteArrayLiteral("KRMSLOT1") + hash(payload) + payload,keepPrevious,error);
 }
 
 bool MovieSession::loadSlot(int slot, QImage& frame, double& aspect, bool& missing, QString& error) {

@@ -67,9 +67,10 @@ int main(int argc,char** argv){
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool frameBackOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--frame-back");
+ const bool speedOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--game-speed");
  const bool timerOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--run-timer");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || timerOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || timerOnly || speedOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
  if(frameBackOnly)rom=frameBackRom();
@@ -215,6 +216,28 @@ int main(int argc,char** argv){
   return 0;
  }
  session.loadGame(path);waitFor([&]{return frames.load()>=5;});
+ if(speedOnly){
+  std::atomic<qint64> samples{0};std::atomic<int> sampleRate{0};
+  QObject::connect(&session,&EmulationSession::audioSamples,&app,[&](const QByteArray& pcm,int rate){
+   samples+=pcm.size()/4;sampleRate=rate;
+  },Qt::DirectConnection);
+  session.setRewindEnabled(false);
+  for (int percent : {5,75,100,200}) {
+   session.setGameSpeedPercent(percent);
+   int start=frames.load();
+   waitFor([&]{return frames.load()>=start+2;},"speed change stalled");
+   const auto baseFrames=frames.load();const auto baseSamples=samples.load();
+   QElapsedTimer clock;clock.start();
+   const int interval=percent==5 ? 3 : percent/5;
+   waitFor([&]{return frames.load()>=baseFrames+interval;},"game speed stalled");
+   const auto elapsed=clock.elapsed();
+   const auto expectedMs=interval*100000.0/(60.0*percent);
+   require(elapsed>expectedMs*0.78 && elapsed<expectedMs*1.4,"wrong wall time for game speed");
+   const auto playedMs=(samples.load()-baseSamples)*1000.0/sampleRate.load();
+   require(playedMs>expectedMs*0.9 && playedMs<expectedMs*1.1,"live PCM duration does not follow game speed");
+  }
+  session.shutdown();std::puts("Game speed: 5/75/100/200% pacing and live PCM duration passed");return 0;
+ }
  if(timerOnly){
   quint64 timerFrames=0,timerUs=0;int timerEvents=0;
   QObject::connect(&session,&EmulationSession::runTimerChanged,&app,

@@ -281,6 +281,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::runTimerChanged,
             view_, &GameView::setRunTimer);
     session_.setFastForwardFactor(fastForwardFactor_);
+    session_.setGameSpeedPercent(gameSpeedPercent_);
     session_.setRewindEnabled(rewindEnabled_);
     session_.setRewindSpeed(rewindAccelerate_, rewindFixedFactor_);
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
@@ -303,10 +304,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(netplay_, &NetplayController::activeChanged, this, [this](bool active) {
         if (netplayLeaveAction_) netplayLeaveAction_->setEnabled(active);
         updateMovieActions();
+        updateGameSpeedActions();
         updateGunPresentation();
         updateInputEnabled();
     });
-    connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) { updateGunPresentation(); });
+    connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) {
+        updateGunPresentation();
+        updateGameSpeedActions();
+    });
     debugAudioGains_.fill(100);
     buildMenus();
     updateService_ = new UpdateService(this);
@@ -405,18 +410,15 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         view_->showOsd(message, 10000, QStringLiteral("recordingCompatibility"));
     });
     connect(&session_, &EmulationSession::videoRecordingChanged, this,
-            [this](bool active, bool exporting, const QString& path) {
-        const bool started = active && !videoActive_;
+            [this](bool active, bool exporting, const QString& /* path */) {
         videoPending_ = false;
         videoActive_ = active;
+        view_->setVideoRecordingStatus(active && !exporting && !videoStopping_);
         // Keep the export lock until the writer reports finalization.
         if (active) videoExporting_ = exporting;
         updateMovieActions();
         updateDebugDialogs();
         updateInputEnabled();
-        if (started && !exporting)
-            view_->showOsd(Localization::text(QStringLiteral("Идёт запись видео: %1"))
-                               .arg(QFileInfo(path).fileName()), 3000, QStringLiteral("video"));
     });
     connect(&session_, &EmulationSession::videoExportProgress, this,
             [this](quint64 done, quint64 total) {
@@ -436,6 +438,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         const bool exporting = videoExporting_;
         const bool stopped = videoStopping_;
         videoActive_ = videoPending_ = videoExporting_ = videoStopping_ = false;
+        view_->setVideoRecordingStatus(false);
         if (videoProgress_) {
             videoProgress_->close();
             videoProgress_->deleteLater();
@@ -536,6 +539,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             updateRewind();
         }
         updateMovieActions();
+        updateGameSpeedActions();
         updateInputEnabled();
     });
     session_.configureAchievements(
@@ -607,6 +611,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         view_->setFocus();
         updateInputEnabled();
         updateMovieActions();
+        updateGameSpeedActions();
     });
     connect(&session_, &EmulationSession::gameClosed, this, [this] {
         setLoadingUi(false);
@@ -617,6 +622,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         moviePending_ = false;
         moviePath_.clear();
         updateMovieActions();
+        updateGameSpeedActions();
         setWindowTitle(QStringLiteral("Kega Refusion"));
         for (auto* action : {pauseAction_,resetAction_,hardResetAction_,fastForwardAction_,
                              rewindAction_,saveAction_,loadAction_,saveFileAction_,loadFileAction_}) action->setEnabled(false);
@@ -873,6 +879,29 @@ void MainWindow::buildMenus() {
             session_.setRegion(region);
         });
     }
+    gameSpeedMenu_ = emulationMenu->addMenu(Localization::text(QStringLiteral("Скорость игры")));
+    gameSpeedMenu_->setObjectName(QStringLiteral("gameSpeedMenu"));
+    slowDownAction_ = gameSpeedMenu_->addAction(Localization::text(QStringLiteral("Замедлить на 5%")));
+    slowDownAction_->setObjectName(QStringLiteral("slowDownAction"));
+    slowDownAction_->setShortcut(QKeySequence(Qt::Key_BracketLeft));
+    slowDownAction_->setAutoRepeat(false);
+    shortcut(slowDownAction_);
+    connect(slowDownAction_, &QAction::triggered, this, [this] {
+        setGameSpeedPercent(effectiveGameSpeedPercent() - 5);
+    });
+    speedUpAction_ = gameSpeedMenu_->addAction(Localization::text(QStringLiteral("Ускорить на 5%")));
+    speedUpAction_->setObjectName(QStringLiteral("speedUpAction"));
+    speedUpAction_->setShortcut(QKeySequence(Qt::Key_BracketRight));
+    speedUpAction_->setAutoRepeat(false);
+    shortcut(speedUpAction_);
+    connect(speedUpAction_, &QAction::triggered, this, [this] {
+        setGameSpeedPercent(effectiveGameSpeedPercent() + 5);
+    });
+    gameSpeedMenu_->addSeparator();
+    normalSpeedAction_ = gameSpeedMenu_->addAction(Localization::text(QStringLiteral("Вернуть 100%")));
+    normalSpeedAction_->setObjectName(QStringLiteral("normalSpeedAction"));
+    connect(normalSpeedAction_, &QAction::triggered, this, [this] { setGameSpeedPercent(100); });
+    updateGameSpeedActions();
     fastForwardAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Ускорение (Tab)")));
     fastForwardAction_->setCheckable(true);
     fastForwardAction_->setEnabled(false);
@@ -2764,6 +2793,7 @@ void MainWindow::exportInputVideo() {
 void MainWindow::stopVideoCapture() {
     if ((!videoActive_ && !videoPending_ && !videoExporting_) || videoStopping_) return;
     videoStopping_ = true;
+    view_->setVideoRecordingStatus(false);
     if (videoProgress_)
         videoProgress_->setLabelText(Localization::text(QStringLiteral("Завершение видео…")));
     updateVideoActions();
@@ -2791,6 +2821,36 @@ void MainWindow::updateVideoActions() {
     if (openGameAction_) openGameAction_->setEnabled(!loading_ && !videoExporting_);
     if (recentMenu_) recentMenu_->setEnabled(!recentPaths_.isEmpty() && !loading_ && !videoExporting_);
     for (QMenu* menu : exportBlockedMenus_) menu->setEnabled(!videoExporting_);
+}
+
+int MainWindow::effectiveGameSpeedPercent() const {
+    if ((netplay_ && netplay_->active()) || session_.networkActive()) return 100;
+    return achievementsHardcore_ ? qMax(100, gameSpeedPercent_) : gameSpeedPercent_;
+}
+
+void MainWindow::setGameSpeedPercent(int percent) {
+    if (!session_.hasGame() || loading_ || videoExporting_ ||
+        (netplay_ && netplay_->active()) || session_.networkActive()) return;
+    percent = qBound(achievementsHardcore_ ? 100 : 5, percent, 200);
+    if (percent == effectiveGameSpeedPercent()) return;
+    gameSpeedPercent_ = percent;
+    session_.setGameSpeedPercent(percent);
+    updateGameSpeedActions();
+    if (osdAction_ && osdAction_->isChecked())
+        view_->showOsd(Localization::text(QStringLiteral("Скорость игры: %1%")).arg(percent),
+                       1500, QStringLiteral("speed"));
+}
+
+void MainWindow::updateGameSpeedActions() {
+    if (!gameSpeedMenu_) return;
+    const bool available = session_.hasGame() && !loading_ && !videoExporting_ &&
+        !(netplay_ && netplay_->active()) && !session_.networkActive();
+    const int percent = effectiveGameSpeedPercent();
+    gameSpeedMenu_->setTitle(Localization::text(QStringLiteral("Скорость игры: %1%")).arg(percent));
+    gameSpeedMenu_->setEnabled(available);
+    slowDownAction_->setEnabled(available && percent > (achievementsHardcore_ ? 100 : 5));
+    speedUpAction_->setEnabled(available && percent < 200);
+    normalSpeedAction_->setEnabled(available && percent != 100);
 }
 
 void MainWindow::updateMovieActions() {
@@ -2828,6 +2888,7 @@ void MainWindow::updateMovieActions() {
     if (discMenu_) discMenu_->setEnabled(discPaths_.size() > 1 && !protectedMovie && !moviePending_ && !videoExporting_);
     if (pauseAction_) pauseAction_->setEnabled(game);
     if (fastForwardAction_) fastForwardAction_->setEnabled(game);
+    updateGameSpeedActions();
     updateFrameActions();
     updateVideoActions();
 }
@@ -3011,6 +3072,9 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
     case HardResetCommand: if (hardResetAction_->isEnabled()) hardResetAction_->trigger(); break;
     case FullscreenCommand: fullscreenAction_->trigger(); break;
     case MuteCommand: muteAction_->trigger(); break;
+    case SpeedDecreaseCommand: if (slowDownAction_->isEnabled()) slowDownAction_->trigger(); break;
+    case SpeedIncreaseCommand: if (speedUpAction_->isEnabled()) speedUpAction_->trigger(); break;
+    case SpeedResetCommand: if (normalSpeedAction_->isEnabled()) normalSpeedAction_->trigger(); break;
     case NextSlotCommand: setSlot(stateSlot_ + 1); break;
     case PreviousSlotCommand: setSlot(stateSlot_ + 9); break;
     case MenuCommand:
@@ -3093,6 +3157,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (key == Qt::Key_Period) commandAction = frameAdvanceAction_;
         else if (key == Qt::Key_Comma) commandAction = frameBackAction_;
         else if (key == Qt::Key_M) commandAction = muteAction_;
+        else if (key == Qt::Key_BracketLeft) commandAction = slowDownAction_;
+        else if (key == Qt::Key_BracketRight) commandAction = speedUpAction_;
         else if (key == Qt::Key_F5) commandAction = saveAction_;
         else if (key == Qt::Key_F8) commandAction = loadAction_;
         else if (key == Qt::Key_F12) commandAction = screenshotAction_;

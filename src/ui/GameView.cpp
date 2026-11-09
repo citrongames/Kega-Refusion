@@ -272,6 +272,7 @@ void GameView::clearGame() {
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
     notices_.clear(); stateSlots_.expiresAt = 0; clearAchievementNotices(); osdTimer_.stop();
     movieMode_ = 0; movieFrame_ = movieLength_ = 0;
+    videoRecording_ = false;
     runTimerReady_ = false;
     runTimerFrames_ = runTimerMicroseconds_ = 0;
     runTimerText_.clear();
@@ -592,6 +593,12 @@ void GameView::setMovieStatus(int mode, quint64 frame, quint64 length, double fp
     if (changed && osdEnabled_) repaintView();
 }
 
+void GameView::setVideoRecordingStatus(bool recording) {
+    if (videoRecording_ == recording) return;
+    videoRecording_ = recording;
+    if (osdEnabled_) repaintView();
+}
+
 void GameView::setRunTimerMode(RunTimerMode mode) {
     if (runTimerMode_ == mode) return;
     runTimerMode_ = mode;
@@ -656,7 +663,7 @@ void GameView::paintOsd(QPainter& painter) {
     const QRect achievementRect = osdEnabled_ ? achievementPopupRect() : QRect();
     const bool ordinaryOsd = osdEnabled_ && (!notices_.isEmpty() || stateSlots_.expiresAt ||
         paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
-        movieMode_ == 1 || movieMode_ == 2 ||
+        movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||
         (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty()));
     const bool metricsOsd = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
     if (!ordinaryOsd && !metricsOsd) {
@@ -704,6 +711,30 @@ void GameView::paintOsd(QPainter& painter) {
         drawPanel({runTimerText_}, rightY, true, Qt::AlignRight);
 
     int y = margin;
+    if (videoRecording_) {
+        const QString label = Localization::text(QStringLiteral("ЗАПИСЬ ВИДЕО"));
+        const int dotSize = qMax(7, fm.height() / 2);
+        const int panelWidth = qMin(width() - 2 * margin,
+                                    fm.horizontalAdvance(label) + dotSize + 3 * pad);
+        const int panelHeight = lineHeight + 2 * pad;
+        const QRect box(margin, y, panelWidth, panelHeight);
+        painter.save();
+        painter.fillRect(box, QColor(0, 0, 0, 218));
+        painter.setPen(QColor(126, 224, 233));
+        painter.drawRect(box.adjusted(0, 0, -1, -1));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(232, 56, 62));
+        painter.drawEllipse(QRect(margin + pad, y + (panelHeight - dotSize) / 2,
+                                  dotSize, dotSize));
+        const int textX = margin + 2 * pad + dotSize;
+        const int baseline = y + pad + fm.ascent();
+        painter.setPen(Qt::black);
+        painter.drawText(textX + 1, baseline + 1, label);
+        painter.setPen(QColor(244, 249, 250));
+        painter.drawText(textX, baseline, label);
+        painter.restore();
+        y += panelHeight + 4;
+    }
     const auto counter = [this](quint64 frame) {
         return movieCounterAsTime_ ? movieTime(frame, movieFps_) : QString::number(frame);
     };

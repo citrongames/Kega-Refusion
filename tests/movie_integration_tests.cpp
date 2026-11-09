@@ -300,6 +300,8 @@ void integration(const QString& core) {
     require(slotMovie.load(moviePath,error),qPrintable(error));
     const QString sourceSlot=dataPath+"/states/movies/original_"+
         QString::fromLatin1(slotMovie.id().toHex())+"/slot0.krs";
+    require(!QFileInfo::exists(sourceSlot + QStringLiteral(".bak")),
+            "first movie quick save unexpectedly created a backup");
     makeSlotCheckpointLegacy(sourceSlot); // Exercise embedded v1 checkpoint during record and replay.
 
     const auto rewind=movie.captureRewind();
@@ -312,7 +314,27 @@ void integration(const QString& core) {
     require(movie.loadSlot(0,savedFrame,aspect,missing,error),qPrintable(error));
     require(movie.position()==10 && !savedFrame.isNull() && aspect>0,
             "movie slot did not restore its prefix and frame");
+    const QString backupTestSlot = QFileInfo(sourceSlot).dir().filePath(QStringLiteral("slot1.krs"));
+    require(movie.saveSlot(1,error),qPrintable(error));
+    const QByteArray firstMovieSlot = readFile(backupTestSlot);
+    error.clear();
+    require(movie.saveSlot(1, error), qPrintable(error));
+    require(readFile(backupTestSlot + QStringLiteral(".bak")) == firstMovieSlot,
+            "movie quick slot backup did not preserve the previous save");
+    const QByteArray secondMovieSlot = readFile(backupTestSlot);
     for (int i=10;i<14;++i) expected.push_back(step(movie,host,memory,inputFor(i,true),error));
+    error.clear();
+    require(movie.saveSlot(1, error), qPrintable(error));
+    require(readFile(backupTestSlot + QStringLiteral(".bak")) == secondMovieSlot,
+            "movie quick slot backup did not roll forward exactly once");
+    const QByteArray thirdMovieSlot = readFile(backupTestSlot);
+    require(QFile::remove(backupTestSlot + QStringLiteral(".bak")), "could not remove movie test backup");
+    require(QDir().mkpath(backupTestSlot + QStringLiteral(".bak")), "could not block movie test backup path");
+    error.clear();
+    require(!movie.saveSlot(1, error) && !error.isEmpty(),
+            "movie quick slot overwrote primary after backup failure");
+    require(readFile(backupTestSlot) == thirdMovieSlot, "backup failure changed movie quick slot");
+    require(QDir().rmdir(backupTestSlot + QStringLiteral(".bak")), "could not remove movie test backup directory");
     const auto savedClock=host.runClock();
     require(savedClock.frames==movie.position() && savedClock.ticks>0,
             "movie finish did not capture its elapsed frame clock");

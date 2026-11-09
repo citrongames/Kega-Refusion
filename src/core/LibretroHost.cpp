@@ -11,6 +11,7 @@
 #include "SegaCdBios.h"
 #include "Sega32xBios.h"
 #include "CoreFileSystem.h"
+#include "StateFile.h"
 #include <QCryptographicHash>
 #include <QByteArrayView>
 #include <QDir>
@@ -19,7 +20,6 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonValue>
-#include <QSaveFile>
 #include <QtEndian>
 #include <cstring>
 #include <cmath>
@@ -101,14 +101,6 @@ QString readableSaveStem(QString fileName) {
     return name;
 }
 
-bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-        error = Localization::text(QStringLiteral("Не удалось сохранить %1: %2")).arg(path, file.errorString());
-        return false;
-    }
-    return true;
-}
 }
 LibretroHost::LibretroHost(QString corePath, QString dataPath)
     : library_(corePath), api_(std::make_unique<Api>()), dataPath_(QDir(dataPath).absolutePath()) {
@@ -2218,9 +2210,12 @@ QByteArray LibretroHost::stateCoreIdentity() const {
 }
 bool LibretroHost::saveState(int slot, QString& error) {
     if (!loaded_ || slot < 0 || slot > 9) { error = Localization::text(QStringLiteral("Нет игры или неверный слот сохранения.")); return false; }
-    return saveStateToFile(statePath(slot), error);
+    return saveStateFile(statePath(slot), error, true);
 }
 bool LibretroHost::saveStateToFile(const QString& path, QString& error) {
+    return saveStateFile(path, error, false);
+}
+bool LibretroHost::saveStateFile(const QString& path, QString& error, bool keepPrevious) {
     if (!loaded_ || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет игры или не выбран файл сохранения.")); return false; }
     if (isCd() && discEjected()) { error = Localization::text(QStringLiteral("Закройте привод перед сохранением состояния.")); return false; }
     QByteArray payload = serializeCore(true);
@@ -2246,7 +2241,7 @@ bool LibretroHost::saveStateToFile(const QString& path, QString& error) {
     quint32 size = qToBigEndian(quint32(payload.size()));
     bytes.append(reinterpret_cast<const char*>(&size), sizeof(size));
     bytes.append(payload);
-    return atomicWrite(path, bytes, error);
+    return StateFile::write(path,bytes,keepPrevious,error);
 }
 bool LibretroHost::loadState(int slot, QString& error, StateLoadError* failure) {
     if (failure) *failure = StateLoadError::Failed;

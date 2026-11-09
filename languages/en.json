@@ -1042,6 +1042,16 @@
     "Задержка звука:": "Audio latency:",
     "Применяется сразу, без перезапуска игры. Если слышен треск, выберите повышенную устойчивость. Фактическая задержка также зависит от устройства вывода.": "Applied immediately without restarting the game. If you hear crackling, select More stable. Actual latency also depends on the output device.",
     "Оригинальный код: GPLv3+ с исключением для ядра. Без гарантий.": "Original code: GPLv3+ with a core linking exception. No warranty.",
+    "Скорость игры: %1%": "Game speed: %1%",
+    "Замедлить на 5%": "Decrease by 5%",
+    "Ускорить на 5%": "Increase by 5%",
+    "Вернуть 100%": "Reset to 100%",
+    "ЗАПИСЬ ВИДЕО": "VIDEO RECORDING",
+    "Скорость игры": "Game speed",
+    "Не удалось заблокировать слот для записи: %1": "Could not lock the quick-save slot for writing: %1",
+    "Не удалось прочитать предыдущее сохранение %1: %2": "Could not read previous save %1: %2",
+    "Не удалось создать резервную копию %1: %2": "Could not create backup %1: %2",
+    "Не удалось записать резервную копию %1: %2": "Could not write backup %1: %2",
     "Лицензии и условия распространения": "Licenses and distribution terms"
   }
 }

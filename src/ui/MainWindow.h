@@ -84,6 +84,9 @@ private:
     void releaseInput();
     void updateMovieActions();
     void updateVideoActions();
+    void setGameSpeedPercent(int percent);
+    void updateGameSpeedActions();
+    int effectiveGameSpeedPercent() const;
     void startVideoCapture();
     void exportInputVideo();
     void stopVideoCapture();
@@ -131,6 +134,7 @@ private:
     QMenu* videoMenu_ = nullptr;
     QVector<QMenu*> exportBlockedMenus_;
     QMenu* regionMenu_ = nullptr;
+    QMenu* gameSpeedMenu_ = nullptr;
     QMenu* discMenu_ = nullptr;
     QMenu* debugMenu_ = nullptr;
     QAction* debugGraphicsAction_ = nullptr;
@@ -174,6 +178,9 @@ private:
     std::array<ControllerType,3> presentedControllerKinds_{};
     std::array<bool,3> presentedControllerConnected_{};
     QAction* fastForwardAction_ = nullptr;
+    QAction* slowDownAction_ = nullptr;
+    QAction* speedUpAction_ = nullptr;
+    QAction* normalSpeedAction_ = nullptr;
     QAction* rewindAction_ = nullptr;
     QAction* resetAction_ = nullptr;
     QAction* hardResetAction_ = nullptr;
@@ -206,6 +213,7 @@ private:
     int stateSlot_ = 0;
     int runTimerMode_ = 0;
     int fastForwardFactor_ = 4;
+    int gameSpeedPercent_ = 100; // Retained across games until the app closes.
     bool rewindEnabled_ = true;
     bool rewindAccelerate_ = true;
     int rewindFixedFactor_ = 1;

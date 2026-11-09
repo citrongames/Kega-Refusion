@@ -23,7 +23,7 @@ Supply your own games and required BIOS files. Neither is included.
 ## Features
 
 - **Play comfortably:** keyboard and gamepads together, illustrated bindings, 3/6-button pads, multitaps, light guns, Mega Drive Mouse and Master System Paddle.
-- **Stay in control:** pause, single-frame steps in both directions, adjustable fast-forward, memory-limited rewind, ten quick-save slots and save/load to a chosen file. Battery saves keep one backup.
+- **Stay in control:** pause, single-frame steps in both directions, adjustable fast-forward, memory-limited rewind, ten quick-save slots and save/load to a chosen file. Battery saves and quick-save slots keep one backup.
 - **Tune the picture and sound:** console or square-pixel aspect, integer scaling, Blargg filters, built-in dither blending, GLSL presets, output-device selection and live audio latency profiles. Normal latency is the default.
 - **Play together:** invitation-based direct netplay using GGPO rollback, Windows/Linux interoperability, spectators, shared controller roles and optional game-file transfer. Link Cable mode supports compatible Mega Drive cartridges.
 - **Record and export:** a game time display in the upper-right corner showing elapsed time or frames since reset, replayable input recordings, screenshots, live video capture and input-recording export. Video uses native-resolution lossless PNG frames with AAC audio in MOV, without OSD.
@@ -47,6 +47,7 @@ Settings and saves live in `data/`. Keep this folder when updating; use `--data 
 | P | Pause / resume |
 | Ctrl+R · Ctrl+Shift+R | Reset · power restart |
 | `,` · `.` | Previous frame · next frame while paused (hold to repeat) |
+| [ · ] | Decrease / increase game speed by 5 percentage points |
 | Tab · R | Hold fast-forward · hold rewind (doubles every 2 seconds up to 16× by default) |
 | 0–9 · F5/F8 | Select save slot · save/load slot |
 | Alt+Enter · Esc | Fullscreen · show/hide fullscreen menu or release captured mouse |

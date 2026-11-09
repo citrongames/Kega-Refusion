@@ -9,6 +9,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QTemporaryDir>
 #include <QSysInfo>
@@ -334,6 +335,9 @@ void testCore(const QString& corePath) {
     const QString romPath = temp.path() + "/test.md";
     writeFile(romPath, rom);
 
+    const QString slotZero = stateFile(dataPath, romPath, 0);
+    const QString namedState = temp.filePath("chosen-state.krs");
+    QByteArray savedZero;
     Output expectedAfterSlotZero;
     QString error;
     {
@@ -395,9 +399,10 @@ void testCore(const QString& corePath) {
     require(host.serialize() == beforeMissing, "missing save changed emulation state");
     error.clear();
     require(host.saveState(0, error), "could not save slot zero");
-    const QString slotZero = stateFile(dataPath, romPath, 0);
-    const QByteArray savedZero = readFile(slotZero);
+    savedZero = readFile(slotZero);
     require(savedZero.size() > checkpoint.size(), "slot file lacks state envelope");
+    require(!QFileInfo::exists(slotZero + QStringLiteral(".bak")),
+            "first quick save unexpectedly created a backup");
     const auto expectedNext = runAndCapture(host);
     expectedAfterSlotZero = expectedNext;
     for (int i = 0; i < 3; ++i) runAndCapture(host);
@@ -406,7 +411,6 @@ void testCore(const QString& corePath) {
     require(runAndCapture(host).frame == expectedNext.frame, "slot zero did not restore video");
 
     // A chosen path uses the same native envelope, independent of quick slots.
-    const QString namedState = temp.filePath("chosen-state.krs");
     error.clear();
     require(host.saveStateToFile(namedState, error), "could not save state to chosen file");
     require(readFile(namedState).left(8) == QByteArrayLiteral("KRSTATE1"),
@@ -479,6 +483,28 @@ void testCore(const QString& corePath) {
     require(reopened.loadState(0, error), "could not load slot zero in a new host");
     require(runAndCapture(reopened).frame == expectedAfterSlotZero.frame,
             "reopened host did not replay slot zero video");
+    error.clear();
+    require(reopened.saveState(0, error), "could not replace quick slot");
+    require(readFile(slotZero + QStringLiteral(".bak")) == savedZero,
+            "quick slot backup did not preserve the previous save");
+    const QByteArray secondZero = readFile(slotZero);
+    runAndCapture(reopened);
+    error.clear();
+    require(reopened.saveState(0, error), "could not replace quick slot again");
+    require(readFile(slotZero + QStringLiteral(".bak")) == secondZero,
+            "quick slot backup did not roll forward exactly once");
+    const QByteArray thirdZero = readFile(slotZero);
+    require(QFile::remove(slotZero + QStringLiteral(".bak")), "could not remove test backup");
+    require(QDir().mkpath(slotZero + QStringLiteral(".bak")), "could not block test backup path");
+    error.clear();
+    requireRejected(reopened.saveState(0, error), error,
+                    "quick slot overwrote primary after backup failure");
+    require(readFile(slotZero) == thirdZero, "backup failure changed quick slot");
+    require(QDir().rmdir(slotZero + QStringLiteral(".bak")), "could not remove test backup directory");
+    error.clear();
+    require(reopened.saveStateToFile(namedState, error), "could not replace chosen state file");
+    require(!QFileInfo::exists(namedState + QStringLiteral(".bak")),
+            "chosen state file unexpectedly created a slot backup");
 }
 
 void testSaveRam(const QString& corePath) {
@@ -1026,6 +1052,7 @@ void testPokerOverdump(const QString& corePath) {
     require(memory && preserve,"Poker core APIs missing");
     using Abi=const char* (*)();const auto abi=reinterpret_cast<Abi>(inspect.resolve("retro_kegarefusion_recording_abi"));
     require(abi,"Poker recording ABI missing");
+    const QByteArray unloadedAbi(abi());
     for(int variant:{0,1,2,3,4,5,6}){
         const auto rom=makePokerRom(variant);const bool identified=variant==0||variant==3||variant==4;
         quint32 actualSum=0;for(int i=0x200;i<rom.size();i+=2)actualSum+=(quint8(rom[i])<<8)|quint8(rom[i+1]);
@@ -1047,7 +1074,7 @@ void testPokerOverdump(const QString& corePath) {
                 const auto state=host.serialize();require(!state.isEmpty() && host.unserialize(state),"Poker state restore failed");check();
                 host.reset();check();require(host.hardReset(error),"Poker power reset failed");check();
             }
-            host.unload();require(std::strcmp(abi(),"kegarefusion-recording-v2")==0,"Poker contract leaked after unload");
+            host.unload();require(unloadedAbi==abi(),"Poker contract leaked after unload");
         }
         require(readFile(path)==rom,"Poker ROM modified");
     }

@@ -11,6 +11,10 @@ void appendWord(QByteArray& out, quint32 value) {
     const auto word = qToLittleEndian(value);
     out.append(reinterpret_cast<const char*>(&word), 4);
 }
+void trimPatch(QByteArray& bytes) {
+    const qsizetype slack = bytes.capacity() - bytes.size();
+    if (slack >= 256 && slack >= bytes.size() / 8) bytes.squeeze();
+}
 // Read only complete words; memcpy avoids unaligned access and aliasing UB.
 qsizetype sameBytes(const char* a, const char* b, qsizetype count) {
     qsizetype i = 0;
@@ -42,6 +46,7 @@ RewindBuffer::Patch RewindBuffer::encode(const QByteArray& older, const QByteArr
             }
             if (changes.size() + 8 + pos-start >= older.size()) {
                 result.bytes = qCompress(older, 1);
+                trimPatch(result.bytes);
                 return result;
             }
             appendWord(changes, quint32(skip)); appendWord(changes, quint32(pos-start));
@@ -51,6 +56,9 @@ RewindBuffer::Patch RewindBuffer::encode(const QByteArray& older, const QByteArr
         result.delta = true;
         result.bytes = changes.isEmpty() ? QByteArray(1, '\0') : QByteArray(1, '\1') + qCompress(changes, 1);
     } else result.bytes = qCompress(older, 1);
+    // qCompress may retain far more capacity than its compressed size. The
+    // rewind limit counts capacity, so discard that slack before storing a patch.
+    trimPatch(result.bytes);
     return result;
 }
 QByteArray RewindBuffer::decode(const Patch& patch, QByteArray newer) {

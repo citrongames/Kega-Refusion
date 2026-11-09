@@ -197,6 +197,7 @@ private:
     bool refreshDiscFiles(QString& error);
     void setDiscIdentity();
     bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error);
+    bool saveStateFile(const QString& path, QString& error, bool keepPrevious);
     QString statePath(int slot) const;
     QString saveReadPath(const QString& directory, const QString& suffix) const;
     bool restoreSaveRam(QString& error);

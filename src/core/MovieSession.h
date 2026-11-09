@@ -32,6 +32,7 @@ public:
     QByteArray controllers() const;
     double frameRate() const;
 private:
+    bool saveSlotFile(const QString& path, QString& error, bool keepPrevious);
     QString slotPath(int slot) const;
     bool saveRecording(QString& error);
     LibretroHost& host_;

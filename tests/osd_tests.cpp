@@ -689,6 +689,38 @@ void testRecordingOsd() {
     const QRect notice = changedBounds(clean, render(view));
     require(notice.height() > 60, "compatibility warning lost its explicit lines");
 }
+void testVideoRecordingOsd() {
+    GameView view;
+    prepare(view);
+    const QImage baseline = render(view);
+    const QImage clean = view.captureGameImage();
+    view.setVideoRecordingStatus(true);
+    const QImage recording = render(view);
+    require(recording != baseline, "live MOV recording indicator did not render");
+    require(!colorBounds(recording, QColor(232, 56, 62)).isEmpty(),
+            "live MOV recording indicator has no red dot");
+    require(view.captureGameImage() == clean,
+            "live MOV recording indicator leaked into clean screenshot");
+    view.setOsdEnabled(false);
+    require(render(view) == baseline, "disabled OSD still shows live MOV recording");
+    view.setOsdEnabled(true);
+    require(render(view) == recording, "live MOV recording was not restored with OSD");
+    view.showOsd(QStringLiteral("Temporary action"), 500);
+    waitMs(800);
+    require(render(view) == recording, "live MOV recording expired with a timed notice");
+    view.setMovieStatus(1, 60, 0, 60.0);
+    const QImage inputAndVideo = render(view);
+    view.setVideoRecordingStatus(false);
+    require(render(view) != inputAndVideo, "MOV indicator remained after stopping");
+    require(render(view) != baseline, "stopping MOV removed the input recording counter");
+    view.setMovieStatus(0, 0, 0, 60.0);
+    require(render(view) == baseline, "recording indicators remained after stopping both modes");
+    view.setVideoRecordingStatus(true);
+    view.clearGame();
+    prepare(view);
+    require(render(view) == baseline, "clearing the game left a MOV indicator");
+}
+
 struct ExpiryTiming {
     qint64 maxRenderBeforeNs = 0;
     qint64 maxRenderNearNs = 0;
@@ -868,6 +900,10 @@ int main(int argc, char** argv) {
             testRecordingOsd();
             std::puts("recording OSD passed"); return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--video-osd-only"))) {
+            testVideoRecordingOsd();
+            std::puts("live MOV recording OSD passed"); return 0;
+        }
         testMuteStatus();
         if (app.arguments().contains(QStringLiteral("--aspect-only"))) {
             testFilteredSquarePixels();
@@ -885,6 +921,7 @@ int main(int argc, char** argv) {
         testRewindAndSpeedStatus();
         testStateSlots();
         testGlobalToggle();
+        testVideoRecordingOsd();
         testNoticeExpiry();
         testAchievementPopup();
         testStateSlotExpiry();
