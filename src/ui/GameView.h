@@ -31,7 +31,7 @@ public:
     QString shaderPreset() const { return shaderPreset_.path; }
     QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
     bool setShaderParameter(const QString& id, float value);
-    void setFrame(const QImage& frame, double aspectRatio);
+    void setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {});
     void clearGame();
     void setLoading(bool loading, const QString& fileName = {});
     QImage captureImage();
@@ -75,6 +75,7 @@ public:
 
 signals:
     void shaderFailed(const QString& error);
+    void spriteOwnershipRequested(bool enabled);
     void openGameRequested();
     void achievementPopupStarted(bool sound);
     void achievementBadgeRequested(const QString& url);
@@ -121,6 +122,7 @@ private:
     QPoint captureReturnPosition_;
     ShaderView* shaderView_ = nullptr;
     ShaderPreset shaderPreset_;
+    QImage spriteOwnership_;
     bool gpuFailed_ = false;
     bool gpuCreating_ = false;
     quint64 frameCount_ = 0;

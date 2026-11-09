@@ -39,7 +39,8 @@ public:
     void setAutoFixChecksum(bool enabled);
     void setSmsFmEnabled(bool enabled);
     void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
-    bool takeVideoFrame(QImage& frame, double& aspectRatio);
+    bool takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership = nullptr);
+    void setSpriteOwnershipEnabled(bool enabled) { spriteOwnershipEnabled_.store(enabled); }
     void saveState(int slot);
     void loadState(int slot);
     void saveStateToFile(const QString& path);
@@ -190,10 +191,11 @@ private:
     std::atomic_bool networkWaiting_{false}, networkLinkCableDesired_{false};
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);
-    void publishVideo(const QImage& frame, double aspectRatio);
+    void publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {});
     QString corePath_, dataPath_;
     std::mutex mutex_, videoMutex_;
-    QImage latestFrame_;
+    QImage latestFrame_, latestSpriteOwnership_;
+    std::atomic_bool spriteOwnershipEnabled_{false};
     double latestAspect_ = 4.0 / 3.0;
     bool videoPending_ = false;
     std::atomic<qint64> audioQueueUs_{0}, audioTargetUs_{0}, audioFeedbackNs_{0};

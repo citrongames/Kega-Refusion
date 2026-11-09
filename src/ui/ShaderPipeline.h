@@ -36,6 +36,10 @@ struct ShaderPreset {
     QVector<ShaderPass> passes;
     QVector<ShaderParameter> parameters;
     static bool load(const QString& path, ShaderPreset& result, QString& error);
+    bool usesSpriteOwnership() const {
+        return path == QLatin1String(":/shaders/refusion-dither.glslp") && passes.size() == 1
+            && passes[0].path == QLatin1String(":/shaders/refusion-dither.glsl");
+    }
 };
 
 // All methods, including destruction, require its owning GL context current.
@@ -45,7 +49,8 @@ public:
     ~ShaderPipeline();
     bool initialize(const ShaderPreset& preset, QString& error);
     bool render(const QImage& frame, unsigned framebuffer, const QSize& surface,
-                const QRect& viewport, quint64 frameCount, int frameDirection, QString& error);
+                const QRect& viewport, quint64 frameCount, int frameDirection, QString& error,
+                const QImage& spriteOwnership = {});
     bool setParameter(const QString& id, float value);
     QVector<ShaderParameter> parameters() const { return preset_.parameters; }
 
@@ -53,7 +58,8 @@ private:
     bool compile(const QByteArray& source, std::unique_ptr<QOpenGLShaderProgram>& program,
                  QString& error);
     void draw(QOpenGLShaderProgram& program, unsigned texture, const QSize& input,
-              const QSize& output, quint64 count, int direction, bool linear, unsigned wrap);
+              const QSize& output, quint64 count, int direction, bool linear, unsigned wrap,
+              int hasSpriteOwnership = -1);
     ShaderPreset preset_;
     std::vector<std::unique_ptr<QOpenGLShaderProgram>> programs_;
     std::unique_ptr<QOpenGLShaderProgram> stock_;

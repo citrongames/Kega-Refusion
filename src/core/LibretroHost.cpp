@@ -183,6 +183,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->debug_gain = reinterpret_cast<decltype(api_->debug_gain)>(library_.resolve("retro_kegarefusion_debug_gain"));
     api_->debug_capabilities = reinterpret_cast<decltype(api_->debug_capabilities)>(library_.resolve("retro_kegarefusion_debug_capabilities"));
     api_->native_video_size = reinterpret_cast<decltype(api_->native_video_size)>(library_.resolve("retro_kegarefusion_native_video_size"));
+    api_->sprite_hint_enable = reinterpret_cast<decltype(api_->sprite_hint_enable)>(library_.resolve("retro_kegarefusion_sprite_hint_enable"));
+    api_->sprite_hint = reinterpret_cast<decltype(api_->sprite_hint)>(library_.resolve("retro_kegarefusion_sprite_hint"));
     api_->recording_video = reinterpret_cast<decltype(api_->recording_video)>(library_.resolve("retro_kegarefusion_recording_video"));
     api_->recording_frame = reinterpret_cast<decltype(api_->recording_frame)>(library_.resolve("retro_kegarefusion_recording_frame"));
     api_->get_cd_header = reinterpret_cast<decltype(api_->get_cd_header)>(library_.resolve("retro_kegarefusion_cd_header"));
@@ -229,6 +231,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->set_input_poll(inputPoll);
     api_->set_input_state(inputState);
     api_->init();
+    if (api_->sprite_hint_enable) api_->sprite_hint_enable(spriteOwnershipEnabled_);
     if (api_->set_paprium_music)
         api_->set_paprium_music(papriumMusicRead, &papriumMusic_);
     initialized_ = true;
@@ -584,7 +587,7 @@ void LibretroHost::unload() {
     if (!linkParent_) CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0;
     contentInfo_ = {}; contentInfoActive_ = false;
-    content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); gamePath_.clear(); gameKey_.clear(); legacyGameKey_.clear(); contentName_.clear(); romHash_.clear();
+    content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); spriteOwnership_ = {}; gamePath_.clear(); gameKey_.clear(); legacyGameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
     controllerDevices_.fill(~0u);
     saveRamWritable_ = true;
@@ -625,8 +628,23 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     error = Localization::text(QStringLiteral("Это ядро не поддерживает подключение 32X к обычным играм."));
     return false;
 }
+void LibretroHost::setSpriteOwnershipEnabled(bool enabled) {
+    if (spriteOwnershipEnabled_ == enabled) return;
+    spriteOwnershipEnabled_ = enabled;
+    spriteOwnership_ = {};
+    if (initialized_ && api_->sprite_hint_enable)
+        api_->sprite_hint_enable(enabled);
+    if (linkPeer_) {
+        Activation scope(linkPeer_.get());
+        linkPeer_->setSpriteOwnershipEnabled(enabled);
+    }
+}
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
+    if (!renderVideo) {
+        spriteOwnership_ = {};
+        if (linkPeer_) linkPeer_->spriteOwnership_ = {};
+    }
     if (linkPair_) { runLinkedFrame(renderVideo,captureAudio); return; }
     videoEnabled_ = renderVideo; audioEnabled_ = captureAudio;
     audio_.clear(); api_->run();
@@ -635,6 +653,7 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     videoEnabled_ = audioEnabled_ = true;
 }
 void LibretroHost::reset() {
+    spriteOwnership_ = {};
     if (linkPeer_) { resetLinkedPair(); return; }
     if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
 }
@@ -720,7 +739,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     api_->unload_game();
     batterySave_.clear();
     loaded_ = false;
-    audio_.clear(); frame_ = QImage(); buttons_.fill(0);
+    audio_.clear(); frame_ = QImage(); spriteOwnership_ = {}; buttons_.fill(0);
     if (!discs_.isEmpty()) setDiscIdentity();
     prepareCoreContent();
     CoreFileSystem::clearError();
@@ -1254,6 +1273,7 @@ QByteArray LibretroHost::serialize() const {
     return result;
 }
 bool LibretroHost::unserialize(const QByteArray& state) {
+    spriteOwnership_ = {};
     if (linkPeer_) return restoreLinkedState(state);
     if (!loaded_ || size_t(state.size()) != api_->serialize_size() ||
         !api_->unserialize(state.constData(), size_t(state.size()))) return false;
@@ -1424,6 +1444,7 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     }
     const auto previous = serialize();
     if (previous.isEmpty()) { error = Localization::text(QStringLiteral("Не удалось сохранить текущее состояние перед загрузкой записи.")); return false; }
+    spriteOwnership_ = {};
     if (!(linkPeer_ ? restoreLinkedState(state.mid(128,sizes[0]),false) : api_->unserialize(state.constData()+128,size_t(sizes[0])))) {
         if (!unserialize(previous)) error = Localization::text(QStringLiteral("Ядро отклонило состояние записи; восстановить прежнее состояние не удалось."));
         else error = Localization::text(QStringLiteral("Ядро отклонило состояние записи."));
@@ -2390,9 +2411,13 @@ bool LibretroHost::environment(unsigned command, void* data) {
 }
 void LibretroHost::video(const void* data, unsigned width, unsigned height, size_t pitch) {
     auto* h = active_;
-    if (!h || !h->videoEnabled_ || !data || data == RETRO_HW_FRAME_BUFFER_VALID || !width || !height || width > 4096 || height > 4096) return;
+    if (!h) return;
+    if (!h->videoEnabled_ || !data || data == RETRO_HW_FRAME_BUFFER_VALID || !width || !height || width > 4096 || height > 4096) {
+        h->spriteOwnership_ = {};
+        return;
+    }
     const size_t bpp = h->pixelFormat_ == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2;
-    if (pitch < width * bpp) return;
+    if (pitch < width * bpp) { h->spriteOwnership_ = {}; return; }
     QImage result;
     if (bpp == 2) {
         // Qt uses its optimized RGB565/555 converter; the wrapped core buffer
@@ -2410,7 +2435,7 @@ void LibretroHost::video(const void* data, unsigned width, unsigned height, size
             }
         }
     }
-    if (result.isNull()) return;
+    if (result.isNull()) { h->spriteOwnership_ = {}; return; }
     unsigned nativeWidth = 0, nativeHeight = 0;
     const QSize reportedNative =
         h->api_->native_video_size && h->api_->native_video_size(&nativeWidth, &nativeHeight)
@@ -2445,6 +2470,23 @@ void LibretroHost::video(const void* data, unsigned width, unsigned height, size
             }
         }
     }
+    // The optional native mask is already ready at this callback boundary.
+    // Keep it paired with exactly this clean frame; no core buffer lifetime
+    // crosses to the GUI or rewind/recording storage.
+    unsigned hintWidth = 0, hintHeight = 0; size_t hintPitch = 0;
+    const uint8_t* hint = h->spriteOwnershipEnabled_ && h->api_->sprite_hint
+        ? h->api_->sprite_hint(&hintWidth,&hintHeight,&hintPitch) : nullptr;
+    if (hint && hintWidth == width && hintHeight == height &&
+        hintPitch >= width && hintPitch <= 65536) {
+        if (h->spriteOwnership_.size() != result.size())
+            h->spriteOwnership_ = QImage(result.size(),QImage::Format_Grayscale8);
+        if (!h->spriteOwnership_.isNull()) {
+            auto* pixels = h->spriteOwnership_.bits(); // Detach once if the GUI retains the last mask.
+            const qsizetype stride = h->spriteOwnership_.bytesPerLine();
+            for (unsigned y = 0; y < height; ++y)
+                std::memcpy(pixels + y*stride,hint + y*hintPitch,width);
+        }
+    } else h->spriteOwnership_ = {};
     h->frame_ = std::move(result);
 }
 void LibretroHost::audioSample(int16_t left, int16_t right) { const int16_t samples[2]{left,right}; audioBatch(samples,1); }

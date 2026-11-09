@@ -133,6 +133,9 @@ public:
     double aspectRatio() const;
     QSize nativeVideoSize() const;
     const QImage& frame() const;
+    // Presentation-only sidecar; pixels remain separate from clean captures.
+    void setSpriteOwnershipEnabled(bool enabled);
+    const QImage& spriteOwnership() const;
     // Capture pixels before core output filters. Enable before the first recorded
     // runFrame; the returned image owns its pixels and follows the presented peer.
     bool setRecordingVideoEnabled(bool enabled);
@@ -251,7 +254,8 @@ private:
     QList<QByteArray> activeCheatCodes_;
     retro_system_av_info av_{};
     retro_pixel_format pixelFormat_ = RETRO_PIXEL_FORMAT_0RGB1555;
-    QImage frame_;
+    QImage frame_, spriteOwnership_;
+    bool spriteOwnershipEnabled_ = false;
     QByteArray audio_;
     bool videoEnabled_ = true, audioEnabled_ = true;
     bool recordingVideoEnabled_ = false;

@@ -1,0 +1,278 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -159,6 +159,38 @@
+ /* Optional presentation capture; never serialized or involved in execution. */
+ uint8_t *kega_recording_bitmap = NULL;
+ static bool kega_recording_frame_ready;
++/* Borrowed optional raster, local presentation only, never serialized. */
++uint8_t *kega_sprite_hint_bitmap = NULL;
++int kega_sprite_hint_active = 0;
++static bool kega_sprite_hint_frame_ready;
++static bool kega_sprite_hint_requested;
++static bool kega_sprite_hint_allocation_failed;
++
++static void kega_sprite_hint_release(void)
++{
++   free(kega_sprite_hint_bitmap);
++   kega_sprite_hint_bitmap = NULL;
++   kega_sprite_hint_frame_ready = false;
++   kega_sprite_hint_active = 0;
++   kega_sprite_hint_allocation_failed = false;
++}
++
++static void kega_sprite_hint_invalidate(void)
++{
++   kega_sprite_hint_frame_ready = false;
++   kega_sprite_hint_active = 0;
++   if (kega_sprite_hint_bitmap) memset(kega_sprite_hint_bitmap, 0, 720 * 576);
++}
++
++static bool kega_sprite_hint_supported(void)
++{
++   if ((system_hw != SYSTEM_MD && system_hw != SYSTEM_MCD) ||
++       !(reg[1] & 4) || config.ntsc || config.lcd) return false;
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) return false;
++#endif
++   return true;
++}
+ static uint8_t reg0_prev = 0;
+ 
+ static char g_rom_dir[256];
+@@ -3638,6 +3670,7 @@
+ 
+ bool retro_unserialize(const void *data, size_t size)
+ {
++   kega_sprite_hint_invalidate();
+ #ifdef KEGAREFUSION_32X
+    if (kegarefusion_32x_attached)
+    {
+@@ -3911,6 +3944,37 @@
+ #endif
+    return true;
+ }
++/* A value of 1 identifies the visible native MD/CD sprite color at that
++ * output pixel. 0 includes background, borders and S/H operator pixels.
++ * The borrowed buffer matches the latest non-duplicate video callback and is
++ * valid until next run, state/load/reset, disable or deinit. Unsupported
++ * hardware/VDP modes and filtered output return NULL. No state ABI changes. */
++RETRO_API void retro_kegarefusion_sprite_hint_enable(bool enabled)
++{
++   if (!enabled) kega_sprite_hint_release();
++   else if (!kega_sprite_hint_requested) kega_sprite_hint_allocation_failed = false;
++   kega_sprite_hint_requested = enabled;
++   kega_sprite_hint_invalidate();
++}
++
++RETRO_API const uint8_t *retro_kegarefusion_sprite_hint(unsigned *width,
++      unsigned *height, size_t *pitch)
++{
++   if (width) *width = 0;
++   if (height) *height = 0;
++   if (pitch) *pitch = 0;
++   if (!width || !height || !pitch || !kega_sprite_hint_frame_ready ||
++       !kega_sprite_hint_bitmap || !kega_sprite_hint_active ||
++       !kega_sprite_hint_supported() || vwidth <= vwoffset ||
++       vwidth - vwoffset > 720 || vheight <= 0 || vheight > 576 ||
++       bmdoffset < 0 || (bmdoffset & 1) || bmdoffset / 2 + vwidth - vwoffset > 720)
++      return NULL;
++   *width = vwidth - vwoffset;
++   *height = vheight;
++   *pitch = 720;
++   return kega_sprite_hint_bitmap + bmdoffset / 2;
++}
++
+ RETRO_API void retro_kegarefusion_debug_capabilities(uint32_t *video, uint64_t *audio)
+ {
+    uint32_t v = ((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 15u : 24u;
+@@ -4018,6 +4082,7 @@
+ 
+ bool retro_load_game(const struct retro_game_info *info)
+ {
++   kega_sprite_hint_release();
+    int i;
+    char *dir       = NULL;
+ #if defined(_WIN32)
+@@ -4335,6 +4400,7 @@
+ 
+ void retro_unload_game(void) 
+ {
++   kega_sprite_hint_release();
+    kega_recording_frame_ready = false;
+ #ifdef KEGAREFUSION_32X
+    kegarefusion_32x_detach();
+@@ -4478,6 +4544,7 @@
+ 
+ void retro_deinit(void)
+ {
++   retro_kegarefusion_sprite_hint_enable(false);
+    retro_kegarefusion_recording_video(false);
+    kr_yx5200_close();
+    paprium_shutdown();
+@@ -4490,6 +4557,7 @@
+ 
+ void retro_reset(void)
+ {
++   kega_sprite_hint_invalidate();
+    kega_recording_frame_ready = false;
+ #ifdef HAVE_OVERCLOCK
+    overclock_delay = OVERCLOCK_FRAME_DELAY;
+@@ -4599,6 +4667,16 @@
+     update_audio_latency = false;
+   }
+ 
++   kega_sprite_hint_frame_ready = false;
++   kega_sprite_hint_active = !do_skip && kega_sprite_hint_requested && kega_sprite_hint_supported();
++   /* Unsupported-only sessions allocate nothing. One optional allocation on
++    * the first supported rendered frame; a failure is not retried per frame. */
++   if (kega_sprite_hint_active && !kega_sprite_hint_bitmap && !kega_sprite_hint_allocation_failed)
++   {
++      kega_sprite_hint_bitmap = calloc(720, 576);
++      kega_sprite_hint_allocation_failed = (kega_sprite_hint_bitmap == NULL);
++   }
++   kega_sprite_hint_active = kega_sprite_hint_active && kega_sprite_hint_bitmap != NULL;
+    kega_recording_frame_ready = false;
+    if (system_hw == SYSTEM_MCD)
+    {
+@@ -4656,6 +4734,7 @@
+    if (led_state_cb)
+       retro_led_interface();
+ 
++   kega_sprite_hint_frame_ready = !do_skip && kega_sprite_hint_active;
+    kega_recording_frame_ready = !do_skip && kega_recording_bitmap != NULL;
+    if (!do_skip)
+       video_cb(bitmap.data + bmdoffset, vwidth - vwoffset, vheight, 720 * 2);
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -50,6 +50,8 @@
+ extern int8 reset_do_not_clear_buffers;
+ extern uint32_t kega_debug_video_mask;
+ extern uint8_t *kega_recording_bitmap;
++extern uint8_t *kega_sprite_hint_bitmap;
++extern int kega_sprite_hint_active;
+ extern uint32_t kega_debug_backdrop;
+ 
+ #ifndef HAVE_NO_SPRITE_LIMIT
+@@ -4958,8 +4960,77 @@
+ /* Line rendering functions                                                 */
+ /*--------------------------------------------------------------------------*/
+ 
++/* Presentation-only ownership. Never use linebuf d7 as visible ownership:
++ * it marks even sprites hidden behind a high priority plane for collisions.
++ * This opt-in pass reads the same parsed SAT, cache, masking and pixel budget
++ * as the native sprite renderer, without writing emulated VDP state. */
++static uint8 kega_sprite_hint_line[0x200];
++
++static void kega_sprite_hint_objects(int line)
++{
++  int column, i, pixelcount = 0, masked = 0, sprite_ovr = spr_ovr;
++  const int max_pixels = MODE5_MAX_SPRITE_PIXELS;
++  const int im2 = (render_obj == render_obj_m5_im2 || render_obj == render_obj_m5_im2_ste);
++  const int shadow_highlight = (render_obj == render_obj_m5_ste || render_obj == render_obj_m5_im2_ste);
++  object_info_t *object = obj_info[line];
++  int count = object_count[line];
++
++  while (count--)
++  {
++    int xpos = object->xpos;
++    int width = 8 + ((object->size & 0x0c) << 1);
++    if (xpos) sprite_ovr = 1;
++    else if (sprite_ovr) masked = 1;
++    xpos -= 0x80;
++    pixelcount += width;
++    if (((xpos + width) > 0) && (xpos < bitmap.viewport.w) && !masked)
++    {
++      uint32 attr = object->attr;
++      const uint32 atex = (attr >> 9) & 0x70;
++      const uint32 name = attr & (im2 ? 0x3ff : 0x7ff);
++      uint32 v_line = object->ypos;
++      uint8 *offsets;
++      attr &= 0x1800;
++      offsets = &name_lut[((attr >> 3) & 0x300) | (object->size << 4) |
++        ((v_line & (im2 ? 0x30 : 0x18)) >> (im2 ? 2 : 1))];
++      if (pixelcount > max_pixels) width -= pixelcount - max_pixels;
++      width >>= 3;
++      v_line = (v_line & (im2 ? 15 : 7)) << 3;
++      for (column = 0; column < width; ++column)
++      {
++        const uint32 tile = attr | (((name + offsets[column]) & (im2 ? 0x3ff : 0x7ff)) << (im2 ? 1 : 0));
++        const uint8 *pattern = &bg_pattern_cache[((tile << 6) | v_line) ^ (im2 ? ((attr & 0x1000) >> 6) : 0)];
++        for (i = 0; i < 8; ++i)
++        {
++          const int x = xpos + column * 8 + i;
++          const uint32 sprite = pattern[i] | atex;
++          uint8 background;
++          int visible;
++          if (x < 0 || x >= bitmap.viewport.w || !(sprite & 15) ||
++              (kega_sprite_hint_line[0x20 + x] & 0x80)) continue;
++          background = linebuf[0][0x20 + x];
++          visible = (sprite & 0x40) || !(background & 0x40) || !(background & 15);
++          /* Palette 3 colors E/F change background intensity in S/H mode;
++           * they consume the sprite slot but are not a visible sprite color. */
++          if (shadow_highlight && ((sprite & 0x3e) == 0x3e)) visible = 0;
++          kega_sprite_hint_line[0x20 + x] = 0x80 | (visible ? 1 : 0);
++        }
++      }
++    }
++    if (pixelcount >= max_pixels) return;
++    ++object;
++  }
++}
++
+ void render_line(int line)
+ {
++  if (kega_sprite_hint_active)
++  {
++    /* A mid-frame switch away from Mode 5 invalidates the whole sidecar. */
++    if (!(reg[1] & 4)) kega_sprite_hint_active = 0;
++    else memset(kega_sprite_hint_line, 0, sizeof(kega_sprite_hint_line));
++  }
++
+   /* Check display status */
+   if (reg[1] & 0x40)
+   {
+@@ -4976,6 +5047,9 @@
+     if ((!(reg[1] & 4) || (system_hw & SYSTEM_PBC) != SYSTEM_MD) &&
+         (kega_debug_video_mask & (((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 1u : 16u)))
+       memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
++
++    if (kega_sprite_hint_active && !(kega_debug_video_mask & 8u))
++      kega_sprite_hint_objects(line & 1);
+ 
+     /* Preserve sprite collision/overflow. Copy only with sprites hidden. */
+     if (kega_debug_video_mask & 8u)
+@@ -4993,6 +5067,7 @@
+       if (system_hw >= SYSTEM_MARKIII)
+       {
+         memset(&linebuf[0][0x20], 0x40, 8);
++        if (kega_sprite_hint_active) memset(&kega_sprite_hint_line[0x20], 0, 8);
+       }
+     }
+ 
+@@ -5032,6 +5107,8 @@
+ 
+ void blank_line(int line, int offset, int width)
+ {
++  if (kega_sprite_hint_active)
++    memset(&kega_sprite_hint_line[0x20 + offset], 0, width);
+   memset(&linebuf[0][0x20 + offset], 0x40, width);
+   remap_line(line);
+ }
+@@ -5085,6 +5162,17 @@
+   }
+ #endif
+ 
++  /* Match exactly the unfiltered framebuffer's border/interlace row mapping.
++   * Fixed 720-byte pitch is independent of the RGB565 color buffer. */
++  if (kega_sprite_hint_active && line >= 0 && line < bitmap.height &&
++      width > 0 && width <= 720)
++  {
++    int x;
++    uint8 *dst = kega_sprite_hint_bitmap + line * 720;
++    const uint8 *ownership = &kega_sprite_hint_line[0x20 - bitmap.viewport.x];
++    for (x = 0; x < width; ++x) dst[x] = ownership[x] & 1;
++  }
++
+   /* Capture native palette pixels before NTSC or LCD processing only when
+      requested. The ordinary rendering path owns no capture buffer. */
+   if (kega_recording_bitmap && line >= 0 && line < bitmap.height &&

@@ -12,20 +12,25 @@
 #include <functional>
 #include <stdexcept>
 void require(bool ok,const char* text){if(!ok)throw std::runtime_error(text);}
-void waitFor(const std::function<bool()>& predicate){
- QElapsedTimer t;t.start();while(!predicate() && t.elapsed()<4000){QCoreApplication::processEvents();QThread::msleep(2);}require(predicate(),"session timeout");
+void waitFor(const std::function<bool()>& predicate,const char* description="session timeout"){
+ QElapsedTimer t;t.start();bool ready=predicate();while(!ready && t.elapsed()<4000){QCoreApplication::processEvents();QThread::msleep(2);ready=predicate();}require(ready,description);
 }
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  try {
  const bool achievementsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--achievements");
  const bool achievementLoadingOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--achievements-loading");
+ const bool spriteOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--sprite-ownership");
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
+ if(spriteOnly){
+  const auto program=QByteArray::fromHex("33fc800400c0000433fc814400c0000460fe");
+  rom.replace(0x200,program.size(),program);
+ }
  const auto path=temp.filePath("original.md");QFile file(path);require(file.open(QIODevice::WriteOnly) && file.write(rom)==rom.size(),"ROM fixture");file.close();
  EmulationSession session(QString::fromLocal8Bit(argv[1]),temp.path());
  std::atomic<int> frames{0};int ready=0,errors=0,actions=0;bool paused=false;
@@ -34,6 +39,52 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& s){++errors;std::fprintf(stderr,"%s\n",qPrintable(s));});
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
+ if(spriteOnly){
+  int closed=0;bool reversing=false;
+  QObject::connect(&session,&EmulationSession::gameClosed,&app,[&]{++closed;});
+  QObject::connect(&session,&EmulationSession::rewindingChanged,&app,[&](bool value){reversing=value;});
+  QImage image,mask;double aspect=0;
+  const auto take=[&](bool expectedMask){
+   return session.takeVideoFrame(image,aspect,&mask) && (mask.isNull()!=expectedMask);
+  };
+  const auto check=[&]{
+   require(!image.isNull() && mask.size()==image.size() && mask.format()==QImage::Format_Grayscale8,
+           "sprite ownership geometry/format not paired with video");
+   for(int y=0;y<image.height();++y){
+    const auto* pixels=reinterpret_cast<const QRgb*>(image.constScanLine(y));
+    const auto* hints=mask.constScanLine(y);
+    for(int x=0;x<image.width();++x)
+     require(qAlpha(pixels[x])==255 && hints[x]<=1,"sprite ownership contaminated clean pixels or values");
+   }
+  };
+  session.setSpriteOwnershipEnabled(true); // Must apply before the very first game.
+  session.loadGame(path);waitFor([&]{return take(true);},"startup native ownership timed out");check();
+  const QSize native=image.size();
+  session.setPaused(true);waitFor([&]{return paused;},"sprite test pause timed out");
+  session.takeVideoFrame(image,aspect,&mask); // Drain the last running presentation.
+  session.setSpriteOwnershipEnabled(false);session.advanceFrame();
+  waitFor([&]{return take(false);},"ownership fallback presentation timed out");
+  session.setSpriteOwnershipEnabled(true);session.advanceFrame();
+  waitFor([&]{return take(true);},"pause enable native ownership timed out");check();
+  session.setPaused(false);waitFor([&]{return !paused;},"sprite test resume timed out");
+  session.setBlarggFilter(2);
+  waitFor([&]{return take(false) && image.width()>native.width();},"filter resize without ownership timed out");
+  session.setBlarggFilter(0);
+  waitFor([&]{return take(true) && image.size()==native;},"native ownership after filter timed out");check();
+  const int start=frames.load();waitFor([&]{return frames.load()>=start+30;},"rewind history capture timed out");
+  session.setRewind(true);waitFor([&]{return reversing;},"sprite test rewind start timed out");
+  waitFor([&]{return take(false);},"ownership fallback presentation timed out"); // Rewind screenshots deliberately carry no ownership.
+  session.setRewind(false);waitFor([&]{return !reversing;},"sprite test rewind stop timed out");
+  waitFor([&]{return take(true);},"rewind resume native ownership timed out");check();
+  session.closeGame();waitFor([&]{return closed==1;},"sprite test close timed out");
+  require(!session.takeVideoFrame(image,aspect,&mask),"closed game retained a pending ownership frame");
+  session.loadGame(path);waitFor([&]{return take(true);},"reload native ownership timed out");check();
+  session.setSpriteOwnershipEnabled(false);waitFor([&]{return take(false);},"ownership fallback presentation timed out");
+  require(errors==0,"sprite ownership session emitted a core error");
+  session.shutdown();
+  std::puts("Sprite ownership: startup, pause switches, clean frame pairing, filter resize/fallback, rewind and reload passed");
+  return 0;
+ }
  if(achievementLoadingOnly){
   // The mock owns every RetroAchievements request: no real network or account data.
   QByteArray secondRom=rom, thirdRom=rom;

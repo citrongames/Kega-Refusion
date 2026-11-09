@@ -547,6 +547,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         discEjected_ = ejected;
         updateDiscMenu();
     });
+    connect(view_, &GameView::spriteOwnershipRequested,
+            &session_, &EmulationSession::setSpriteOwnershipEnabled);
     connect(view_, &GameView::shaderFailed, this, [this](const QString& error) {
         settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
         updateShaderActions();
@@ -571,8 +573,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     if (!geometry.isEmpty()) restoreGeometry(geometry);
 
     connect(&session_, &EmulationSession::videoFrameReady, view_, [this] {
-        QImage image; double ratio = 4.0 / 3.0;
-        if (session_.takeVideoFrame(image, ratio)) view_->setFrame(image, ratio);
+        QImage image, spriteOwnership; double ratio = 4.0 / 3.0;
+        if (session_.takeVideoFrame(image, ratio, &spriteOwnership))
+            view_->setFrame(image, ratio, spriteOwnership);
     });
     connect(&session_, &EmulationSession::audioSamples, audio_, [this](const QByteArray& pcm, int rate) {
         audio_->play(pcm, rate);

@@ -65,12 +65,13 @@ void parserTests(const QString& directory) {
     require(qAbs(preset.parameters[0].value - .7f) < .0001f, "preset parameter override was lost");
 }
 
-QImage render(ShaderPipeline& pipeline, const QImage& image, QSize size, QRect viewport = {}) {
+QImage render(ShaderPipeline& pipeline, const QImage& image, QSize size, QRect viewport = {},
+              const QImage& ownership = {}) {
     if (viewport.isNull()) viewport = QRect(QPoint(), size);
     QOpenGLFramebufferObject target(size);
     require(target.isValid(), "test output FBO unavailable");
     QString error;
-    require(pipeline.render(image, target.handle(), size, viewport, 17, 1, error), qPrintable(error));
+    require(pipeline.render(image, target.handle(), size, viewport, 17, 1, error, ownership), qPrintable(error));
     return target.toImage();
 }
 void memoryBudgetTests(const QString& directory) {
@@ -147,6 +148,13 @@ void gpuTests(const QString& directory) {
             }
         }
         const QImage mixed = render(dither, tile, tile.size());
+        QImage ownership(tile.size(), QImage::Format_Grayscale8);
+        for (int y = 0; y < tile.height(); ++y)
+            for (int x = 0; x < tile.width(); ++x)
+                ownership.scanLine(y)[x] = tile.pixelColor(x, y) == light;
+        require(render(dither, tile, tile.size(), {}, ownership) == mixed,
+                "sprite holes no longer blend with the underlying plane");
+
         const QColor expected = pattern == 2 ? QColor(70, 40, 170) :
                                 pattern == 3 ? QColor(170, 40, 70) : QColor(120, 40, 120);
         for (int y = 0; y < tile.height(); ++y)
@@ -213,6 +221,52 @@ void gpuTests(const QString& directory) {
                                   QColor(99, 69, 66) : QColor(173, 138, 173));
     require(render(dither, details, details.size()).convertToFormat(details.format()) == details,
             "wider palette steps softened an isolated glyph or dotted line");
+
+    // Window cells have long, closely spaced thin outlines with no third
+    // periodic stroke. Their corners, interiors and gaps all stay exact.
+    QImage cells(80, 30, QImage::Format_RGB32);
+    cells.fill(Qt::black);
+    for (int start = 4; start < 64; start += 16) {
+        for (int i = 0; i < 14; ++i) {
+            for (int edge : {0, 13}) {
+                cells.setPixelColor(start + i, 6 + edge, QColor(66, 69, 66));
+                cells.setPixelColor(start + edge, 6 + i, QColor(66, 69, 66));
+            }
+        }
+    }
+    constexpr const char* stems[] = {"1010111", "1010101", "1110101", "1010101", "1010111"};
+    for (int y = 0; y < 5; ++y)
+        for (int x = 0; x < 7; ++x)
+            if (stems[y][x] == '1') cells.setPixelColor(6+x, 24+y, QColor(239, 138, 66));
+    require(render(dither, cells, cells.size()).convertToFormat(cells.format()) == cells,
+            "parallel outline edges or adjacent glyph stems were blended as hatching");
+    // An asymmetrically placed opaque sprite shares the dark color with the
+    // background. RGB alone cannot determine where the checkerboard ends.
+    QImage layers(48, 32, QImage::Format_RGB32);
+    QImage owners(layers.size(), QImage::Format_Grayscale8);
+    for (int y = 0; y < layers.height(); ++y) {
+        for (int x = 0; x < layers.width(); ++x) {
+            const bool sprite = QRect(17, 4, 18, 11).contains(x, y);
+            layers.setPixelColor(x, y, !sprite && (x+y)%2 ? ink : base);
+            owners.scanLine(y)[x] = sprite;
+        }
+    }
+    const QImage ordinary = render(dither, layers, layers.size());
+    const QImage guided = render(dither, layers, layers.size(), {}, owners);
+    require(guided.pixelColor(23, 4) == base && ordinary.pixelColor(23, 4) != base,
+            "visible sprite boundary missing or flipped");
+    require(render(dither, layers, layers.size(), {}, owners.copy(0,0,8,8)) == ordinary &&
+            render(dither, layers, layers.size()) == ordinary, "stale ownership affected a later frame");
+    write(directory + QStringLiteral("/alpha.glsl"), shader(
+        "void main() { gl_FragColor = vec4(vec3(texture2D(Texture, tc).a), 1.0); }"));
+    ShaderPreset alphaPreset;
+    require(ShaderPreset::load(directory + QStringLiteral("/alpha.glsl"), alphaPreset, error), qPrintable(error));
+    ShaderPipeline external;
+    require(external.initialize(alphaPreset, error), qPrintable(error));
+    const QImage originalAlpha = render(external, layers, layers.size());
+    require(originalAlpha.pixelColor(0, 0) == QColor(Qt::white) &&
+            render(external, layers, layers.size(), {}, owners) == originalAlpha,
+            "ownership leaked into an external shader's alpha channel");
 
     memoryBudgetTests(directory);
     write(directory + QStringLiteral("/lut.glsl"), shader("uniform sampler2D LUT; void main() { gl_FragColor=texture2D(LUT,tc); }"));

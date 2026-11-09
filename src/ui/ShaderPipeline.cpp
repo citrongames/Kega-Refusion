@@ -295,7 +295,8 @@ bool ShaderPipeline::setParameter(const QString& id, float value) {
 }
 
 void ShaderPipeline::draw(QOpenGLShaderProgram& program, unsigned texture, const QSize& input,
-                          const QSize& output, quint64 count, int direction, bool linear, unsigned wrap) {
+                          const QSize& output, quint64 count, int direction, bool linear, unsigned wrap,
+                          int hasSpriteOwnership) {
     program.bind();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -314,6 +315,8 @@ void ShaderPipeline::draw(QOpenGLShaderProgram& program, unsigned texture, const
     program.setUniformValue("MVPMatrix", matrix);
     for (const auto& parameter : preset_.parameters)
         program.setUniformValue(parameter.id.toUtf8().constData(), parameter.value);
+    if (hasSpriteOwnership >= 0)
+        program.setUniformValue("HasSpriteOwnership", hasSpriteOwnership);
     vertices_.bind();
     for (const auto& attribute : {std::pair<const char*,int>{"VertexCoord",0}, {"TexCoord",2}}) {
         const int location = program.attributeLocation(attribute.first);
@@ -334,7 +337,8 @@ void ShaderPipeline::draw(QOpenGLShaderProgram& program, unsigned texture, const
 }
 
 bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSize& surface,
-                            const QRect& viewport, quint64 frameCount, int direction, QString& error) {
+                            const QRect& viewport, quint64 frameCount, int direction, QString& error,
+                            const QImage& spriteOwnership) {
     if (frame.isNull() || viewport.isEmpty()) return true;
     for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
     int maxTexture = 0;
@@ -378,12 +382,28 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     // RGBA rows are naturally four-byte aligned. Restore the default explicitly:
     // Qt's grayscale glyph atlas uploads rely on it when the OSD is painted next.
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    const bool usesSpriteOwnership = preset_.usesSpriteOwnership();
+    const bool hasSpriteOwnership = usesSpriteOwnership && spriteOwnership.size() == frame.size()
+        && spriteOwnership.format() == QImage::Format_Grayscale8;
     // QImage starts at the top; FBOs and every GLSL pass use OpenGL's bottom-left origin.
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-    const QImage pixels = frame.convertToFormat(QImage::Format_RGBA8888).flipped(Qt::Vertical);
+    QImage pixels = frame.convertToFormat(QImage::Format_RGBA8888).flipped(Qt::Vertical);
 #else
-    const QImage pixels = frame.convertToFormat(QImage::Format_RGBA8888).mirrored();
+    QImage pixels = frame.convertToFormat(QImage::Format_RGBA8888).mirrored();
 #endif
+    if (hasSpriteOwnership) {
+        // This upload already owns its flipped RGBA pixels. Pack only its spare
+        // alpha byte: clean source frames, captures and external shaders retain
+        // their normal pixels. Row pointers avoid per-pixel Qt API calls.
+        auto* rgba = pixels.bits();
+        const qsizetype stride = pixels.bytesPerLine();
+        const int width = pixels.width(), height = pixels.height();
+        for (int y = 0; y < height; ++y) {
+            auto* out = rgba + y*stride + 3;
+            const auto* hint = spriteOwnership.constScanLine(height-1-y);
+            for (int x = 0; x < width; ++x) out[x*4] = hint[x] ? 255 : 0;
+        }
+    }
     if (textureSize_ != frame.size()) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, frame.width(), frame.height(), 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, pixels.constBits());
@@ -408,7 +428,8 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
         buffer->bind();
         glViewport(0, 0, output.width(), output.height());
         draw(*programs_[size_t(i)], source, input, output,
-             pass.frameCountMod ? frameCount % pass.frameCountMod : frameCount, direction, pass.linear, pass.wrap);
+             pass.frameCountMod ? frameCount % pass.frameCountMod : frameCount, direction, pass.linear, pass.wrap,
+             usesSpriteOwnership && i == 0 ? int(hasSpriteOwnership) : -1);
         source = buffer->texture();
         input = output;
     }

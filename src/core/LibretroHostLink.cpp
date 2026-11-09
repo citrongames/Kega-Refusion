@@ -85,6 +85,9 @@ thread_local LibretroHost::LinkPair* LibretroHost::LinkPair::current=nullptr;
 void LibretroHost::LinkPairDeleter::operator()(LinkPair* p)const {delete p;}
 
 const QImage& LibretroHost::frame() const {return frameForLinkRole(linkPresentationRole_);}
+const QImage& LibretroHost::spriteOwnership() const {
+    return linkPeer_&&linkPresentationRole_==2?linkPeer_->spriteOwnership_:spriteOwnership_;
+}
 const QByteArray& LibretroHost::audio() const {
     return linkPeer_&&linkPresentationRole_==2?linkPeer_->audio_:audio_;
 }
@@ -142,6 +145,7 @@ bool LibretroHost::startLinkedPair(QString& error) {
     if(!QFileInfo::exists(peerPath)) {error=Localization::text(QStringLiteral("Не найден модуль второй консоли Link Cable: %1")).arg(peerPath);return false;}
     auto peer=std::make_unique<LibretroHost>(peerPath,dataPath_);
     peer->linkParent_=this;peer->moviePlayback_=true;
+    peer->spriteOwnershipEnabled_=spriteOwnershipEnabled_;
     peer->optionOverrides_=variables_;peer->variables_=variables_;
     peer->autoFixChecksum_=autoFixChecksum_;peer->smsFmEnabled_=smsFmEnabled_;
     peer->controllerConnected_={{true,false,false}};
@@ -196,6 +200,7 @@ void LibretroHost::runLinkedFrame(bool video,bool audio) {linkPair_->run(video,a
 void LibretroHost::resetLinkedPair() {
     // Both contexts are suspended outside retro_run at this public boundary.
     api_->link_connect(nullptr,nullptr,nullptr);linkPeer_->api_->link_connect(nullptr,nullptr,nullptr);
+    spriteOwnership_={};
     clearCoreCheats();api_->reset();resetAchievementMemory();applyCheats();audio_.clear();
     {Activation scope(linkPeer_.get());linkPeer_->reset();}
     linkPair_->connect();
@@ -245,6 +250,7 @@ bool LibretroHost::restoreLinkedState(const QByteArray& state,bool transactional
     const auto apply=[&]()->bool {
     for(unsigned i=0;i<2;++i) {
         auto* h=i?linkPeer_.get():this;Activation scope(h);
+        h->spriteOwnership_={};
         if(!h->api_->unserialize(state.constData()+offset[i],sizes[i]))return false;
         if(!h->api_->link_audio_load(state.constData()+offset[i+2],sizes[i+2]))return false;
         for(unsigned j=0;j<2;++j) {

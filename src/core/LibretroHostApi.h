@@ -33,6 +33,8 @@ struct LibretroHost::Api {
     void (*debug_gain)(unsigned,unsigned) = nullptr;
     void (*debug_capabilities)(uint32_t*,uint64_t*) = nullptr;
     bool (*native_video_size)(unsigned*,unsigned*) = nullptr;
+    void (*sprite_hint_enable)(bool) = nullptr;
+    const uint8_t* (*sprite_hint)(unsigned*,unsigned*,size_t*) = nullptr;
     bool (*recording_video)(bool) = nullptr;
     bool (*recording_frame)(const void**,unsigned*,unsigned*,size_t*,unsigned*) = nullptr;
     bool (*input_polled)() = nullptr;

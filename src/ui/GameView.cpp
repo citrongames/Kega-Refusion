@@ -156,7 +156,7 @@ protected:
         QString error;
         if (!pipeline_->render(owner_->frame_, defaultFramebufferObject(),
                                QSize(qRound(width() * dpr), qRound(height() * dpr)),
-                               target, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error)) {
+                               target, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_)) {
             failed(error);
         }
         painter.endNativePainting();
@@ -234,10 +234,12 @@ QImage GameView::captureGameImage() {
     return image;
 }
 
-void GameView::setFrame(const QImage& frame, double aspectRatio) {
+void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
     const QSize previousNative = VideoFrameGeometry::nativeSize(frame_);
     const double previousAspect = aspectRatio_;
     frame_ = frame;
+    spriteOwnership_ = shaderPreset_.usesSpriteOwnership() && spriteOwnership.size() == frame.size()
+        && spriteOwnership.format() == QImage::Format_Grayscale8 ? spriteOwnership : QImage();
     if (frame_.isNull()) { clearMouseGun(); clearAnalogMouse(); }
     ++frameCount_;
     if (qIsFinite(aspectRatio) && aspectRatio > 0.25 && aspectRatio < 5.0)
@@ -1287,6 +1289,8 @@ void GameView::resizeEvent(QResizeEvent* event) {
 void GameView::gpuFailed(const QString& error) {
     const bool hadShader = !shaderPreset_.path.isEmpty();
     shaderPreset_ = {};
+    spriteOwnership_ = {};
+    emit spriteOwnershipRequested(false);
     gpuFailed_ = true;
     if (shaderView_) {
         shaderView_->hide();
@@ -1314,6 +1318,8 @@ bool GameView::setShaderPreset(const QString& path, QString* error) {
         return false;
     }
     shaderPreset_ = std::move(next);
+    spriteOwnership_ = {};
+    emit spriteOwnershipRequested(shaderPreset_.usesSpriteOwnership());
     if (!path.isEmpty() && !shaderView_) {
         gpuFailed_ = false;
         if (isVisible()) ensureGpu();
