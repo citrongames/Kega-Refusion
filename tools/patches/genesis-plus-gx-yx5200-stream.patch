@@ -19,7 +19,24 @@
  /* YX5200 UART interface RX message size */
  #define YX5200_RX_BUFFER_SIZE 10
  
-@@ -94,16 +97,11 @@
+@@ -80,12 +83,14 @@
+ 
+ static size_t read_cb(void *buf, size_t size, void *user_data)
+ {
+-  return cdStreamRead(buf, 1, size, (cdStream*)user_data);
++  size_t count = cdStreamRead(buf, 1, size, (cdStream*)user_data);
++  return count <= size ? count : 0; /* VFS read errors are negative. */
+ }
+ 
+ static int seek_cb(uint64_t position, void *user_data)
+ {
+-  return cdStreamSeek((cdStream*)user_data, position, SEEK_SET);
++  /* VFS may return the new offset; minimp3 requires zero on success. */
++  return cdStreamSeek((cdStream*)user_data, position, SEEK_SET) < 0 ? -1 : 0;
+ }
+ 
+ static mp3dec_ex_t mp3dec;
+@@ -94,16 +99,11 @@
  
  void yx5200_init(int samplerate)
  {
@@ -41,7 +58,7 @@
    }
  }
  
-@@ -115,173 +113,228 @@
+@@ -115,173 +115,228 @@
    yx5200.audioEnabled = 1;
  }
  
@@ -373,7 +390,7 @@
    switch (yx5200.rxBuffer[3])
    {
      case 0x01:  /* Play next track (only if there is already a track loaded) */
-@@ -405,67 +458,53 @@
+@@ -405,67 +460,53 @@
  
  static void yx5200_load_track(uint16 index, uint8 playbackLoop)
  {
