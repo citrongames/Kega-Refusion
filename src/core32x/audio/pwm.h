@@ -30,6 +30,7 @@ typedef struct Kega32xPwm {
     unsigned debug_mask; /* presentation only; never serialized */
     uint8_t debug_gain[2];
     unsigned advancing;
+    uint64_t next_deadline; /* Unclamped next observable event; never serialized. */
 } Kega32xPwm;
 /* Callbacks may enqueue FIFO data at their event timestamp; they must not run
    a CPU, advance to a future time, reset or restore this device recursively. */

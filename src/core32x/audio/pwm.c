@@ -84,10 +84,23 @@ static void push(Kega32xPwmState *s, unsigned channel, uint16_t value)
     s->fifo[channel][(s->read[channel] + s->count[channel]) % 3] = (value - 1u) & 0xfff;
     ++s->count[channel];
 }
+static uint64_t raw_deadline(const Kega32xPwm *p)
+{
+    unsigned clocks = period(&p->s), steps;
+    if (!clocks) return UINT64_MAX;
+    if (p->s.count[0] || p->s.count[1]) steps = 1;
+    else if (p->host.irq || ((p->s.control & KEGA32X_PWM_RTP) && p->host.dreq))
+        steps = p->s.irq_count;
+    else return UINT64_MAX;
+    return master_clock(p->s.cursor_sh2 + (uint64_t)steps * clocks);
+}
+static void refresh_deadline(Kega32xPwm *p) { p->next_deadline = raw_deadline(p); }
 void kega32x_pwm_advance(Kega32xPwm *p, uint64_t t)
 {
-    uint64_t target = sh2_clock(t);
+    uint64_t target;
+    unsigned changed = 0;
     if (t < p->s.now_mclk || p->advancing) return;
+    target = sh2_clock(t);
     /* Release a held amplitude when the presentation mask changes. */
     if (p->debug_mask != output_mask() || p->debug_gain[0] != output_gain(34) ||
         p->debug_gain[1] != output_gain(35)) publish(p, p->s.now_mclk);
@@ -107,6 +120,7 @@ void kega32x_pwm_advance(Kega32xPwm *p, uint64_t t)
         if (p->s.count[0] || p->s.count[1]) steps = 1;
         else steps = observable_irq && due > first_irq ? first_irq : due;
         p->s.cursor_sh2 += steps * clocks;
+        changed = 1;
         event = master_clock(p->s.cursor_sh2);
         /* Shortening CYCLE can make an old partial interval immediately due.
            Apply it at the register write, never publish a timestamp in the past. */
@@ -133,17 +147,13 @@ void kega32x_pwm_advance(Kega32xPwm *p, uint64_t t)
         }
     }
     p->s.now_mclk = t;
+    if (changed) refresh_deadline(p);
     p->advancing = 0;
 }
 uint64_t kega32x_pwm_next_deadline(const Kega32xPwm *p)
 {
-    unsigned clocks = period(&p->s), steps;
-    uint64_t deadline;
-    if (!clocks) return UINT64_MAX;
-    if (p->s.count[0] || p->s.count[1]) steps = 1;
-    else if (p->host.irq || ((p->s.control & KEGA32X_PWM_RTP) && p->host.dreq)) steps = p->s.irq_count;
-    else return UINT64_MAX;
-    deadline = master_clock(p->s.cursor_sh2 + (uint64_t)steps * clocks);
+    /* Callbacks may enqueue samples while advance is processing an event. */
+    uint64_t deadline = p->advancing ? raw_deadline(p) : p->next_deadline;
     return deadline < p->s.now_mclk ? p->s.now_mclk : deadline;
 }
 void kega32x_pwm_reset(Kega32xPwm *p, uint64_t t)
@@ -151,6 +161,7 @@ void kega32x_pwm_reset(Kega32xPwm *p, uint64_t t)
     if (p->advancing) return;
     memset(&p->s, 0, sizeof(p->s));
     p->s.now_mclk = t; p->s.cursor_sh2 = sh2_clock(t); p->s.irq_count = 16;
+    refresh_deadline(p);
     publish(p, t);
 }
 void kega32x_pwm_power(Kega32xPwm *p, const Kega32xPwmHost *h, uint64_t t)
@@ -184,15 +195,17 @@ void kega32x_pwm_write16(Kega32xPwm *p, unsigned reg, uint16_t value, uint64_t t
     case 0x30:
         p->s.control = value & KEGA32X_PWM_CONTROL_MASK;
         p->s.irq_count = (uint8_t)reload(&p->s);
+        refresh_deadline(p);
         publish(p, t);
         break;
     case 0x32:
         p->s.cycle = value & 0xfff;
+        refresh_deadline(p);
         kega32x_pwm_advance(p, t);
         break;
-    case 0x38: push(&p->s, 1, value); push(&p->s, 0, value); break;
-    case 0x36: push(&p->s, 1, value); break;
-    case 0x34: push(&p->s, 0, value); break;
+    case 0x38: push(&p->s, 1, value); push(&p->s, 0, value); refresh_deadline(p); break;
+    case 0x36: push(&p->s, 1, value); refresh_deadline(p); break;
+    case 0x34: push(&p->s, 0, value); refresh_deadline(p); break;
     default: break;
     }
 }
@@ -211,6 +224,7 @@ int kega32x_pwm_set_state(Kega32xPwm *p, const Kega32xPwmState *s)
     }
     p->s = *s;
     p->emitted[0] = p->emitted[1] = 0;
+    refresh_deadline(p);
     publish(p, s->now_mclk);
     return 1;
 }

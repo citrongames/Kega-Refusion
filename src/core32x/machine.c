@@ -176,7 +176,7 @@ void kega32x_machine_write(Kega32xMachine *m,unsigned c,uint32_t address,uint32_
     uint64_t t;
     if(!m || c>1 || (size!=1 && size!=2 && size!=4))return;
 #ifdef KEGA_SH2_DRC
-    if(m->soc_running)kega_sh2_drc_invalidate(m->cpu[c],a,size);
+    if(m->soc_running)kega_sh2_drc_invalidate(m->cpu[c],a & ~(size - 1u),size);
 #endif
     if(a>=0xc0000000 && a<0xe0000000) {
         write_words((uint16_t *)(void *)kega_sh2_native(m->cpu[c])->data_array,(a&0xfff)&~(size-1),value,size);return;
@@ -359,19 +359,21 @@ static void advance_devices(Kega32xMachine *m,uint64_t t)
 {
     unsigned i;
     kega32x_bus_advance(&m->bus,t);kega32x_pwm_advance(&m->pwm,t);
-    if((m->bus.s.regs[0]&3)==3) for(i=0;i<2;i++) {
+    if((m->bus.s.regs[0]&3)==3) {
         uint64_t local=sh2_clock(t);
-        if(local<m->epoch_sh2[i])continue;
-        m->soc_running|=1u<<i;
-        kega_sh2_soc_advance(m->soc[i],local-m->epoch_sh2[i]);
-        m->soc_running&=~(1u<<i);
+        for(i=0;i<2;i++) {
+            if(local<m->epoch_sh2[i])continue;
+            m->soc_running|=1u<<i;
+            kega_sh2_soc_advance(m->soc[i],local-m->epoch_sh2[i]);
+            m->soc_running&=~(1u<<i);
+        }
     }
 }
 void kega32x_machine_run_until(Kega32xMachine *m,uint64_t target)
 {
     if(!m || m->running || target<=m->now)return;
     while(m->now<target) {
-        uint64_t next,event;
+        uint64_t next,event,goal;
         advance_devices(m,m->now);
         next=target;event=kega32x_machine_next_event(m);
         int c;
@@ -379,8 +381,9 @@ void kega32x_machine_run_until(Kega32xMachine *m,uint64_t target)
         if(next-m->now>448)next=m->now+448;
         if(event>m->now && event<next)next=event;
         if((m->bus.s.regs[0]&3)==3) {
+            goal=sh2_clock(next);
             for(c=1;c>=0;c--) {
-                uint64_t done=m->epoch_sh2[c]+kega_sh2_cycles(m->cpu[c]),goal=sh2_clock(next);
+                uint64_t done=m->epoch_sh2[c]+kega_sh2_cycles(m->cpu[c]);
                 if(goal>done) {
                     m->running|=1u<<c;
                     kega_sh2_run(m->cpu[c],(uint32_t)(goal-done));
@@ -389,7 +392,6 @@ void kega32x_machine_run_until(Kega32xMachine *m,uint64_t target)
             }
         }
         if((m->bus.s.regs[0]&3)==3) {
-            uint64_t goal=sh2_clock(next);
             unsigned i;
             for(i=0;i<2;i++) {
                 uint64_t done=m->epoch_sh2[i]+kega_sh2_cycles(m->cpu[i]);

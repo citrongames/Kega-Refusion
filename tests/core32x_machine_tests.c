@@ -25,6 +25,8 @@ int main(void)
     put16(mb,0x142,0x6211); /* MOV.W @R1,R2 */
     put16(mb,0x144,0x6312); /* MOV.L @R1,R3 */
     put16(mb,0x146,0xaffe); put16(mb,0x148,0x0009);
+    put16(sb,0x160,0x2122); /* MOV.L R2,@R1 */
+    put16(sb,0x162,0xaffe); put16(sb,0x164,0x0009);
     h.peripheral_read=peripheral;
     CHECK(!kega32x_machine_create(&h,mb,2047,sb,sizeof(sb),0,0));
     m=kega32x_machine_create(&h,mb,sizeof(mb),sb,sizeof(sb),0,0);CHECK(m);
@@ -58,6 +60,21 @@ int main(void)
         CHECK(kega_sh2_get_state(master,&state));
         CHECK(state.r[0]==0xffffffcd && state.r[2]==0xffffabcd && state.r[3]==0x1234abcd);
     }
+    /* Warm the master's translated idle loop. A store from the other SH-2
+       through an unaligned SDRAM mirror replaces both instructions. */
+    KegaSh2 *slave=kega32x_machine_cpu(m,1);
+    CHECK(kega_sh2_get_state(slave,&state));
+    state.pc=0x160;state.delay=0;state.r[1]=0x27fc1003;state.r[2]=0xaffe7701;
+    CHECK(kega_sh2_set_state(slave,&state));
+    kega32x_machine_write(m,0,0x06001000,0xaffe0009,4);
+    CHECK(kega_sh2_get_state(master,&state));
+    state.pc=0x06001000;state.delay=0;state.r[7]=0;
+    CHECK(kega_sh2_set_state(master,&state));
+    for(int i=0;i<4;i++) CHECK(kega_sh2_run(master,12)==12);
+    CHECK(kega_sh2_run(slave,1)>=1);
+    CHECK(kega_sh2_run(master,12)==12);
+    CHECK(kega_sh2_get_state(master,&state));
+    CHECK(state.r[7]==4); /* ADD #1,R7 in the new delay slot */
     kega32x_machine_destroy(m);
     puts("32X assembly: two synthetic BIOS programs, held reset, shared/private memory passed");
     return 0;

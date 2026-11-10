@@ -162,29 +162,31 @@ static void sync_timers(KegaSh2Soc *c, uint64_t now) {
     if (now == c->s.now && c->s.frt_last == now && c->s.wdt_last == now) return;
     shift = frt_shift(c);
     c->s.now = now;
-    if (shift) {
-        unsigned counter = get16(c, 0x12), a = distance16(counter, c->s.ocra);
-        unsigned b = distance16(counter, c->s.ocrb), wrap = 65536 - counter;
-        uint8_t old = get8(c, 0x11), flags = 0;
-        count = ticks(now - c->s.frt_last, &c->s.frt_phase, shift);
-        if (count >= a) flags |= 8;
-        if (count >= b) flags |= 4;
-        if (count >= wrap) flags |= 2;
-        if ((old & 1) && count >= a) {
-            uint64_t remainder = count - a;
+    count = shift ? ticks(now - c->s.frt_last, &c->s.frt_phase, shift) : 0;
+    c->s.frt_last = now;
+    if (count) {
+        uint32_t registers = get32(c, 0x10); /* TIER, FTCSR and FRC */
+        unsigned counter = (uint16_t)registers, wrap = 65536 - counter;
+        unsigned a = distance16(counter, c->s.ocra), b = distance16(counter, c->s.ocrb);
+        uint8_t flags = 0;
+        if ((registers & (1u << 16)) && count >= a) {
+            uint64_t remaining = count - a;
             unsigned period = c->s.ocra ? c->s.ocra : 65536;
-            /* After compare A the counter restarts at zero each period. */
             flags = 8;
-            if (b <= a || (c->s.ocrb && c->s.ocrb <= period && remainder >= c->s.ocrb)) flags |= 4;
-            if (wrap <= a || (period == 65536 && remainder >= 65536)) flags |= 2;
-            counter = (unsigned)(remainder % period);
-        } else counter = (counter + (unsigned)(count & 65535)) & 65535;
-        put16(c, 0x12, (uint16_t)counter);
-        put8(c, 0x11, old | flags);
-        c->s.frt_last = now;
+            if (b <= a || (c->s.ocrb && c->s.ocrb <= period && remaining >= c->s.ocrb)) flags |= 4;
+            if (wrap <= a || (period == 65536 && remaining >= 65536)) flags |= 2;
+            if (remaining < period) counter = (unsigned)remaining;
+            else if (!(period & (period - 1))) counter = (unsigned)remaining & (period - 1);
+            else counter = (unsigned)(remaining % period);
+        } else {
+            if (count >= a) flags |= 8;
+            if (count >= b) flags |= 4;
+            if (count >= wrap) flags |= 2;
+            counter = (uint16_t)(counter + (uint16_t)count);
+        }
+        put32(c, 0x10, (registers & 0xffff0000u) | ((uint32_t)flags << 16) | counter);
         frt_irq(c, flags);
     }
-    c->s.frt_last = now;
     if (get8(c, 0x80) & 0x20) {
         unsigned old_counter = get8(c, 0x81);
         count = ticks(now - c->s.wdt_last, &c->s.wdt_phase, wdt_shift(c));

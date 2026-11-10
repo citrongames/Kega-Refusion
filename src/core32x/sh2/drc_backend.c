@@ -182,7 +182,8 @@ void kega_sh2_drc_invalidate(KegaSh2 *cpu, u32 a, size_t length) {
     if(!ready || kega_drc_failed || !length) return;
     SH2 *s=kega_sh2_native(cpu); if(s!=kega_drc_cpus[0] && s!=kega_drc_cpus[1]) return;
     a = a >= 0xc0000000u ? a : a & 0xc7ffffffu;
-    if ((a&0xfffc0000u)==0x06000000u) {
+    if ((a&0xc6000000u)==0x06000000u) {
+        a=0x06000000u | (a&0x3ffffu);
         if(length>0x40000u || (a&0x3ffffu)+length>0x40000u) { kega_sh2_drc_flush(); return; }
         bool marked=false;
         for(size_t i=(a&0x3ffffu)/2;i<=((a&0x3ffffu)+length-1)/2;++i)
@@ -221,6 +222,17 @@ int kega_drc_execute(SH2 *s, int budget) {
             kega_drc_stats.fallback_interpreter_cycles[i]+=done;
         }
         return left;
+    }
+    /* A translated BRA-self/NOP does not change architectural registers.
+       The normal JIT handles IRQ entry, delay slots and cold/stale tags. */
+    unsigned slot=(s->pc >> 3) & (ARRAY_SIZE(s->branch_cache)-1);
+    if(s->branch_cache[slot].pc==s->pc && s->branch_cache[slot].idle_loop==1 &&
+       !s->test_irq && s->pending_level<=(int)((s->sr >> 4) & 15)) {
+        unsigned used=3u*((unsigned)(budget+2)/3u);
+        ++kega_drc_stats.jit_calls[i];
+        kega_drc_stats.jit_cycles[i]+=used;
+        s->icount=budget-(int)used;
+        return s->icount;
     }
     executing=s; ++depth;
     int left=sh2_execute_drc(s,budget);

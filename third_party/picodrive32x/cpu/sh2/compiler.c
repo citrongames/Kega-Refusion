@@ -331,6 +331,7 @@ struct block_link {
 
 struct block_entry {
   u32 pc;
+  u32 idle_loop;
   u8 *tcache_ptr;            // translated block for above PC
   struct block_entry *next;  // chain in hash_table with same pc hash
   struct block_entry *prev;
@@ -1196,8 +1197,17 @@ static void REGPARM(3) *dr_lookup_block(u32 pc, SH2 *sh2, int *tcache_id)
   void *block = NULL;
 
   be = dr_get_entry(pc, sh2->is_slave, tcache_id);
-  if (be != NULL)
+  if (be != NULL) {
     block = be->tcache_ptr;
+#if BRANCH_CACHE
+    /* Publish the classification with the same PC and code pointer. Cache
+       flushes (including self-modifying code) already invalidate this tag. */
+    unsigned slot = (pc >> 3) & (ARRAY_SIZE(sh2->branch_cache) - 1);
+    sh2->branch_cache[slot].pc = pc;
+    sh2->branch_cache[slot].code = block;
+    sh2->branch_cache[slot].idle_loop = be->idle_loop;
+#endif
+  }
 
 #if (DRC_DEBUG & 2)
   if (be != NULL)
@@ -3496,6 +3506,7 @@ static void *sh2_translate_impl(SH2 *sh2, int tcache_id)
       {
         entry = &block->entryp[v];
         entry->pc = pc;
+        entry->idle_loop = 0;
         entry->tcache_ptr = tcache_ptr;
         entry->links = entry->o_links = NULL;
 #if (DRC_DEBUG & 2)
@@ -4982,6 +4993,8 @@ end_op:
        entry, and invalidation in exactly the same way as any other block. */
       if (cycles == 3 && (op_flags[i] & OF_DELAY_OP) && op == 0x0009 &&
           target_pc == pc - 4 && FETCH_OP(target_pc) == 0xaffe) {
+        if (entry->pc == target_pc)
+          entry->idle_loop = 1;
         emit_sync_t_to_sr();
         emith_sh2_delay_loop(3, -1);
         rcache_unlock_all();
@@ -5438,7 +5451,7 @@ static void sh2_generate_utils(void)
   emith_move_r_r_ptr(arg1, CONTEXT_REG);
   emith_add_r_r_ptr_imm(arg2, CONTEXT_REG, offsetof(SH2, drc_tmp));
   emith_abicall(dr_lookup_block);
-  // store PC and block entry ptr (in arg0) in branch target cache
+  // A successful lookup populated the branch target cache.
   emith_tst_r_r_ptr(RET_REG, RET_REG);
   EMITH_SJMP_START(DCOND_EQ);
 #if BRANCH_CACHE
@@ -5448,11 +5461,6 @@ static void sh2_generate_utils(void)
   emith_add_r_imm(arg3, 1);
   emith_write_r_r_offs(arg3, arg2, 0);
 #endif
-  emith_ctx_read(arg2, SHR_PC * 4);
-  emith_and_r_r_imm(arg1, arg2, (ARRAY_SIZE(kega_drc_cpus[0]->branch_cache)-1)*8);
-  emith_add_r_r_r_lsl_ptr(arg1, CONTEXT_REG, arg1, sizeof(void *) == 8 ? 1 : 0);
-  emith_write_r_r_offs(arg2, arg1, offsetof(SH2, branch_cache));
-  emith_write_r_r_offs_ptr(RET_REG, arg1, offsetof(SH2, branch_cache) + sizeof(void *));
 #endif
   emith_jump_reg(RET_REG);
   EMITH_SJMP_END(DCOND_EQ);

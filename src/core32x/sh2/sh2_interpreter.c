@@ -31,7 +31,7 @@ struct KegaSh2 {
 static KegaSh2 *owner(SH2 *core) { return (KegaSh2 *)core; }
 /* The machine's SDRAM and local data array store native 16-bit words.
  * SH-2 byte reads select the high or low byte of that numeric word. */
-static const void *plain_read_base(SH2 *s, uint32_t a, uint32_t *offset) {
+static void *plain_base(SH2 *s, uint32_t a, uint32_t *offset) {
     if (s->p_da && (a & 0xe0000000u)==0xc0000000u) {
         *offset=a & 0xfffu;
         return s->p_da;
@@ -49,7 +49,7 @@ static uint16_t plain_word(const void *base, uint32_t offset) {
 }
 static uint8_t read8(SH2 *s, uint32_t a) {
     uint32_t offset;
-    const void *base=plain_read_base(s,a,&offset);
+    const void *base=plain_base(s,a,&offset);
     if (base) {
         uint16_t word=plain_word(base,offset & ~1u);
         return (uint8_t)(word >> ((offset & 1u) ? 0 : 8));
@@ -58,20 +58,20 @@ static uint8_t read8(SH2 *s, uint32_t a) {
 }
 static uint16_t read16(SH2 *s, uint32_t a) {
     uint32_t offset;
-    const void *base=plain_read_base(s,a,&offset);
+    const void *base=plain_base(s,a,&offset);
     if (base) return plain_word(base,offset & ~1u);
     KegaSh2 *c = owner(s); return c->host.read16(c->host.user, c, a);
 }
 static uint16_t fetch16(SH2 *s, uint32_t a) {
     uint32_t offset;
-    const void *base=(a & 1u) ? NULL : plain_read_base(s,a,&offset);
+    const void *base=(a & 1u) ? NULL : plain_base(s,a,&offset);
     if (base) return plain_word(base,offset);
     KegaSh2 *c = owner(s);
     return c->host.fetch16 ? c->host.fetch16(c->host.user, c, a) : read16(s, a);
 }
 static uint32_t read32(SH2 *s, uint32_t a) {
     uint32_t offset;
-    const void *base=plain_read_base(s,a,&offset);
+    const void *base=plain_base(s,a,&offset);
     if (base) {
         offset &= ~3u;
         return ((uint32_t)plain_word(base,offset) << 16) |
@@ -79,7 +79,37 @@ static uint32_t read32(SH2 *s, uint32_t a) {
     }
     KegaSh2 *c = owner(s); return c->host.read32(c->host.user, c, a);
 }
+/* Plain machine RAM has no write side effects other than translated code
+   invalidation. Check the affected native word(s), including unaligned
+   guest addresses and physical mirrors, before changing their contents. */
+static inline bool store_plain(SH2 *s, uint32_t a, uint32_t v, unsigned size) {
+    uint32_t offset;
+    uint8_t *base=plain_base(s,a,&offset);
+    if (!base) return false;
+    offset &= ~(size-1u);
+#ifdef KEGA_SH2_DRC
+    bool local=(a & 0xe0000000u)==0xc0000000u;
+    const uint8_t *marked=local?s->p_drcblk_da:s->p_drcblk_ram;
+    if (marked && (marked[offset>>1] || (size==4 && marked[(offset>>1)+1]))) {
+        uint32_t physical=(local?0xc0000000u:0x06000000u) | offset;
+        kega_sh2_drc_invalidate(owner(s),physical,size);
+    }
+#endif
+    uint16_t word=(uint16_t)v;
+    if (size==1) {
+        unsigned shift=(offset & 1u)?0:8;
+        offset &= ~1u;
+        word=(uint16_t)((plain_word(base,offset) & ~(0xffu<<shift)) | ((v & 0xffu)<<shift));
+    } else if (size==4) {
+        uint16_t high=(uint16_t)(v>>16);
+        memcpy(base+offset,&high,sizeof(high));
+        offset+=2;
+    }
+    memcpy(base+offset,&word,sizeof(word));
+    return true;
+}
 static void write8(SH2 *s, uint32_t a, uint8_t v) {
+    if (store_plain(s,a,v,1)) return;
     KegaSh2 *c = owner(s);
 #ifdef KEGA_SH2_DRC
     kega_sh2_drc_invalidate(c,a,1);
@@ -87,6 +117,7 @@ static void write8(SH2 *s, uint32_t a, uint8_t v) {
     c->host.write8(c->host.user, c, a, v);
 }
 static void write16(SH2 *s, uint32_t a, uint16_t v) {
+    if (store_plain(s,a,v,2)) return;
     KegaSh2 *c = owner(s);
 #ifdef KEGA_SH2_DRC
     kega_sh2_drc_invalidate(c,a,2);
@@ -94,6 +125,7 @@ static void write16(SH2 *s, uint32_t a, uint16_t v) {
     c->host.write16(c->host.user, c, a, v);
 }
 static void write32(SH2 *s, uint32_t a, uint32_t v) {
+    if (store_plain(s,a,v,4)) return;
     KegaSh2 *c = owner(s);
 #ifdef KEGA_SH2_DRC
     kega_sh2_drc_invalidate(c,a,4);

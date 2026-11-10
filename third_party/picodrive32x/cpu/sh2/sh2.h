@@ -62,7 +62,13 @@ typedef struct SH2_
 	// DRC branch cache. size must be 2^n and <=128
 	int rts_cache_idx;
 	struct { uint32_t pc; void *code; } rts_cache[16];
-	struct { uint32_t pc; void *code; } branch_cache[128];
+	struct {
+        uint32_t pc;
+#if UINTPTR_MAX > UINT32_MAX
+        uint32_t idle_loop; /* Uses the x86-64 entry's alignment padding. */
+#endif
+        void *code;
+    } branch_cache[128];
 
 	// interpreter stuff
 	int		icount;		// cycles left in current timeslice

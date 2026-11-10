@@ -26,8 +26,10 @@ static void request(void *user, uint64_t t)
 {
     Recorder *r = user;
     ++r->requests;
+    if (r->pwm) CHECK(kega32x_pwm_next_deadline(r->pwm) > t);
     if (r->feed) {
         kega32x_pwm_write16(r->pwm, 0x38, (uint16_t)(r->feed % 2 + 1), t);
+        CHECK(kega32x_pwm_next_deadline(r->pwm) > t);
         --r->feed;
     }
 }
@@ -117,6 +119,23 @@ static void exact_clock_and_silence(void)
     CHECK(kega32x_pwm_next_deadline(&p) == UINT64_MAX);
     kega32x_pwm_advance(&p, UINT64_MAX - 2);
     CHECK(p.s.now_mclk == UINT64_MAX - 2 && p.s.irq_count >= 1 && p.s.irq_count <= 16);
+}
+static void deadline_after_silent_span(void)
+{
+    Kega32xPwm p;
+    kega32x_pwm_power(&p, NULL, 0);
+    kega32x_pwm_write16(&p, 0x32, 11, 0);
+    CHECK(kega32x_pwm_next_deadline(&p) == UINT64_MAX);
+    kega32x_pwm_advance(&p, 100);
+    CHECK(kega32x_pwm_next_deadline(&p) == UINT64_MAX);
+    kega32x_pwm_write16(&p, 0x34, 2, 100);
+    CHECK(kega32x_pwm_next_deadline(&p) == 117);
+    kega32x_pwm_advance(&p, 110);
+    CHECK(kega32x_pwm_next_deadline(&p) == 117);
+    kega32x_pwm_write16(&p, 0x32, 2, 110);
+    CHECK(p.s.count[0] == 0 && kega32x_pwm_next_deadline(&p) == UINT64_MAX);
+    kega32x_pwm_reset(&p, 111);
+    CHECK(kega32x_pwm_next_deadline(&p) == UINT64_MAX);
 }
 static void late_peer_write(void)
 {
@@ -231,7 +250,8 @@ int main(void)
 #ifdef KEGAREFUSION_32X
     for (unsigned i = 0; i < 38; ++i) kega_debug_audio_gain[i] = 100;
 #endif
-    fifo_and_routes(); exact_clock_and_silence(); late_peer_write(); restore_and_reentrant_fifo();
+    fifo_and_routes(); exact_clock_and_silence(); deadline_after_silent_span();
+    late_peer_write(); restore_and_reentrant_fifo();
 #ifdef KEGAREFUSION_32X
     debug_output_mute();
 #endif
