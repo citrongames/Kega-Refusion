@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "BatterySave.h"
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -30,6 +31,16 @@ bool atomicWrite(const QString& path, const QByteArray& bytes, QString& error) {
     }
     return true;
 }
+}
+
+// The core has just initialized a fresh device. A first save must represent
+// an in-game change, even if it happens before the first periodic poll.
+void BatterySave::rememberUnwritten(const QString& path, const void* formatted, qsizetype size) {
+    if (QFileInfo::exists(path)) return;
+    auto& entry = entries_[path];
+    entry.persisted = QByteArray(static_cast<const char*>(formatted), size);
+    entry.observed = entry.persisted;
+    entry.initialized = true;
 }
 
 bool BatterySave::update(const QString& path, const void* data, qsizetype size,
@@ -85,6 +96,10 @@ bool BatterySave::update(const QString& path, const void* data, qsizetype size,
         entry.persisted = QByteArray(current.constData(), current.size());
         entry.dirtySince = -1;
         return true;
+    }
+    if (!exists && !QDir().mkpath(QFileInfo(path).absolutePath())) {
+        error = Localization::text(QStringLiteral("Не удалось создать папку сохранений: %1")).arg(QFileInfo(path).absolutePath());
+        return false;
     }
     if (!atomicWrite(path + QStringLiteral(".bak"), exists ? previous : current, error) ||
         !atomicWrite(path, current, error)) return false;

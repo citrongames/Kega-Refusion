@@ -273,6 +273,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setSmsFmEnabled(smsFmEnabled_);
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
+    session_.setPerGameCdBackup(settings_.value(QStringLiteral("emulation/perGameCdBackup"), true).toBool());
     session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
     session_.setExpansionDevices(settings_.value(QStringLiteral("emulation/attachCd"), false).toBool(),
                                  settings_.value(QStringLiteral("emulation/attach32x"), false).toBool());
@@ -1880,6 +1881,15 @@ void MainWindow::editSettings(int initialPage) {
         "Если игра зависает или звук рассинхронизируется, верните обычный режим.")), &dialog);
     cdHelp->setWordWrap(true);
     games->addRow(cdHelp);
+    const bool perGameCdBackup = settings_.value(QStringLiteral("emulation/perGameCdBackup"), true).toBool();
+    auto* cdBackup = new QCheckBox(Localization::text(QStringLiteral("Отдельная память сохранений Sega CD для каждой игры")), &dialog);
+    cdBackup->setObjectName(QStringLiteral("perGameCdBackup"));
+    cdBackup->setChecked(perGameCdBackup);
+    games->addRow(cdBackup);
+    auto* cdBackupHelp = new QLabel(Localization::text(QStringLiteral(
+        "Если выключено, используется общая память. Применится при следующем открытии игры.")), &dialog);
+    cdBackupHelp->setWordWrap(true);
+    games->addRow(cdBackupHelp);
     const bool noSpriteLimit = settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool();
     auto* spriteLimit = new QComboBox(&dialog);
     spriteLimit->setObjectName(QStringLiteral("spriteLimitMode"));
@@ -2461,6 +2471,10 @@ void MainWindow::editSettings(int initialPage) {
         if (cdLoading->isEnabled() && selectedFastCd != fastCd) {
             settings_.setValue(QStringLiteral("emulation/fastCdLoading"), selectedFastCd);
             session_.setFastCdLoading(selectedFastCd);
+        }
+        if (cdBackup->isChecked() != perGameCdBackup) {
+            settings_.setValue(QStringLiteral("emulation/perGameCdBackup"), cdBackup->isChecked());
+            session_.setPerGameCdBackup(cdBackup->isChecked());
         }
         const bool selectedNoSpriteLimit = spriteLimit->currentData().toBool();
         if (spriteLimit->isEnabled() && selectedNoSpriteLimit != noSpriteLimit) {

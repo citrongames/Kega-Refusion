@@ -2,6 +2,9 @@
   "code": "en",
   "name": "English",
   "translations": {
+    "Не удалось создать папку сохранений: %1": "Could not create the save folder: %1",
+    "Отдельная память сохранений Sega CD для каждой игры": "Separate Sega CD backup memory for each game",
+    "Если выключено, используется общая память. Применится при следующем открытии игры.": "When off, games use shared backup memory. Takes effect the next time a game is opened.",
     "Предыдущее обновление завершилось с ошибкой.": "The previous update encountered an error.",
     "Некорректное описание релиза на GitHub.": "GitHub returned invalid release information.",
     "В релизе нет проверенного архива для этой платформы.": "The release does not include a verified archive for this platform.",

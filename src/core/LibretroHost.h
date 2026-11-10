@@ -109,6 +109,7 @@ public:
     const QString& movieCompatibilityWarning() const { return movieCompatibilityWarning_; }
     void setMoviePlayback(bool playback) { moviePlayback_ = playback; }
     bool flushSaveRam(QString& error);
+    void setPerGameCdBackup(bool enabled) { perGameCdBackup_ = enabled; }
     void setNetworkReadOnly(bool readOnly) { networkReadOnly_ = readOnly; }
     bool pollSaveRam(qint64 nowMs, QString& error);
     ConsoleProfile controllerProfile() const;
@@ -283,4 +284,8 @@ private:
     bool recordingVideoEnabled_ = false;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;
+    bool perGameCdBackup_ = true;
+    QByteArray cdSavePath_;
+    const QByteArray& activeSavePath() const { return cdSavePath_.isEmpty() ? savePath_ : cdSavePath_; }
+    void rememberEmptyCdBackup();
 };

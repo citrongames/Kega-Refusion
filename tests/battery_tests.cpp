@@ -5,6 +5,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLibrary>
 #include <QTemporaryDir>
 #include <QtEndian>
@@ -130,11 +131,11 @@ QByteArray replay(LibretroHost& host) {
     }
     return hash.result();
 }
-void integration(const QString& core, const QString& oldCore, const QString& bios) {
+void cartridgeIntegration(const QString& core, const QString& oldCore) {
     QTemporaryDir temp; require(temp.isValid(),"temporary directory failed");QString error;
     const auto rom=makeSaveRamRom();const auto path=temp.filePath("original.md");write(path,rom);
     const auto data=temp.filePath("data");
-    const auto ram=data+"/saves/"+QString::fromLatin1(QCryptographicHash::hash(rom,QCryptographicHash::Sha256).toHex())+".srm";
+    const auto ram=data+"/saves/original.srm";
     QByteArray expectedReplay;
     {
         LibretroHost host(oldCore,data);require(host.load(path,error),qPrintable(error));
@@ -163,39 +164,101 @@ void integration(const QString& core, const QString& oldCore, const QString& bio
         require(host.pollSaveRam(4000,error)&&host.pollSaveRam(33000,error),qPrintable(error));
         require(read(ram)==original&&quint8(read(ram+".bak")[0])==0x55,"rewound SRAM did not persist correctly");
     }
-    error.clear();SegaCdBios::importDirectory(bios,data,error);
+}
+void cdIntegration(const QString& core, const QString& bios) {
+    QTemporaryDir temp; require(temp.isValid(),"temporary directory failed");QString error;
+    const auto data=temp.filePath("data");
+    SegaCdBios::importDirectory(bios,data,error);
     require(error.isEmpty(),qPrintable(error));
     QByteArray disc(150*2048,0);disc.replace(0,14,"SEGADISCSYSTEM");disc[0x20b]=0;
     const auto cd=temp.filePath("original.iso");write(cd,disc);
-    {
-        LibretroHost host(core,data);require(host.load(cd,error),qPrintable(error));
-        QLibrary lib(core);
-        using Getter=bool(*)(unsigned,const void**,size_t*,const char**);
-        auto get=reinterpret_cast<Getter>(lib.resolve("kegarefusion_get_bram"));
-        require(get,"BRAM extension missing");const void* memory=nullptr;size_t size=0;const char* raw=nullptr;
-        require(get(0,&memory,&size,&raw)&&size==8192,"internal BRAM unavailable");
-        const QString bram=QString::fromUtf8(raw);
-        require(host.pollSaveRam(1000,error)&&host.pollSaveRam(3000,error),qPrintable(error));
-        const auto first=read(bram);
-        require(first.size()==8192&&read(bram+".bak")==first,"live BRAM not saved before unload");
-        auto* writable=const_cast<char*>(static_cast<const char*>(memory));
-        writable[0]^=1; // Simulate a completed in-game battery update, preserve format footer.
-        require(host.pollSaveRam(4000,error)&&host.pollSaveRam(33000,error),qPrintable(error));
-        const auto second=read(bram);
-        require(second!=first&&read(bram+".bak")==first,"BRAM change or previous backup missing");
-        host.unload();
-        require(read(bram)==second&&read(bram+".bak")==first,"core unload overwrote/rotated host backup");
-        require(host.load(cd,error),qPrintable(error));
-        require(get(0,&memory,&size,&raw)&&QByteArray(static_cast<const char*>(memory),qsizetype(size))==second,
-                "core did not reload persisted BRAM");
-    }
+    const auto cue=temp.filePath("original.cue");
+    const auto otherCue=temp.filePath("other.cue");
+    const QByteArray cueText("FILE \"original.iso\" BINARY\n  TRACK 01 MODE1/2048\n    INDEX 01 00:00:00\n");
+    write(cue,cueText);write(otherCue,cueText);
+    QLibrary lib(core);
+    using Getter=bool(*)(unsigned,const void**,size_t*,const char**);
+    auto get=reinterpret_cast<Getter>(lib.resolve("kegarefusion_get_bram"));
+    require(get,"BRAM extension missing");
+    auto bramMemory=[&](const QString& expected) {
+        const void* memory=nullptr;size_t size=0;const char* raw=nullptr;
+        require(get(0,&memory,&size,&raw)&&memory&&size==8192&&raw,"internal BRAM unavailable");
+        require(QDir::cleanPath(QString::fromUtf8(raw))==QDir::cleanPath(expected),
+                "internal BRAM path does not match CD save group");
+        const void* cart=nullptr;size_t cartSize=0;const char* cartPath=nullptr;
+        if (get(1,&cart,&cartSize,&cartPath))
+            require(cart&&cartSize&&cartPath&&
+                    QFileInfo(QString::fromUtf8(cartPath)).absolutePath()==QFileInfo(expected).absolutePath(),
+                    "external backup cart is outside the CD save group");
+        return const_cast<char*>(static_cast<const char*>(memory));
+    };
+    LibretroHost host(core,data);
+    require(host.load(cue,error),qPrintable(error));
+    const QString bram=data+"/saves/original/scd_U.brm";
+    auto* writable=bramMemory(bram);
+    require(!QFile::exists(bram),"unused per-game BRAM was written");
+    writable[0]^=1; // Simulate a completed in-game battery update, preserve format footer.
+    require(host.pollSaveRam(1000,error)&&host.pollSaveRam(3000,error),qPrintable(error));
+    const auto first=read(bram);
+    require(first.size()==8192&&read(bram+".bak")==first,"live BRAM not saved before unload");
+    writable[0]^=2;
+    require(host.pollSaveRam(4000,error)&&host.pollSaveRam(33000,error),qPrintable(error));
+    const auto second=read(bram);
+    require(second!=first&&read(bram+".bak")==first,"BRAM change or previous backup missing");
+    host.unload();
+    require(read(bram)==second&&read(bram+".bak")==first,"core unload overwrote/rotated host backup");
+    require(host.load(cue,error),qPrintable(error));
+    writable=bramMemory(bram);
+    require(QByteArray(writable,8192)==second,"core did not reload per-game BRAM");
+
+    host.unload();
+    require(host.load(otherCue,error),qPrintable(error));
+    const QString otherBrm=data+"/saves/other/scd_U.brm";
+    writable=bramMemory(otherBrm);
+    require(!QFile::exists(otherBrm)&&QByteArray(writable,8192)!=second,
+            "a different CD inherited the first game's BRAM");
+    writable[0]^=4;
+    require(host.flushSaveRam(error),qPrintable(error));
+    require(read(otherBrm).size()==8192&&read(otherBrm+".bak")==read(otherBrm),
+            "second CD BRAM or first backup missing");
+    host.unload();
+    require(host.load(cue,error),qPrintable(error));
+    require(QByteArray(bramMemory(bram),8192)==second,
+            "second CD overwrote the first game's BRAM");
+
+    host.unload();
+    host.setPerGameCdBackup(false);
+    require(host.load(cue,error),qPrintable(error));
+    const QString sharedBrm=data+"/saves/scd_U.brm";
+    writable=bramMemory(sharedBrm);
+    require(!QFile::exists(sharedBrm)&&QByteArray(writable,8192)!=second,
+            "shared mode unexpectedly loaded per-game BRAM");
+    writable[0]^=8;
+    require(host.flushSaveRam(error),qPrintable(error));
+    const auto shared=read(sharedBrm);
+    require(shared.size()==8192&&read(sharedBrm+".bak")==shared,
+            "shared CD BRAM was not written to the legacy path");
+    host.unload();
+    host.setPerGameCdBackup(true);
+    require(host.load(cue,error),qPrintable(error));
+    require(QByteArray(bramMemory(bram),8192)==second&&read(bram)==second,
+            "shared CD BRAM replaced the per-game copy");
+    host.unload();
+    host.setPerGameCdBackup(false);
+    require(host.load(cue,error),qPrintable(error));
+    require(QByteArray(bramMemory(sharedBrm),8192)==shared,
+            "legacy shared CD BRAM is no longer reachable");
 }
 int main(int argc,char** argv){
     QCoreApplication app(argc,argv);
     try{
         policy();
-        if(argc==4)integration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]),QString::fromLocal8Bit(argv[3]));
-        else require(argc==1,"usage: battery_tests [CORE OLD_CORE BIOS_DIR]");
+        if(argc==4) {
+            cartridgeIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
+            cdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[3]));
+        } else if(argc==3) {
+            cdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
+        } else require(argc==1,"usage: battery_tests [CORE BIOS_DIR | CORE OLD_CORE BIOS_DIR]");
         std::puts("Battery saves: debounce, rate limit, backup, failure preservation and requested integration passed");
         return 0;
     }catch(const std::exception& error){std::fprintf(stderr,"FAIL: %s\n",error.what());return 1;}

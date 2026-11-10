@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLibrary>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -55,11 +56,18 @@ void requireFrame(LibretroHost& host) {
     require(host.audio().size() % 4 == 0, "core produced incomplete stereo PCM");
 }
 
-void requireBrm(const QString& savesPath) {
-    const auto files = QDir(savesPath).entryInfoList({"*.brm"}, QDir::Files);
-    for (const auto& file : files)
-        if (file.size() == 8192) return;
-    throw std::runtime_error("CD internal 8 KiB BRAM was not persisted on unload");
+void requireBrmPath(const QString& corePath, const QString& expected) {
+    QLibrary library(corePath);
+    using Getter = bool (*)(unsigned, const void**, size_t*, const char**);
+    const auto get = reinterpret_cast<Getter>(library.resolve("kegarefusion_get_bram"));
+    require(get, "BRAM extension missing");
+    const void* memory = nullptr;
+    size_t size = 0;
+    const char* rawPath = nullptr;
+    require(get(0, &memory, &size, &rawPath) && memory && size == 8192 && rawPath,
+            "CD internal BRAM unavailable");
+    require(QDir::cleanPath(QString::fromUtf8(rawPath)) == QDir::cleanPath(expected),
+            "CD BRAM save path changed with the mounted disc");
 }
 
 void testCd(const QString& corePath, const QString& biosSourcePath) {
@@ -98,6 +106,8 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
     require(host.load(playlist, error), "generated CD playlist did not load");
     require(host.isCd() && host.discPaths().size() == 2 && host.discIndex() == 0 &&
             !host.discEjected(), "CD playlist did not register two discs");
+    const QString playlistBrm = dataPath + "/saves/discs/scd_U.brm";
+    requireBrmPath(corePath, playlistBrm);
     bool receivedAudio = false;
     for (int i = 0; i < 8; ++i) {
         requireFrame(host);
@@ -128,6 +138,7 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
 
     require(host.changeDisc(disc3, error) && host.discPaths().size() == 2 &&
             host.discPaths().at(0) == disc3, "external disc replacement failed");
+    requireBrmPath(corePath, playlistBrm);
     requireFrame(host);
     require(!host.changeDisc(badCue, error) && !error.isEmpty(),
             "CUE with missing track was accepted");
@@ -141,22 +152,27 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
     error.clear();
     require(host.hardReset(error) && host.isCd() && host.discPaths().size() == 2,
             "CD hard reset lost disc registration");
+    requireBrmPath(corePath, playlistBrm);
     requireFrame(host);
     host.unload();
-    requireBrm(dataPath + "/saves");
+    require(!QFile::exists(playlistBrm), "unused playlist BRAM created a save");
 
     require(host.load(cartridge, error) && !host.isCd() && host.discPaths().isEmpty(),
             "cartridge load retained CD controls");
     requireFrame(host);
     require(host.load(cue, error) && host.isCd() && host.discPaths().size() == 1,
             "cartridge-to-CD switch failed");
+    const QString cueBrm = dataPath + "/saves/disc1/scd_U.brm";
+    requireBrmPath(corePath, cueBrm);
     requireFrame(host);
     require(host.load(cartridge, error) && !host.isCd() &&
             host.load(playlist, error) && host.isCd() && host.discPaths().size() == 2,
             "CD-to-cartridge-to-CD switch failed");
+    requireBrmPath(corePath, playlistBrm);
     requireFrame(host);
     host.unload();
-    requireBrm(dataPath + "/saves");
+    require(!QFile::exists(cueBrm) && !QFile::exists(playlistBrm),
+            "unused CD BRAM created a save");
 }
 
 void exerciseUserDisc(const QString& corePath, const QString& biosSource, const QString& path, const QString& output) {

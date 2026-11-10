@@ -10,6 +10,7 @@ public:
     static constexpr qint64 MinimumWriteMs = 30000;
     bool update(const QString& path, const void* data, qsizetype size, qint64 now,
                 bool force, bool skipBlank, QString& error);
+    void rememberUnwritten(const QString& path, const void* formatted, qsizetype size);
     void clear() { entries_.clear(); }
 private:
     struct Entry {

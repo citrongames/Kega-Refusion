@@ -191,6 +191,7 @@ void EmulationSession::setDebugAudioGain(unsigned channel, unsigned percent) {
 void EmulationSession::setDebugBackdrop(quint32 rgb) { enqueue({Type::DebugBackdrop,{},int(rgb & 0xffffff)}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
+void EmulationSession::setPerGameCdBackup(bool enabled) { enqueue({Type::PerGameCdBackup,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
 void EmulationSession::setControllerAdapter(ControllerAdapter adapter) {
@@ -1593,6 +1594,9 @@ void EmulationSession::run() {
                 if (host.setFastCdLoading(command.value != 0,error)) {
                     if (host.isCd()) { optionsPending = true; clearHistory(); }
                 } else emit errorOccurred(error);
+                break;
+            case Type::PerGameCdBackup:
+                host.setPerGameCdBackup(command.value != 0);
                 break;
             case Type::Checksum:
                 // Update the policy only. load() and an explicit hard reset

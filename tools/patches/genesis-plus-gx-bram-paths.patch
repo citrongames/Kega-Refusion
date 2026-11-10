@@ -1,0 +1,17 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -126,10 +126,10 @@
+ char CD_BIOS_EU[256];
+ char CD_BIOS_US[256];
+ char CD_BIOS_JP[256];
+-char CD_BRAM_JP[256];
+-char CD_BRAM_US[256];
+-char CD_BRAM_EU[256];
+-char CART_BRAM[256];
++char CD_BRAM_JP[4096];
++char CD_BRAM_US[4096];
++char CD_BRAM_EU[4096];
++char CART_BRAM[4096];
+ 
+ static int vwidth;
+ static int vheight;

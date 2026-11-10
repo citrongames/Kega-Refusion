@@ -345,6 +345,17 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
     discs_ = images; discIndex_ = 0;
+    // A disc set owns one backup memory for its whole session, including
+    // tray changes and power cycles. Use the original playlist/image name.
+    if (perGameCdBackup_) {
+        const QString directory = dataPath_ + "/saves/" + readableSaveStem(QFileInfo(path).fileName());
+        cdSavePath_ = QDir::toNativeSeparators(directory).toUtf8();
+        // Older cores write BRAM themselves and require the directory up front.
+        if (!api_->get_bram && !QDir().mkpath(directory)) {
+            error = Localization::text(QStringLiteral("Не удалось создать папку сохранений: %1")).arg(directory);
+            unload(); return false;
+        }
+    }
     if (!refreshDiscFiles(error)) { unload(); return false; }
     CoreFileSystem::clearError();
     setDiscIdentity();
@@ -370,8 +381,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         unload(); return false;
     }
     applyControllerPorts(true);
-    // The battery extension exposes formatted BRAM and its regional path.
-    // GPX still owns initialization/formatting; the host owns atomic writes.
+    rememberEmptyCdBackup();
     saveMemorySizes_.fill(0);
     loadCheats();
     if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
@@ -599,7 +609,7 @@ void LibretroHost::unload() {
     active32xBiosFingerprints_ = {};
     contentNeeds32x_ = false;
     if (!linkParent_) CoreFileSystem::clearVirtualFiles();
-    discs_.clear(); discIndex_ = 0;
+    discs_.clear(); discIndex_ = 0; cdSavePath_.clear();
     contentInfo_ = {}; contentInfoActive_ = false;
     content_.clear(); coreContent_.clear(); audio_.clear(); frame_ = QImage(); spriteOwnership_ = {}; gamePath_.clear(); gameKey_.clear(); legacyGameKey_.clear(); contentName_.clear(); romHash_.clear();
     buttons_.fill(0);
@@ -2362,7 +2372,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
             const void* data = nullptr; size_t size = 0; const char* rawPath = nullptr;
             if (!api_->get_bram(index, &data, &size, &rawPath)) continue;
             const QString path = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(rawPath)));
-            const QString saveRoot = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(savePath_))) + '/';
+            const QString saveRoot = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(activeSavePath()))) + '/';
             if (!path.startsWith(saveRoot) || !path.endsWith(QLatin1String(".brm")) ||
                 size > 64 * 1024 * 1024) {
                 error = Localization::text(QStringLiteral("Ядро вернуло некорректный путь или размер BRAM."));
@@ -2386,9 +2396,20 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
     }
     return true;
 }
+void LibretroHost::rememberEmptyCdBackup() {
+    if (cdSavePath_.isEmpty() || !api_->get_bram) return;
+    for (unsigned index = 0; index < 2; ++index) {
+        const void* data = nullptr;
+        size_t size = 0;
+        const char* rawPath = nullptr;
+        if (api_->get_bram(index, &data, &size, &rawPath) && size && size <= 1024 * 1024)
+            batterySave_.rememberUnwritten(QDir::cleanPath(QDir::fromNativeSeparators(QString::fromUtf8(rawPath))),
+                                           data, qsizetype(size));
+    }
+}
 bool LibretroHost::restoreSaveRam(QString& error) {
     if (linkParent_) return true;
-    if (isCd()) return true;
+    if (isCd()) { rememberEmptyCdBackup(); return true; }
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         auto data = api_->get_memory_data(id);
@@ -2417,7 +2438,7 @@ bool LibretroHost::environment(unsigned command, void* data) {
         *static_cast<const retro_game_info_ext**>(data) = &h->contentInfo_;
         return true;
     case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: *static_cast<const char**>(data) = h->systemPath_.constData(); return true;
-    case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: *static_cast<const char**>(data) = h->savePath_.constData(); return true;
+    case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: *static_cast<const char**>(data) = h->activeSavePath().constData(); return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
         const auto format = *static_cast<retro_pixel_format*>(data);
         if (format != RETRO_PIXEL_FORMAT_0RGB1555 && format != RETRO_PIXEL_FORMAT_RGB565 && format != RETRO_PIXEL_FORMAT_XRGB8888) return false;
