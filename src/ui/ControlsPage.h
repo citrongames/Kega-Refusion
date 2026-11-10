@@ -110,6 +110,7 @@ private:
     QPushButton* assignButton_ = nullptr;
     QPushButton* sequenceButton_ = nullptr;
     QPushButton* skipButton_ = nullptr;
+    QPushButton* clearKeyButton_ = nullptr;
     QPushButton* clearButton_ = nullptr;
     QMap<int, PlayerMapping> drafts_;
     QMap<int, ControllerAdapter> adapterDrafts_;

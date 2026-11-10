@@ -24,7 +24,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QKeyEvent>
-#include <QKeySequenceEdit>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -471,11 +471,26 @@ void testControlsLayout(MainWindow& window) {
         const int second = rowFor(gameTable, 1);
         check(first >= 0 && second >= 0, QStringLiteral("gameplay targets are missing"));
         if (first >= 0 && second >= 0) {
-            auto* oldKey = gameTable->cellWidget(first, 1)->findChild<QKeySequenceEdit*>();
-            auto* newKey = gameTable->cellWidget(second, 1)->findChild<QKeySequenceEdit*>();
-            newKey->setKeySequence(QKeySequence(Qt::Key_X));
-            check(oldKey->keySequence().isEmpty() &&
-                  newKey->keySequence() == QKeySequence(Qt::Key_X),
+            auto* oldKey = gameTable->item(first, 1);
+            auto* newKey = gameTable->item(second, 1);
+            const QString previous = newKey->text();
+            auto* view = gameTable->viewport();
+            const QPoint point = gameTable->visualItemRect(newKey).center();
+            const auto click = [&](QEvent::Type type, Qt::MouseButtons held) {
+                QMouseEvent e(type, point, view->mapToGlobal(point), Qt::LeftButton, held, Qt::NoModifier);
+                QApplication::sendEvent(view, &e);
+            };
+            click(QEvent::MouseButtonPress, Qt::LeftButton);
+            click(QEvent::MouseButtonRelease, Qt::NoButton);
+            press(*gameTable, Qt::Key_X);
+            check(newKey->text() == previous && oldKey->text() == QStringLiteral("X"),
+                  QStringLiteral("one click armed keyboard capture"));
+            click(QEvent::MouseButtonDblClick, Qt::LeftButton);
+            click(QEvent::MouseButtonRelease, Qt::NoButton);
+            press(*controls, Qt::Key_X);
+            QKeyEvent release(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
+            QApplication::sendEvent(controls, &release);
+            check(oldKey->text() == QStringLiteral("—") && newKey->text() == QStringLiteral("X"),
                   QStringLiteral("new keyboard binding did not clear the previous target"));
         }
 

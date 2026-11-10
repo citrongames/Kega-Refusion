@@ -5,21 +5,19 @@
 
 #include <QHideEvent>
 #include <QApplication>
-#include <QLineEdit>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
-#include <QKeySequenceEdit>
+#include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTableWidget>
 #include <QTabBar>
-#include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -78,32 +76,9 @@ bool reservedKey(int key) {
     return InputManager::reservedKeyboardKey(key);
 }
 
-// Record the same physical identity that gameplay uses, regardless of layout.
-class PhysicalKeySequenceEdit final : public QKeySequenceEdit {
-public:
-    using QKeySequenceEdit::QKeySequenceEdit;
-protected:
-    bool event(QEvent* event) override {
-        if (event->type() == QEvent::KeyRelease) {
-            event->accept();
-            return true;
-        }
-        if (event->type() != QEvent::KeyPress)
-            return QKeySequenceEdit::event(event);
-        auto* keyEvent = static_cast<QKeyEvent*>(event);
-        if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab)
-            return QKeySequenceEdit::event(event);
-        const int key = InputManager::keyboardKey(*keyEvent);
-        if (!keyEvent->isAutoRepeat() && key != Qt::Key_Control &&
-            key != Qt::Key_Shift && key != Qt::Key_Meta && key != Qt::Key_Alt &&
-            key != Qt::Key_AltGr && key != Qt::Key_unknown) {
-            const auto modifiers = keyEvent->modifiers() & ~Qt::KeypadModifier;
-            setKeySequence(QKeySequence(QKeyCombination::fromCombined(key | int(modifiers))));
-        }
-        event->accept();
-        return true;
-    }
-};
+QString keyboardName(int key) {
+    return key ? QKeySequence(key).toString(QKeySequence::NativeText) : QStringLiteral("—");
+}
 
 QTableWidgetItem* cell(const QString& text, int target = -1) {
     auto* item = new QTableWidgetItem(text);
@@ -299,11 +274,13 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     sequenceButton_ = new QPushButton(Localization::text(QStringLiteral("Назначить по порядку")), this);
     sequenceButton_->setObjectName(QStringLiteral("assignSequence"));
     skipButton_ = new QPushButton(Localization::text(QStringLiteral("Пропустить")), this);
+    clearKeyButton_ = new QPushButton(Localization::text(QStringLiteral("Очистить клавишу")), this);
     clearButton_ = new QPushButton(Localization::text(QStringLiteral("Очистить геймпад")), this);
     auto* defaultsButton = new QPushButton(Localization::text(QStringLiteral("По умолчанию")), this);
     actionRow->addWidget(assignButton_);
     actionRow->addWidget(sequenceButton_);
     actionRow->addWidget(skipButton_);
+    actionRow->addWidget(clearKeyButton_);
     actionRow->addWidget(clearButton_);
     actionRow->addStretch(1);
     actionRow->addWidget(defaultsButton);
@@ -464,6 +441,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
             this, &ControlsPage::startSequence);
     connect(skipButton_, &QPushButton::clicked,
             this, &ControlsPage::skipCapture);
+    connect(clearKeyButton_, &QPushButton::clicked, this, [this] {
+        stopCapture();
+        onKeyboardChanged(selectedTarget_, QKeySequence());
+    });
     connect(clearButton_, &QPushButton::clicked, this, [this] {
         if (selectedTarget_ < 0) return;
         stopCapture();
@@ -840,40 +821,7 @@ void ControlsPage::fillGameTable() {
         gameTable_->setRowHeight(row, 30);
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target, mapping.controllerType), target));
-        auto* keyEdit = new PhysicalKeySequenceEdit(gameTable_);
-        keyEdit->setProperty("bindingTarget", target);
-        keyEdit->installEventFilter(this);
-        if (auto* line = keyEdit->findChild<QLineEdit*>()) {
-            line->setPlaceholderText(Localization::text(QStringLiteral("Нажмите клавишу")));
-            line->setProperty("bindingTarget", target);
-            line->installEventFilter(this);
-        }
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-        keyEdit->setMaximumSequenceLength(1);
-#endif
-        const int key = mapping.keyboard.value(target, 0);
-        if (key)
-            keyEdit->setKeySequence(QKeySequence(key));
-        auto* keyCell = new QWidget(gameTable_);
-        auto* keyLayout = new QHBoxLayout(keyCell);
-        keyLayout->setContentsMargins(2, 1, 2, 1);
-        keyLayout->setSpacing(2);
-        keyLayout->addWidget(keyEdit, 1);
-        auto* clearKey = new QToolButton(keyCell);
-        clearKey->setText(QStringLiteral("×"));
-        clearKey->setToolTip(Localization::text(QStringLiteral("Очистить клавишу")));
-        clearKey->setFixedWidth(22);
-        keyLayout->addWidget(clearKey);
-        gameTable_->setCellWidget(row, 1, keyCell);
-        connect(keyEdit, &QKeySequenceEdit::keySequenceChanged,
-                this, [this, target](const QKeySequence& sequence) {
-                    onKeyboardChanged(target, sequence);
-                });
-        connect(clearKey, &QToolButton::clicked, this, [this, keyEdit, target] {
-            const QSignalBlocker blocker(keyEdit);
-            keyEdit->clear();
-            onKeyboardChanged(target, QKeySequence());
-        });
+        gameTable_->setItem(row, 1, cell(keyboardName(mapping.keyboard.value(target))));
         gameTable_->setItem(row, 2, cell(padName(mapping, target)));
         if (isLightgun(mapping.controllerType) || isAnalogController(mapping.controllerType)) {
             auto* mouseBox = new QComboBox(gameTable_);
@@ -933,10 +881,6 @@ void ControlsPage::selectTarget(int target) {
     if (captureTarget_ >= 0 && captureTarget_ != target)
         stopCapture();
     selectedTarget_ = target;
-    if (target >= 0 && target < 16)
-        diagram_->setSelectedTarget(target);
-    else
-        diagram_->setSelectedTarget(-1);
     QTableWidget* table = commandTabSelected() ? commandTable_ : gameTable_;
     for (int row = 0; row < table->rowCount(); ++row) {
         const auto* item = table->item(row, 0);
@@ -964,10 +908,7 @@ void ControlsPage::refreshKeyboardCell(int target) {
     for (int row = 0; row < gameTable_->rowCount(); ++row) {
         const auto* item = gameTable_->item(row, 0);
         if (!item || item->data(Qt::UserRole).toInt() != target) continue;
-        auto* editor = gameTable_->cellWidget(row, 1)->findChild<QKeySequenceEdit*>();
-        const QSignalBlocker blocker(editor);
-        const int key = draft().keyboard.value(target, 0);
-        editor->setKeySequence(key ? QKeySequence(key) : QKeySequence());
+        gameTable_->item(row, 1)->setText(keyboardName(draft().keyboard.value(target)));
         return;
     }
 }
@@ -981,7 +922,10 @@ void ControlsPage::updateActionButtons() {
     assignButton_->setEnabled(targetSelected && (gamePage || deviceSelected));
     sequenceButton_->setEnabled(gamePage || deviceSelected);
     skipButton_->setEnabled(captureTarget_ >= 0 && !sequence_.isEmpty());
+    clearKeyButton_->setVisible(gamePage);
+    clearKeyButton_->setEnabled(gamePage && targetSelected);
     clearButton_->setEnabled(targetSelected);
+    diagram_->setSelectedTarget(gamePage ? selectedTarget_ : -1, captureTarget_ >= 0);
 }
 
 void ControlsPage::setFeedback(const QString& message, bool warning) {
@@ -1017,12 +961,6 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
     else if (reservedKey(key))
         error = Localization::text(QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8, F12, запятая и точка зарезервированы."));
     if (!error.isEmpty()) {
-        auto* editor = qobject_cast<QKeySequenceEdit*>(sender());
-        if (editor) {
-            const QSignalBlocker blocker(editor);
-            const int oldKey = draft().keyboard.value(target, 0);
-            editor->setKeySequence(oldKey ? QKeySequence(oldKey) : QKeySequence());
-        }
         setFeedback(error, true);
         return false;
     }
@@ -1036,6 +974,7 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
         }
     }
     mapping.keyboard[target] = key;
+    refreshKeyboardCell(target);
     dirty_.insert(draftKey());
     setFeedback(key
         ? Localization::text(QStringLiteral("Клавиша назначена."))
@@ -1311,15 +1250,6 @@ bool ControlsPage::apply() {
 }
 
 bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::MouseButtonDblClick &&
-        watched->property("bindingTarget").isValid()) {
-        auto* widget = qobject_cast<QWidget*>(watched);
-        if (!isVisible() || !widget || widget->window() != window())
-            return QWidget::eventFilter(watched, event);
-        stopCapture();
-        beginCaptureFor(watched->property("bindingTarget").toInt());
-        return true;
-    }
     // Release remembered keys if focus leaves the application before key-up.
     if (event->type() == QEvent::ApplicationDeactivate) {
         captureKeysDown_.clear();
@@ -1372,13 +1302,6 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         return true;
     captureTarget_ = -1;
     if (input_.capturing()) input_.cancelCapture();
-    for (int row = 0; row < gameTable_->rowCount(); ++row) {
-        if (gameTable_->item(row, 0)->data(Qt::UserRole).toInt() != target) continue;
-        auto* editor = gameTable_->cellWidget(row, 1)->findChild<QKeySequenceEdit*>();
-        const QSignalBlocker blocker(editor);
-        editor->setKeySequence(QKeySequence(key));
-        break;
-    }
     if (!sequence_.isEmpty()) QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
     updateActionButtons();
     return true;

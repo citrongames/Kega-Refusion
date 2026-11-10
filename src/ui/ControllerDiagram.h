@@ -21,7 +21,7 @@ public:
     void setSixButton(bool sixButton);
     void setControllerType(ControllerType type);
     void setTargets(const QVector<int>& targets);
-    void setSelectedTarget(int target);
+    void setSelectedTarget(int target, bool awaitingInput);
     void setPressedMask(unsigned mask);
 
 signals:
@@ -61,6 +61,7 @@ private:
     QPixmap illustration_;
     QSet<int> targets_;
     int selectedTarget_ = -1;
+    bool awaitingInput_ = false;
     unsigned pressedMask_ = 0;
     QVector<TargetArea> areas_;
 };

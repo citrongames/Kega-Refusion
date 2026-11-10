@@ -15,7 +15,8 @@ constexpr int Right = 7;
 constexpr qreal ImageWidth = 1536;
 constexpr qreal ImageHeight = 1024;
 const QColor accent(64, 180, 198);
-const QColor selected(215, 62, 56);
+const QColor selectionGreen(55, 183, 98);
+const QColor captureRed(215, 62, 56);
 
 QPainterPath ellipse(QPointF center, qreal rx, qreal ry) {
     QPainterPath path;
@@ -146,9 +147,10 @@ void ControllerDiagram::setTargets(const QVector<int>& targets) {
     update();
 }
 
-void ControllerDiagram::setSelectedTarget(int target) {
-    if (selectedTarget_ != target) {
+void ControllerDiagram::setSelectedTarget(int target, bool awaitingInput) {
+    if (selectedTarget_ != target || awaitingInput_ != awaitingInput) {
         selectedTarget_ = target;
+        awaitingInput_ = awaitingInput;
         update();
     }
 }
@@ -359,6 +361,7 @@ void ControllerDiagram::drawHighlight(QPainter& painter, int target,
         painter.drawPath(shape);
     }
     if (target == selectedTarget_) {
+        const QColor& selected = awaitingInput_ ? captureRed : selectionGreen;
         QColor fill = selected;
         fill.setAlpha(pressed ? 0 : 38);
         QPen pen(selected, 2.5);
