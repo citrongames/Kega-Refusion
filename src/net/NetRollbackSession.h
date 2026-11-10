@@ -1,5 +1,6 @@
 #pragma once
 #include "core/MovieTape.h"
+#include "core/InputDisplay.h"
 #include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -27,6 +28,7 @@ public:
     struct RewindFrame {
         QByteArray state; QImage image; double aspect=1;
         QImage secondImage; double secondAspect=1;
+        InputDisplayState input;
     };
     void setHistoryEnabled(bool enabled);
     // Only final, locally earned frames reach the achievement runtime. Predicted

@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "GameView.h"
+#include "InputDisplayPainter.h"
 #include "WaylandMouseCapture.h"
 #include <QCursor>
 #include <QKeyEvent>
@@ -155,6 +156,7 @@ protected:
         if (owner_->frame_.isNull() || !pipeline_) {
             QPainter painter(this);
             owner_->paintRaster(painter);
+            owner_->paintInputDisplay(painter);
             owner_->paintOsd(painter);
             owner_->paintCrosshairs(painter);
             owner_->paintLoading(painter);
@@ -177,6 +179,7 @@ protected:
             failed(error);
         }
         painter.endNativePainting();
+        owner_->paintInputDisplay(painter);
         owner_->paintOsd(painter); // Native-resolution OSD is never filtered.
         owner_->paintCrosshairs(painter);
         owner_->paintLoading(painter);
@@ -224,7 +227,7 @@ QImage GameView::captureImage() {
         image = shaderView_ && shaderView_->isVisible() && shaderView_->isValid()
             ? shaderView_->grabFramebuffer() : grab().toImage();
     }
-    if (std::any_of(std::begin(guns_), std::end(guns_),
+    if (inputDisplayEnabled_ || std::any_of(std::begin(guns_), std::end(guns_),
                     [](const GunState& gun) { return gun.enabled; })) repaintView();
     return image;
 }
@@ -267,6 +270,7 @@ void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& s
 }
 
 void GameView::clearGame() {
+    inputDisplay_ = {};
     setLightgunInputEnabled(false);
     setAnalogMousePlayer(-1, ControllerType::Pad);
     for (unsigned slot = 0; slot < kGunSlots; ++slot) setLightgunEnabled(slot, false);
@@ -493,6 +497,24 @@ void GameView::setOsdEnabled(bool enabled) {
     repaintView();
 }
 
+void GameView::setInputDisplay(const InputDisplayState& state) {
+    if (inputDisplay_ == state) return;
+    const bool visibleChange = !(InputDisplayPainter::visualState(inputDisplay_) ==
+                                 InputDisplayPainter::visualState(state));
+    inputDisplay_ = state;
+    if (inputDisplayEnabled_ && visibleChange) repaintView();
+}
+
+void GameView::setInputDisplayEnabled(bool enabled) {
+    if (inputDisplayEnabled_ == enabled) return;
+    inputDisplayEnabled_ = enabled;
+    if (!enabled) {
+        inputDisplayPixmap_ = {};
+        inputDisplayRasterValid_ = false;
+    }
+    repaintView();
+}
+
 void GameView::setPerformanceMetricsEnabled(bool enabled) {
     if (performanceMetricsEnabled_ == enabled) return;
     performanceMetricsEnabled_ = enabled;
@@ -656,6 +678,34 @@ void GameView::expireOsd() {
     }
     if (notices_.isEmpty() && !stateSlots_.expiresAt && achievementQueue_.isEmpty())
         osdTimer_.stop();
+}
+
+void GameView::paintInputDisplay(QPainter& painter) {
+    if (!inputDisplayEnabled_ || capturingGame_ || capturingReticles_ ||
+        frame_.isNull() || loading_) return;
+    const InputDisplayState visual = InputDisplayPainter::visualState(inputDisplay_);
+    const auto row = InputDisplayPainter::geometry(visual, rect());
+    if (row.scale <= 0) return;
+    const qreal dpr = painter.device()->devicePixelRatioF();
+    const QSize pixels(qMax(1, qCeil(row.size.width() * dpr)),
+                       qMax(1, qCeil(row.size.height() * dpr)));
+    if (!inputDisplayRasterValid_ || !(inputDisplayRasterState_ == visual) ||
+        inputDisplayRasterPixels_ != pixels || inputDisplayRasterScale_ != row.scale ||
+        inputDisplayRasterDpr_ != dpr) {
+        QPixmap raster(pixels);
+        raster.setDevicePixelRatio(dpr);
+        raster.fill(Qt::transparent);
+        QPainter rowPainter(&raster);
+        InputDisplayPainter::paintRow(rowPainter, visual, row.scale);
+        rowPainter.end();
+        inputDisplayPixmap_ = std::move(raster);
+        inputDisplayRasterState_ = visual;
+        inputDisplayRasterPixels_ = pixels;
+        inputDisplayRasterScale_ = row.scale;
+        inputDisplayRasterDpr_ = dpr;
+        inputDisplayRasterValid_ = true;
+    }
+    painter.drawPixmap(row.topLeft, inputDisplayPixmap_);
 }
 
 void GameView::paintOsd(QPainter& painter) {
@@ -1302,6 +1352,7 @@ void GameView::paintEvent(QPaintEvent*) {
         return;
     }
     paintRaster(painter);
+    paintInputDisplay(painter);
     paintOsd(painter);
     paintCrosshairs(painter);
     paintLoading(painter);

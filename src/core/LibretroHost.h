@@ -1,4 +1,5 @@
 #pragma once
+#include "InputDisplay.h"
 #include <QByteArray>
 #include <QImage>
 #include <QJsonObject>
@@ -110,6 +111,7 @@ public:
     bool flushSaveRam(QString& error);
     void setNetworkReadOnly(bool readOnly) { networkReadOnly_ = readOnly; }
     bool pollSaveRam(qint64 nowMs, QString& error);
+    InputDisplayState inputDisplay(bool withButtons = true) const;
     void setButtons(unsigned port, unsigned mask);
     // Virtual console ports, independent of physical input device selection.
     // Configuration survives unload/load. Returns true only for a change.

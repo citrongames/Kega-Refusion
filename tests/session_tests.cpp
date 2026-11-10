@@ -67,13 +67,14 @@ int main(int argc,char** argv){
  const bool fastOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--fast-forward");
  const bool portsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--controller-ports");
  const bool frameBackOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--frame-back");
+ const bool inputDisplayOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--input-display");
  const bool speedOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--game-speed");
  const bool timerOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--run-timer");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || timerOnly || speedOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || inputDisplayOnly || timerOnly || speedOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
- if(frameBackOnly)rom=frameBackRom();
+ if(frameBackOnly || inputDisplayOnly)rom=frameBackRom();
  if(spriteOnly){
   const auto program=QByteArray::fromHex("33fc800400c0000433fc814400c0000460fe");
   rom.replace(0x200,program.size(),program);
@@ -86,6 +87,98 @@ int main(int argc,char** argv){
  QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& s){++errors;std::fprintf(stderr,"%s\n",qPrintable(s));});
  QObject::connect(&session,&EmulationSession::actionCompleted,&app,[&](const QString&){++actions;});
  QObject::connect(&session,&EmulationSession::effectivePauseChanged,&app,[&](bool p){paused=p;});
+ if(inputDisplayOnly){
+  InputDisplayState shown;
+  int changes=0,closed=0;
+  std::atomic<int> movieMode{0};
+  std::atomic<unsigned> movieLocalMask{0};
+  std::atomic<bool> pauseNext{false};
+  QObject::connect(&session,&EmulationSession::inputDisplayChanged,&app,[&]{
+   shown=session.inputDisplay();++changes;
+  });
+  QObject::connect(&session,&EmulationSession::gameClosed,&app,[&]{++closed;});
+  QObject::connect(&session,&EmulationSession::movieStatusChanged,&app,
+   [&](int mode,const QString&,quint64,quint64,double){
+    movieMode=mode;
+    if ((mode==1 || mode==2) && movieLocalMask.load())
+     session.setButtons(1,movieLocalMask.load());
+   },Qt::DirectConnection);
+  QObject::connect(&session,&EmulationSession::videoFrame,&app,
+   [&](const QImage&,double){if(pauseNext.exchange(false))session.setPaused(true);},
+   Qt::DirectConnection);
+  session.setInputDisplayEnabled(true);
+  session.loadGame(path);
+  waitFor([&]{return frames.load()>=5 && shown.players[0].device==InputDisplayDevice::MegaDrive6;},
+          "input display startup");
+  session.setPaused(true);waitFor([&]{return paused;},"input display pause");
+  session.setControllerConnected(1,true);
+  session.setControllerSixButton(1,false);
+  waitFor([&]{return shown.players[1].device==InputDisplayDevice::MegaDrive3;},
+          "P2 three-button topology");
+  require(shown.players[0].buttons==0 && shown.players[1].buttons==0,
+          "topology change retained buttons");
+  QImage image;double aspect=0;
+  const auto step=[&](bool backwards,quint16 expected){
+   session.takeVideoFrame(image,aspect);
+   const int before=frames.load();
+   if(backwards)session.backFrame();else session.advanceFrame();
+   waitFor([&]{return frames.load()>before && shown.players[1].buttons==expected;},
+           backwards?"input display frame back":"input display frame advance");
+   require(frames.load()==before+1 && paused && shown.players[0].buttons==0,
+           "input display step skipped a frame or showed P1 input");
+  };
+  constexpr quint16 face=quint16(1u<<4), sixOnly=quint16(1u<<9);
+  session.setButtons(0,0);session.setButtons(1,face|sixOnly);
+  step(false,face);
+  require(shown.players[1].device==InputDisplayDevice::MegaDrive3,
+          "three-button pad did not filter six-button input");
+  session.setControllerSixButton(1,true);
+  waitFor([&]{return shown.players[1].device==InputDisplayDevice::MegaDrive6;},
+          "P2 six-button topology");
+  session.setButtons(1,face|sixOnly);
+  step(false,face|sixOnly);
+  session.setButtons(1,quint16(1u<<5));
+  step(false,quint16(1u<<5));
+  step(true,face|sixOnly);
+  require(shown.players[1].device==InputDisplayDevice::MegaDrive6,
+          "frame back lost P2 device type");
+
+  // Playback must display the recorded P2 input, not the local live mask.
+  const auto moviePath=temp.filePath("input-display.krm");
+  movieLocalMask=face;
+  const int start=frames.load();
+  session.startMovieRecording(moviePath);
+  waitFor([&]{return movieMode.load()==1 && frames.load()>=start+8;},
+          "input display movie recording");
+  session.stopMovie();session.setPaused(true);
+  waitFor([&]{return movieMode.load()==0 && paused && QFile::exists(moviePath);},
+          "input display movie stop");
+  MovieTape tape;QString error;require(tape.load(moviePath,error),qPrintable(error));
+  require(tape.size()>=8,"input display movie too short");
+  for(quint64 i=0;i<tape.size();++i){
+   MovieInput input;
+   require(tape.inputAt(i,input) && input.buttons[0]==0 && input.buttons[1]==face,
+           "input display movie did not record P2-only input");
+  }
+  const quint16 decoy=quint16(1u<<5);
+  movieLocalMask=decoy;
+  session.setButtons(1,decoy);
+  step(false,decoy);
+  pauseNext=true;
+  session.playMovie(moviePath);
+  waitFor([&]{return movieMode.load()==2 && paused && shown.players[1].buttons==face;},
+          "playback displayed local input instead of recorded P2 input");
+  require(shown.players[0].buttons==0 && shown.players[1].device==InputDisplayDevice::MegaDrive6,
+          "playback displayed wrong player or hardware");
+  step(false,face);
+  session.closeGame();
+  waitFor([&]{return closed==1 && shown==InputDisplayState{};},
+          "closed game retained input display");
+  require(changes>0 && errors==0,"input display session emitted a core error");
+  session.shutdown();
+  std::puts("Input display: P2-only, three/six-button, frame back, TAS playback and close passed");
+  return 0;
+ }
  if(spriteOnly){
   int closed=0;bool reversing=false;
   QObject::connect(&session,&EmulationSession::gameClosed,&app,[&]{++closed;});

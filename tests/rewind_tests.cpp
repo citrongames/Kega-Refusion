@@ -62,10 +62,52 @@ int main(int argc,char** argv) {
  for(int i=0;i<2001;++i)require(identical.capture(shots[0].state,shots[0].frame,shots[0].aspect),"identical capture");
  require(identical.size()==2001,"history stopped at a duration cap");
  require(identical.bytesUsed()<512*1024,"unchanged frames repeated full storage");
+ InputDisplayState held;held.players[0].device=InputDisplayDevice::MegaDrive6;
+ held.players[0].buttons=0x31;
+ RewindBuffer heldHistory;heldHistory.configure(true);
+ for(int i=0;i<2001;++i)require(heldHistory.capture(shots[0].state,shots[0].frame,shots[0].aspect,&held),"held input capture");
+ require(heldHistory.size()==identical.size(),"input history changed frame count");
+ require(heldHistory.bytesUsed()<=identical.bytesUsed()+4*qsizetype(sizeof(InputDisplayState)),
+         "identical input was copied per frame");
+ InputDisplayState restored;
+ require(heldHistory.stepBack(actual,image,aspect,1000,&restored) && restored==held,"held input rewind");
  identical.configure(false);require(identical.capture(shots[0].state,shots[0].frame,1.0) && identical.size()==0 && identical.bytesUsed()==0,"disabled history retained bytes");
+ restored=held;
+ require(!identical.stepBack(actual,image,aspect,1,&restored) && restored==InputDisplayState{},
+         "unavailable input was not neutral");
+ RewindBuffer inputHistory;inputHistory.configure(true);
+ InputDisplayState aim=held;aim.players[0].device=InputDisplayDevice::LightPhaser;
+ aim.players[0].x=123;aim.players[0].y=-27;aim.players[0].offscreen=true;
+ require(inputHistory.capture(shots[0].state,shots[0].frame,1.0),"untracked input capture");
+ require(inputHistory.capture(shots[1].state,shots[1].frame,1.0,&held),"first tracked input capture");
+ require(inputHistory.capture(shots[2].state,shots[2].frame,1.0,&held),"repeated input capture");
+ require(inputHistory.capture(shots[3].state,shots[3].frame,1.0),"missing input capture");
+ require(inputHistory.capture(shots[4].state,shots[4].frame,1.0,&aim),"changed input capture");
+ require(inputHistory.stepBack(actual,image,aspect,1,&restored) && actual==shots[3].state &&
+         restored==InputDisplayState{},"missing input did not rewind to neutral");
+ require(inputHistory.stepBack(actual,image,aspect,1,&restored) && actual==shots[2].state &&
+         restored==held,"held input was not preserved");
+ require(inputHistory.stepBack(actual,image,aspect,2,&restored) && actual==shots[0].state &&
+         restored==InputDisplayState{},"pre-tracking input was not neutral");
+ require(inputHistory.capture(shots[5].state,shots[5].frame,1.0,&aim),"tracked branch capture");
+ require(inputHistory.stepBack(actual,image,aspect,1,&restored) && actual==shots[0].state &&
+         restored==InputDisplayState{},"future input leaked into branched history");
+ RewindBuffer boundedInput(4000);boundedInput.configure(true);
+ for(int i=0;i<100;++i) {
+   InputDisplayState snapshot=held;snapshot.players[0].buttons=quint16(i+1);
+   require(boundedInput.capture(small,tiny,1.0,&snapshot),"bounded input capture");
+   require(boundedInput.bytesUsed()<=4000,"bounded input memory cap exceeded");
+ }
+ const size_t retained=boundedInput.size();
+ require(retained>1 && retained<100,"input history was not budgeted");
+ for(size_t i=1;i<retained;++i) {
+   require(boundedInput.stepBack(actual,image,aspect,1,&restored),"bounded input rewind");
+   require(restored.players[0].buttons==quint16(100-i),"bounded input landed on wrong frame");
+   require(boundedInput.bytesUsed()<=4000,"bounded input reverse memory cap exceeded");
+ }
  buffer.configure(true);for(int i=0;i<10;++i)buffer.capture(shots[i].state,shots[i].frame,1.0);
  require(buffer.size()==10,"history was limited by checkpoint count");
  require(!buffer.capture({},shots[0].frame,1.0),"empty state accepted");
  require(!buffer.capture(shots[0].state,{},1.0),"empty image accepted");
- std::puts("Reverse deltas: sparse/dense changes, dimensions, branches, budgets and disabled history passed");
+ std::puts("Reverse deltas: sparse/dense changes, dimensions, branches, budgets, input and disabled history passed");
 }

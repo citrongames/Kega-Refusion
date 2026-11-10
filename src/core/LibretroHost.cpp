@@ -968,6 +968,47 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     localBlarggFilter_ = values[size_t(filter)];
     return true;
 }
+InputDisplayState LibretroHost::inputDisplay(bool withButtons) const {
+    InputDisplayState state;
+    if (!loaded_) return state;
+    const unsigned console = achievementConsoleId();
+    // The callback map already resolves port gaps, multitaps, the J-Cart
+    // and a second chained Justifier into stable logical player numbers.
+    for (const int player : callbackPlayers_) {
+        if (player < 0 || !controllerConnected_[player]) continue;
+        if (console == RC_CONSOLE_GAME_GEAR && player != 0) continue;
+        auto& slot = state.players[player];
+        const auto kind = controllerKind(unsigned(player));
+        switch (kind) {
+        case ControllerType::LightPhaser: slot.device = InputDisplayDevice::LightPhaser; break;
+        case ControllerType::Menacer: slot.device = InputDisplayDevice::Menacer; break;
+        case ControllerType::Justifier: slot.device = InputDisplayDevice::Justifier; break;
+        case ControllerType::Mouse: slot.device = InputDisplayDevice::Mouse; break;
+        case ControllerType::Paddle: slot.device = InputDisplayDevice::Paddle; break;
+        case ControllerType::Pad:
+            if (console == RC_CONSOLE_MASTER_SYSTEM) slot.device = InputDisplayDevice::MasterSystem;
+            else if (console == RC_CONSOLE_GAME_GEAR) slot.device = InputDisplayDevice::GameGear;
+            else if (console == RC_CONSOLE_SG1000) slot.device = InputDisplayDevice::SG1000;
+            else slot.device = controllerSixButton_[player] ? InputDisplayDevice::MegaDrive6
+                                                           : InputDisplayDevice::MegaDrive3;
+            break;
+        }
+        if (!withButtons) continue;
+        slot.buttons = quint16(buttons_[player]);
+        if (kind != ControllerType::Pad && unsigned(player) < gunAim_.size()) {
+            const auto& aim = gunAim_[player];
+            if (isLightgun(kind)) slot.offscreen = aim.offscreen;
+            else if (kind == ControllerType::Paddle) slot.x = aim.x;
+            else if (kind == ControllerType::Mouse) {
+                slot.x = (aim.x > 0) - (aim.x < 0);
+                slot.y = (aim.y > 0) - (aim.y < 0);
+            }
+        }
+    }
+    if (linkPeer_) state.players[1] = linkPeer_->inputDisplay(withButtons).players[0];
+    return state;
+}
+
 void LibretroHost::setButtons(unsigned port, unsigned mask) {
     if (linkPeer_ && port == 1) { Activation scope(linkPeer_.get()); linkPeer_->setButtons(0,mask); return; }
     if (port >= buttons_.size()) return;

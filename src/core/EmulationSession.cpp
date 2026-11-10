@@ -251,6 +251,14 @@ void EmulationSession::updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, 
     audioFeedbackNs_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+void EmulationSession::setInputDisplayEnabled(bool enabled) {
+    enqueue({Type::InputDisplay, {}, int(enabled)});
+}
+InputDisplayState EmulationSession::inputDisplay() {
+    std::lock_guard<std::mutex> lock(videoMutex_);
+    inputDisplayPending_ = false;
+    return latestInputDisplay_;
+}
 void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
     bool notify = false;
     {
@@ -474,8 +482,23 @@ void EmulationSession::run() {
         shownClock = clock;
         emit runTimerChanged(clock.frames,clock.microseconds());
     };
+    bool inputDisplayEnabled = false;
+    InputDisplayState frameInput, publishedInput;
+    auto publishInput = [&] {
+        if (frameInput == publishedInput) return;
+        publishedInput = frameInput;
+        bool notify;
+        {
+            std::lock_guard<std::mutex> lock(videoMutex_);
+            latestInputDisplay_ = frameInput;
+            notify = !inputDisplayPending_;
+            inputDisplayPending_ = true;
+        }
+        if (notify) emit inputDisplayChanged();
+    };
     auto presentFrame = [&](const QImage& frame, double aspect, const QImage& ownership = QImage()) {
         publishClock();
+        if (inputDisplayEnabled) publishInput();
         publishVideo(frame,aspect,ownership);
     };
     auto addNetworkClock = [&](QJsonObject& metadata) {
@@ -688,6 +711,38 @@ void EmulationSession::run() {
     QImage networkRewindImage;
     QByteArray networkRewindLinkPreview;
     double networkRewindAspect=4.0/3.0;
+    // Rewind previews do not run the core on clients. Include the input that
+    // produced the preview in its existing packet, even for a spectator.
+    auto addPreviewInput = [](QJsonObject& metadata, const InputDisplayState& state) {
+        MovieInput input;
+        for (unsigned i = 0; i < state.players.size(); ++i) {
+            const auto& slot = state.players[i];
+            input.buttons[i] = slot.buttons;
+            if (i < input.aim.size())
+                input.aim[i] = quint16(slot.x) | (quint64(quint16(slot.y)) << 16) |
+                               (quint64(slot.offscreen) << 32);
+        }
+        metadata.insert("input", QString::fromLatin1(NetplayTimeline::inputBytes(input).toBase64()));
+    };
+    auto readPreviewInput = [&](const QJsonObject& metadata) {
+        if (!inputDisplayEnabled) return;
+        frameInput = host.inputDisplay(false);
+        MovieInput input;
+        const QString encoded = metadata.value("input").toString();
+        if (encoded.size() == 56 && NetplayTimeline::parseInput(QByteArray::fromBase64(encoded.toLatin1()), input)) {
+            for (unsigned i = 0; i < frameInput.players.size(); ++i) {
+                auto& slot = frameInput.players[i];
+                if (slot.device == InputDisplayDevice::None) continue;
+                slot.buttons = input.buttons[i];
+                if (i < input.aim.size()) {
+                    slot.x = qint16(input.aim[i]);
+                    slot.y = qint16(input.aim[i] >> 16);
+                    slot.offscreen = (input.aim[i] >> 32) & 1;
+                }
+            }
+        }
+        publishInput();
+    };
     auto networkRewindPreview=[&](qint64 remaining,qint64 total) {
         if(networkMode!=1 || networkRoster.size()<2 || networkPreviewPending_.exchange(true))return false;
         QByteArray geometry=networkRewindLinkPreview;
@@ -695,6 +750,7 @@ void EmulationSession::run() {
         QJsonObject metadata{{"epoch",QString::number(networkEpoch)},
             {"remaining",remaining},{"total",total},{"aspect",networkRewindAspect}};
         addNetworkClock(metadata);
+        addPreviewInput(metadata,frameInput);
         if(!geometry.isEmpty())metadata.insert("linkPreview",QString::fromLatin1(geometry.toBase64()));
         const auto json=QJsonDocument(metadata).toJson(QJsonDocument::Compact);
         QByteArray packet;packet.reserve(4+json.size()+preview.size());
@@ -724,6 +780,7 @@ void EmulationSession::run() {
             {"paused",paused},{"fast",fastForward_.load()},{"factor",fastForwardFactor_.load()},
             {"rewinding",rewind_.load()},{"rewindRemaining",rewindLastProgressMs},{"rewindTotal",rewindTotalMs},{"slots",int(host.occupiedStateSlots())}};
         addNetworkClock(metadata);
+        addPreviewInput(metadata,networkRewindImage.isNull() ? host.inputDisplay() : frameInput);
         QImage snapshotImage=!networkRewindImage.isNull()?networkRewindImage:host.frame();
         QByteArray snapshotGeometry=networkRewindLinkPreview;
         if(host.linkCableEnabled() && networkRewindImage.isNull())
@@ -808,6 +865,7 @@ void EmulationSession::run() {
         return false;
     };
     auto afterFrame = [&] {
+        if (inputDisplayEnabled) frameInput = host.inputDisplay();
         if(networkMode) {
             QString error;
             if(!networkTimeline.afterFrame(error)){
@@ -886,11 +944,12 @@ void EmulationSession::run() {
                 }
                 QByteArray packed(geometry.isEmpty()?"KRGGORW1":"KRGGORW2",8);
                 packed.reserve(8+geometry.size()+frame.state.size());packed+=geometry;packed+=frame.state;
-                if(!history.capture(packed,image,frame.aspect))return false;
+                if(!history.capture(packed,image,frame.aspect,&frame.input))return false;
             }
             return true;
         }
-        return history.capture(captureHistory(),host.frame(),host.aspectRatio());
+        return history.capture(captureHistory(),host.frame(),host.aspectRatio(),
+                               inputDisplayEnabled ? &frameInput : nullptr);
     };
     // Capture the pre-input state once when a new local timeline starts.
     // At power-on the core has not delivered its first picture yet.
@@ -901,19 +960,24 @@ void EmulationSession::run() {
             frame = QImage(1,1,QImage::Format_RGB32);
             frame.fill(Qt::black);
         }
-        historyHealthy = history.capture(captureHistory(),frame,host.aspectRatio());
+        historyHealthy = history.capture(captureHistory(),frame,host.aspectRatio(),
+                                        inputDisplayEnabled ? &frameInput : nullptr);
     };
     auto restorePreviousFrame = [&](bool exactStep, int steps = 1) {
         QByteArray state;
         QImage frame;
         double aspect = 4.0 / 3.0;
-        if (!history.stepBack(state,frame,aspect,steps)) return false;
+        InputDisplayState previousInput;
+        const bool needInput = inputDisplayEnabled || networkMode == 1;
+        if (!history.stepBack(state,frame,aspect,steps,needInput ? &previousInput : nullptr)) return false;
         QString error;
         if (!restoreHistory(state,error)) {
             clearHistory(); historyHealthy = false;
             emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
             return false;
         }
+        if (needInput) frameInput = previousInput == InputDisplayState{}
+            ? host.inputDisplay(false) : previousInput;
         if (!networkMode) host.restoreFramePreview(frame,aspect);
         const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
         if (!selected.isNull()) presentFrame(selected,aspect);
@@ -943,6 +1007,7 @@ void EmulationSession::run() {
             // Export is a read-only pass over a fixed recording. GUI changes,
             // background pauses and input must not alter its deterministic timeline.
             if (videoExport && command.type != Type::VideoStop && command.type != Type::RunTimer &&
+                command.type != Type::InputDisplay &&
                 command.type != Type::AchievementsResponse && command.type != Type::AchievementsRefresh)
                 continue;
             if ((command.type==Type::Load || command.type==Type::Close) && videoRecorder.accepting())
@@ -1135,6 +1200,7 @@ void EmulationSession::run() {
                             }
                             if(ok) {
                                 resetNetworkAchievements();
+                                readPreviewInput(meta);
                                 lastNetworkConfiguration=config; networkEpoch=epoch; networkPosition=0;
                                 host.setLinkPresentationRole(networkRole_.load());
                                 if(config.value("linkCable").toBool()==networkLinkCableDesired_.load())emit networkLinkCableChanged(host.linkCableEnabled());
@@ -1176,6 +1242,7 @@ void EmulationSession::run() {
                 if(meta.value("epoch").toString().toULongLong()!=networkEpoch || remaining<0 || total<remaining)break;
                 if(!networkRemoteRewinding) {networkRemoteRewinding=true;networkTimeline.stop();clearAudio();}
                 readNetworkClock(meta);
+                readPreviewInput(meta);
                 rewindStatus(true);emit rewindProgress(remaining,total);
                 QByteArray preview=packet.mid(4+size);
                 if(!preview.isEmpty()) {
@@ -1196,6 +1263,11 @@ void EmulationSession::run() {
             case Type::NetFast: fastForward_.store(command.value!=0); break;
             case Type::NetReverse:
                 if(rewind_.exchange(command.value!=0) && !command.value && networkMode==1)networkDirty=true;
+                break;
+            case Type::InputDisplay:
+                inputDisplayEnabled = command.value != 0;
+                frameInput = inputDisplayEnabled ? host.inputDisplay() : InputDisplayState{};
+                publishInput();
                 break;
             case Type::RunTimer:
                 timerEnabled = command.value != 0;
@@ -1561,6 +1633,7 @@ void EmulationSession::run() {
                     const bool restored = named ? movie.loadFile(command.path,frame,aspect,missing,error)
                                                 : movie.loadSlot(command.value,frame,aspect,missing,error);
                     if (restored) {
+                        if (inputDisplayEnabled) { frameInput = host.inputDisplay(false); publishInput(); }
                         achievements.reset();
                         clearHistory(); clearAudio(); resetMetrics();
                         if (!frame.isNull()) presentFrame(frame,aspect);
@@ -1574,6 +1647,7 @@ void EmulationSession::run() {
                     const bool restored = named ? host.loadStateFromFile(command.path,error,&failure)
                                                 : host.loadState(command.value,error,&failure);
                     if (restored) {
+                        if (inputDisplayEnabled) { frameInput = host.inputDisplay(false); publishInput(); }
                         clearHistory(); clearAudio(); resetMetrics();
                         if (networkMode==1) networkDirty=true;
                         emit actionCompleted(named ? Localization::text(QStringLiteral("Загружено из файла: %1")).arg(QFileInfo(command.path).fileName())
@@ -1594,6 +1668,20 @@ void EmulationSession::run() {
             case Type::DebugBackdrop: host.setDebugBackdrop(quint32(command.value)); break;
             case Type::DebugGain: host.setDebugAudioGain(unsigned(command.value),unsigned(command.requestId)); break;
             case Type::Slots: slotStatus(command.value); break;
+            }
+            if (inputDisplayEnabled) {
+                switch (command.type) {
+                case Type::Load: case Type::Close: case Type::Reset: case Type::HardReset:
+                case Type::NetMode: case Type::NetLinkCable:
+                case Type::MovieRecord: case Type::MoviePlay:
+                case Type::MovieResume: case Type::MovieFork: case Type::MovieStop:
+                case Type::Port: case Type::Adapter: case Type::ControllerKind: case Type::ControllerType:
+                case Type::Region:
+                    frameInput = host.inputDisplay(false);
+                    publishInput();
+                    break;
+                default: break;
+                }
             }
             switch(command.type) {
             case Type::Load: case Type::Close: case Type::HardReset: case Type::NetMode:
@@ -1653,6 +1741,7 @@ void EmulationSession::run() {
             const auto now = nowNs();
             if (now >= nextVideoProgressNs || movie.mode() == MovieSession::Finished) {
                 emit videoExportProgress(movie.position(),movie.length());
+                if (inputDisplayEnabled) frameInput = host.inputDisplay();
                 presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership()); movieStatus();
                 nextVideoProgressNs = now + 100000000;
             }
@@ -1760,6 +1849,7 @@ void EmulationSession::run() {
                 rewindLastProgressMs = rewindTotalMs;
                 rewindStartedNs = nowNs();
                 nextRewindProgressNs = rewindStartedNs + 100000000;
+                if (networkMode == 1) frameInput = host.inputDisplay();
                 networkRewindImage=host.frame();networkRewindAspect=host.aspectRatio();networkRewindLinkPreview.clear();
                 if(host.linkCableEnabled())networkRewindImage=combineLinkPreview(host.frameForLinkRole(1),host.aspectRatioForLinkRole(1),
                     host.frameForLinkRole(2),host.aspectRatioForLinkRole(2),networkRewindLinkPreview);

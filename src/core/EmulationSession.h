@@ -1,5 +1,6 @@
 #pragma once
 #include "RomArchive.h"
+#include "InputDisplay.h"
 #include "Cheats.h"
 #include "Achievements.h"
 #include "../input/ControllerType.h"
@@ -24,6 +25,8 @@ public:
     void loadGame(const QString& path, const RomArchive::Entry& archiveEntry);
     void closeGame();
     void setPaused(bool paused);
+    void setInputDisplayEnabled(bool enabled);
+    InputDisplayState inputDisplay();
     void resetGame();
     void hardResetGame();
     void changeDisc(const QString& path);
@@ -150,6 +153,7 @@ signals:
     void networkRoleChanged(int role);
     void jcartChanged(bool enabled);
     void movieHardwareChanged(const QByteArray& controllersJson);
+    void inputDisplayChanged();
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
     void runTimerChanged(quint64 frames, quint64 microseconds);
@@ -175,7 +179,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay};
     struct Command {
         Type type;
         QString path;
@@ -203,7 +207,8 @@ private:
     QImage latestFrame_, latestSpriteOwnership_;
     std::atomic_bool spriteOwnershipEnabled_{false};
     double latestAspect_ = 4.0 / 3.0;
-    bool videoPending_ = false;
+    bool videoPending_ = false, inputDisplayPending_ = false;
+    InputDisplayState latestInputDisplay_;
     std::atomic<qint64> audioQueueUs_{0}, audioTargetUs_{0}, audioFeedbackNs_{0};
     std::atomic<bool> audioClockAvailable_{false};
     std::deque<Command> commands_;

@@ -58,6 +58,7 @@ struct NetRollbackSession::Impl {
     std::array<int, GGPO_MAX_PREDICTION_FRAMES + 2> stateFrames{};
     std::array<QImage, GGPO_MAX_PREDICTION_FRAMES + 2> images, secondImages;
     std::array<double, GGPO_MAX_PREDICTION_FRAMES + 2> aspects{}, secondAspects{};
+    std::array<InputDisplayState, GGPO_MAX_PREDICTION_FRAMES + 2> historyInputs{};
     bool historyEnabled=false, achievementsEnabled=false;
     struct AchievementFrame { QByteArray memory; int frame=-1; };
     std::array<AchievementFrame, GGPO_MAX_PREDICTION_FRAMES + 2> achievementFrames;
@@ -98,6 +99,7 @@ struct NetRollbackSession::Impl {
             auto& slot=self.states[i];slot=std::move(state);self.stateBytes+=slot.size();
             self.stateFrames[i]=frame;
             if(self.historyEnabled && self.localId==0 && frame%2==0) {
+                self.historyInputs[i] = self.host->inputDisplay();
                 self.images[i]=self.host->frameForLinkRole(1);self.aspects[i]=self.host->aspectRatioForLinkRole(1);
                 if(self.host->linkCableEnabled()) {
                     self.secondImages[i]=self.host->frameForLinkRole(2);
@@ -225,7 +227,7 @@ bool NetRollbackSession::takeConfirmedHistory(RewindFrame& output) {
             index=int(i);earliest=d->stateFrames[i];
         }
     if(index<0)return false;
-    output={d->states[index],d->images[index],d->aspects[index],d->secondImages[index],d->secondAspects[index]};d->lastHistoryFrame=earliest;return true;
+    output={d->states[index],d->images[index],d->aspects[index],d->secondImages[index],d->secondAspects[index],d->historyInputs[index]};d->lastHistoryFrame=earliest;return true;
 }
 bool NetRollbackSession::active() const {return d->session!=nullptr;}
 quint64 NetRollbackSession::position() const {return d->frame;}

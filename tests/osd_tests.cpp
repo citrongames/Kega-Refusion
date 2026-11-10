@@ -850,6 +850,45 @@ void testAchievementPopup(bool positionsOnly = false) {
                 notice.maxTimerGapNs / 1e6);
 }
 
+void testInputDisplayOverlay() {
+    GameView view;
+    prepare(view);
+    const QImage baseline = render(view);
+    const QImage clean = view.captureGameImage();
+    InputDisplayState state;
+    state.players[0].device = InputDisplayDevice::MegaDrive6;
+    state.players[0].buttons = quint16((1u << 4) | (1u << 10));
+    state.players[1].device = InputDisplayDevice::LightPhaser;
+    state.players[1].buttons = quint16(1u << 1);
+    view.setInputDisplay(state);
+    require(render(view) == baseline, "disabled input display changed the frame");
+    view.setInputDisplayEnabled(true);
+    const QImage shown = render(view);
+    const QRect bounds = changedBounds(baseline, shown);
+    require(!bounds.isEmpty() && bounds.left() < view.width() / 4 &&
+                bounds.top() > view.height() / 2 && bounds.right() < view.width() / 2,
+            "connected controller row is not compact at bottom-left");
+    require(render(view) == shown, "cached input display changed without input");
+    require(view.captureGameImage() == clean, "input display leaked into clean capture");
+    state.players[1].x = 1234; // Aim movement does not redraw the control schematic.
+    view.setInputDisplay(state);
+    require(render(view) == shown, "aim motion changed the button schematic");
+    state.players[1].buttons = quint16(1u << 2);
+    view.setInputDisplay(state);
+    require(render(view) != shown, "gun reload did not change the displayed controls");
+    state.players[1].device = InputDisplayDevice::Mouse;
+    state.players[1].buttons = 0;
+    state.players[1].x = state.players[1].y = 0;
+    view.setInputDisplay(state);
+    const QImage stillMouse = render(view);
+    state.players[1].x = 1;
+    state.players[1].y = -1;
+    view.setInputDisplay(state);
+    require(render(view) != stillMouse, "mouse direction arrow did not respond to motion");
+    view.setInputDisplayEnabled(false);
+    require(render(view) == baseline, "disabled input display left overlay pixels");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -867,6 +906,10 @@ int main(int argc, char** argv) {
         if (app.arguments().contains(QStringLiteral("--fps-only"))) {
             testFpsOverlays();
             std::puts("FPS overlay independence and clean capture passed"); return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--input-display-only"))) {
+            testInputDisplayOverlay();
+            std::puts("input display row, caching and clean capture passed"); return 0;
         }
         if (app.arguments().contains(QStringLiteral("--achievement-positions-only"))) {
             testAchievementPopup(true);
@@ -910,6 +953,7 @@ int main(int argc, char** argv) {
             std::puts("filtered square-pixel geometry passed"); return 0;
         }
         testFpsOverlays();
+        testInputDisplayOverlay();
         testReadinessWaiting();
         testGameBorders();
         testAnalogPointerEvents();

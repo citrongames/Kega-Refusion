@@ -280,6 +280,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             view_, &GameView::setPerformanceMetrics);
     connect(&session_, &EmulationSession::runTimerChanged,
             view_, &GameView::setRunTimer);
+    connect(&session_, &EmulationSession::inputDisplayChanged, this, [this] {
+        view_->setInputDisplay(session_.inputDisplay());
+    });
     session_.setFastForwardFactor(fastForwardFactor_);
     session_.setGameSpeedPercent(gameSpeedPercent_);
     session_.setRewindEnabled(rewindEnabled_);
@@ -612,12 +615,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateInputEnabled();
         updateMovieActions();
         updateGameSpeedActions();
+        view_->setInputDisplay(session_.inputDisplay());
     });
     connect(&session_, &EmulationSession::gameClosed, this, [this] {
         setLoadingUi(false);
         currentRom_.clear(); currentGameName_.clear();
         padMasks_.fill(0); gunMasks_.fill(0);
         view_->clearGame();
+        view_->setInputDisplay(session_.inputDisplay());
         movieMode_ = 0;
         moviePending_ = false;
         moviePath_.clear();
@@ -1115,6 +1120,20 @@ void MainWindow::buildMenus() {
     });
     session_.setGameFpsEnabled(gameFpsAction_->isChecked());
     view_->setGameFpsEnabled(gameFpsAction_->isChecked());
+    QAction* inputDisplayAction = viewMenu->addAction(
+        Localization::text(QStringLiteral("Показывать нажатия на геймпадах")));
+    inputDisplayAction->setObjectName(QStringLiteral("inputDisplayAction"));
+    inputDisplayAction->setCheckable(true);
+    inputDisplayAction->setChecked(settings_.value(QStringLiteral("view/inputDisplay"), false).toBool());
+    connect(inputDisplayAction, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("view/inputDisplay"), enabled);
+        session_.setInputDisplayEnabled(enabled);
+        view_->setInputDisplayEnabled(enabled);
+        view_->setInputDisplay(session_.inputDisplay());
+    });
+    session_.setInputDisplayEnabled(inputDisplayAction->isChecked());
+    view_->setInputDisplayEnabled(inputDisplayAction->isChecked());
+    view_->setInputDisplay(session_.inputDisplay());
     QMenu* runTimerMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Время игры")));
     runTimerMenu->setObjectName(QStringLiteral("runTimerMenu"));
     auto* runTimerGroup = new QActionGroup(this);

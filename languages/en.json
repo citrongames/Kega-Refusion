@@ -221,6 +221,7 @@
     "FM-синтезатор (Master System)": "FM synthesizer (Master System)",
     "FPS игры (оценка по опросу управления)": "Game FPS (estimated from input polling)",
     "FPS эмуляции": "Emulation FPS",
+    "Показывать нажатия на геймпадах": "Show gamepad button presses",
     "GLSL-пресеты (*.glslp);;GLSL-шейдеры (*.glsl)": "GLSL presets (*.glslp);;GLSL shaders (*.glsl)",
     "Game Genie XXXX-XXXX; Action Replay / прямой код AAAAAA:DDDD.": "Game Genie XXXX-XXXX; Action Replay / direct code AAAAAA:DDDD.",
     "Genesis Plus GX не смог загрузить ROM.": "Genesis Plus GX was unable to load the ROM.",

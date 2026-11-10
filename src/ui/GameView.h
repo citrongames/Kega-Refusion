@@ -2,6 +2,7 @@
 
 #include "ShaderPipeline.h"
 #include "input/ControllerType.h"
+#include "core/InputDisplay.h"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -49,6 +50,8 @@ public:
     void clearAchievementNotices();
     void setAchievementPosition(int position); // 0..5: top L/C/R, bottom L/C/R.
     void setOsdEnabled(bool enabled);
+    void setInputDisplay(const InputDisplayState& state);
+    void setInputDisplayEnabled(bool enabled);
     void setPerformanceMetricsEnabled(bool enabled);
     void setGameFpsEnabled(bool enabled);
     void setPerformanceMetrics(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
@@ -154,6 +157,7 @@ private:
     void rebuildAchievementPixmap();
     QRect achievementPopupRect() const;
     void paintOsd(QPainter& painter);
+    void paintInputDisplay(QPainter& painter);
     void rebuildPerformanceMetrics();
     void paintLoading(QPainter& painter);
 
@@ -162,6 +166,14 @@ private:
     AspectMode aspectMode_ = AspectMode::Console;
     bool integerScaling_ = false;
     bool osdEnabled_ = true;
+    bool inputDisplayEnabled_ = false;
+    InputDisplayState inputDisplay_{};
+    InputDisplayState inputDisplayRasterState_{};
+    QPixmap inputDisplayPixmap_;
+    QSize inputDisplayRasterPixels_;
+    qreal inputDisplayRasterScale_ = 0;
+    qreal inputDisplayRasterDpr_ = 0;
+    bool inputDisplayRasterValid_ = false;
     bool performanceMetricsEnabled_ = false;
     bool gameFpsEnabled_ = false;
     bool metricsReady_ = false;

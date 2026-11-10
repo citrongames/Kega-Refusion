@@ -86,6 +86,28 @@ QByteArray RewindBuffer::decode(const Patch& patch, QByteArray newer) {
     return newer;
 }
 qsizetype RewindBuffer::entryBytes(const Entry& e) { return e.state.bytes.capacity()+e.pixels.bytes.capacity()+sizeof(Entry); }
+void RewindBuffer::appendInput(const InputDisplayState& input) {
+    if (!inputRuns_.empty() && inputRuns_.back().state == input) {
+        ++inputRuns_.back().count;
+    } else {
+        inputRuns_.push_back({input,1});
+        bytesUsed_ += sizeof(InputRun);
+    }
+}
+void RewindBuffer::dropOldestInput() {
+    if (inputRuns_.empty()) return;
+    if (--inputRuns_.front().count == 0) {
+        inputRuns_.pop_front();
+        bytesUsed_ -= sizeof(InputRun);
+    }
+}
+void RewindBuffer::dropNewestInput() {
+    if (inputRuns_.empty()) return;
+    if (--inputRuns_.back().count == 0) {
+        inputRuns_.pop_back();
+        bytesUsed_ -= sizeof(InputRun);
+    }
+}
 void RewindBuffer::configure(bool enabled) {
     clear();
     enabled_ = enabled;
@@ -97,10 +119,11 @@ void RewindBuffer::setByteLimit(qsizetype byteLimit) {
     clear();
 }
 void RewindBuffer::clear() {
-    entries_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
+    entries_.clear(); inputRuns_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
     bytesUsed_ = 0;
 }
-bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect) {
+bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect,
+                           const InputDisplayState* input) {
     if (!enabled_) return true;
     if (state.isEmpty() || state.size()>maxBytes || frame.isNull() || frame.sizeInBytes()>maxBytes ||
         !std::isfinite(aspect) || aspect<=0 || quint64(frame.width())*frame.height()*4>maxBytes) return false;
@@ -109,6 +132,7 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     const QByteArray pixels(reinterpret_cast<const char*>(rgb.constBits()),rgb.sizeInBytes());
     const qsizetype anchorBytes = state.capacity()+pixels.capacity();
     if (anchorBytes>byteLimit_) { clear(); return false; }
+    const size_t previousCount = size();
     if (!currentState_.isEmpty()) {
         Entry previous{encode(currentState_,state),encode(currentPixels_,pixels),currentSize_,currentNativeSize_,currentAspect_};
         if (previous.state.bytes.isEmpty() || previous.pixels.bytes.isEmpty()) { clear(); return false; }
@@ -117,12 +141,23 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     }
     bytesUsed_ += anchorBytes-currentState_.capacity()-currentPixels_.capacity();
     currentState_ = state; currentPixels_ = pixels; currentSize_ = rgb.size(); currentNativeSize_ = VideoFrameGeometry::nativeSize(frame); currentAspect_ = aspect;
+    // A history captured before input tracking began has neutral input. Runs
+    // keep long holds to one snapshot rather than copying it every frame.
+    if (input && inputRuns_.empty() && previousCount) {
+        inputRuns_.push_back({{}, previousCount});
+        bytesUsed_ += sizeof(InputRun);
+    }
+    if (input || !inputRuns_.empty()) appendInput(input ? *input : InputDisplayState{});
     while (!entries_.empty() && bytesUsed_>byteLimit_) {
         bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
+        dropOldestInput();
     }
+    if (bytesUsed_ > byteLimit_) { clear(); return false; }
     return true;
 }
-bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, int steps) {
+bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, int steps,
+                            InputDisplayState* input) {
+    if (input) *input = {};
     if (steps < 1 || entries_.empty()) return false;
     // Apply the reverse deltas in order. Only the landing frame needs an image
     // and a core restore, even when one display tick spans several checkpoints.
@@ -139,15 +174,19 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, in
         bytesUsed_ += newBytes - oldBytes - entryBytes(target);
         currentSize_ = target.size; currentNativeSize_ = target.nativeSize; currentAspect_ = target.aspect;
         entries_.pop_back();
+        dropNewestInput();
     }
     // A size-changing older anchor can be larger than the newer one.
     while (!entries_.empty() && bytesUsed_>byteLimit_) {
         bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
+        dropOldestInput();
     }
+    if (bytesUsed_ > byteLimit_) { clear(); return false; }
     QImage image(currentSize_,QImage::Format_RGB32);
     if (image.isNull() || image.sizeInBytes()!=currentPixels_.size()) { clear(); return false; }
     std::memcpy(image.bits(),currentPixels_.constData(),size_t(currentPixels_.size()));
     if (currentNativeSize_ != image.size()) VideoFrameGeometry::setNativeSize(image,currentNativeSize_);
     state = currentState_; frame = std::move(image); aspect = currentAspect_;
+    if (input && !inputRuns_.empty()) *input = inputRuns_.back().state;
     return true;
 }
