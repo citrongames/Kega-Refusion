@@ -514,6 +514,37 @@ void testControlsLayout(MainWindow& window) {
                 if (table->item(row, 0)->data(Qt::UserRole).toInt() == target) return row;
             return -1;
         };
+        const auto clickCell = [&](QTableWidget* table, int row, int column,
+                                   Qt::MouseButton button, bool doubleClick = false) {
+            auto* item = table->item(row, column);
+            check(item != nullptr, QStringLiteral("mapping cell is missing"));
+            if (!item) return;
+            table->scrollToItem(item);
+            QApplication::processEvents();
+            const QRect rect = table->visualItemRect(item);
+            auto* view = table->viewport();
+            const QPoint point = rect.center();
+            check(rect.isValid() && view->rect().contains(point),
+                  QStringLiteral("mapping cell is outside its viewport"));
+            if (!rect.isValid() || !view->rect().contains(point)) return;
+            const auto sendMouse = [&](QEvent::Type type, Qt::MouseButtons held) {
+                QMouseEvent event(type, point, view->mapToGlobal(point),
+                                  button, held, Qt::NoModifier);
+                QApplication::sendEvent(view, &event);
+            };
+            sendMouse(QEvent::MouseButtonPress, button);
+            sendMouse(QEvent::MouseButtonRelease, Qt::NoButton);
+            if (doubleClick) {
+                sendMouse(QEvent::MouseButtonDblClick, button);
+                sendMouse(QEvent::MouseButtonRelease, Qt::NoButton);
+            }
+            QApplication::processEvents();
+        };
+        const auto sendKey = [&](int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            press(*controls, key, modifiers);
+            QKeyEvent release(QEvent::KeyRelease, key, modifiers);
+            QApplication::sendEvent(controls, &release);
+        };
         const int first = rowFor(gameTable, 0);
         const int second = rowFor(gameTable, 1);
         check(first >= 0 && second >= 0, QStringLiteral("gameplay targets are missing"));
@@ -521,22 +552,21 @@ void testControlsLayout(MainWindow& window) {
             auto* oldKey = gameTable->item(first, 1);
             auto* newKey = gameTable->item(second, 1);
             const QString previous = newKey->text();
-            auto* view = gameTable->viewport();
-            const QPoint point = gameTable->visualItemRect(newKey).center();
-            const auto click = [&](QEvent::Type type, Qt::MouseButtons held) {
-                QMouseEvent e(type, point, view->mapToGlobal(point), Qt::LeftButton, held, Qt::NoModifier);
-                QApplication::sendEvent(view, &e);
-            };
-            click(QEvent::MouseButtonPress, Qt::LeftButton);
-            click(QEvent::MouseButtonRelease, Qt::NoButton);
-            press(*gameTable, Qt::Key_X);
+            clickCell(gameTable, second, 1, Qt::LeftButton);
+            sendKey(Qt::Key_X);
             check(newKey->text() == previous && oldKey->text() == QStringLiteral("X"),
-                  QStringLiteral("one click armed keyboard capture"));
-            click(QEvent::MouseButtonDblClick, Qt::LeftButton);
-            click(QEvent::MouseButtonRelease, Qt::NoButton);
-            press(*controls, Qt::Key_X);
-            QKeyEvent release(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
-            QApplication::sendEvent(controls, &release);
+                  QStringLiteral("one left click armed keyboard capture"));
+            clickCell(gameTable, second, 1, Qt::RightButton, true);
+            sendKey(Qt::Key_X);
+            check(newKey->text() == previous && !input->capturing(),
+                  QStringLiteral("right double-click armed keyboard capture"));
+            clickCell(gameTable, second, 1, Qt::LeftButton, true);
+            const QString oldPad = gameTable->item(second, 2)->text();
+            pad.button(10, true); input->poll();
+            pad.button(10, false); input->poll();
+            check(newKey->text() == previous && gameTable->item(second, 2)->text() == oldPad,
+                  QStringLiteral("keyboard-only capture accepted gamepad input"));
+            sendKey(Qt::Key_X);
             check(oldKey->text() == QStringLiteral("—") && newKey->text() == QStringLiteral("X"),
                   QStringLiteral("new keyboard binding did not clear the previous target"));
         }
@@ -554,48 +584,71 @@ void testControlsLayout(MainWindow& window) {
             auto* pauseKey = commandTable->item(pauseRow, 1);
             const QString originalPause = pauseKey->text();
             auto* commandView = commandTable->viewport();
-            const QPoint point = commandTable->visualItemRect(pauseKey).center();
-            const auto clickCommand = [&](QEvent::Type type, Qt::MouseButtons held) {
-                QMouseEvent event(type, point, commandView->mapToGlobal(point),
-                                  Qt::LeftButton, held, Qt::NoModifier);
-                QApplication::sendEvent(commandView, &event);
-            };
-            clickCommand(QEvent::MouseButtonPress, Qt::LeftButton);
-            clickCommand(QEvent::MouseButtonRelease, Qt::NoButton);
-            press(*controls, Qt::Key_X);
-            QKeyEvent plainRelease(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
-            QApplication::sendEvent(controls, &plainRelease);
+            clickCell(commandTable, pauseRow, 1, Qt::LeftButton);
+            sendKey(Qt::Key_X);
             check(!input->capturing() && pauseKey->text() == originalPause,
                   QStringLiteral("one command click armed keyboard capture"));
+            clickCell(commandTable, pauseRow, 1, Qt::RightButton, true);
+            sendKey(Qt::Key_X);
+            check(!input->capturing() && pauseKey->text() == originalPause,
+                  QStringLiteral("right command double-click armed capture"));
 
             const auto waitingColor = [&](int row, int column) {
+                commandTable->scrollToItem(commandTable->item(row, column));
+                QApplication::processEvents();
                 const QRect cell = commandTable->visualItemRect(commandTable->item(row, column));
-                const QImage sample = commandView->grab(QRect(cell.right() - 8, cell.center().y(), 2, 2)).toImage();
+                const QImage sample = commandView->grab(
+                    QRect(cell.right() - 8, cell.center().y(), 2, 2)).toImage();
                 const QColor color = sample.pixelColor(0, 0);
                 return color.red() > color.green() + 60 && color.red() > color.blue() + 60;
             };
-            commandTable->cellDoubleClicked(pauseRow, 2);
+            clickCell(commandTable, pauseRow, 2, Qt::LeftButton, true);
             check(waitingColor(pauseRow, 2) && !waitingColor(pauseRow, 1),
                   QStringLiteral("waiting gamepad cell not visibly distinguished from keyboard"));
-            press(*controls, Qt::Key_Escape);
-            QKeyEvent escapeUp(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
-            QApplication::sendEvent(controls, &escapeUp);
-            check(!waitingColor(pauseRow, 2), QStringLiteral("cancel left a waiting cell highlighted"));
+            sendKey(Qt::Key_Z);
+            check(waitingColor(pauseRow, 2) && pauseKey->text() == originalPause,
+                  QStringLiteral("gamepad-only capture accepted a keyboard key"));
+            pad.button(11, true); input->poll();
+            pad.button(11, false); input->poll();
+            check(commandTable->item(pauseRow, 2)->text() != QStringLiteral("—"),
+                  QStringLiteral("gamepad-only capture rejected gamepad input"));
+            clickCell(commandTable, pauseRow, 2, Qt::MiddleButton);
+            check(commandTable->item(pauseRow, 2)->text() == QStringLiteral("—") &&
+                  !input->capturing(),
+                  QStringLiteral("middle click did not clear command gamepad binding"));
+
+            clickCell(commandTable, pauseRow, 1, Qt::LeftButton);
             child<QPushButton>(*controls, "assignSequence")->click();
-            check(waitingColor(pauseRow, 1), QStringLiteral("sequence did not mark its first row"));
-            press(*controls, Qt::Key_P);
-            QKeyEvent pauseUp(QEvent::KeyRelease, Qt::Key_P, Qt::NoModifier);
-            QApplication::sendEvent(controls, &pauseUp);
+            check(waitingColor(pauseRow, 1) && !waitingColor(pauseRow, 2),
+                  QStringLiteral("sequence ignored selected keyboard source"));
+            pad.button(11, true); input->poll();
+            pad.button(11, false); input->poll();
+            check(waitingColor(pauseRow, 1),
+                  QStringLiteral("keyboard sequence accepted gamepad input"));
+            sendKey(Qt::Key_P);
             QApplication::processEvents();
             check(!waitingColor(pauseRow, 1) && waitingColor(fastRow, 1),
-                  QStringLiteral("waiting highlight did not follow the capture sequence"));
+                  QStringLiteral("keyboard sequence did not advance to its next row"));
             controls->cancelCapture();
 
+            clickCell(commandTable, pauseRow, 2, Qt::LeftButton);
+            child<QPushButton>(*controls, "assignSequence")->click();
+            check(waitingColor(pauseRow, 2) && !waitingColor(pauseRow, 1),
+                  QStringLiteral("sequence ignored selected gamepad source"));
+            sendKey(Qt::Key_Z);
+            check(waitingColor(pauseRow, 2),
+                  QStringLiteral("gamepad sequence accepted keyboard input"));
+            pad.button(11, true); input->poll();
+            pad.button(11, false); input->poll();
+            QApplication::processEvents();
+            check(!waitingColor(pauseRow, 2) && waitingColor(fastRow, 2),
+                  QStringLiteral("gamepad sequence did not advance to its next row"));
+            controls->cancelCapture();
+            clickCell(commandTable, pauseRow, 2, Qt::MiddleButton);
+
             const auto captureCommand = [&](int row, int key, Qt::KeyboardModifiers modifiers) {
-                commandTable->cellDoubleClicked(row, 1);
-                press(*controls, key, modifiers);
-                QKeyEvent release(QEvent::KeyRelease, key, modifiers);
-                QApplication::sendEvent(controls, &release);
+                clickCell(commandTable, row, 1, Qt::LeftButton, true);
+                sendKey(key, modifiers);
             };
             captureCommand(pauseRow, Qt::Key_X, Qt::NoModifier);
             check(pauseKey->text() == QStringLiteral("X") &&
@@ -608,16 +661,22 @@ void testControlsLayout(MainWindow& window) {
 
             tabs->setCurrentIndex(0);
             QApplication::processEvents();
-            gameTable->cellDoubleClicked(second, 1);
-            press(*controls, Qt::Key_X);
-            QKeyEvent gameRelease(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
-            QApplication::sendEvent(controls, &gameRelease);
+            clickCell(gameTable, second, 1, Qt::LeftButton, true);
+            sendKey(Qt::Key_X);
             check(gameTable->item(second, 1)->text() == QStringLiteral("X") &&
                   commandTable->item(fastRow, 1)->text() == QStringLiteral("—"),
                   QStringLiteral("gameplay keyboard assignment did not clear command hotkey"));
+            clickCell(gameTable, second, 1, Qt::MiddleButton);
+            check(gameTable->item(second, 1)->text() == QStringLiteral("—"),
+                  QStringLiteral("middle click did not clear gameplay keyboard binding"));
 
             tabs->setCurrentIndex(tabs->count() - 1);
             QApplication::processEvents();
+            clickCell(commandTable, fastRow, 1, Qt::MiddleButton, true);
+            sendKey(Qt::Key_Q);
+            check(!input->capturing() &&
+                  commandTable->item(fastRow, 1)->text() == QStringLiteral("—"),
+                  QStringLiteral("middle double-click armed command capture"));
             captureCommand(fullscreenRow, Qt::Key_Return, Qt::AltModifier);
             check(commandTable->item(fullscreenRow, 1)->text() ==
                   QKeySequence(int(Qt::AltModifier) | Qt::Key_Return).toString(QKeySequence::NativeText),
@@ -627,6 +686,15 @@ void testControlsLayout(MainWindow& window) {
                   QKeySequence(int(Qt::ControlModifier) | int(Qt::ShiftModifier) |
                                Qt::Key_K).toString(QKeySequence::NativeText),
                   QStringLiteral("Ctrl+Shift+key command chord was not captured"));
+            clickCell(commandTable, hardResetRow, 1, Qt::MiddleButton);
+            check(commandTable->item(hardResetRow, 1)->text() == QStringLiteral("—"),
+                  QStringLiteral("middle click did not clear command keyboard binding"));
+            clickCell(commandTable, hardResetRow, 0, Qt::LeftButton, true);
+            sendKey(Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+            check(commandTable->item(hardResetRow, 1)->text() ==
+                  QKeySequence(int(Qt::ControlModifier) | int(Qt::ShiftModifier) |
+                               Qt::Key_K).toString(QKeySequence::NativeText),
+                  QStringLiteral("generic command name cell rejected keyboard input"));
         }
 
         tabs->setCurrentIndex(1);
@@ -640,10 +708,10 @@ void testControlsLayout(MainWindow& window) {
                   QStringLiteral("port 2 preview could not be saved"));
         }
         if (first >= 0 && second >= 0) {
-            gameTable->cellDoubleClicked(first, 0);
+            clickCell(gameTable, first, 0, Qt::LeftButton, true);
             QApplication::processEvents();
             check(input->capturing() && error->isVisible() && !error->text().isEmpty(),
-                  QStringLiteral("double-click did not show capture waiting footer"));
+                  QStringLiteral("left double-click did not show capture waiting footer"));
             check(error->styleSheet().contains(QStringLiteral("#18783c")) ||
                   error->styleSheet().contains(QStringLiteral("#70d993")),
                   QStringLiteral("capture waiting footer is not green"));
@@ -652,22 +720,40 @@ void testControlsLayout(MainWindow& window) {
                       QStringLiteral("waiting preview could not be saved"));
             pad.button(10, true); input->poll();
             pad.button(10, false); input->poll();
-            diagram->targetDoubleClicked(1);
+            clickCell(gameTable, second, 2, Qt::LeftButton, true);
+            const QString oldSecondKey = gameTable->item(second, 1)->text();
+            sendKey(Qt::Key_J);
+            check(gameTable->item(second, 1)->text() == oldSecondKey &&
+                  input->capturing(),
+                  QStringLiteral("gamepad-only gameplay capture accepted a keyboard key"));
             pad.button(10, true); input->poll();
             pad.button(10, false); input->poll();
             check(gameTable->item(first, 2)->text() == QStringLiteral("—") &&
                   gameTable->item(second, 2)->text() != QStringLiteral("—"),
-                  QStringLiteral("diagram double-click or latest-wins pad binding failed"));
+                  QStringLiteral("gameplay gamepad source or latest-wins binding failed"));
+            diagram->targetDoubleClicked(0);
+            sendKey(Qt::Key_J);
+            check(gameTable->item(first, 1)->text() == QStringLiteral("J"),
+                  QStringLiteral("generic diagram capture rejected keyboard input"));
+            diagram->targetDoubleClicked(1);
+            check(input->capturing(), QStringLiteral("diagram double-click did not arm gamepad capture"));
+            pad.button(10, true); input->poll();
+            pad.button(10, false); input->poll();
+            check(gameTable->item(second, 2)->text() != QStringLiteral("—"),
+                  QStringLiteral("generic diagram capture rejected gamepad input"));
             tabs->setCurrentIndex(tabs->count() - 1);
             QApplication::processEvents();
             check(player->isVisible() && player->currentData().toInt() == 1,
                   QStringLiteral("command pad source is unclear"));
-            commandTable->cellDoubleClicked(0, 0);
+            clickCell(commandTable, 0, 0, Qt::LeftButton, true);
             pad.button(10, true); input->poll();
             pad.button(10, false); input->poll();
             check(commandTable->item(0, 2)->text() != QStringLiteral("—") &&
                   gameTable->item(second, 2)->text() == QStringLiteral("—"),
-                  QStringLiteral("command binding did not take the pad control from gameplay"));
+                  QStringLiteral("generic command name capture did not take gameplay pad control"));
+            clickCell(commandTable, 0, 2, Qt::MiddleButton);
+            check(commandTable->item(0, 2)->text() == QStringLiteral("—"),
+                  QStringLiteral("middle click did not clear command gamepad binding"));
             tabs->setCurrentIndex(0);
             QApplication::processEvents();
         }
@@ -681,6 +767,15 @@ void testControlsLayout(MainWindow& window) {
                 moved->setCurrentIndex(moved->findData(int(Qt::RightButton)));
                 check(previous->currentData().toInt() == 0,
                       QStringLiteral("new mouse binding did not clear the previous target"));
+                const QPoint point = moved->rect().center();
+                QMouseEvent down(QEvent::MouseButtonPress, point, moved->mapToGlobal(point),
+                                 Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+                QApplication::sendEvent(moved, &down);
+                QMouseEvent up(QEvent::MouseButtonRelease, point, moved->mapToGlobal(point),
+                               Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(moved, &up);
+                check(moved->currentData().toInt() == 0,
+                      QStringLiteral("middle click did not clear mouse binding"));
             }
         }
         tabs->setCurrentIndex(1);

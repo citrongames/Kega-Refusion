@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
@@ -75,6 +76,9 @@ QTableWidgetItem* cell(const QString& text, int target = -1) {
     return item;
 }
 
+constexpr int keyboardColumn = 1;
+constexpr int gamepadColumn = 2;
+constexpr int mouseColumn = 3;
 constexpr int waitingForBindingRole = Qt::UserRole + 1;
 
 class BindingCellDelegate final : public QStyledItemDelegate {
@@ -438,18 +442,6 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
         stopCapture();
         beginCaptureFor(target);
     });
-    connect(gameTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
-        if (const auto* item = gameTable_->item(row, 0)) {
-            stopCapture();
-            beginCaptureFor(item->data(Qt::UserRole).toInt(), column);
-        }
-    });
-    connect(commandTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
-        if (const auto* item = commandTable_->item(row, 0)) {
-            stopCapture();
-            beginCaptureFor(item->data(Qt::UserRole).toInt(), column);
-        }
-    });
     connect(assignButton_, &QPushButton::clicked, this, [this] {
         stopCapture();
         if (selectedTarget_ >= 0)
@@ -460,17 +452,10 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     connect(skipButton_, &QPushButton::clicked,
             this, &ControlsPage::skipCapture);
     connect(clearKeyButton_, &QPushButton::clicked, this, [this] {
-        stopCapture();
-        onKeyboardChanged(selectedTarget_, QKeySequence());
+        clearBinding(selectedTarget_, keyboardColumn);
     });
     connect(clearButton_, &QPushButton::clicked, this, [this] {
-        if (selectedTarget_ < 0) return;
-        stopCapture();
-        draft().pad[selectedTarget_] = PadBinding{};
-        dirty_.insert(draftKey());
-        refreshPadCell(selectedTarget_);
-        setFeedback(Localization::text(QStringLiteral("Назначение кнопки очищено.")));
-        updateActionButtons();
+        clearBinding(selectedTarget_, gamepadColumn);
     });
     connect(defaultsButton, &QPushButton::clicked, this, [this] {
         stopCapture();
@@ -513,15 +498,6 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     });
     connect(&input_, &InputManager::devicesChanged,
             this, &ControlsPage::refreshDevices);
-    connect(&input_, &InputManager::captureReady, this, [this] {
-        if (captureTarget_ < 0) return;
-        const QString label = captureTarget_ < 16
-            ? InputManager::targetName(selectedProfile(), captureTarget_, displayMapping().controllerType)
-            : commandName(captureTarget_);
-        setFeedback((captureTarget_ < 16
-            ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
-            : Localization::text(QStringLiteral("Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена."))).arg(label));
-    });
     connect(&input_, &InputManager::bindingCaptured,
             this, &ControlsPage::onCaptured);
     connect(&input_, &InputManager::captureCancelled,
@@ -1065,6 +1041,19 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
     return true;
 }
 
+void ControlsPage::clearBinding(int target, int column) {
+    if (target < 0) return;
+    stopCapture();
+    if (column == keyboardColumn) {
+        onKeyboardChanged(target, QKeySequence());
+    } else if (column == gamepadColumn) {
+        draft().pad[target] = PadBinding{};
+        dirty_.insert(draftKey());
+        refreshPadCell(target);
+        setFeedback(Localization::text(QStringLiteral("Назначение кнопки очищено.")));
+    }
+}
+
 void ControlsPage::setCaptureTarget(int target, int column) {
     const auto mark = [this](int id, int sourceColumn, bool waiting) {
         if (id < 0) return;
@@ -1078,27 +1067,46 @@ void ControlsPage::setCaptureTarget(int target, int column) {
             break;
         }
     };
-    mark(captureTarget_, 0, false);
+    mark(captureTarget_, captureColumn_, false);
     captureTarget_ = target;
+    captureColumn_ = column;
     mark(target, column, true);
 }
 
 void ControlsPage::beginCaptureFor(int target, int column) {
     if (target < 16 && !activeGameTargets().contains(target)) return;
-    const QString deviceKey = captureDeviceKey();
+    QString deviceKey;
     bool padPresent = false;
-    for (const InputDevice& device : input_.devices())
-        padPresent |= device.key == deviceKey;
-    const int sourceColumn = (column == 1 || column == 2) ? column : (padPresent ? 0 : 1);
-    setCaptureTarget(target, sourceColumn);
+    if (column != keyboardColumn) {
+        deviceKey = captureDeviceKey();
+        for (const auto& device : input_.devices())
+            if (device.key == deviceKey) { padPresent = true; break; }
+    }
+    if (column == gamepadColumn && !padPresent) {
+        stopCapture();
+        setFeedback(Localization::text(QStringLiteral("Для назначения кнопки подключите геймпад.")), true);
+        return;
+    }
+    // Outside a binding column (button name or diagram), accept either device.
+    const int source = !padPresent ? keyboardColumn : (column == gamepadColumn ? gamepadColumn : 0);
+    setCaptureTarget(target, source);
     selectTarget(target);
     setFocus(Qt::OtherFocusReason);
     const QString label = target < 16
         ? InputManager::targetName(selectedProfile(), target, displayMapping().controllerType)
         : commandName(target);
-    setFeedback((target < 16
-        ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
-        : Localization::text(QStringLiteral("Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена."))).arg(label));
+    QString prompt;
+    if (source == gamepadColumn)
+        prompt = Localization::text(QStringLiteral("Назначение «%1»: нажмите кнопку геймпада. Esc — отмена."));
+    else if (source == keyboardColumn)
+        prompt = target < 16
+            ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу. Esc — отмена."))
+            : Localization::text(QStringLiteral("Назначение «%1»: нажмите сочетание клавиш. Esc — отмена."));
+    else
+        prompt = target < 16
+            ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
+            : Localization::text(QStringLiteral("Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена."));
+    setFeedback(prompt.arg(label));
     if (padPresent)
         input_.beginCapture(deviceKey, selectedPlayer());
     updateActionButtons();
@@ -1106,10 +1114,11 @@ void ControlsPage::beginCaptureFor(int target, int column) {
 
 void ControlsPage::startSequence() {
     stopCapture();
+    sequenceColumn_ = (commandTabSelected() ? commandTable_ : gameTable_)->currentColumn();
     sequence_ = commandTabSelected() ? commands : activeGameTargets();
     sequenceIndex_ = 0;
     if (!sequence_.isEmpty())
-        beginCaptureFor(sequence_.first());
+        beginCaptureFor(sequence_.first(), sequenceColumn_);
 }
 
 void ControlsPage::advanceSequence() {
@@ -1122,7 +1131,7 @@ void ControlsPage::advanceSequence() {
         updateActionButtons();
         return;
     }
-    beginCaptureFor(sequence_[sequenceIndex_]);
+    beginCaptureFor(sequence_[sequenceIndex_], sequenceColumn_);
 }
 
 void ControlsPage::skipCapture() {
@@ -1149,7 +1158,7 @@ void ControlsPage::stopCapture() {
 }
 
 void ControlsPage::onCaptured(const PadBinding& binding) {
-    if (captureTarget_ < 0) return;
+    if (captureTarget_ < 0 || captureColumn_ == keyboardColumn) return;
     const int target = captureTarget_;
     setCaptureTarget(-1);
     const QString deviceKey = captureDeviceKey();
@@ -1393,6 +1402,42 @@ bool ControlsPage::apply() {
 }
 
 bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
+        auto* mouse = static_cast<QMouseEvent*>(event);
+        const bool press = event->type() == QEvent::MouseButtonPress;
+        const bool clear = press && mouse->button() == Qt::MiddleButton;
+        const bool assign = !press && mouse->button() == Qt::LeftButton;
+        const bool select = press && captureTarget_ >= 0 && mouse->button() == Qt::LeftButton;
+        if ((assign || clear || select) && isVisible()) {
+            auto* table = commandTabSelected() ? commandTable_ : gameTable_;
+            auto* widget = qobject_cast<QWidget*>(watched);
+            if (table && widget && (widget == table->viewport() ||
+                (clear && widget->parentWidget() == table->viewport()))) {
+                const auto pos = widget->mapTo(table->viewport(), mouse->position().toPoint());
+                const auto index = table->indexAt(pos);
+                if (index.isValid()) {
+                    const int row = index.row(), column = index.column();
+                    const int target = table->item(row, 0)->data(Qt::UserRole).toInt();
+                    if (select) {
+                        if (target != captureTarget_ || column != captureColumn_) stopCapture();
+                        return false; // Let the view select the cell normally.
+                    }
+                    table->setCurrentCell(row, column);
+                    if (clear && column == mouseColumn) {
+                        stopCapture();
+                        if (auto* box = qobject_cast<QComboBox*>(table->cellWidget(row, column)))
+                            box->setCurrentIndex(0);
+                    } else if (clear && column != 0) {
+                        clearBinding(target, column);
+                    } else if (assign && column != mouseColumn) {
+                        stopCapture();
+                        beginCaptureFor(target, column);
+                    }
+                    return true;
+                }
+            }
+        }
+    }
     // Release remembered keys if focus leaves the application before key-up.
     if (event->type() == QEvent::ApplicationDeactivate) {
         captureKeysDown_.clear();
@@ -1432,6 +1477,7 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         setFeedback(Localization::text(QStringLiteral("Назначение отменено.")));
         return true;
     }
+    if (captureColumn_ == gamepadColumn) return true;
     if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt ||
         key == Qt::Key_AltGr || key == Qt::Key_Meta || key == Qt::Key_unknown)
         return true;

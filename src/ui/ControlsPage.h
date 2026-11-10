@@ -74,6 +74,7 @@ private:
     void clearGameKeyConflicts(int key, int profileFilter = -1, int exceptPlayer = -1,
                                int exceptTarget = -1);
     void clearCommandKeyConflicts(int key, int exceptTarget = -1);
+    void clearBinding(int target, int column);
     void setCaptureTarget(int target, int column = 0);
     void beginCaptureFor(int target, int column = 0);
     void startSequence();
@@ -129,6 +130,8 @@ private:
     QMap<QString, QString> knownDevices_;
     QVector<int> sequence_;
     int sequenceIndex_ = 0;
+    int sequenceColumn_ = 0;
+    int captureColumn_ = 0;
     int captureTarget_ = -1;
     int selectedTarget_ = -1;
     bool refreshing_ = false;

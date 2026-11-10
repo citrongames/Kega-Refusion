@@ -2,6 +2,9 @@
   "code": "en",
   "name": "English",
   "translations": {
+    "Для назначения кнопки подключите геймпад.": "Connect a gamepad to assign a button.",
+    "Назначение «%1»: нажмите клавишу. Esc — отмена.": "Assign “%1”: press a key. Esc cancels.",
+    "Назначение «%1»: нажмите сочетание клавиш. Esc — отмена.": "Assign “%1”: press a keyboard shortcut. Esc cancels.",
     "Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена.": "Binding “%1”: press a keyboard shortcut or a gamepad button. Esc cancels.",
     "Клавиши команд и кнопки геймпада этого порта сброшены к исходным.": "Command shortcuts and this port’s gamepad bindings have been reset to their defaults.",
     "Для кнопки игры назначьте одну клавишу без Ctrl, Alt или Shift.": "For a game button, choose a single key without Ctrl, Alt or Shift.",
