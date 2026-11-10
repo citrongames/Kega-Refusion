@@ -33,6 +33,7 @@ struct KegaSh2Soc {
     KegaSh2SocState s;
     KegaSh2Soc *peer;
     uint64_t notified;
+    uint64_t timers_only_until;
     bool advancing;
     unsigned irq_level, irq_vector;
 };
@@ -129,19 +130,21 @@ static void internal_ack(void *user, KegaSh2 *cpu, unsigned level, unsigned vect
      * source; the new SR mask blocks it until the ISR clears it or returns. */
     c->irq_level=UINT_MAX;resample_irq(c);
 }
-static unsigned frt_divisor(const KegaSh2Soc *c) {
-    static const unsigned divisors[4] = {8, 32, 128, 0};
-    return divisors[get8(c, 0x16) & 3]; /* 3 selects an external clock. */
+/* The SH7604 timer prescalers are all powers of two. Zero here denotes
+   an external FRT clock; the smallest internal divisor is eight. */
+static unsigned frt_shift(const KegaSh2Soc *c) {
+    static const unsigned char shift[4] = {3, 5, 7, 0};
+    return shift[get8(c, 0x16) & 3];
 }
-static unsigned wdt_divisor(const KegaSh2Soc *c) {
-    static const unsigned divisors[8] = {2, 64, 128, 256, 512, 1024, 4096, 8192};
-    return divisors[get8(c, 0x80) & 7];
+static unsigned wdt_shift(const KegaSh2Soc *c) {
+    static const unsigned char shift[8] = {1, 6, 7, 8, 9, 10, 12, 13};
+    return shift[get8(c, 0x80) & 7];
 }
-static uint64_t ticks(uint64_t delta, uint32_t *phase, unsigned divisor) {
-    uint64_t result = delta / divisor;
-    unsigned tail = *phase + (unsigned)(delta % divisor);
-    if (tail >= divisor) { ++result; tail -= divisor; }
-    *phase = tail; return result;
+static uint64_t ticks(uint64_t delta, uint32_t *phase, unsigned shift) {
+    unsigned mask = (1u << shift) - 1;
+    unsigned tail = *phase + ((unsigned)delta & mask);
+    *phase = tail & mask;
+    return (delta >> shift) + (tail >> shift);
 }
 static unsigned distance16(unsigned from, unsigned to) {
     unsigned distance = (to - from) & 65535;
@@ -154,16 +157,16 @@ static void frt_irq(KegaSh2Soc *c, uint8_t changed) {
 }
 static void sync_timers(KegaSh2Soc *c, uint64_t now) {
     uint64_t count;
-    unsigned divisor;
+    unsigned shift;
     if (now < c->s.now) return;
     if (now == c->s.now && c->s.frt_last == now && c->s.wdt_last == now) return;
-    divisor = frt_divisor(c);
+    shift = frt_shift(c);
     c->s.now = now;
-    if (divisor) {
+    if (shift) {
         unsigned counter = get16(c, 0x12), a = distance16(counter, c->s.ocra);
         unsigned b = distance16(counter, c->s.ocrb), wrap = 65536 - counter;
         uint8_t old = get8(c, 0x11), flags = 0;
-        count = ticks(now - c->s.frt_last, &c->s.frt_phase, divisor);
+        count = ticks(now - c->s.frt_last, &c->s.frt_phase, shift);
         if (count >= a) flags |= 8;
         if (count >= b) flags |= 4;
         if (count >= wrap) flags |= 2;
@@ -184,7 +187,7 @@ static void sync_timers(KegaSh2Soc *c, uint64_t now) {
     c->s.frt_last = now;
     if (get8(c, 0x80) & 0x20) {
         unsigned old_counter = get8(c, 0x81);
-        count = ticks(now - c->s.wdt_last, &c->s.wdt_phase, wdt_divisor(c));
+        count = ticks(now - c->s.wdt_last, &c->s.wdt_phase, wdt_shift(c));
         put8(c, 0x81, (uint8_t)(old_counter + count));
         c->s.wdt_last = now;
         if (count >= 256 - old_counter) {
@@ -238,17 +241,17 @@ static void dma_refresh(KegaSh2Soc *c, bool reset_count, unsigned changed_channe
 }
 static uint64_t calculate_deadline(const KegaSh2Soc *c, uint64_t now) {
     uint64_t deadline = UINT64_MAX, candidate;
-    unsigned divisor;
+    unsigned shift;
     if (!c) return deadline;
     for (unsigned ch = 0; ch < 2; ++ch)
         if (c->s.dma_due[ch] < deadline) deadline = c->s.dma_due[ch];
     if (get8(c, 0x80) & 0x20) {
         candidate = add_time(c->s.wdt_last,
-            (uint64_t)(256 - get8(c, 0x81)) * wdt_divisor(c) - c->s.wdt_phase);
+            ((uint64_t)(256 - get8(c, 0x81)) << wdt_shift(c)) - c->s.wdt_phase);
         if (candidate < deadline) deadline = candidate;
     }
-    divisor = frt_divisor(c);
-    if (divisor) {
+    shift = frt_shift(c);
+    if (shift) {
         unsigned count=get16(c,0x12), distance=UINT_MAX;
         uint8_t status=get8(c,0x11);
         /* CCLRA changes the counter, not an externally observable event.
@@ -272,7 +275,7 @@ static uint64_t calculate_deadline(const KegaSh2Soc *c, uint64_t now) {
             if(ticks_to<distance)distance=ticks_to;
         }
         if(distance!=UINT_MAX) {
-            candidate=add_time(c->s.frt_last,(uint64_t)distance*divisor-c->s.frt_phase);
+            candidate=add_time(c->s.frt_last,((uint64_t)distance << shift)-c->s.frt_phase);
             if(candidate<deadline)deadline=candidate;
         }
     }
@@ -281,6 +284,12 @@ static uint64_t calculate_deadline(const KegaSh2Soc *c, uint64_t now) {
 static void notify(KegaSh2Soc *c) {
     resample_irq(c);
     uint64_t deadline = calculate_deadline(c, c->s.now);
+    /* Refresh on every register/DREQ/state change, even if the deadline
+       stayed the same. An enabled serial port can change from its peer. */
+    bool timers_only = !(get32(c, 0x1b0) & DMA_DME) && !(get8(c, 2) & 0x30) &&
+        !c->s.dma_active[0] && !c->s.dma_active[1] &&
+        c->s.dma_due[0] == UINT64_MAX && c->s.dma_due[1] == UINT64_MAX;
+    c->timers_only_until = timers_only ? deadline : 0;
     if (deadline != c->notified) {
         c->notified = deadline;
         if (c->host.schedule_changed) c->host.schedule_changed(c->host.user, c->cpu, deadline);
@@ -485,12 +494,7 @@ static bool dma_transfer(KegaSh2Soc *c, unsigned ch, unsigned *used) {
 void kega_sh2_soc_advance(KegaSh2Soc *c, uint64_t target) {
     unsigned work = 0;
     if (!c || c->advancing || target < c->s.now) return;
-    /* Idle DMA has no bus work. An enabled serial port can change from the
-       peer CPU, so keep the full IRQ resample there. Before a timer deadline
-       counting and masked flags still advance without changing the IRQ line. */
-    if (!(get32(c, 0x1b0) & DMA_DME) && !(get8(c, 2) & 0x30) && target < c->notified &&
-        !c->s.dma_active[0] && !c->s.dma_active[1] &&
-        c->s.dma_due[0] == UINT64_MAX && c->s.dma_due[1] == UINT64_MAX) {
+    if (target < c->timers_only_until) {
         uint32_t pending = c->s.irq_pending;
         sync_timers(c, target);
         /* Timer matches can latch masked flags. The published interrupt

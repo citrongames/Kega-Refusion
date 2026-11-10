@@ -4976,6 +4976,17 @@ end_op:
         ctaken = (op_flags[i] & OF_DELAY_OP) ? 1 : 2;
       cycles += ctaken; // assume branch taken
 
+      /* An unconditional BRA to itself with a NOP delay slot cannot touch
+       memory, registers or devices. Charge whole three-cycle iterations
+       against this slice; the normal back edge handles the remainder, IRQ
+       entry, and invalidation in exactly the same way as any other block. */
+      if (cycles == 3 && (op_flags[i] & OF_DELAY_OP) && op == 0x0009 &&
+          target_pc == pc - 4 && FETCH_OP(target_pc) == 0xaffe) {
+        emit_sync_t_to_sr();
+        emith_sh2_delay_loop(3, -1);
+        rcache_unlock_all();
+      }
+
 #if LOOP_OPTIMIZER
       if ((drcf.loop_type == OF_IDLE_LOOP ||
           (drcf.loop_type == OF_DELAY_LOOP && drcf.delay_reg >= 0)))

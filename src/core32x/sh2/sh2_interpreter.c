@@ -29,19 +29,54 @@ struct KegaSh2 {
 };
 
 static KegaSh2 *owner(SH2 *core) { return (KegaSh2 *)core; }
+/* The machine's SDRAM and local data array store native 16-bit words.
+ * SH-2 byte reads select the high or low byte of that numeric word. */
+static const void *plain_read_base(SH2 *s, uint32_t a, uint32_t *offset) {
+    if (s->p_da && (a & 0xe0000000u)==0xc0000000u) {
+        *offset=a & 0xfffu;
+        return s->p_da;
+    }
+    if (s->p_sdram && (a & 0xc6000000u)==0x06000000u) {
+        *offset=a & 0x3ffffu;
+        return s->p_sdram;
+    }
+    return NULL;
+}
+static uint16_t plain_word(const void *base, uint32_t offset) {
+    uint16_t word;
+    memcpy(&word, (const uint8_t *)base + offset, sizeof(word));
+    return word;
+}
 static uint8_t read8(SH2 *s, uint32_t a) {
+    uint32_t offset;
+    const void *base=plain_read_base(s,a,&offset);
+    if (base) {
+        uint16_t word=plain_word(base,offset & ~1u);
+        return (uint8_t)(word >> ((offset & 1u) ? 0 : 8));
+    }
     KegaSh2 *c = owner(s); return c->host.read8(c->host.user, c, a);
 }
 static uint16_t read16(SH2 *s, uint32_t a) {
+    uint32_t offset;
+    const void *base=plain_read_base(s,a,&offset);
+    if (base) return plain_word(base,offset & ~1u);
     KegaSh2 *c = owner(s); return c->host.read16(c->host.user, c, a);
 }
 static uint16_t fetch16(SH2 *s, uint32_t a) {
+    uint32_t offset;
+    const void *base=(a & 1u) ? NULL : plain_read_base(s,a,&offset);
+    if (base) return plain_word(base,offset);
     KegaSh2 *c = owner(s);
-    if ((a & 0xc6000001u)==0x06000000u && s->p_sdram)
-        return ((const uint16_t *)s->p_sdram)[(a & 0x3ffffu) >> 1];
     return c->host.fetch16 ? c->host.fetch16(c->host.user, c, a) : read16(s, a);
 }
 static uint32_t read32(SH2 *s, uint32_t a) {
+    uint32_t offset;
+    const void *base=plain_read_base(s,a,&offset);
+    if (base) {
+        offset &= ~3u;
+        return ((uint32_t)plain_word(base,offset) << 16) |
+            plain_word(base,offset+2u);
+    }
     KegaSh2 *c = owner(s); return c->host.read32(c->host.user, c, a);
 }
 static void write8(SH2 *s, uint32_t a, uint8_t v) {

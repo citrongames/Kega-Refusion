@@ -5,6 +5,7 @@
  * absolute master-clock timeline and independently allocated CPU contexts. */
 #include "machine.h"
 #include "state.h"
+#include "clock.h"
 #include <assert.h>
 #include "sh2/soc.h"
 #ifdef KEGA_SH2_DRC
@@ -24,10 +25,10 @@ struct Kega32xMachine {
     Kega32xMachineHost host;
     uint8_t bios[2][2048];
     uint64_t epoch_sh2[2], now;
+    uint64_t soc_event[2]; /* Published peripheral deadlines in master clocks. */
     unsigned running, irq_level[2];
 };
-static uint64_t sh2_clock(uint64_t t) { return (t/7)*3+(t%7)*3/7; }
-static uint64_t master_clock(uint64_t t) { return (t/3)*7+((t%3)*7+2)/3; }
+static uint64_t master_clock(uint64_t t) { return t*2 + t/3 + (t%3 != 0); }
 Kega32xBus *kega32x_machine_bus(Kega32xMachine *m) { return m?&m->bus:NULL; }
 Kega32xPwm *kega32x_machine_pwm(Kega32xMachine *m) { return m?&m->pwm:NULL; }
 KegaSh2 *kega32x_machine_cpu(Kega32xMachine *m, unsigned c) { return m && c<2?m->cpu[c]:NULL; }
@@ -268,9 +269,10 @@ static void schedule_changed(void *p,KegaSh2 *c,uint64_t deadline)
 {
     Kega32xMachine *m=p;
     unsigned i=cpu_index(m,c);
+    m->soc_event[i]=deadline==UINT64_MAX?UINT64_MAX:master_clock(m->epoch_sh2[i]+deadline);
     if(m->running&(1u<<i))kega_sh2_end_run(c);
     if(m->host.changed && deadline!=UINT64_MAX)
-        m->host.changed(m->host.userdata,i,KEGA32X_COMM_CHANGED,0xfffffe00,master_clock(m->epoch_sh2[i]+deadline));
+        m->host.changed(m->host.userdata,i,KEGA32X_COMM_CHANGED,0xfffffe00,m->soc_event[i]);
 }
 Kega32xMachine *kega32x_machine_create(const Kega32xMachineHost *h,const uint8_t *mb,size_t ml,const uint8_t *sb,size_t sl,int pal,int no_cart)
 {
@@ -285,8 +287,11 @@ Kega32xMachine *kega32x_machine_create(const Kega32xMachineHost *h,const uint8_t
     if(!m->cpu[0] || !m->cpu[1]) {kega32x_machine_destroy(m);return NULL;}
     /* Shared SDRAM is word-swapped plain storage for the lifetime of this
        machine. All writes still go through the code invalidation path. */
-    kega_sh2_native(m->cpu[0])->p_sdram=m->memory.sdram;
-    kega_sh2_native(m->cpu[1])->p_sdram=m->memory.sdram;
+    for(unsigned i=0;i<2;i++) {
+        SH2 *sh2=kega_sh2_native(m->cpu[i]);
+        sh2->p_sdram=m->memory.sdram;
+        sh2->p_da=sh2->data_array;
+    }
     kega_sh2_set_peer(m->cpu[0],m->cpu[1]);kega_sh2_set_peer(m->cpu[1],m->cpu[0]);
     sh.user=m;sh.read8=r8;sh.read16=r16;sh.read32=r32;sh.write8=w8;sh.write16=w16;sh.write32=w32;
     sh.schedule_changed=schedule_changed;sh.dreq_available=fifo_available;sh.dreq_pop=fifo_pop;
@@ -338,8 +343,14 @@ uint64_t kega32x_machine_next_event(const Kega32xMachine *m)
     if((m->bus.s.regs[0]&3)==3) {
         unsigned i;
         for(i=0;i<2;i++) {
-            uint64_t t=kega_sh2_soc_next_deadline(m->soc[i],kega_sh2_soc_now(m->soc[i]));
-            if(t!=UINT64_MAX) {t=master_clock(m->epoch_sh2[i]+t);if(t<next)next=t;}
+            uint64_t t=m->soc_event[i];
+            /* A callback can inspect a peripheral before its update publishes
+               the deadline. Outside callbacks the published value is exact. */
+            if(m->running || m->soc_running) {
+                t=kega_sh2_soc_next_deadline(m->soc[i],kega_sh2_soc_now(m->soc[i]));
+                if(t!=UINT64_MAX)t=master_clock(m->epoch_sh2[i]+t);
+            }
+            if(t<next)next=t;
         }
     }
     return next;
@@ -436,6 +447,10 @@ int kega32x_machine_set_state(Kega32xMachine *m,const Kega32xMachineState *state
            retain its exact pending/test-IRQ architecture at this boundary. */
         okay=kega_sh2_soc_set_state(m->soc[i],&s->soc[i]);assert(okay);
         if(!okay)return 0;
+        /* A restored deadline of zero may match the reset notification
+           sentinel, so seed the cache even when no change was published. */
+        uint64_t deadline=kega_sh2_soc_next_deadline(m->soc[i],s->soc[i].now);
+        m->soc_event[i]=deadline==UINT64_MAX?UINT64_MAX:master_clock(m->epoch_sh2[i]+deadline);
         okay=kega_sh2_set_state(m->cpu[i],&s->cpu[i]);assert(okay);
         if(!okay)return 0;
         m->irq_level[i]=s->cpu[i].pending_irl;

@@ -74,7 +74,7 @@ void kega_drc_publish(const void *start, const void *end) {
 #endif
 }
 /* Constant folding stays disabled: the mapper and writable code can change.
- * Runtime read maps below bypass callbacks only for plain SDRAM. */
+ * Runtime read maps below bypass callbacks for plain SDRAM/data array. */
 void *p32x_sh2_get_mem_ptr(u32 a, u32 *mask, SH2 *s) {
     (void)a; (void)s; *mask=0; return NULL;
 }
@@ -117,6 +117,12 @@ static void setup_maps(SH2 *s) {
         if (s->p_sdram && (((u32)b << SH2_READ_SHIFT) & 0xc6000000u)==0x06000000u) {
             read_maps[i][w][b].addr=(uptr)s->p_sdram >> 1;
             read_maps[i][w][b].mask=0x3ffffu & ~((1u << w)-1);
+        }
+        /* The local data array mirrors through C/D space. Its native words
+           have the same byte and longword layout as SDRAM. */
+        if (s->p_da && (((u32)b << SH2_READ_SHIFT) & 0xe0000000u)==0xc0000000u) {
+            read_maps[i][w][b].addr=(uptr)s->p_da >> 1;
+            read_maps[i][w][b].mask=0xfffu & ~((1u << w)-1);
         }
         write_maps[i][w][b]=writers[w];
     }

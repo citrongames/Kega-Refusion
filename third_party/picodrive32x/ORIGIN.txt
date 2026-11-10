@@ -37,8 +37,10 @@ DRC adaptations:
 - Native SH2 layout is unchanged. Compiler references two independent CPU
   pointers and project-owned marker arrays; no Pico global machine/MD/CD code.
 - Numeric fetch16 callbacks replace raw BIOS/ROM instruction pointers. All
-  data accesses are host callbacks; ROM folding, loop elision and DIV sequence
-  optimization are disabled in the initial correctness backend.
+  data writes and MMIO reads use host callbacks. Plain SDRAM and private
+  data arrays use native read maps. Only an exact BRA-self/NOP pair batches
+  iterations within a slice; ROM folding, generic loop detection and DIV
+  sequence optimization are disabled.
 - Blocks contain at most 64 decoded instructions; every non-delay instruction
   has a cycle boundary. Compile failures/assertions return through a guarded
   translator frame and the normal JIT register-flush exit, then interpreter.

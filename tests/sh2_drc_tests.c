@@ -123,6 +123,14 @@ static void smc_and_nested(void) {
         unsigned x=kega_sh2_run(a->cpu,1),y=kega_sh2_run(b->cpu,1);
         assert(x==y); compare(a,b);
     }
+    /* BRA-self/NOP must finish exactly the same iteration as the
+       interpreter even when the budget ends inside its delay slot. */
+    const unsigned idle_budgets[]={1,2,3,4,190,191,192,193,4096};
+    for(unsigned i=0;i<sizeof(idle_budgets)/sizeof(idle_budgets[0]);i++) {
+        unsigned budget=idle_budgets[i];
+        assert(kega_sh2_run(a->cpu,budget)==kega_sh2_run(b->cpu,budget));
+        compare(a,b);
+    }
     assert(kega_sh2_get_state(b->cpu,&state)); assert(state.r[0]==7);
     /* Unsupported executable region has ordinary host data here. Translation
      * failure must flush registers and spend its budget on reference execution. */

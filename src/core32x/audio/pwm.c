@@ -12,6 +12,7 @@
  * donor globals/PCM storage. The programmed IRQ interval is never adapted.
  */
 #include "pwm.h"
+#include "../clock.h"
 #include <string.h>
 
 #ifdef KEGAREFUSION_32X
@@ -36,15 +37,10 @@ static unsigned output_mask(void)
 #endif
 }
 
-static uint64_t sh2_clock(uint64_t t)
-{
-    return (t / 7) * 3 + ((t % 7) * 3) / 7;
-}
 static uint64_t master_clock(uint64_t sh2)
 {
-    uint64_t whole = sh2 / 3, fraction = ((sh2 % 3) * 7 + 2) / 3;
-    if (whole > (UINT64_MAX - fraction) / 7) return UINT64_MAX;
-    return whole * 7 + fraction;
+    if (sh2 > sh2_clock(UINT64_MAX)) return UINT64_MAX;
+    return sh2 * 2 + sh2 / 3 + (sh2 % 3 != 0);
 }
 static unsigned period(const Kega32xPwmState *s) { return (s->cycle - 1u) & 0xfff; }
 static unsigned reload(const Kega32xPwmState *s)
@@ -101,8 +97,9 @@ void kega32x_pwm_advance(Kega32xPwm *p, uint64_t t)
         uint64_t due, steps, event;
         int observable_irq;
         if (!clocks) { p->s.cursor_sh2 = target; break; }
-        due = (target - p->s.cursor_sh2) / clocks;
-        if (!due) break;
+        uint64_t elapsed = target - p->s.cursor_sh2;
+        if (elapsed < clocks) break;
+        due = elapsed / clocks;
         first_irq = p->s.irq_count;
         interval = reload(&p->s);
         observable_irq = p->host.irq != 0 ||
