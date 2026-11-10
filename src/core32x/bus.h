@@ -46,6 +46,9 @@ typedef struct Kega32xBus {
     /* Renderer-owned transient guard, never part of emulated/saved state.
        Bit n watches a latched bank until its pixels have been sampled. */
     unsigned video_watch_banks;
+    /* Absolute start of this scanline's framebuffer DRAM refresh, supplied by
+       the raster timing owner and reconstructed on state load. */
+    uint64_t dram_refresh_start;
 } Kega32xBus;
 /* Call once before a timestamped CPU/DMA framebuffer mutation. A normal
    backbuffer write needs no renderer callback; only a watched bank can require

@@ -53,6 +53,7 @@ void kega32x_bus_power(Kega32xBus *b, Kega32xMemory *m, const Kega32xBusHost *h,
     memset(b,0,sizeof(*b));
     b->memory=m;
     if (h) b->host=*h;
+    b->dram_refresh_start=UINT64_MAX;
     b->s.regs[0]=REN|NRES;
     b->s.regs[8]=0xffff;
     b->s.sh2_control=(uint16_t)(no_cart ? 0x100:0);
@@ -157,7 +158,14 @@ uint16_t kega32x_bus_read16(Kega32xBus *b, unsigned cpu, uint32_t a, uint64_t t)
     if (a<0x40) return sys_read(b,cpu,a,t);
     if (a>=0x100 && a<0x110) {
         kega32x_bus_advance(b,t);
-        return b->s.vdp[(a&15)/2];
+        uint16_t value=b->s.vdp[(a&15)/2];
+        /* FEN is busy both during an autofill and while the framebuffer DRAM
+           refreshes (~40 SH-2 clocks per line). Only sample the latter on a
+           control-register read; it has no DMA completion event of its own. */
+        if (a==0x10a && t>=b->dram_refresh_start &&
+            t-b->dram_refresh_start < 40u*7/3)
+            value|=FEN;
+        return value;
     }
     if (a>=0x200 && a<0x400) return b->s.palette[(a&511)/2];
     return 0;

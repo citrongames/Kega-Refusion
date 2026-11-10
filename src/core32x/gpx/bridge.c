@@ -200,6 +200,20 @@ static void legacy_io_write(unsigned a,unsigned v,unsigned size,int z80)
     kega_sh2_drc_flush();
 #endif
 }
+/* GPX may switch non-overlaid cart pages between ROM and serial data
+   directly. The SH-2 and banked 68K windows must see the same read handlers. */
+void kegarefusion_32x_cart_reads_changed(unsigned first,unsigned count)
+{
+    if(!ctx || !ctx->has_cart_rom || !count || !first || first>=0x40 || count>0x40-first)return;
+    for(unsigned i=first;i<first+count;i++) {
+        ctx->original[i].read8=m68k.memory_map[i].read8;
+        ctx->original[i].read16=m68k.memory_map[i].read16;
+        ctx->original_zbank[i].read=zbank_memory_map[i].read;
+    }
+#ifdef KEGA_SH2_DRC
+    kega_sh2_drc_flush();
+#endif
+}
 static bool rom_fetch_is_pure(void *user,uint32_t a,size_t bytes)
 {
     unsigned page,last;
@@ -423,10 +437,16 @@ void kegarefusion_32x_soft_reset(void)
         m68k_set_reg(M68K_REG_PC,(map_read16(zero,4)<<16)|map_read16(zero,6));
     }
 }
+static unsigned hblank_start(void) { return (reg[12]&1)?228u:280u; }
+static void set_refresh_line(unsigned line_start)
+{
+    /* Use the horizontal blank boundary in GPX master-clock coordinates. */
+    kega32x_machine_bus(ctx->machine)->dram_refresh_start=ctx->frame_base+line_start+hblank_start();
+}
 static void blank_at(unsigned local)
 {
     unsigned phase=local%MCYCLES_PER_LINE;
-    int hb=phase>=(unsigned)((reg[12]&1)?228:280) && phase<(unsigned)((reg[12]&1)?872:860);
+    int hb=phase>=hblank_start() && phase<(unsigned)((reg[12]&1)?872:860);
     int vb=ctx->line>=bitmap.viewport.h && ctx->line<lines_per_frame-1;
     kega32x_bus_blank(kega32x_machine_bus(ctx->machine),vb,hb,ctx->frame_base+local);
 }
@@ -443,6 +463,7 @@ void kegarefusion_32x_frame_start(int skip)
         config.ntsc=0;bitmap.viewport.changed|=9;
         fprintf(stderr,"32X RGB565 filter allocation failed; filter disabled.\n");
     }
+    set_refresh_line(0);
     blank_at(0);
 }
 void kegarefusion_32x_frame_end(unsigned cycles)
@@ -458,6 +479,7 @@ void kegarefusion_32x_line(int line,unsigned cycles)
     video_sync(ctx->frame_base+cycles);
     ctx->line=line;ctx->line_start=cycles;
     video_row(line,ctx->frame_base+cycles);
+    set_refresh_line(cycles);
     b=kega32x_machine_bus(ctx->machine);blank_at(cycles);
     if(line==lines_per_frame-1)ctx->hint_count=b->s.hcount;
     if(line<bitmap.viewport.h || (b->s.sh2_control&0x80)) {
@@ -474,7 +496,7 @@ void kegarefusion_32x_run(unsigned target)
         video_sync(ctx->frame_base+ctx->now);
         event=kega32x_machine_next_event(ctx->machine);
         video_event=ctx->video_due;if(video_event<event)event=video_event;
-        unsigned hb0=(reg[12]&1)?228:280,hb1=(reg[12]&1)?872:860;
+        unsigned hb0=hblank_start(),hb1=(reg[12]&1)?872:860;
         if(next-ctx->now>448)next=ctx->now+448;
         edge=ctx->now-phase+(phase<hb0?hb0:phase<hb1?hb1:MCYCLES_PER_LINE);
         if(edge<next)next=edge;
@@ -685,6 +707,7 @@ int kegarefusion_32x_state_end_load(int success)
         /* GPX state_load has reset/rebased its blips. Restore our held PWM
            amplitude only after the absolute-to-frame timestamp is restored. */
         okay=kega32x_machine_set_state(ctx->machine,ctx->snapshot);
+        if (okay) set_refresh_line(ctx->now - ctx->now%MCYCLES_PER_LINE);
     }
     ctx->restore.ready=0;video_reset();map_apply();bitmap.viewport.changed|=9;return okay;
 }

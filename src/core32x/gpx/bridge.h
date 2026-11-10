@@ -6,6 +6,7 @@
 extern int kegarefusion_32x_attached;
 unsigned kegarefusion_32x_features(void);
 void kegarefusion_32x_invalidate_code(void);
+void kegarefusion_32x_cart_reads_changed(unsigned first, unsigned count);
 int kegarefusion_32x_stats(uint64_t *, size_t);
 /* Direct SDRAM pointer is valid only while the 32X attachment is loaded. */
 void *kegarefusion_32x_sdram(void);

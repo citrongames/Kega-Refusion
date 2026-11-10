@@ -1,0 +1,42 @@
+--- a/core/cart_hw/eeprom_i2c.c
++++ b/core/cart_hw/eeprom_i2c.c
+@@ -38,6 +38,9 @@
+ 
+ #include "shared.h"
+ #include "gamepad.h"
++#ifdef KEGAREFUSION_32X
++#include "kega32x/gpx/bridge.h"
++#endif
+ 
+ /* Some notes from 8BitWizard (http://gendev.spritesmind.net/forum/viewtopic.php?t=206):
+  *
+@@ -140,6 +143,8 @@
+   {"T-81033"  , 0          , 0      , mapper_i2c_acclaim_16M_init , EEPROM_X24C02 }, /* NBA Jam (J) */
+   {"T-081326" , 0          , 0      , mapper_i2c_acclaim_16M_init , EEPROM_X24C02 }, /* NBA Jam (UE) */
+   {"T-081276" , 0          , 0      , mapper_i2c_acclaim_32M_init , EEPROM_24C02  }, /* NFL Quarterback Club */
++  {"T-8104B"  , 0          , 0      , mapper_i2c_acclaim_32M_init , EEPROM_24C02  }, /* NBA Jam TE 32X */
++  {"T-8102B"  , 0          , 0      , mapper_i2c_acclaim_32M_init , EEPROM_24C02  }, /* NFL Quarterback Club 32X */
+   {"T-81406"  , 0          , 0      , mapper_i2c_acclaim_32M_init , EEPROM_24C04  }, /* NBA Jam TE */
+   {"T-081586" , 0          , 0      , mapper_i2c_acclaim_32M_init , EEPROM_24C16  }, /* NFL Quarterback Club '96 */
+   {"T-81476"  , 0          , 0      , mapper_i2c_acclaim_32M_init , EEPROM_24C65  }, /* Frank Thomas Big Hurt Baseball */
+@@ -781,6 +786,9 @@
+ {
+   int i;
+   
++#ifdef KEGAREFUSION_32X
++  int reads_changed = (m68k.memory_map[0x20].read16 == NULL) != (data & 1);
++#endif
+   /* custom bankshifting when both /LWR and /UWR are asserted */
+   if (data & 0x01)
+   {
+@@ -802,6 +810,10 @@
+       zbank_memory_map[i].read   = mapper_i2c_generic_read8;
+     }
+   }
++#ifdef KEGAREFUSION_32X
++  if (kegarefusion_32x_attached && reads_changed)
++    kegarefusion_32x_cart_reads_changed(0x20, 0x10);
++#endif
+ }
+ 
+ static void mapper_i2c_acclaim_32M_init(void)

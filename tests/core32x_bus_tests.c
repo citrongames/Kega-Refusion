@@ -139,6 +139,15 @@ int main(void)
     assert(!(b.s.vdp[5]&1));
     kega32x_bus_blank(&b,1,0,101);
     assert(b.s.vdp[5]&1);
+    /* FEN reports refresh on both buses independently of the autofill timer.
+       A second read at the same time must not advance the beam. */
+    b.dram_refresh_start=200;
+    assert(!(kega32x_bus_read16(&b,2,0x10a,199)&2));
+    assert(kega32x_bus_read16(&b,2,0x10a,200)&2);
+    assert(kega32x_bus_read8(&b,0,0x10b,200)&2);
+    assert(kega32x_bus_read16(&b,1,0x10a,292)&2);
+    assert(!(kega32x_bus_read16(&b,0,0x10a,293)&2));
+    assert(!(b.s.vdp[5]&2));
     /* Normal words can clear pixels; overwrite words and all byte writes skip zero. */
     kega32x_fb_write16(&b,0,0x1234);
     kega32x_fb_write16(&b,0x20000,0x0056);
