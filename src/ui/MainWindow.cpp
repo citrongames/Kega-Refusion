@@ -73,6 +73,9 @@
 #include <QWidgetAction>
 #include <QWindowStateChangeEvent>
 #include <optional>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 namespace {
 constexpr int kBiosSettingsPage = 6;
@@ -3132,7 +3135,7 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (event->type() == QEvent::Polish || event->type() == QEvent::WindowStateChange) {
+    if (event->type() == QEvent::Polish || event->type() == QEvent::Show) {
         auto* window = qobject_cast<QWidget*>(watched);
         if (window && window != this && (window->windowType() == Qt::Dialog ||
                 window->windowType() == Qt::Window || window->windowType() == Qt::Tool ||
@@ -3142,11 +3145,19 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
                 flags &= ~(Qt::WindowMinMaxButtonsHint | Qt::WindowContextHelpButtonHint);
                 flags |= Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint;
                 if (flags != window->windowFlags()) window->setWindowFlags(flags);
-            } else if (window->isMaximized()) {
-                // Some window managers also offer maximize through title-bar gestures.
-                window->setWindowState(window->windowState() & ~Qt::WindowMaximized);
-                return true;
             }
+#ifdef Q_OS_WIN
+            else if (const auto hwnd = reinterpret_cast<HWND>(window->internalWinId())) {
+                // Qt 6.10.2 adds WS_MAXIMIZEBOX to resizable windows even without
+                // WindowMaximizeButtonHint. Keep the sizing border and close button.
+                const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                if (style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX)) {
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~(WS_MAXIMIZEBOX | WS_MINIMIZEBOX));
+                    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE |
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                }
+            }
+#endif
         }
     }
     if (watched == this && event->type() == QEvent::WindowBlocked) {

@@ -40,6 +40,9 @@
 #include <QTimer>
 #include <QThread>
 #include <SDL.h>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -405,9 +408,13 @@ void testControlsLayout(MainWindow& window) {
         check(!(dialog->windowFlags() & Qt::WindowMinMaxButtonsHint) &&
               dialog->windowFlags().testFlag(Qt::WindowCloseButtonHint),
               QStringLiteral("settings title-bar actions are incorrect"));
-        dialog->showMaximized();
-        QApplication::processEvents();
-        check(!dialog->isMaximized(), QStringLiteral("settings accepted maximize"));
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName() == QLatin1String("windows")) {
+            const auto style = GetWindowLongPtrW(reinterpret_cast<HWND>(dialog->winId()), GWL_STYLE);
+            check(!(style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX)) && (style & WS_THICKFRAME),
+                  QStringLiteral("native settings title-bar buttons or resize border are incorrect"));
+        }
+#endif
         const auto finish = [&] { inspected = true; dialog->reject(); };
         auto* navigation = dialog->findChild<QListWidget*>(QStringLiteral("settingsNavigation"));
         if (!navigation) { check(false, QStringLiteral("settings navigation missing")); finish(); return; }
