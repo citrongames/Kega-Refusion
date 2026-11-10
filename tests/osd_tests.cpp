@@ -867,7 +867,8 @@ void testInputDisplayOverlay() {
     const QRect bounds = changedBounds(baseline, shown);
     require(!bounds.isEmpty() && bounds.left() < view.width() / 4 &&
                 bounds.top() > view.height() / 2 && bounds.right() < view.width() / 2 &&
-                bounds.width() < 140 && bounds.height() < 40,
+                bounds.width() >= 150 && bounds.width() <= 238 &&
+                bounds.height() >= 34 && bounds.height() <= 60,
             "connected controller row is not compact at bottom-left");
     require(render(view) == shown, "cached input display changed without input");
     require(view.captureGameImage() == clean, "input display leaked into clean capture");

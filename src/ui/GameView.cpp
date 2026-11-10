@@ -684,7 +684,7 @@ void GameView::paintInputDisplay(QPainter& painter) {
     if (!inputDisplayEnabled_ || capturingGame_ || capturingReticles_ ||
         frame_.isNull() || loading_) return;
     const InputDisplayState visual = InputDisplayPainter::visualState(inputDisplay_);
-    const auto row = InputDisplayPainter::geometry(visual, rect());
+    const auto row = InputDisplayPainter::geometry(visual, rect(), gameRect().width());
     if (row.scale <= 0) return;
     const qreal dpr = painter.device()->devicePixelRatioF();
     const QSize pixels(qMax(1, qCeil(row.size.width() * dpr)),
