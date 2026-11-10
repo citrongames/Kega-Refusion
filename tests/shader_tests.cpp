@@ -110,6 +110,9 @@ void gpuTests(const QString& directory) {
     source.setPixelColor(0, 0, QColor(240, 10, 20));
     const QRect viewport(8, 4, 64, 32);
     const QImage result = render(pipeline, source, QSize(80, 40), viewport);
+    require(result == render(pipeline, source.convertToFormat(QImage::Format_RGBA8888),
+                             QSize(80, 40), viewport),
+            "RGB32 BGRA upload differed from the RGBA fallback");
     require(result.pixelColor(0, 0) == QColor(Qt::black) &&
             result.pixelColor(79, 20) == QColor(Qt::black), "GPU game borders are not black");
     const QColor center = result.pixelColor(40, 20);

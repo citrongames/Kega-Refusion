@@ -185,7 +185,7 @@ private:
     RunClock runClock_;
     double runRate_ = 0;
     quint64 ticksPerFrame_ = 0;
-    QByteArray serializeCore(bool includeClock) const;
+    QByteArray serializeCore(bool includeClock, qsizetype prefix = 0, qsizetype suffix = 0) const;
     QByteArray captureMoviePayload(bool checksum, bool includeClock) const;
     bool restoreCore(const char* data, qsizetype size, bool transactional = true);
     struct Api;

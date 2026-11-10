@@ -1351,21 +1351,26 @@ QByteArray LibretroHost::unpackNetworkState(const QByteArray& packed) {
     return result;
 }
 QByteArray LibretroHost::serialize() const { return serializeCore(false); }
-QByteArray LibretroHost::serializeCore(bool includeClock) const {
+QByteArray LibretroHost::serializeCore(bool includeClock, qsizetype prefix, qsizetype suffix) const {
     if (!loaded_) return {};
     const qsizetype size = serializedSize();
-    if (size <= 0 || size > maxStateSize - (includeClock ? runClockBytes : 0)) return {};
+    const qsizetype clockBytes = includeClock ? runClockBytes : 0;
+    if (size <= 0 || size > maxStateSize - clockBytes - prefix - suffix) return {};
+    const qsizetype total = prefix + size + clockBytes + suffix;
     QByteArray result;
     if (linkPeer_) {
         result = captureLinkedState();
         if (result.size() != size) return {};
-        if (includeClock) result.resize(size + runClockBytes);
+        if (prefix) result.prepend(QByteArray(prefix, char(0)));
+        result.resize(total);
     } else {
-        result = QByteArray(size + (includeClock ? runClockBytes : 0), char(0));
-        if (!api_->serialize(result.data(),size_t(size))) return {};
+        // The core may leave padding unwritten. Keep it deterministic and
+        // serialize straight into the final rewind envelope when present.
+        result = QByteArray(total, char(0));
+        if (!api_->serialize(result.data() + prefix, size_t(size))) return {};
     }
     if (includeClock) {
-        char* tail = result.data() + size;
+        char* tail = result.data() + prefix + size;
         std::memcpy(tail,runClockMagic,8);
         qToBigEndian(runClock_.frames,tail+8);
         qToBigEndian(runClock_.ticks,tail+16);
@@ -1413,25 +1418,26 @@ unsigned LibretroHost::occupiedStateSlots() const {
     return mask;
 }
 QByteArray LibretroHost::captureRewindState() const {
-    const auto core = serializeCore(true);
-    if (core.isEmpty()) return {};
-    qsizetype total = core.size() + 20;
-    for (auto size : saveMemorySizes_) {
-        if (size > size_t(maxStateSize) || total + qsizetype(size) > maxStateSize) return {};
-        total += qsizetype(size);
-    }
-    QByteArray result("KRREW001", 8);
-    result.reserve(total);
-    for (quint32 size : {quint32(core.size()), quint32(saveMemorySizes_[0]), quint32(saveMemorySizes_[1])}) {
-        const quint32 encoded = qToBigEndian(size);
-        result.append(reinterpret_cast<const char*>(&encoded), 4);
-    }
-    result += core;
+    const auto ram = saveMemorySizes_[0], rtc = saveMemorySizes_[1];
+    if (ram > size_t(maxStateSize) || rtc > size_t(maxStateSize)) return {};
+    constexpr qsizetype header = 20;
+    const qsizetype suffix = qsizetype(ram + rtc);
+    QByteArray result = serializeCore(true, header, suffix);
+    if (result.isEmpty()) return {};
+    const qsizetype coreBytes = result.size() - header - suffix;
+    char* bytes = result.data();
+    std::memcpy(bytes, "KRREW001", 8);
+    qToBigEndian(quint32(coreBytes), bytes + 8);
+    qToBigEndian(quint32(ram), bytes + 12);
+    qToBigEndian(quint32(rtc), bytes + 16);
+    char* target = bytes + header + coreBytes;
     for (unsigned i = 0; i < 2; ++i) {
         const auto size = saveMemorySizes_[i];
+        if (!size) continue;
         const void* data = api_->get_memory_data(i ? RETRO_MEMORY_RTC : RETRO_MEMORY_SAVE_RAM);
-        if (size && !data) return {};
-        if (size) result.append(static_cast<const char*>(data), qsizetype(size));
+        if (!data) return {};
+        std::memcpy(target, data, size);
+        target += size;
     }
     return result;
 }

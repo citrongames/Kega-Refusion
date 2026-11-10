@@ -386,13 +386,23 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     const bool hasSpriteOwnership = usesSpriteOwnership && spriteOwnership.size() == frame.size()
         && spriteOwnership.format() == QImage::Format_Grayscale8;
     // QImage starts at the top; FBOs and every GLSL pass use OpenGL's bottom-left origin.
-#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-    QImage pixels = frame.convertToFormat(QImage::Format_RGBA8888).flipped(Qt::Vertical);
+    // The core supplies RGB32. On little-endian hosts its bytes are BGRA, so only
+    // flip the rows and let OpenGL handle channel order during the texture upload.
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+    const bool uploadBgra = frame.format() == QImage::Format_RGB32;
 #else
-    QImage pixels = frame.convertToFormat(QImage::Format_RGBA8888).mirrored();
+    const bool uploadBgra = false;
 #endif
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+    QImage pixels = uploadBgra ? frame.flipped(Qt::Vertical)
+                               : frame.convertToFormat(QImage::Format_RGBA8888).flipped(Qt::Vertical);
+#else
+    QImage pixels = uploadBgra ? frame.mirrored()
+                               : frame.convertToFormat(QImage::Format_RGBA8888).mirrored();
+#endif
+    const unsigned uploadFormat = uploadBgra ? GL_BGRA : GL_RGBA;
     if (hasSpriteOwnership) {
-        // This upload already owns its flipped RGBA pixels. Pack only its spare
+        // This upload already owns its flipped pixels. Pack only its spare
         // alpha byte: clean source frames, captures and external shaders retain
         // their normal pixels. Row pointers avoid per-pixel Qt API calls.
         auto* rgba = pixels.bits();
@@ -406,11 +416,11 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     }
     if (textureSize_ != frame.size()) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, frame.width(), frame.height(), 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, pixels.constBits());
+                     uploadFormat, GL_UNSIGNED_BYTE, pixels.constBits());
         textureSize_ = frame.size();
     } else {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width(), frame.height(),
-                        GL_RGBA, GL_UNSIGNED_BYTE, pixels.constBits());
+                        uploadFormat, GL_UNSIGNED_BYTE, pixels.constBits());
     }
     unsigned source = texture_;
     input = frame.size();
