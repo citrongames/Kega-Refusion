@@ -1,0 +1,21 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -4027,14 +4027,11 @@
+       ((system_hw == SYSTEM_MD) || (system_hw == SYSTEM_MCD));
+    if (!forced && memcmp(rominfo.consoletype, "SEGA 32X", 8) != 0 && strcasecmp(extension, "32x") != 0)
+       return true;
+-   if (!kegarefusion_read_32x_bios(dir, "32X_G_BIOS.BIN", g, sizeof(g)) ||
+-       !kegarefusion_read_32x_bios(dir, "32X_M_BIOS.BIN", m, sizeof(m)) ||
+-       !kegarefusion_read_32x_bios(dir, "32X_S_BIOS.BIN", s, sizeof(s)))
+-   {
+-      if (log_cb) log_cb(RETRO_LOG_ERROR, "32X requires complete G/M/S BIOS in the system directory.\n");
++   bool have_g = kegarefusion_read_32x_bios(dir, "32X_G_BIOS.BIN", g, sizeof(g));
++   bool have_m = kegarefusion_read_32x_bios(dir, "32X_M_BIOS.BIN", m, sizeof(m));
++   bool have_s = kegarefusion_read_32x_bios(dir, "32X_S_BIOS.BIN", s, sizeof(s));
++   if (!kegarefusion_32x_attach(have_g ? g : NULL, have_m ? m : NULL, have_s ? s : NULL))
+       return false;
+-   }
+-   if (!kegarefusion_32x_attach(g, m, s)) return false;
+    return kegarefusion_32x_prepare_filter() != 0;
+ }
+ #endif

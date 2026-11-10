@@ -2,7 +2,7 @@
 #include <QString>
 #include <QStringList>
 
-// User-provided, original 32X BIOS pieces. No BIOS bytes are bundled.
+// Resolves optional original 32X firmware. The core supplies missing boot programs.
 class Sega32xBios final {
 public:
     enum class Piece { M68k, MasterSh2, SlaveSh2 };

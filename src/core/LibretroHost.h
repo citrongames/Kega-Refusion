@@ -176,6 +176,8 @@ private:
     QByteArray stateCoreIdentity() const;
     bool acceptsLegacyMovieCore(const QByteArray& identity) const;
     QJsonObject movieBiosFingerprints() const;
+    void snapshot32xBios();
+    QJsonObject active32xBiosFingerprints_;
     quint32 debugVideoMask_ = 0, debugBackdrop_ = 0xff00ff;
     quint64 debugAudioMask_ = 0;
     std::array<quint8,38> debugAudioGains_ = [] { std::array<quint8,38> gains{}; gains.fill(100); return gains; }();

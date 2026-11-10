@@ -208,6 +208,92 @@ Identity exercise32x(const QString& corePath, const QString& dataPath, const QSt
     return beforeReset;
 }
 
+void verifyMixedBiosGuards(const QString& corePath, const QString& dataPath,
+                           const QString& cartridgePath, const QString& biosPath,
+                           const QString& biosSource) {
+    QJsonObject originalConfig;
+    QByteArray networkIdentity;
+    {
+        LibretroHost original(corePath, dataPath);
+        original.setExpansionDevices(false, true);
+        QString error;
+        require(original.load(cartridgePath, error), "cannot load 32X with original BIOS");
+        originalConfig = original.movieConfiguration();
+        networkIdentity = original.networkCompatibility();
+        require(networkIdentity.size() == 32, "real core lacks network compatibility");
+    }
+    require(QFile::remove(QDir(biosPath).filePath(QStringLiteral("renamed_32x_master.rom"))),
+            "cannot isolate a missing Master SH2 BIOS");
+    LibretroHost mixed(corePath, dataPath);
+    mixed.setExpansionDevices(false, true);
+    QString error;
+    require(mixed.load(cartridgePath, error), "mixed original/built-in 32X BIOS failed to load");
+    const auto mixedConfig = mixed.movieConfiguration();
+    const auto bios = mixedConfig.value(QStringLiteral("bios")).toObject();
+    require(bios.value(QStringLiteral("32X_G_BIOS.BIN")).toString().size() == 64,
+            "original 68000 BIOS fingerprint disappeared");
+    require(bios.value(QStringLiteral("32X_M_BIOS.BIN")).toString() ==
+                QStringLiteral("builtin-32x-m-v1"),
+            "built-in Master SH2 BIOS lacks a role-specific identity");
+    require(bios.value(QStringLiteral("32X_S_BIOS.BIN")).toString().size() == 64,
+            "original Slave SH2 BIOS fingerprint disappeared");
+    require(!mixed.prepareMovie(originalConfig, error) && error.contains(QStringLiteral("BIOS")),
+            "recording accepted different 32X BIOS");
+    auto originalNetwork = originalConfig;
+    originalNetwork.insert(QStringLiteral("networkCompatibility"),
+                           QString::fromLatin1(networkIdentity.toHex()));
+    error.clear();
+    require(!mixed.prepareNetwork(originalNetwork, error) && error.contains(QStringLiteral("BIOS")),
+            "netplay accepted different 32X BIOS");
+    auto oldMissing = mixedConfig;
+    auto oldBios = bios;
+    oldBios.insert(QStringLiteral("32X_M_BIOS.BIN"), QStringLiteral("missing"));
+    oldMissing.insert(QStringLiteral("bios"), oldBios);
+    error.clear();
+    require(!mixed.prepareMovie(oldMissing, error) && error.contains(QStringLiteral("BIOS")),
+            "recording treated legacy missing as built-in 32X BIOS");
+    oldMissing.insert(QStringLiteral("networkCompatibility"),
+                      QString::fromLatin1(networkIdentity.toHex()));
+    error.clear();
+    require(!mixed.prepareNetwork(oldMissing, error) && error.contains(QStringLiteral("BIOS")),
+            "netplay treated legacy missing as built-in 32X BIOS");
+    error.clear();
+    require(mixed.prepareMovie(mixedConfig, error),
+            "matching mixed 32X BIOS configuration was rejected");
+    require(mixed.restoreMovieConfiguration(error), "cannot end matching recording setup");
+
+    // An import changes the next power cycle, not the BIOS executing now.
+    const auto originalMaster = sourceFile(QDir(biosSource), biosFiles[2]);
+    require(!originalMaster.isEmpty(), "original Master SH2 BIOS source disappeared");
+    const auto installedMaster = QDir(biosPath).filePath(QStringLiteral("32X_M_BIOS.BIN"));
+    require(QFile::copy(originalMaster, installedMaster), "cannot import Master SH2 BIOS");
+    require(mixed.movieConfiguration().value(QStringLiteral("bios")).toObject() == bios,
+            "import changed the running built-in BIOS identity");
+    error.clear();
+    require(!mixed.prepareMovie(mixedConfig, error) && error.contains(QStringLiteral("BIOS")),
+            "recording ignored the imported BIOS on its next power cycle");
+    auto mixedNetwork = mixedConfig;
+    mixedNetwork.insert(QStringLiteral("networkCompatibility"),
+                        QString::fromLatin1(networkIdentity.toHex()));
+    error.clear();
+    require(!mixed.prepareNetwork(mixedNetwork, error) && error.contains(QStringLiteral("BIOS")),
+            "netplay ignored the imported BIOS on its next power cycle");
+
+    error.clear();
+    require(mixed.hardReset(error), "cannot power cycle into imported Master SH2 BIOS");
+    const auto originalMasterConfig = mixed.movieConfiguration();
+    require(originalMasterConfig.value(QStringLiteral("bios")).toObject()
+                .value(QStringLiteral("32X_M_BIOS.BIN")).toString().size() == 64,
+            "power cycle did not select imported Master SH2 BIOS");
+    require(QFile::remove(installedMaster), "cannot remove imported Master SH2 BIOS");
+    require(mixed.movieConfiguration().value(QStringLiteral("bios")).toObject()
+                .value(QStringLiteral("32X_M_BIOS.BIN")).toString().size() == 64,
+            "removal changed the running original BIOS identity");
+    error.clear();
+    require(!mixed.prepareMovie(originalMasterConfig, error) && error.contains(QStringLiteral("BIOS")),
+            "recording ignored the removed BIOS on its next power cycle");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -237,6 +323,7 @@ int main(int argc, char** argv) {
         requireOnlyRenamedBios(biosPath);
         sameIdentity(exercise32x(corePath, dataPath, cartridgePath, true), canonical32x);
         requireOnlyRenamedBios(biosPath);
+        verifyMixedBiosGuards(corePath, dataPath, cartridgePath, biosPath, source);
         std::puts("Real-core CD and 32X BIOS loads, hard resets, quick-state compatibility, identities and no-copy rename passed");
         return 0;
     } catch (const std::exception& error) {

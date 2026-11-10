@@ -17,7 +17,7 @@
 #include <utility>
 
 namespace {
-enum class VirtualKind { Memory, Alias, Mp3 };
+enum class VirtualKind { Memory, Alias, Mp3, Hidden };
 struct VirtualFile {
     VirtualKind kind = VirtualKind::Memory;
     QByteArray bytes;
@@ -43,7 +43,7 @@ int32_t statSize(qint64 size) {
 bool virtualDirectory(const QString& path) {
     const QString prefix = path.endsWith(QLatin1Char('/')) ? path : path + QLatin1Char('/');
     for (auto it = virtualFiles.cbegin(); it != virtualFiles.cend(); ++it)
-        if (it.key().startsWith(prefix)) return true;
+        if (it->kind != VirtualKind::Hidden && it.key().startsWith(prefix)) return true;
     return false;
 }
 
@@ -93,6 +93,7 @@ retro_vfs_file_handle* openFile(const char* rawPath, unsigned mode, unsigned) {
     handle->originalPath = QByteArray(rawPath);
     auto it = virtualFiles.constFind(path);
     if (it != virtualFiles.cend()) {
+        if (it->kind == VirtualKind::Hidden) return nullptr;
         if (access != RETRO_VFS_FILE_ACCESS_READ || update) {
             setVirtualError(path, Localization::text(QStringLiteral("виртуальные файлы доступны только для чтения")));
             return nullptr;
@@ -252,6 +253,7 @@ int fileStat(const char* rawPath, int32_t* size) {
     if (path.isEmpty()) return 0;
     auto it = virtualFiles.constFind(path);
     if (it != virtualFiles.cend()) {
+        if (it->kind == VirtualKind::Hidden) return 0;
         if (it->kind == VirtualKind::Memory) {
             if (size) *size = statSize(it->bytes.size());
             return RETRO_VFS_STAT_IS_VALID;
@@ -293,13 +295,15 @@ retro_vfs_dir_handle* openDirectory(const char* rawPath, bool includeHidden) {
         if (includeHidden) filters |= QDir::Hidden;
         for (const QFileInfo& info : dir.entryInfoList(filters, QDir::Name)) {
             const QByteArray name = info.fileName().toUtf8();
+            const auto masked = virtualFiles.constFind(normalized(info.absoluteFilePath()));
+            if (masked != virtualFiles.cend() && masked->kind == VirtualKind::Hidden) continue;
             handle->entries.append({name, info.isDir()});
             seen.insert(name);
         }
     }
     const QString prefix = path.endsWith(QLatin1Char('/')) ? path : path + QLatin1Char('/');
     for (auto it = virtualFiles.cbegin(); it != virtualFiles.cend(); ++it) {
-        if (!it.key().startsWith(prefix)) continue;
+        if (it->kind == VirtualKind::Hidden || !it.key().startsWith(prefix)) continue;
         const QString remainder = it.key().mid(prefix.size());
         const int slash = remainder.indexOf(QLatin1Char('/'));
         const QString entry = slash < 0 ? remainder : remainder.left(slash);
@@ -354,6 +358,10 @@ void CoreFileSystem::addMemoryFile(QString virtualPath, QByteArray bytes) {
 void CoreFileSystem::addAlias(QString virtualPath, QString actualPath, bool mp3) {
     virtualFiles.insert(normalized(virtualPath),
         {mp3 ? VirtualKind::Mp3 : VirtualKind::Alias, {}, normalized(actualPath)});
+}
+
+void CoreFileSystem::hideFile(QString virtualPath) {
+    virtualFiles.insert(normalized(virtualPath), {VirtualKind::Hidden, {}, {}});
 }
 
 QString CoreFileSystem::lastError() { return vfsError; }

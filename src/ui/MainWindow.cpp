@@ -1854,7 +1854,8 @@ void MainWindow::editSettings(int initialPage) {
     games->addRow(Localization::text(QStringLiteral("32X для обычных игр:")), x32Attachment);
     auto* attachmentHelp = new QLabel(Localization::text(QStringLiteral(
         "Игры Sega CD и 32X подключают нужное устройство автоматически. «Подключено» оставляет устройство "
-        "и для обычных игр Mega Drive. Нужны BIOS. Изменения применятся при следующей загрузке или перезапуске питания.")), &dialog);
+        "и для обычных игр Mega Drive. Для Sega CD нужен BIOS региона; 32X использует встроенные BIOS, "
+        "если оригинальные не установлены. Изменения применятся при следующей загрузке или перезапуске питания.")), &dialog);
     attachmentHelp->setWordWrap(true);
     games->addRow(attachmentHelp);
     const bool fixChecksum = settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool();
@@ -2189,7 +2190,7 @@ void MainWindow::editSettings(int initialPage) {
     bool biosCreated = false;
     const auto createBiosPage = [this, &dialog, pages, biosPlaceholder, addPage] {
         auto* bios = addPage(QStringLiteral("BIOS"),
-            Localization::text(QStringLiteral("Файлы BIOS для запуска Sega CD и 32X.")));
+            Localization::text(QStringLiteral("BIOS Sega CD и дополнительные оригинальные BIOS 32X.")));
         const auto reportBiosImport = [&dialog](const QString& title, const QStringList& imported,
                                                const QString& error, const QString& emptyMessage) {
             QString message;
@@ -2250,8 +2251,8 @@ void MainWindow::editSettings(int initialPage) {
         });
         auto* x32Group = new QGroupBox(QStringLiteral("32X"), &dialog);
         auto* x32Layout = new QVBoxLayout(x32Group);
-        auto* x32Hint = new QLabel(Localization::text(QStringLiteral("Для 32X нужны три файла BIOS. "
-            "Для CD32X также требуется BIOS Sega CD соответствующего региона.")), x32Group);
+        auto* x32Hint = new QLabel(Localization::text(QStringLiteral("32X использует оригинальный BIOS для каждой установленной части (68000, Master SH2, Slave SH2), "
+            "а для отсутствующих частей — встроенный. Для CD32X также требуется BIOS Sega CD соответствующего региона.")), x32Group);
         x32Hint->setWordWrap(true);
         x32Layout->addWidget(x32Hint);
         auto* x32Form = new QFormLayout;
@@ -2272,8 +2273,8 @@ void MainWindow::editSettings(int initialPage) {
                 QString error;
                 const QString path = Sega32xBios::resolve(dataPath_, pieces[i], error);
                 const bool installed = !path.isEmpty();
-                x32StatusLabels[i]->setText(installed ? Localization::text(QStringLiteral("Установлен"))
-                                                   : Localization::text(QStringLiteral("Не готов")));
+                x32StatusLabels[i]->setText(installed ? Localization::text(QStringLiteral("Оригинальный"))
+                                                   : Localization::text(QStringLiteral("Встроенный")));
                 x32StatusLabels[i]->setToolTip(installed ? QDir::toNativeSeparators(path) : error);
             }
         };

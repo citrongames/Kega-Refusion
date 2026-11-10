@@ -262,8 +262,7 @@ int main(int argc, char** argv) {
         // Explicitly authorized imports into a fresh temporary directory only.
         // ROMs and source BIOS files are opened read-only by the existing helpers.
         const auto x32Imported = Sega32xBios::importDirectory(source, temp.path(), error);
-        const bool validBios = Sega32xBios::validate(temp.path(), error);
-        require(validBios, QStringLiteral("32X BIOS import failed: %1").arg(error));
+        error.clear(); // Missing 32X pieces use the same built-in loaders as the application.
         QString cdImportError;
         const auto cdImported = SegaCdBios::importDirectory(source, temp.path(), cdImportError);
         LibretroHost host(core, temp.path());

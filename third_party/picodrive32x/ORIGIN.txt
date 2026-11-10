@@ -51,3 +51,8 @@ DRC adaptations:
 - Donor diagnostic printf output is disabled; no exit/abort paths are retained.
 - Failed-translation teardown clears list heads before later engine re-enable.
 - cmn.h include guard added; compiler.h instruction limit changed to 64.
+
+The optional substitute 32X boot programs in src/core32x/gpx/bootrom.h
+adapt pico/32x/memory.c at the same commit. Guest SH-2 code performs the
+cartridge setup done in pico/32x/32x.c upstream. The boot programs are
+emulator replacements, not Sega firmware dumps.

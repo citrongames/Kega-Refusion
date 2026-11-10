@@ -3,6 +3,7 @@
  * This file is compiled only in the experimental GPX fork. */
 #include "shared.h"
 #include "bridge.h"
+#include "bootrom.h"
 #include "../machine.h"
 #include "../state.h"
 #ifdef KEGA_SH2_DRC
@@ -38,6 +39,7 @@ typedef struct Gpx32x {
     cpu_memory_map original[256];
     t_zbank_memory_map original_zbank[256];
     int has_cart_rom;
+    uint32_t boot_identity; /* Zero in existing states with three original BIOS. */
     uint8_t boot_page[65536];
     uint64_t frame_base, hint_due;
     unsigned now, main_running, hint_count;
@@ -365,10 +367,15 @@ static void audio_delta(void *user,uint64_t t,int32_t l,int32_t r)
 int kegarefusion_32x_attach(const uint8_t *g,const uint8_t *m,const uint8_t *s)
 {
     Kega32xMachineHost host={0};Gpx32x *next;unsigned i;
-    if(!g || !m || !s)return 0;
+    uint8_t builtin_g[256], builtin_m[2048], builtin_s[1024];
+    unsigned builtin_mask = (g ? 0u : 1u) | (m ? 0u : 2u) | (s ? 0u : 4u);
+    if (!g) { builtin_boot_68k(builtin_g); g = builtin_g; }
+    if (!m) { builtin_boot_sh2(builtin_m, 0); m = builtin_m; }
+    if (!s) { builtin_boot_sh2(builtin_s, 1); s = builtin_s; }
     kegarefusion_32x_detach();
     next=calloc(1,sizeof(*next));if(!next)return 0;
     ctx=next;
+    ctx->boot_identity = builtin_mask ? (1u << 8) | builtin_mask : 0; /* replacement boot ROMs v1 */
     maps_capture();
     for(i=0;i<256;i++)WRITE_BYTE(ctx->boot_page,i,g[i]);
     host.rom_read16=rom_read;host.rom_fetch_is_pure=rom_fetch_is_pure;host.changed=changed;host.render_sync=render_sync;host.audio_delta=audio_delta;
@@ -618,14 +625,14 @@ int kegarefusion_32x_state_save(void *data,size_t size)
     put32(p+32,ctx->now);put32(p+36,ctx->hint_count);put32(p+40,(uint32_t)(ctx->line+1));
     put32(p+44,(uint32_t)ctx->has_cart_rom);
     hint=((uint32_t)*(uint16_t *)(void *)(ctx->boot_page+0x70)<<16)|*(uint16_t *)(void *)(ctx->boot_page+0x72);
-    put32(p+48,hint);put32(p+52,0);return 1;
+    put32(p+48,hint);put32(p+52,ctx->boot_identity);return 1;
 }
 int kegarefusion_32x_state_prepare(const void *data,size_t size)
 {
     const uint8_t *p=data;uint64_t base,now,limit=MCYCLES_PER_LINE*313u;
     if(ctx)ctx->restore.ready=0;
     if(!p || size!=kegarefusion_32x_state_size() || !snapshot_storage() || ctx->main_running ||
-       memcmp(p,"KR32X001",8) || get32(p+8)!=1 || get32(p+12)!=size || get32(p+52) ||
+       memcmp(p,"KR32X001",8) || get32(p+8)!=1 || get32(p+12)!=size || get32(p+52)!=ctx->boot_identity ||
        get32(p+32)>limit || get32(p+36)>255 || get32(p+40)>313 ||
        get32(p+44)!=(unsigned)ctx->has_cart_rom)return 0;
     base=get64(p+16);

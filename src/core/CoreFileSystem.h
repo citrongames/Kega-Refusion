@@ -13,6 +13,7 @@ public:
     static void removeVirtualFile(const QString& virtualPath);
     static void addMemoryFile(QString virtualPath, QByteArray bytes);
     static void addAlias(QString virtualPath, QString actualPath, bool mp3 = false);
+    static void hideFile(QString virtualPath);
     static QString lastError();
     static void clearError();
     static quint64 mp3PcmBytesRead();

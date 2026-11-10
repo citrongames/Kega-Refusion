@@ -1053,6 +1053,11 @@
     "Не удалось прочитать предыдущее сохранение %1: %2": "Could not read previous save %1: %2",
     "Не удалось создать резервную копию %1: %2": "Could not create backup %1: %2",
     "Не удалось записать резервную копию %1: %2": "Could not write backup %1: %2",
-    "Лицензии и условия распространения": "Licenses and distribution terms"
+    "Лицензии и условия распространения": "Licenses and distribution terms",
+    "Игры Sega CD и 32X подключают нужное устройство автоматически. «Подключено» оставляет устройство и для обычных игр Mega Drive. Для Sega CD нужен BIOS региона; 32X использует встроенные BIOS, если оригинальные не установлены. Изменения применятся при следующей загрузке или перезапуске питания.": "Sega CD and 32X games connect the required hardware automatically. “Connected” also keeps the hardware enabled for standard Mega Drive games. Sega CD requires a regional BIOS; 32X uses built-in BIOS when originals are not installed. Changes take effect when the next game loads or after a power cycle.",
+    "BIOS Sega CD и дополнительные оригинальные BIOS 32X.": "Sega CD BIOS and optional original 32X BIOS files.",
+    "32X использует оригинальный BIOS для каждой установленной части (68000, Master SH2, Slave SH2), а для отсутствующих частей — встроенный. Для CD32X также требуется BIOS Sega CD соответствующего региона.": "32X uses an original BIOS for each installed component (68000, Master SH2, Slave SH2), with a built-in fallback for each missing component. CD32X also requires a Sega CD BIOS for the matching region.",
+    "Оригинальный": "Original",
+    "Встроенный": "Built-in"
   }
 }

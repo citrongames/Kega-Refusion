@@ -18,7 +18,7 @@ Emulation is based on a modified **Genesis Plus GX** core, with integrated 32X s
 | 32X and Sega CD + 32X | Integrated, experimental support; compatibility is still being improved |
 | Paprium | Experimental cartridge support, external MP3 soundtrack and CPU MATE integration |
 
-Supply your own games and required BIOS files. Neither is included.
+Supply your own games and Sega CD BIOS files. The 32X uses each recognized original G/M/S BIOS when available and a built-in fallback for each missing piece. CD32X still requires the Sega CD BIOS for the selected region.
 
 ## Features
 

@@ -44,6 +44,24 @@ QString resolvedBiosPath(const QString& dataPath, const QString& role) {
         if (role == QLatin1String(biosRoleNames[i+3])) return Sega32xBios::resolve(dataPath,pieces[i],error);
     return {};
 }
+// The fallback is part of 32X execution. Bump a role's version if its
+// built-in boot program or deterministic boot behavior changes.
+QString biosFingerprint(const QString& dataPath, const QString& role) {
+    int index = 0;
+    while (index < 6 && role != QLatin1String(biosRoleNames[index])) ++index;
+    if (index == 6) return {};
+    static constexpr qint64 sizes[]{131072,131072,131072,256,2048,1024};
+    static const QString fallback[]{QStringLiteral("missing"),QStringLiteral("missing"),
+        QStringLiteral("missing"),QStringLiteral("builtin-32x-g-v1"),
+        QStringLiteral("builtin-32x-m-v1"),QStringLiteral("builtin-32x-s-v1")};
+    QFile file(resolvedBiosPath(dataPath,role));
+    if (file.fileName().isEmpty() || !file.open(QIODevice::ReadOnly))
+        return fallback[index];
+    if (file.size() != sizes[index]) return QStringLiteral("invalid");
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    return hash.addData(&file) ? QString::fromLatin1(hash.result().toHex())
+                               : QStringLiteral("unreadable");
+}
 constexpr qsizetype maxStateSize = 64 * 1024 * 1024;
 constexpr qsizetype maxAchievementProgressSize = 2 * 1024 * 1024;
 // The largest supported RetroAchievements map is Sega CD: 0xB0000 bytes.
@@ -323,10 +341,6 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
             error = Localization::text(QStringLiteral("Этот диск требует CD32X, но загруженное ядро не поддерживает 32X."));
             return false;
         }
-        if (!Sega32xBios::validate(dataPath_, error)) {
-            error.prepend(Localization::text(QStringLiteral("Для этого диска CD32X нужны три BIOS 32X.\n")));
-            return false;
-        }
     }
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
@@ -342,10 +356,10 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (!accepted) {
         error = Localization::text(QStringLiteral("Не удалось загрузить Sega CD. Проверьте образ, дорожки и BIOS региона.\n%1\n%2\n%3"))
             .arg(SegaCdBios::status(dataPath_,1),SegaCdBios::status(dataPath_,2),SegaCdBios::status(dataPath_,3));
-        if (needs32x) error += QLatin1Char('\n') + Sega32xBios::status(dataPath_);
         unload(); return false;
     }
     loaded_ = true;
+    snapshot32xBios();
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
     if (!CoreFileSystem::lastError().isEmpty()) { error = CoreFileSystem::lastError(); unload(); return false; }
@@ -495,7 +509,6 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
             error = Localization::text(QStringLiteral("Это ядро ещё не поддерживает 32X."));
             return false;
         }
-        if (!Sega32xBios::validate(dataPath_, error)) return false;
     }
     if (attachCd_ && mdCartridge && content.size() > 8 * 1024 * 1024) {
         error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
@@ -535,6 +548,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
+    snapshot32xBios();
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
     gamePath_ = info.absoluteFilePath();
@@ -578,6 +592,7 @@ void LibretroHost::unload() {
     }
     papriumMusic_.clear();
     loaded_ = false;
+    active32xBiosFingerprints_ = {};
     contentNeeds32x_ = false;
     if (!linkParent_) CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0;
@@ -604,7 +619,7 @@ void LibretroHost::setExpansionDevices(bool cd, bool x32) {
     attachCd_ = cd; attach32x_ = x32;
 }
 bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
-    // Refresh only the six BIOS aliases at a power/load boundary, never during
+    // Refresh BIOS aliases and 32X fallback masks at a power/load boundary, never during
     // emulation. Disc aliases remain mounted. The peer shares this thread's VFS.
     if (!linkParent_) for (const auto* name : biosRoleNames) {
         const QString role = QString::fromLatin1(name);
@@ -612,6 +627,8 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
         CoreFileSystem::removeVirtualFile(virtualPath);
         const QString actual = resolvedBiosPath(dataPath_,role);
         if (!actual.isEmpty()) CoreFileSystem::addAlias(virtualPath,actual);
+        else if (role.startsWith(QLatin1String("32X_")))
+            CoreFileSystem::hideFile(virtualPath);
     }
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
@@ -713,7 +730,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     achievementConsoleCache_ = 0;
     if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
     // The active attachment also covers CHD, whose 32X header is core-detected.
-    // Recheck user BIOS before unloading a working game for its power cycle.
+    // Recheck the required Sega CD BIOS before unloading for a power cycle.
     const bool mdHardware = api_->system_hw ? ((api_->system_hw() & 0x80u) != 0)
         : (contentExtension_ != "sms" && contentExtension_ != "gg" && contentExtension_ != "sg");
     const auto wantedOption = [this,applyPending](const char* key, bool preference) {
@@ -721,10 +738,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         const auto value = variables_.find(key);
         return value != variables_.end() && (value->second == "connected" || value->second == "sega/mega cd");
     };
-    const bool target32x = wantedOption("genesis_plus_gx_32x_add_on", attach32x_);
     const bool targetCd = wantedOption("genesis_plus_gx_add_on", attachCd_);
-    if (((api_->features && (api_->features() & 2u)) || (target32x && mdHardware)) &&
-        !Sega32xBios::validate(dataPath_,error)) return false;
     if (targetCd && mdHardware && !isCd()) {
         if (content_.size() > 8 * 1024 * 1024) {
             error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
@@ -760,6 +774,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     loaded_ = true;
+    snapshot32xBios();
     runClock_ = {};
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
@@ -1851,31 +1866,24 @@ QByteArray LibretroHost::movieGameIdentity() const {
     }
     return hash.result();
 }
+void LibretroHost::snapshot32xBios() {
+    active32xBiosFingerprints_ = {};
+    // Capture only the hardware the core actually attached. The files can be
+    // imported or removed while the current boot remains in memory.
+    if (!api_->features || !(api_->features() & 2u)) return;
+    for (int i = 3; i < 6; ++i) {
+        const auto name = QLatin1String(biosRoleNames[i]);
+        active32xBiosFingerprints_.insert(name,biosFingerprint(dataPath_,name));
+    }
+}
 QJsonObject LibretroHost::movieBiosFingerprints() const {
     QJsonObject result;
-    const bool cd = hasCdHardware();
-    const bool x32 = api_->features && (api_->features() & 2u);
-    const auto fingerprint = [this,&result](const char* name, qint64 expectedSize) {
-        QFile source(resolvedBiosPath(dataPath_,QString::fromLatin1(name)));
-        if (source.fileName().isEmpty() || !source.open(QIODevice::ReadOnly)) {
-            result.insert(QLatin1String(name), QStringLiteral("missing")); return;
-        }
-        if (source.size() != expectedSize) {
-            result.insert(QLatin1String(name), QStringLiteral("invalid")); return;
-        }
-        QCryptographicHash hash(QCryptographicHash::Sha256);
-        if (!hash.addData(&source)) {
-            result.insert(QLatin1String(name), QStringLiteral("unreadable")); return;
-        }
-        result.insert(QLatin1String(name), QString::fromLatin1(hash.result().toHex()));
-    };
-    if (cd) for (const auto* name : {"bios_CD_J.bin", "bios_CD_U.bin", "bios_CD_E.bin"})
-        fingerprint(name, 131072);
-    if (x32) {
-        fingerprint("32X_G_BIOS.BIN", 256);
-        fingerprint("32X_M_BIOS.BIN", 2048);
-        fingerprint("32X_S_BIOS.BIN", 1024);
+    if (hasCdHardware()) for (int i = 0; i < 3; ++i) {
+        const auto name = QLatin1String(biosRoleNames[i]);
+        result.insert(name,biosFingerprint(dataPath_,name));
     }
+    for (auto it = active32xBiosFingerprints_.begin(); it != active32xBiosFingerprints_.end(); ++it)
+        result.insert(it.key(),it.value());
     return result;
 }
 QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
@@ -1996,21 +2004,8 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     const auto recordedBios = configuration.value(QStringLiteral("bios")).toObject();
     QJsonObject installedBios;
     for (auto it = recordedBios.begin(); it != recordedBios.end(); ++it) {
-        static const QStringList names{QStringLiteral("bios_CD_J.bin"), QStringLiteral("bios_CD_U.bin"),
-            QStringLiteral("bios_CD_E.bin"), QStringLiteral("32X_G_BIOS.BIN"),
-            QStringLiteral("32X_M_BIOS.BIN"), QStringLiteral("32X_S_BIOS.BIN")};
-        if (!names.contains(it.key())) continue;
-        QFile file(resolvedBiosPath(dataPath_,it.key()));
-        QString value = QStringLiteral("missing");
-        if (!file.fileName().isEmpty() && file.open(QIODevice::ReadOnly)) {
-            const qint64 expected = it.key().startsWith(QStringLiteral("bios_CD_")) ? 131072
-                : it.key() == QLatin1String("32X_G_BIOS.BIN") ? 256
-                : it.key() == QLatin1String("32X_M_BIOS.BIN") ? 2048 : 1024;
-            if (file.size() != expected) value = QStringLiteral("invalid");
-            else { QCryptographicHash hash(QCryptographicHash::Sha256);
-                value = hash.addData(&file) ? QString::fromLatin1(hash.result().toHex()) : QStringLiteral("unreadable"); }
-        }
-        installedBios.insert(it.key(), value);
+        const auto value = biosFingerprint(dataPath_,it.key());
+        if (!value.isEmpty()) installedBios.insert(it.key(),value);
     }
     if (recordedBios != installedBios) {
         error = Localization::text(QStringLiteral("BIOS записи отличаются от установленных.")); return false;
