@@ -568,6 +568,29 @@ void testControlsLayout(MainWindow& window) {
             check(!input->capturing() && pauseKey->text() == originalPause,
                   QStringLiteral("one command click armed keyboard capture"));
 
+            const auto waitingColor = [&](int row, int column) {
+                const QRect cell = commandTable->visualItemRect(commandTable->item(row, column));
+                const QImage sample = commandView->grab(QRect(cell.right() - 8, cell.center().y(), 2, 2)).toImage();
+                const QColor color = sample.pixelColor(0, 0);
+                return color.red() > color.green() + 60 && color.red() > color.blue() + 60;
+            };
+            commandTable->cellDoubleClicked(pauseRow, 2);
+            check(waitingColor(pauseRow, 2) && !waitingColor(pauseRow, 1),
+                  QStringLiteral("waiting gamepad cell not visibly distinguished from keyboard"));
+            press(*controls, Qt::Key_Escape);
+            QKeyEvent escapeUp(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(controls, &escapeUp);
+            check(!waitingColor(pauseRow, 2), QStringLiteral("cancel left a waiting cell highlighted"));
+            child<QPushButton>(*controls, "assignSequence")->click();
+            check(waitingColor(pauseRow, 1), QStringLiteral("sequence did not mark its first row"));
+            press(*controls, Qt::Key_P);
+            QKeyEvent pauseUp(QEvent::KeyRelease, Qt::Key_P, Qt::NoModifier);
+            QApplication::sendEvent(controls, &pauseUp);
+            QApplication::processEvents();
+            check(!waitingColor(pauseRow, 1) && waitingColor(fastRow, 1),
+                  QStringLiteral("waiting highlight did not follow the capture sequence"));
+            controls->cancelCapture();
+
             const auto captureCommand = [&](int row, int key, Qt::KeyboardModifiers modifiers) {
                 commandTable->cellDoubleClicked(row, 1);
                 press(*controls, key, modifiers);

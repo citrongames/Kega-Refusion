@@ -74,7 +74,8 @@ private:
     void clearGameKeyConflicts(int key, int profileFilter = -1, int exceptPlayer = -1,
                                int exceptTarget = -1);
     void clearCommandKeyConflicts(int key, int exceptTarget = -1);
-    void beginCaptureFor(int target);
+    void setCaptureTarget(int target, int column = 0);
+    void beginCaptureFor(int target, int column = 0);
     void startSequence();
     void advanceSequence();
     void skipCapture();

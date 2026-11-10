@@ -14,9 +14,11 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
+#include <QPainter>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTableWidget>
+#include <QStyledItemDelegate>
 #include <QTabBar>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -72,6 +74,33 @@ QTableWidgetItem* cell(const QString& text, int target = -1) {
         item->setData(Qt::UserRole, target);
     return item;
 }
+
+constexpr int waitingForBindingRole = Qt::UserRole + 1;
+
+class BindingCellDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        if (!index.data(waitingForBindingRole).toBool()) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        // Native selection styles vary. Paint the waiting cell consistently,
+        // including when focus has moved from the table to the input handler.
+        painter->save();
+        painter->fillRect(option.rect, QColor(169, 45, 49));
+        QFont font = option.font;
+        font.setBold(true);
+        painter->setFont(font);
+        painter->setPen(Qt::white);
+        const QRect bounds = option.rect.adjusted(4, 0, -4, 0);
+        const QString text = painter->fontMetrics().elidedText(index.data().toString(),
+                                                               option.textElideMode, bounds.width());
+        painter->drawText(bounds, Qt::AlignLeading | Qt::AlignVCenter | Qt::TextSingleLine, text);
+        painter->restore();
+    }
+};
 
 QString padName(const PlayerMapping& mapping, int target) {
     const auto it = mapping.pad.constFind(target);
@@ -216,6 +245,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     gameTable_->verticalHeader()->hide();
     gameTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     gameTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    gameTable_->setItemDelegate(new BindingCellDelegate(gameTable_));
     gameTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     gameTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     gameTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
@@ -245,6 +275,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     commandTable_->verticalHeader()->hide();
     commandTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     commandTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    commandTable_->setItemDelegate(new BindingCellDelegate(commandTable_));
     commandTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     commandTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     commandTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
@@ -407,22 +438,22 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
         stopCapture();
         beginCaptureFor(target);
     });
-    connect(gameTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+    connect(gameTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
         if (const auto* item = gameTable_->item(row, 0)) {
             stopCapture();
-            beginCaptureFor(item->data(Qt::UserRole).toInt());
+            beginCaptureFor(item->data(Qt::UserRole).toInt(), column);
         }
     });
-    connect(commandTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+    connect(commandTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
         if (const auto* item = commandTable_->item(row, 0)) {
             stopCapture();
-            beginCaptureFor(item->data(Qt::UserRole).toInt());
+            beginCaptureFor(item->data(Qt::UserRole).toInt(), column);
         }
     });
     connect(assignButton_, &QPushButton::clicked, this, [this] {
         stopCapture();
         if (selectedTarget_ >= 0)
-            beginCaptureFor(selectedTarget_);
+            beginCaptureFor(selectedTarget_, (commandTabSelected() ? commandTable_ : gameTable_)->currentColumn());
     });
     connect(sequenceButton_, &QPushButton::clicked,
             this, &ControlsPage::startSequence);
@@ -1034,13 +1065,32 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
     return true;
 }
 
-void ControlsPage::beginCaptureFor(int target) {
+void ControlsPage::setCaptureTarget(int target, int column) {
+    const auto mark = [this](int id, int sourceColumn, bool waiting) {
+        if (id < 0) return;
+        auto* table = id < 16 ? gameTable_ : commandTable_;
+        for (int row = 0; row < table->rowCount(); ++row) {
+            if (table->item(row, 0)->data(Qt::UserRole).toInt() != id) continue;
+            for (int col = 1; col <= 2; ++col) {
+                if (!sourceColumn || sourceColumn == col)
+                    table->item(row, col)->setData(waitingForBindingRole, waiting);
+            }
+            break;
+        }
+    };
+    mark(captureTarget_, 0, false);
+    captureTarget_ = target;
+    mark(target, column, true);
+}
+
+void ControlsPage::beginCaptureFor(int target, int column) {
     if (target < 16 && !activeGameTargets().contains(target)) return;
     const QString deviceKey = captureDeviceKey();
     bool padPresent = false;
     for (const InputDevice& device : input_.devices())
         padPresent |= device.key == deviceKey;
-    captureTarget_ = target;
+    const int sourceColumn = (column == 1 || column == 2) ? column : (padPresent ? 0 : 1);
+    setCaptureTarget(target, sourceColumn);
     selectTarget(target);
     setFocus(Qt::OtherFocusReason);
     const QString label = target < 16
@@ -1067,7 +1117,7 @@ void ControlsPage::advanceSequence() {
     ++sequenceIndex_;
     if (sequenceIndex_ >= sequence_.size()) {
         sequence_.clear();
-        captureTarget_ = -1;
+        setCaptureTarget(-1);
         setFeedback(Localization::text(QStringLiteral("Последовательное назначение завершено.")));
         updateActionButtons();
         return;
@@ -1078,7 +1128,7 @@ void ControlsPage::advanceSequence() {
 void ControlsPage::skipCapture() {
     if (captureTarget_ < 0 || sequence_.isEmpty()) return;
     skipping_ = true;
-    captureTarget_ = -1;
+    setCaptureTarget(-1);
     input_.cancelCapture();
     QTimer::singleShot(0, this, [this] {
         if (skipping_)
@@ -1088,7 +1138,7 @@ void ControlsPage::skipCapture() {
 
 void ControlsPage::stopCapture() {
     const bool hadPending = captureTarget_ >= 0 || !sequence_.isEmpty();
-    captureTarget_ = -1;
+    setCaptureTarget(-1);
     sequence_.clear();
     sequenceIndex_ = 0;
     skipping_ = false;
@@ -1101,7 +1151,7 @@ void ControlsPage::stopCapture() {
 void ControlsPage::onCaptured(const PadBinding& binding) {
     if (captureTarget_ < 0) return;
     const int target = captureTarget_;
-    captureTarget_ = -1;
+    setCaptureTarget(-1);
     const QString deviceKey = captureDeviceKey();
     const auto deviceKeys = resolvedDeviceKeys();
     const int profile = int(selectedProfile());
@@ -1145,7 +1195,7 @@ void ControlsPage::onCaptureCancelled() {
         return;
     }
     if (captureTarget_ >= 0) {
-        captureTarget_ = -1;
+        setCaptureTarget(-1);
         sequence_.clear();
         setFeedback(Localization::text(QStringLiteral("Назначение отменено или время ожидания истекло.")));
         updateActionButtons();
@@ -1390,7 +1440,7 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         : key | int(keyEvent->modifiers() & ~Qt::KeypadModifier);
     if (!onKeyboardChanged(target, QKeySequence(QKeyCombination::fromCombined(capturedKey))))
         return true;
-    captureTarget_ = -1;
+    setCaptureTarget(-1);
     if (input_.capturing()) input_.cancelCapture();
     if (!sequence_.isEmpty()) QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
     updateActionButtons();
