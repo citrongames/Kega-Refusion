@@ -488,17 +488,21 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     }
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
     if (!initialize(error)) return false;
-    // Read only the eight console-header bytes in each supported layout.
-    // In SMD, odd/even bytes occupy separate halves of the first 16 KiB block.
+    // Some prototypes declare a Genesis cartridge but start with Sega's 32X
+    // bootstrap. Match its reset vector and the adapter ID check together.
     const auto header32x = [&content](int layout) {
-        constexpr char signature[] = "SEGA 32X";
-        for (qsizetype i = 0; i < 8; ++i) {
-            const qsizetype logical = 0x100 + i;
-            const qsizetype physical = layout == 2 ? 512 + logical / 2 + ((logical & 1) ? 0 : 0x2000)
-                                                  : layout == 1 ? (logical ^ 1) : logical;
-            if (physical >= content.size() || content[physical] != signature[i]) return false;
-        }
-        return true;
+        const auto matches = [&](qsizetype offset, QByteArrayView bytes) {
+            for (char expected : bytes) {
+                const qsizetype physical = layout == 2 ? 512 + offset / 2 + ((offset & 1) ? 0 : 0x2000)
+                                                      : layout == 1 ? (offset ^ 1) : offset;
+                if (physical >= content.size() || content[physical] != expected) return false;
+                ++offset;
+            }
+            return true;
+        };
+        return matches(0x100, "SEGA 32X") ||
+            (matches(4, QByteArrayView("\x00\x00\x03\xf0", 4)) &&
+             matches(0x40c, QByteArrayView("\x0c\xad" "MARS" "\x30\xec", 8)));
     };
     const bool smdLayout = content.size() >= 512 + 0x4000 &&
         ((content.size() / 512) & 1) && !(content.size() % 512) && !((content.size() - 512) % 0x4000);
@@ -533,7 +537,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfo_.archive_file = archived ? archiveMember_.constData() : nullptr;
     contentInfo_.dir = contentDirectory_.constData();
     contentInfo_.name = contentBaseName_.constData();
-    contentInfo_.ext = contentExtension_.constData();
+    contentInfo_.ext = needs32x ? "32x" : contentExtension_.constData();
     contentInfo_.data = coreContent_.constData();
     contentInfo_.size = size_t(coreContent_.size());
     contentInfo_.file_in_archive = archived;
