@@ -688,12 +688,10 @@ void testPhysicalKeyboard() {
             "XKB normalization used text instead of physical scan code");
     require(InputManager::keyboardKey(Qt::Key_Home, 0xe010, Codes::Windows) == Qt::Key_Home,
             "Windows extended scan code was mistaken for a letter");
+    const int keypadEnter = int(Qt::KeypadModifier) | Qt::Key_Enter;
     require(InputManager::keyboardKey(Qt::Key_Return, 0x1c, Codes::Windows) == Qt::Key_Return &&
-                InputManager::keyboardKey(Qt::Key_Enter, 0xe01c, Codes::Windows) == Qt::Key_Enter,
-            "main Enter and keypad Enter lost their existing key identities");
-    require(InputManager::keyboardKey(Qt::Key_7, 0x47, Codes::Windows) == Qt::Key_7 &&
-                InputManager::keyboardKey(Qt::Key_7, 0x47 + 8, Codes::Xkb) == Qt::Key_7,
-            "numeric keypad digit stopped selecting a slot");
+                InputManager::keyboardKey(Qt::Key_Enter, 0xe01c, Codes::Windows) == keypadEnter,
+            "main Enter and keypad Enter were not distinct");
     require(InputManager::keyboardKey(Qt::Key_Left, 0, Codes::Unavailable) == Qt::Key_Left,
             "key without native scan code did not retain Qt identity");
     require(InputManager::keyboardKey(0x0447, 0) == Qt::Key_X,
@@ -729,6 +727,128 @@ void testPhysicalKeyboard() {
     require(masks[0] == 0, "focus loss left physical keyboard input held");
     manager.setEnabled(true);
     require(masks[0] == 0, "focus regain resurrected released keyboard input");
+}
+
+void testDistinctKeypad() {
+    using Codes = KeyboardScanCodes;
+    const auto keypad = [](int key) { return int(Qt::KeypadModifier) | key; };
+    struct Digit { int scan; int digit; int navigation; };
+    const Digit digits[] = {
+        {0x52, 0, Qt::Key_Insert}, {0x4f, 1, Qt::Key_End},
+        {0x50, 2, Qt::Key_Down}, {0x51, 3, Qt::Key_PageDown},
+        {0x4b, 4, Qt::Key_Left}, {0x4c, 5, Qt::Key_Clear},
+        {0x4d, 6, Qt::Key_Right}, {0x47, 7, Qt::Key_Home},
+        {0x48, 8, Qt::Key_Up}, {0x49, 9, Qt::Key_PageUp}
+    };
+    for (const Digit& digit : digits) {
+        for (const auto codes : {Codes::Windows, Codes::Xkb}) {
+            const int scan = digit.scan + (codes == Codes::Xkb ? 8 : 0);
+            const int expected = keypad(Qt::Key_0 + digit.digit);
+            require(InputManager::keyboardKey(Qt::Key_0 + digit.digit, scan, codes,
+                                              Qt::KeypadModifier) == expected,
+                    "NumLock-on keypad digit lost its keypad identity");
+            require(InputManager::keyboardKey(digit.navigation, scan, codes,
+                                              Qt::KeypadModifier) == expected,
+                    "NumLock-off keypad digit changed its binding");
+            require(InputManager::keyboardKey(digit.navigation, scan, codes) == expected,
+                    "keypad scan without modifier changed its binding");
+            require(!InputManager::reservedKeyboardKey(expected),
+                    "keypad digit was reserved as a main-row save slot");
+        }
+        const int mainScan = digit.digit == 0 ? 0x0b : digit.digit + 1;
+        require(InputManager::keyboardKey(Qt::Key_0 + digit.digit, mainScan, Codes::Windows) ==
+                    Qt::Key_0 + digit.digit &&
+                InputManager::reservedKeyboardKey(Qt::Key_0 + digit.digit),
+                "main-row save slot collided with keypad digit");
+    }
+    struct Operator { int windowsScan; int xkbScan; int logical; int navigation; };
+    const Operator operators[] = {
+        {0x37, 0x3f, Qt::Key_Asterisk, Qt::Key_Asterisk},
+        {0x4a, 0x52, Qt::Key_Minus, Qt::Key_Minus},
+        {0x4e, 0x56, Qt::Key_Plus, Qt::Key_Plus},
+        {0xe035, 0x6a, Qt::Key_Slash, Qt::Key_Slash},
+        {0xe01c, 0x68, Qt::Key_Enter, Qt::Key_Enter},
+        {0x53, 0x5b, Qt::Key_Period, Qt::Key_Delete}
+    };
+    for (const Operator& op : operators) {
+        for (const auto codes : {Codes::Windows, Codes::Xkb}) {
+            const int scan = codes == Codes::Windows ? op.windowsScan : op.xkbScan;
+            require(InputManager::keyboardKey(op.logical, scan, codes,
+                                              Qt::KeypadModifier) == keypad(op.logical),
+                    "keypad operator lost its keypad identity");
+            require(InputManager::keyboardKey(op.navigation, scan, codes) == keypad(op.logical),
+                    "keypad operator changed with NumLock");
+        }
+    }
+    require(InputManager::keyboardKey(Qt::Key_Left, 0xe04b, Codes::Windows) == Qt::Key_Left &&
+                InputManager::keyboardKey(Qt::Key_Left, 0x71, Codes::Xkb) == Qt::Key_Left,
+            "main Left arrow collided with keypad 4");
+    require(InputManager::keyboardKey(Qt::Key_Return, 0x1c, Codes::Windows) == Qt::Key_Return &&
+                InputManager::keyboardKey(Qt::Key_Return, 0x24, Codes::Xkb) == Qt::Key_Return,
+            "main Return collided with keypad Enter");
+    require(InputManager::keyboardKey(Qt::Key_Enter, 0, Codes::Unavailable,
+                                      Qt::KeypadModifier) == keypad(Qt::Key_Enter),
+            "keypad Enter without native scan lost its identity");
+
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create keypad settings directory");
+    const QString path = temp.path() + "/settings.ini";
+    {
+        QSettings settings(path, QSettings::IniFormat);
+        settings.setValue("input/md/player1/device", "none");
+        settings.setValue("input/md/player1/key/8", Qt::Key_Enter); // pre-keypad encoding
+        settings.sync();
+    }
+    InputManager manager(path);
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) ==
+                keypad(Qt::Key_Enter),
+            "saved legacy keypad Enter did not migrate");
+    unsigned mask = 0;
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned value) { if (player == 0) mask = value; });
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    mapping.keyboard.clear();
+    mapping.keyboard[0] = keypad(Qt::Key_4);
+    mapping.keyboard[1] = Qt::Key_Left;
+    mapping.keyboard[8] = Qt::Key_Enter; // setter also accepts old keypad Enter
+    mapping.keyboard[9] = Qt::Key_Return;
+    mapping.keyboard[10] = keypad(Qt::Key_Period);
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    const auto saved = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    require(saved.keyboard.value(0) == keypad(Qt::Key_4) &&
+                saved.keyboard.value(1) == Qt::Key_Left &&
+                saved.keyboard.value(8) == keypad(Qt::Key_Enter) &&
+                saved.keyboard.value(9) == Qt::Key_Return &&
+                saved.keyboard.value(10) == keypad(Qt::Key_Period),
+            "keypad and main keyboard bindings collided during assignment");
+    const int padFour = InputManager::keyboardKey(Qt::Key_Left, 0x4b, Codes::Windows);
+    require(!manager.keyEvent(Qt::Key_4, true) && mask == 0,
+            "reserved main-row digit activated keypad binding");
+    require(manager.keyEvent(padFour, true) && mask == 1u,
+            "NumLock-off keypad 4 did not activate its binding");
+    require(manager.keyEvent(Qt::Key_Left, true) && mask == 3u,
+            "main Left arrow did not remain a separate binding");
+    require(manager.keyEvent(padFour, false) && mask == 2u &&
+                manager.keyEvent(Qt::Key_Left, false) && mask == 0,
+            "releasing one of two distinct keys changed the other binding");
+    require(manager.keyEvent(keypad(Qt::Key_Enter), true) && mask == (1u << 8) &&
+                manager.keyEvent(keypad(Qt::Key_Enter), false) && mask == 0,
+            "keypad Enter binding did not activate independently");
+    require(manager.keyEvent(Qt::Key_Return, true) && mask == (1u << 9) &&
+                manager.keyEvent(Qt::Key_Return, false) && mask == 0,
+            "main Return binding collided with keypad Enter");
+    require(manager.keyEvent(keypad(Qt::Key_Period), true) && mask == (1u << 10) &&
+                manager.keyEvent(keypad(Qt::Key_Period), false) && mask == 0,
+            "keypad decimal was reserved as main period");
+
+    InputManager reloaded(path);
+    const auto restored = reloaded.mapping(ConsoleProfile::MegaDrive, 0);
+    require(restored.keyboard.value(0) == keypad(Qt::Key_4) &&
+                restored.keyboard.value(1) == Qt::Key_Left &&
+                restored.keyboard.value(8) == keypad(Qt::Key_Enter) &&
+                restored.keyboard.value(9) == Qt::Key_Return &&
+                restored.keyboard.value(10) == keypad(Qt::Key_Period),
+            "distinct keypad and main bindings did not survive reload");
 }
 
 void testKeyboardSettingsMigration() {
@@ -1217,8 +1337,9 @@ int main(int argc, char** argv) {
         }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--keyboard")) {
             testPhysicalKeyboard();
+            testDistinctKeypad();
             testKeyboardSettingsMigration();
-            std::puts("physical keyboard and reserved hotkey tests passed");
+            std::puts("physical keyboard, keypad and reserved hotkey tests passed");
             return 0;
         }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--analog")) {
@@ -1261,6 +1382,7 @@ int main(int argc, char** argv) {
         testUnknownRawJoystick();
         testBackgroundGamepad();
         testPhysicalKeyboard();
+        testDistinctKeypad();
         testKeyboardSettingsMigration();
         std::puts("input tests passed");
         return 0;

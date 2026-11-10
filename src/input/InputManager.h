@@ -9,6 +9,8 @@
 #include <QVector>
 #include <memory>
 
+class QKeyEvent;
+
 // Targets 0..15 are libretro joypad IDs. Commands are separate from game inputs.
 // Qt uses Windows Set-1 codes or XKB keycodes (evdev + 8) on Linux.
 enum class KeyboardScanCodes { Native, Windows, Xkb, Unavailable };
@@ -33,7 +35,7 @@ struct PlayerMapping {
     bool showCrosshair = true;
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
-    QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key
+    QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key, with KeypadModifier for the numeric keypad
     QMap<int,QMap<int,int>> mouse; // controller type -> target -> Qt::MouseButton (0 = unbound)
     int deadzonePercent = 25;
     int analogSensitivity = 100; // MD Mouse stick speed, percent (25..400).
@@ -79,8 +81,10 @@ public:
     bool mouseCaptureEnabled() const;
     void setMouseCaptureEnabled(bool enabled); // persistent preference
     void setBackgroundGamepadActive(bool active); // MainWindow's game/modal focus gate
+    static int keyboardKey(const QKeyEvent& event);
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
-                           KeyboardScanCodes codes = KeyboardScanCodes::Native);
+                           KeyboardScanCodes codes = KeyboardScanCodes::Native,
+                           Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     static bool reservedKeyboardKey(int key);
     bool keyEvent(int key, bool pressed);
     void releaseKeyboard();

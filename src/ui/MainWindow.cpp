@@ -3162,7 +3162,14 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     const bool pressed = event->type() == QEvent::KeyPress;
     const bool shortcutOverride = event->type() == QEvent::ShortcutOverride;
     const Qt::KeyboardModifiers modifiers = keyEvent->modifiers() & ~Qt::KeypadModifier;
-    const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+    const int key = InputManager::keyboardKey(*keyEvent);
+    const bool keypad = (key & Qt::KeypadModifier) != 0;
+    // Qt can match NumLock-off keypad navigation to a logical menu shortcut.
+    // Keep keypad bindings in the input mapping instead of letting QAction consume them.
+    if (shortcutOverride && keypad) {
+        event->accept();
+        return true;
+    }
     if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() && key == Qt::Key_R && rewindHeld_) {
         rewindHeld_ = false; updateRewind(); return true;
     }
@@ -3225,7 +3232,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     }
     // Right Alt/AltGr arrives as Ctrl+Alt on Windows, or GroupSwitch on XKB.
     // Accept both representations for fullscreen, including keypad Enter.
-    if ((key == Qt::Key_Return || key == Qt::Key_Enter) &&
+    if (((key & ~int(Qt::KeypadModifier)) == Qt::Key_Return ||
+         (key & ~int(Qt::KeypadModifier)) == Qt::Key_Enter) &&
         (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
         !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier))) {
         if (shortcutOverride) event->accept();

@@ -3,6 +3,7 @@
 
 #include <QElapsedTimer>
 #include <QJsonArray>
+#include <QKeyEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSettings>
@@ -161,7 +162,11 @@ bool validMouseButton(int button) {
            button == int(Qt::MiddleButton) || button == int(Qt::XButton1) ||
            button == int(Qt::XButton2);
 }
+constexpr int keypadKey(int key) { return int(Qt::KeypadModifier) | key; }
+
 int legacyKeyboardKey(int key) {
+    // Qt used Key_Enter specifically for keypad Enter before we stored its location.
+    if (key == Qt::Key_Enter) return keypadKey(Qt::Key_Enter);
     // Old settings stored the active layout's Unicode key. Keep those bindings
     // usable at their original Russian/English key positions after upgrading.
     if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
@@ -1318,7 +1323,11 @@ void InputManager::setEnabled(bool enabled) {
     d->commandBlocked.fill(true);
     d->recompute();
 }
-int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardScanCodes codes) {
+int InputManager::keyboardKey(const QKeyEvent& event) {
+    return keyboardKey(event.key(), event.nativeScanCode(), KeyboardScanCodes::Native, event.modifiers());
+}
+int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardScanCodes codes,
+                              Qt::KeyboardModifiers modifiers) {
     if (codes == KeyboardScanCodes::Native) {
 #if defined(Q_OS_WIN)
         codes = KeyboardScanCodes::Windows;
@@ -1333,6 +1342,14 @@ int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardSc
     quint32 scan = nativeScanCode;
     if (codes == KeyboardScanCodes::Xkb) scan = scan >= 8 ? scan - 8 : 0;
     if (codes != KeyboardScanCodes::Unavailable && nativeScanCode != 0) {
+        // The keypad matrix occupies the same Set-1 / evdev positions. Dedicated
+        // navigation keys are extended on Windows and have separate XKB codes.
+        if (scan >= 0x47 && scan <= 0x53) return keypadKey("789-456+1230."[scan - 0x47]);
+        if (scan == 0x37) return keypadKey(Qt::Key_Asterisk);
+        if (scan == (codes == KeyboardScanCodes::Windows ? 0xe01cu : 96u)) return keypadKey(Qt::Key_Enter);
+        if (scan == (codes == KeyboardScanCodes::Windows ? 0xe035u : 98u)) return keypadKey(Qt::Key_Slash);
+        if (codes == KeyboardScanCodes::Xkb && scan == 117) return keypadKey(Qt::Key_Equal);
+        if (codes == KeyboardScanCodes::Xkb && scan == 121) return keypadKey(Qt::Key_Comma);
         if (scan >= 0x02 && scan <= 0x0d) return "1234567890-="[scan - 0x02];
         if (scan >= 0x10 && scan <= 0x1b) return "QWERTYUIOP[]"[scan - 0x10];
         if (scan >= 0x1e && scan <= 0x28) return "ASDFGHJKL;'"[scan - 0x1e];
@@ -1341,8 +1358,28 @@ int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardSc
         if (scan == 0x2b) return Qt::Key_Backslash;
         if (scan == 0x56) return Qt::Key_Less; // extra ISO key, distinct from US backslash
     }
-    // Non-text keys and keypad keys retain Qt's identity. Native codes may be
-    // absent in synthetic/accessibility events or unsupported platform plugins.
+    // Some events only carry the Qt keypad flag. With Num Lock off their
+    // logical key is the navigation function printed on the same keycap.
+    if (modifiers.testFlag(Qt::KeypadModifier)) {
+        switch (logicalKey) {
+        case Qt::Key_Insert:   return keypadKey(Qt::Key_0);
+        case Qt::Key_End:      return keypadKey(Qt::Key_1);
+        case Qt::Key_Down:     return keypadKey(Qt::Key_2);
+        case Qt::Key_PageDown: return keypadKey(Qt::Key_3);
+        case Qt::Key_Left:     return keypadKey(Qt::Key_4);
+        case Qt::Key_Clear:    return keypadKey(Qt::Key_5);
+        case Qt::Key_Right:    return keypadKey(Qt::Key_6);
+        case Qt::Key_Home:     return keypadKey(Qt::Key_7);
+        case Qt::Key_Up:       return keypadKey(Qt::Key_8);
+        case Qt::Key_PageUp:   return keypadKey(Qt::Key_9);
+        case Qt::Key_Delete:
+        case Qt::Key_Comma:    return keypadKey(Qt::Key_Period);
+        case Qt::Key_Return:   return keypadKey(Qt::Key_Enter);
+        default:
+            if (logicalKey != Qt::Key_unknown && logicalKey != Qt::Key_NumLock)
+                return keypadKey(logicalKey);
+        }
+    }
     return legacyKeyboardKey(logicalKey);
 }
 bool InputManager::reservedKeyboardKey(int key) {

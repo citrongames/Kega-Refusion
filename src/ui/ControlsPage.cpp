@@ -93,12 +93,12 @@ protected:
         auto* keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab)
             return QKeySequenceEdit::event(event);
-        const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+        const int key = InputManager::keyboardKey(*keyEvent);
         if (!keyEvent->isAutoRepeat() && key != Qt::Key_Control &&
             key != Qt::Key_Shift && key != Qt::Key_Meta && key != Qt::Key_Alt &&
             key != Qt::Key_AltGr && key != Qt::Key_unknown) {
             const auto modifiers = keyEvent->modifiers() & ~Qt::KeypadModifier;
-            setKeySequence(QKeySequence(QKeyCombination(modifiers, Qt::Key(key))));
+            setKeySequence(QKeySequence(QKeyCombination::fromCombined(key | int(modifiers))));
         }
         event->accept();
         return true;
@@ -1007,10 +1007,10 @@ void ControlsPage::selectFailure(int profile, int player, bool commandTab) {
 bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
     if (refreshing_) return false;
     int key = 0;
-    const Qt::KeyboardModifiers modifiers =
-        sequence.isEmpty() ? Qt::NoModifier : sequence[0].keyboardModifiers();
+    const Qt::KeyboardModifiers modifiers = sequence.isEmpty() ? Qt::NoModifier
+        : sequence[0].keyboardModifiers() & ~Qt::KeypadModifier;
     if (!sequence.isEmpty())
-        key = sequence[0].key();
+        key = sequence[0].toCombined();
     QString error;
     if (sequence.count() > 1 || modifiers != Qt::NoModifier)
         error = Localization::text(QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift."));
@@ -1336,7 +1336,7 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         return QWidget::eventFilter(watched, event);
     if (event->type() == QEvent::KeyRelease) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
-        const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+        const int key = InputManager::keyboardKey(*keyEvent);
         if (captureKeysDown_.contains(key)) {
             if (!keyEvent->isAutoRepeat()) captureKeysDown_.remove(key);
             return true;
@@ -1351,7 +1351,7 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         return QWidget::eventFilter(watched, event);
     auto* keyEvent = static_cast<QKeyEvent*>(event);
     if (keyEvent->isAutoRepeat()) return true;
-    const int key = InputManager::keyboardKey(keyEvent->key(), keyEvent->nativeScanCode());
+    const int key = InputManager::keyboardKey(*keyEvent);
     if (captureKeysDown_.contains(key)) return true;
     captureKeysDown_.insert(key);
     if (key == Qt::Key_Escape) {
@@ -1367,8 +1367,8 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         return true;
     }
     const int target = captureTarget_;
-    if (!onKeyboardChanged(target, QKeySequence(QKeyCombination(
-            keyEvent->modifiers() & ~Qt::KeypadModifier, Qt::Key(key)))))
+    if (!onKeyboardChanged(target, QKeySequence(QKeyCombination::fromCombined(
+            key | int(keyEvent->modifiers() & ~Qt::KeypadModifier)))))
         return true;
     captureTarget_ = -1;
     if (input_.capturing()) input_.cancelCapture();
