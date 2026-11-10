@@ -238,7 +238,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         gunMasks_[player] = mask;
         session_.setButtons(player,padMasks_[player] | mask);
     });
-    connect(input_, &InputManager::commandChanged, this, &MainWindow::handleInputCommand);
+    connect(input_, &InputManager::commandChanged, this, [this](int command, bool pressed) {
+        handleInputCommand(command, pressed, false);
+    });
     connect(input_, &InputManager::notification, this, [](const QString& text) {
         qInfo("%s", qPrintable(text));
     });
@@ -321,6 +323,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     debugAudioGains_.fill(100);
     buildMenus();
+    refreshCommandShortcuts();
+    connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
     updateService_ = new UpdateService(this);
     connect(updateService_, &UpdateService::checked, this,
             [this](const QString& version, const QString& notes) {
@@ -817,11 +821,9 @@ void MainWindow::buildMenus() {
     fileMenu->addSeparator();
     screenshotAction_ = fileMenu->addAction(Localization::text(QStringLiteral("Сохранить скриншот")));
     screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
-    screenshotAction_->setShortcut(QKeySequence(QStringLiteral("F12")));
     screenshotAction_->setAutoRepeat(false);
     screenshotAction_->setEnabled(false);
     screenshotAction_->setToolTip(Localization::text(QStringLiteral("Чистое изображение игры без OSD; папка screenshots рядом с settings.ini.")));
-    shortcut(screenshotAction_);
     connect(screenshotAction_, &QAction::triggered, this, &MainWindow::saveScreenshot);
     fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(Localization::text(QStringLiteral("Выход")));
@@ -831,43 +833,33 @@ void MainWindow::buildMenus() {
 
     QMenu* emulationMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Эмуляция")));
     resetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сброс")));
-    resetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     resetAction_->setAutoRepeat(false);
     resetAction_->setEnabled(false);
-    shortcut(resetAction_);
     connect(resetAction_, &QAction::triggered, this, [this] {
         releaseInput();
         session_.resetGame();
     });
     hardResetAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перезапуск питания")));
-    hardResetAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
     hardResetAction_->setAutoRepeat(false);
     hardResetAction_->setEnabled(false);
-    shortcut(hardResetAction_);
     connect(hardResetAction_, &QAction::triggered, this, [this] {
         releaseInput(); session_.hardResetGame();
     });
     emulationMenu->addSeparator();
     pauseAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза")));
     pauseAction_->setCheckable(true);
-    pauseAction_->setShortcut(QKeySequence(QStringLiteral("P")));
     pauseAction_->setAutoRepeat(false);
     pauseAction_->setEnabled(false);
-    shortcut(pauseAction_);
     connect(pauseAction_, &QAction::toggled, this, [this](bool paused) {
         session_.setPaused(paused);
     });
     frameAdvanceAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Следующий кадр")));
-    frameAdvanceAction_->setShortcut(QKeySequence(Qt::Key_Period));
     frameAdvanceAction_->setAutoRepeat(false);
     frameAdvanceAction_->setEnabled(false);
-    shortcut(frameAdvanceAction_);
     connect(frameAdvanceAction_, &QAction::triggered, this, [this] { session_.advanceFrame(); });
     frameBackAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Предыдущий кадр")));
-    frameBackAction_->setShortcut(QKeySequence(Qt::Key_Comma));
     frameBackAction_->setAutoRepeat(false);
     frameBackAction_->setEnabled(false);
-    shortcut(frameBackAction_);
     connect(frameBackAction_, &QAction::triggered, this, [this] { session_.backFrame(); });
     QAction* achievementsAction = emulationMenu->addAction(Localization::text(QStringLiteral("Достижения…")));
     achievementsAction->setObjectName(QStringLiteral("achievementsAction"));
@@ -892,17 +884,13 @@ void MainWindow::buildMenus() {
     gameSpeedMenu_->setObjectName(QStringLiteral("gameSpeedMenu"));
     slowDownAction_ = gameSpeedMenu_->addAction(Localization::text(QStringLiteral("Замедлить на 5%")));
     slowDownAction_->setObjectName(QStringLiteral("slowDownAction"));
-    slowDownAction_->setShortcut(QKeySequence(Qt::Key_BracketLeft));
     slowDownAction_->setAutoRepeat(false);
-    shortcut(slowDownAction_);
     connect(slowDownAction_, &QAction::triggered, this, [this] {
         setGameSpeedPercent(effectiveGameSpeedPercent() - 5);
     });
     speedUpAction_ = gameSpeedMenu_->addAction(Localization::text(QStringLiteral("Ускорить на 5%")));
     speedUpAction_->setObjectName(QStringLiteral("speedUpAction"));
-    speedUpAction_->setShortcut(QKeySequence(Qt::Key_BracketRight));
     speedUpAction_->setAutoRepeat(false);
-    shortcut(speedUpAction_);
     connect(speedUpAction_, &QAction::triggered, this, [this] {
         setGameSpeedPercent(effectiveGameSpeedPercent() + 5);
     });
@@ -911,11 +899,11 @@ void MainWindow::buildMenus() {
     normalSpeedAction_->setObjectName(QStringLiteral("normalSpeedAction"));
     connect(normalSpeedAction_, &QAction::triggered, this, [this] { setGameSpeedPercent(100); });
     updateGameSpeedActions();
-    fastForwardAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Ускорение (Tab)")));
+    fastForwardAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Ускорение")));
     fastForwardAction_->setCheckable(true);
     fastForwardAction_->setEnabled(false);
     connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
-    rewindAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перемотка назад (R)")));
+    rewindAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перемотка назад")));
     rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
     connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
     QAction* focusPause = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза при потере фокуса")));
@@ -927,27 +915,21 @@ void MainWindow::buildMenus() {
     });
     emulationMenu->addSeparator();
     saveAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Быстрое сохранение")));
-    saveAction_->setShortcut(QKeySequence(QStringLiteral("F5")));
     saveAction_->setAutoRepeat(false);
     saveAction_->setEnabled(false);
-    shortcut(saveAction_);
     connect(saveAction_, &QAction::triggered, this, [this] {
         session_.saveState(stateSlot_);
     });
     loadAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Быстрая загрузка")));
-    loadAction_->setShortcut(QKeySequence(QStringLiteral("F8")));
     loadAction_->setAutoRepeat(false);
     loadAction_->setEnabled(false);
-    shortcut(loadAction_);
     connect(loadAction_, &QAction::triggered, this, [this] {
         releaseInput();
         session_.loadState(stateSlot_);
     });
     saveFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сохранить в файл…")));
     saveFileAction_->setObjectName(QStringLiteral("saveStateFileAction"));
-    saveFileAction_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
     saveFileAction_->setAutoRepeat(false);
-    shortcut(saveFileAction_);
     saveFileAction_->setEnabled(false);
     connect(saveFileAction_, &QAction::triggered, this, [this] {
         if (!session_.hasGame() || loading_ || moviePending_ || session_.networkClient()) return;
@@ -971,9 +953,7 @@ void MainWindow::buildMenus() {
     });
     loadFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Загрузить из файла…")));
     loadFileAction_->setObjectName(QStringLiteral("loadStateFileAction"));
-    loadFileAction_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F8));
     loadFileAction_->setAutoRepeat(false);
-    shortcut(loadFileAction_);
     loadFileAction_->setEnabled(false);
     connect(loadFileAction_, &QAction::triggered, this, [this] {
         if (!session_.hasGame() || loading_ || moviePending_ || achievementsHardcore_ || session_.networkClient()) return;
@@ -1172,19 +1152,15 @@ void MainWindow::buildMenus() {
     session_.setRunTimerEnabled(osdAction_->isChecked() && runTimerMode_ != 0);
     viewMenu->addSeparator();
     fullscreenAction_ = viewMenu->addAction(Localization::text(QStringLiteral("Полный экран")));
-    fullscreenAction_->setShortcut(QKeySequence(QStringLiteral("Alt+Return")));
     fullscreenAction_->setAutoRepeat(false);
     fullscreenAction_->setCheckable(true);
-    shortcut(fullscreenAction_);
     connect(fullscreenAction_, &QAction::toggled, this, &MainWindow::setFullscreenMode);
 
     QMenu* soundMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Звук")));
     muteAction_ = soundMenu->addAction(Localization::text(QStringLiteral("Без звука")));
     muteAction_->setCheckable(true);
-    muteAction_->setShortcut(QKeySequence(QStringLiteral("M")));
     muteAction_->setAutoRepeat(false);
     muteAction_->setChecked(settings_.value(QStringLiteral("audio/muted"), false).toBool());
-    shortcut(muteAction_);
     audio_->setMuted(muteAction_->isChecked());
     view_->setMutedStatus(muteAction_->isChecked());
     connect(muteAction_, &QAction::toggled, this, [this](bool muted) {
@@ -2977,6 +2953,7 @@ void MainWindow::setFrameBackSource(bool keyboard, bool pressed) {
 }
 
 void MainWindow::releaseInput() {
+    heldCommandChords_.clear();
     view_->setLightgunInputEnabled(false);
     resetAnalogMotion();
     fastForwardHeld_ = false;
@@ -3093,34 +3070,64 @@ void MainWindow::showOsdDemo() {
     view_->showStateSlots(3, (1u << 1) | (1u << 3) | (1u << 8), 4000);
 }
 
-void MainWindow::handleInputCommand(int command, bool pressed) {
-    if (videoExporting_) return;
-    if (command == RewindCommand) { rewindPadHeld_ = pressed; updateRewind(); return; }
+QAction* MainWindow::commandAction(int command) const {
+    switch (command) {
+    case PauseCommand: return pauseAction_;
+    case FastForwardCommand: return fastForwardAction_;
+    case RewindCommand: return rewindAction_;
+    case FrameAdvanceCommand: return frameAdvanceAction_;
+    case FrameBackCommand: return frameBackAction_;
+    case SaveCommand: return saveAction_;
+    case LoadCommand: return loadAction_;
+    case SaveFileCommand: return saveFileAction_;
+    case LoadFileCommand: return loadFileAction_;
+    case ScreenshotCommand: return screenshotAction_;
+    case ResetCommand: return resetAction_;
+    case HardResetCommand: return hardResetAction_;
+    case FullscreenCommand: return fullscreenAction_;
+    case MuteCommand: return muteAction_;
+    case SpeedDecreaseCommand: return slowDownAction_;
+    case SpeedIncreaseCommand: return speedUpAction_;
+    case SpeedResetCommand: return normalSpeedAction_;
+    default: return nullptr;
+    }
+}
+
+void MainWindow::refreshCommandShortcuts() {
+    keyboardCommands_.clear();
+    for (int command = PauseCommand; command <= ScreenshotCommand; ++command) {
+        const int chord = input_->commandKey(command);
+        if (chord) keyboardCommands_.insert(chord, command);
+        if (auto* action = commandAction(command)) {
+            // Show the shortcut in menus. Only the physical-key handler dispatches
+            // it, so another layout cannot also trigger a logical QAction shortcut.
+            QString label = action->text().section(QLatin1Char('\t'), 0, 0);
+            if (chord) label += QLatin1Char('\t') + QKeySequence(chord).toString(QKeySequence::NativeText);
+            action->setText(label);
+        }
+    }
+}
+
+void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
+    if (!keyboard && videoExporting_ && pressed) return;
+    if (command == RewindCommand) {
+        (keyboard ? rewindHeld_ : rewindPadHeld_) = pressed;
+        updateRewind();
+        return;
+    }
     if (command == FastForwardCommand) {
-        fastForwardPadHeld_ = pressed;
+        (keyboard ? fastForwardHeld_ : fastForwardPadHeld_) = pressed;
         updateFastForward();
         return;
     }
-    if (command == FrameAdvanceCommand) {
-        setFrameAdvanceSource(false, pressed);
-        return;
-    }
-    if (command == FrameBackCommand) {
-        setFrameBackSource(false, pressed);
-        return;
-    }
+    if (command == FrameAdvanceCommand) { setFrameAdvanceSource(keyboard, pressed); return; }
+    if (command == FrameBackCommand) { setFrameBackSource(keyboard, pressed); return; }
     if (!pressed) return;
+    if (auto* action = commandAction(command)) {
+        if (action->isEnabled()) action->trigger();
+        return;
+    }
     switch (command) {
-    case PauseCommand: if (pauseAction_->isEnabled()) pauseAction_->trigger(); break;
-    case SaveCommand: if (saveAction_->isEnabled()) saveAction_->trigger(); break;
-    case LoadCommand: if (loadAction_->isEnabled()) loadAction_->trigger(); break;
-    case ResetCommand: if (resetAction_->isEnabled()) resetAction_->trigger(); break;
-    case HardResetCommand: if (hardResetAction_->isEnabled()) hardResetAction_->trigger(); break;
-    case FullscreenCommand: fullscreenAction_->trigger(); break;
-    case MuteCommand: muteAction_->trigger(); break;
-    case SpeedDecreaseCommand: if (slowDownAction_->isEnabled()) slowDownAction_->trigger(); break;
-    case SpeedIncreaseCommand: if (speedUpAction_->isEnabled()) speedUpAction_->trigger(); break;
-    case SpeedResetCommand: if (normalSpeedAction_->isEnabled()) normalSpeedAction_->trigger(); break;
     case NextSlotCommand: setSlot(stateSlot_ + 1); break;
     case PreviousSlotCommand: setSlot(stateSlot_ + 9); break;
     case MenuCommand:
@@ -3194,18 +3201,23 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         event->accept();
         return true;
     }
-    if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() && key == Qt::Key_R && rewindHeld_) {
-        rewindHeld_ = false; updateRewind(); return true;
-    }
-    if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() &&
-        key == Qt::Key_Period && frameAdvanceHeld_) {
-        setFrameAdvanceSource(true, false);
-        return true;
-    }
-    if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() &&
-        key == Qt::Key_Comma && frameBackHeld_) {
-        setFrameBackSource(true, false);
-        return true;
+    const int chord = InputManager::keyboardChord(*keyEvent);
+    if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() && !heldCommandChords_.isEmpty()) {
+        int releasedModifier = 0;
+        switch (keyEvent->key()) {
+        case Qt::Key_Shift: releasedModifier = Qt::ShiftModifier; break;
+        case Qt::Key_Control: releasedModifier = Qt::ControlModifier; break;
+        case Qt::Key_Alt: case Qt::Key_AltGr: releasedModifier = Qt::AltModifier; break;
+        case Qt::Key_Meta: releasedModifier = Qt::MetaModifier; break;
+        }
+        constexpr int modifiersMask = Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier;
+        for (auto it = heldCommandChords_.begin(); it != heldCommandChords_.end();) {
+            if ((it.value() & ~modifiersMask) == (chord & ~modifiersMask) || (it.value() & releasedModifier)) {
+                const int command = it.key();
+                it = heldCommandChords_.erase(it);
+                handleInputCommand(command, false, true);
+            } else ++it;
+        }
     }
     const bool volumeUp = (key == Qt::Key_Equal || key == Qt::Key_Plus) &&
         (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier);
@@ -3217,35 +3229,27 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
                                             (volumeUp ? 5 : -5), 100));
         return true;
     }
-    // Claim these keys before Qt resolves the logical QAction shortcuts. A
-    // shortcut and its physical counterpart must produce exactly one action.
-    QAction* commandAction = nullptr;
-    if (modifiers == Qt::NoModifier) {
-        if (key == Qt::Key_P) commandAction = pauseAction_;
-        else if (key == Qt::Key_Period) commandAction = frameAdvanceAction_;
-        else if (key == Qt::Key_Comma) commandAction = frameBackAction_;
-        else if (key == Qt::Key_M) commandAction = muteAction_;
-        else if (key == Qt::Key_BracketLeft) commandAction = slowDownAction_;
-        else if (key == Qt::Key_BracketRight) commandAction = speedUpAction_;
-        else if (key == Qt::Key_F5) commandAction = saveAction_;
-        else if (key == Qt::Key_F8) commandAction = loadAction_;
-        else if (key == Qt::Key_F12) commandAction = screenshotAction_;
-    } else if (modifiers == Qt::ShiftModifier) {
-        if (key == Qt::Key_F5) commandAction = saveFileAction_;
-        else if (key == Qt::Key_F8) commandAction = loadFileAction_;
-    } else if (modifiers == Qt::ControlModifier && key == Qt::Key_R) {
-        commandAction = resetAction_;
-    } else if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier) && key == Qt::Key_R) {
-        commandAction = hardResetAction_;
-    }
-    if (commandAction && commandAction->isEnabled()) {
-        if (shortcutOverride) event->accept();
-        else if (commandAction == frameAdvanceAction_) {
-            if (!keyEvent->isAutoRepeat()) setFrameAdvanceSource(true, pressed);
-        } else if (commandAction == frameBackAction_) {
-            if (!keyEvent->isAutoRepeat()) setFrameBackSource(true, pressed);
-        } else if (pressed && !keyEvent->isAutoRepeat()) commandAction->trigger();
-        return true;
+    int command = keyboardCommands_.value(chord, -1);
+    // Preserve right Alt (AltGr) and keypad Enter for the traditional fullscreen
+    // shortcut. An explicitly assigned chord always takes precedence.
+    if (command < 0 && input_->commandKey(FullscreenCommand) == InputManager::defaultCommandKey(FullscreenCommand) &&
+        ((key & ~int(Qt::KeypadModifier)) == Qt::Key_Return ||
+         (key & ~int(Qt::KeypadModifier)) == Qt::Key_Enter) &&
+        (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
+        !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier)))
+        command = FullscreenCommand;
+    if (command >= 0 && (shortcutOverride || pressed)) {
+        auto* action = commandAction(command);
+        const bool needsGameFocus = command == FastForwardCommand || command == RewindCommand;
+        if ((!action || action->isEnabled()) && (!needsGameFocus || (!videoExporting_ && view_->hasFocus()))) {
+            if (shortcutOverride) event->accept();
+            else if (!keyEvent->isAutoRepeat()) {
+                if (needsGameFocus || command == FrameAdvanceCommand || command == FrameBackCommand)
+                    heldCommandChords_.insert(command, chord);
+                handleInputCommand(command, true, true);
+            }
+            return true;
+        }
     }
     if (key == Qt::Key_Escape && modifiers == Qt::NoModifier && view_->mouseCaptured()) {
         if (shortcutOverride) event->accept();
@@ -3257,16 +3261,6 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (pressed && !keyEvent->isAutoRepeat()) toggleFullscreenMenu();
         return true;
     }
-    // Right Alt/AltGr arrives as Ctrl+Alt on Windows, or GroupSwitch on XKB.
-    // Accept both representations for fullscreen, including keypad Enter.
-    if (((key & ~int(Qt::KeypadModifier)) == Qt::Key_Return ||
-         (key & ~int(Qt::KeypadModifier)) == Qt::Key_Enter) &&
-        (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
-        !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier))) {
-        if (shortcutOverride) event->accept();
-        else if (pressed && !keyEvent->isAutoRepeat()) setFullscreenMode(!isFullScreen());
-        return true;
-    }
     if (!session_.hasGame() || loading_ || videoExporting_ || !view_->hasFocus())
         return QMainWindow::eventFilter(watched, event);
     if (key >= Qt::Key_0 && key <= Qt::Key_9 && modifiers == Qt::NoModifier) {
@@ -3274,35 +3268,19 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (pressed && !keyEvent->isAutoRepeat()) setSlot(key - Qt::Key_0);
         return true;
     }
-    if (key == Qt::Key_R && (modifiers == Qt::NoModifier || (!pressed && rewindHeld_))) {
-        if (shortcutOverride) { event->accept(); return true; }
-        if (!keyEvent->isAutoRepeat()) { rewindHeld_ = pressed; updateRewind(); }
-        return true;
-    }
-    if (key == Qt::Key_Tab) {
-        if (shortcutOverride && modifiers == Qt::NoModifier) {
+    if (shortcutOverride) {
+        if (modifiers == Qt::NoModifier && input_->hasGameplayKey(key)) {
             event->accept();
             return true;
         }
-        if (!shortcutOverride && !pressed && !keyEvent->isAutoRepeat() && fastForwardHeld_) {
-            fastForwardHeld_ = false;
-            updateFastForward();
-            return true;
-        }
-        if (pressed && !keyEvent->isAutoRepeat() && modifiers == Qt::NoModifier) {
-            fastForwardHeld_ = true;
-            updateFastForward();
-            return true;
-        }
+        return QMainWindow::eventFilter(watched, event);
     }
-    if (shortcutOverride) return QMainWindow::eventFilter(watched, event);
     if (keyEvent->isAutoRepeat()) return true;
     if (!pressed) {
         if (input_->keyEvent(key, false)) return true;
         return QMainWindow::eventFilter(watched, event);
     }
-    if (modifiers != Qt::NoModifier || key == Qt::Key_P || key == Qt::Key_M ||
-        key == Qt::Key_F5 || key == Qt::Key_F8 || key == Qt::Key_F12)
+    if (modifiers != Qt::NoModifier)
         return QMainWindow::eventFilter(watched, event);
     if (input_->keyEvent(key, true)) return true;
     return QMainWindow::eventFilter(watched, event);

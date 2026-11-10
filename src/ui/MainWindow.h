@@ -8,6 +8,7 @@
 #include <array>
 
 #include <QColor>
+#include <QHash>
 #include <QMainWindow>
 #include <QSettings>
 #include <QPointer>
@@ -101,7 +102,11 @@ private:
     void setPausedUi(bool paused);
     void setSlot(int slot);
     void toggleFullscreenMenu();
-    void handleInputCommand(int command, bool pressed);
+    void handleInputCommand(int command, bool pressed, bool keyboard);
+    QAction* commandAction(int command) const;
+    void refreshCommandShortcuts();
+    QHash<int, int> keyboardCommands_; // chord -> command
+    QHash<int, int> heldCommandChords_; // held command -> physical chord at key-down
 
     EmulationSession& session_;
     QSettings settings_;

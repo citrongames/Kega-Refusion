@@ -60,6 +60,7 @@ public:
     void setReadinessWaiting(bool waiting);
     void setMutedStatus(bool muted);
     void setFastForwardStatus(bool enabled);
+    bool fastForwardActive() const { return fastForward_; }
     void setFastForwardFactor(int factor);
     void setRewindStatus(bool enabled);
     void setRewindProgress(qint64 remainingMs, qint64 totalMs);

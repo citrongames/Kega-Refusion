@@ -27,7 +27,8 @@ const QVector<int> commands = {
     ResetCommand, FullscreenCommand, MuteCommand,
     NextSlotCommand, PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand,
     FrameAdvanceCommand, FrameBackCommand,
-    SpeedDecreaseCommand, SpeedIncreaseCommand, SpeedResetCommand
+    SpeedDecreaseCommand, SpeedIncreaseCommand, SpeedResetCommand,
+    SaveFileCommand, LoadFileCommand, ScreenshotCommand
 };
 
 QString commandName(int command) {
@@ -49,26 +50,10 @@ QString commandName(int command) {
     case PreviousSlotCommand: return Localization::text(QStringLiteral("Предыдущий слот"));
     case MenuCommand: return Localization::text(QStringLiteral("Меню"));
     case RewindCommand: return Localization::text(QStringLiteral("Перемотка назад (удерживать)"));
+    case SaveFileCommand: return Localization::text(QStringLiteral("Сохранить в файл"));
+    case LoadFileCommand: return Localization::text(QStringLiteral("Загрузить из файла"));
+    case ScreenshotCommand: return Localization::text(QStringLiteral("Сохранить скриншот"));
     default: return QString();
-    }
-}
-
-QString commandShortcut(int command) {
-    switch (command) {
-    case PauseCommand: return QStringLiteral("P");
-    case FastForwardCommand: return QStringLiteral("Tab");
-    case RewindCommand: return QStringLiteral("R");
-    case SaveCommand: return QStringLiteral("F5");
-    case LoadCommand: return QStringLiteral("F8");
-    case ResetCommand: return QStringLiteral("Ctrl+R");
-    case HardResetCommand: return QStringLiteral("Ctrl+Shift+R");
-    case FrameAdvanceCommand: return QStringLiteral(".");
-    case FrameBackCommand: return QStringLiteral(",");
-    case SpeedDecreaseCommand: return QStringLiteral("[");
-    case SpeedIncreaseCommand: return QStringLiteral("]");
-    case FullscreenCommand: return QStringLiteral("Alt+Enter");
-    case MuteCommand: return QStringLiteral("M");
-    default: return QStringLiteral("—");
     }
 }
 
@@ -99,6 +84,8 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     : QWidget(parent), input_(input) {
     setFocusPolicy(Qt::StrongFocus);
     qApp->installEventFilter(this);
+    for (int command : commands)
+        commandKeyDrafts_.insert(command, input_.commandKey(command));
 
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(6, 4, 6, 4);
@@ -456,10 +443,31 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     });
     connect(defaultsButton, &QPushButton::clicked, this, [this] {
         stopCapture();
+        if (commandTabSelected()) {
+            for (int command : commands)
+                commandKeyDrafts_[command] = InputManager::defaultCommandKey(command);
+            dirtyCommandKeys_ = true;
+            for (int command : commands)
+                clearGameKeyConflicts(commandKeyDrafts_.value(command));
+            auto& mapping = draft();
+            const auto defaults = InputManager::defaultMapping(selectedProfile(), selectedPlayer());
+            for (int command : commands)
+                mapping.pad[command] = defaults.pad.value(command);
+            dirty_.insert(draftKey());
+            refreshContents();
+            setFeedback(Localization::text(QStringLiteral("Клавиши команд и кнопки геймпада этого порта сброшены к исходным.")));
+            return;
+        }
         draft() = InputManager::defaultMapping(selectedProfile(), selectedPlayer());
         if (selectedAdapter() != ControllerAdapter::None)
             draft().connected = true;
         dirty_.insert(draftKey());
+        const auto defaultKeys = draft().keyboard;
+        for (auto it = defaultKeys.cbegin(); it != defaultKeys.cend(); ++it) {
+            if (!it.value()) continue;
+            clearCommandKeyConflicts(it.value());
+            clearGameKeyConflicts(it.value(), int(selectedProfile()), selectedPlayer(), it.key());
+        }
         refreshContents();
         setFeedback(Localization::text(QStringLiteral("Настройки этого игрока и системы сброшены к исходным.")));
     });
@@ -481,7 +489,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
             : commandName(captureTarget_);
         setFeedback((captureTarget_ < 16
             ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
-            : Localization::text(QStringLiteral("Назначение «%1»: нажмите кнопку геймпада. Esc — отмена."))).arg(label));
+            : Localization::text(QStringLiteral("Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена."))).arg(label));
     });
     connect(&input_, &InputManager::bindingCaptured,
             this, &ControlsPage::onCaptured);
@@ -648,21 +656,20 @@ void ControlsPage::refreshPlayerChoices() {
 }
 
 QString ControlsPage::captureDeviceKey() {
-    const QString key = draft().deviceKey;
-    if (key != QStringLiteral("auto"))
-        return key;
+    const auto keys = resolvedDeviceKeys();
+    return keys.value(selectedPlayer(), QStringLiteral("auto"));
+}
+
+QVector<QString> ControlsPage::resolvedDeviceKeys() const {
     const auto devices = input_.devices();
-    if (devices.isEmpty())
-        return key;
-    QVector<QString> assigned(static_cast<qsizetype>(MaxControllerPlayers));
+    QVector<QString> result(static_cast<qsizetype>(MaxControllerPlayers));
     QVector<PlayerMapping> players;
     for (int player = 0; player < int(MaxControllerPlayers); ++player) {
         const int mappingKey = int(selectedProfile()) * int(MaxControllerPlayers) + player;
         players.append(drafts_.contains(mappingKey) ? drafts_.value(mappingKey)
             : input_.mapping(selectedProfile(), player));
-        if (players[player].deviceKey != QStringLiteral("auto") &&
-            players[player].deviceKey != QStringLiteral("none"))
-            assigned[player] = players[player].deviceKey;
+        if (players[player].deviceKey != QStringLiteral("auto"))
+            result[player] = players[player].deviceKey;
     }
     const bool chainedActive = selectedAdapter() == ControllerAdapter::None &&
         selectedProfile() == ConsoleProfile::MegaDrive &&
@@ -681,13 +688,14 @@ QString ControlsPage::captureDeviceKey() {
             for (const InputDevice& device : devices) {
                 bool usedByActive = false;
                 for (int other = 0; other < int(MaxControllerPlayers); ++other)
-                    usedByActive |= active(other) && assigned[other] == device.key;
-                if (!usedByActive) { assigned[player] = device.key; break; }
+                    usedByActive |= active(other) && result[other] == device.key;
+                if (!usedByActive) { result[player] = device.key; break; }
             }
-            if (assigned[player].isEmpty()) assigned[player] = devices.first().key;
+            if (result[player].isEmpty() && !devices.isEmpty())
+                result[player] = devices.first().key;
         }
     }
-    return assigned[selectedPlayer()];
+    return result;
 }
 
 void ControlsPage::refreshDevices() {
@@ -872,7 +880,7 @@ void ControlsPage::fillCommandTable() {
         const int target = commands[row];
         commandTable_->setRowHeight(row, 30);
         commandTable_->setItem(row, 0, cell(commandName(target), target));
-        commandTable_->setItem(row, 1, cell(commandShortcut(target)));
+        commandTable_->setItem(row, 1, cell(keyboardName(commandKeyDrafts_.value(target))));
         commandTable_->setItem(row, 2, cell(padName(mapping, target)));
     }
 }
@@ -905,10 +913,13 @@ void ControlsPage::refreshPadCell(int target) {
 }
 
 void ControlsPage::refreshKeyboardCell(int target) {
-    for (int row = 0; row < gameTable_->rowCount(); ++row) {
-        const auto* item = gameTable_->item(row, 0);
+    QTableWidget* table = target < 16 ? gameTable_ : commandTable_;
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto* item = table->item(row, 0);
         if (!item || item->data(Qt::UserRole).toInt() != target) continue;
-        gameTable_->item(row, 1)->setText(keyboardName(draft().keyboard.value(target)));
+        const int key = target < 16 ? draft().keyboard.value(target)
+                                    : commandKeyDrafts_.value(target);
+        table->item(row, 1)->setText(keyboardName(key));
         return;
     }
 }
@@ -917,13 +928,11 @@ void ControlsPage::updateActionButtons() {
     if (!assignButton_) return;
     const bool gamePage = !commandTabSelected();
     const bool targetSelected = selectedTarget_ >= 0;
-    const bool deviceSelected = draft().deviceKey != QStringLiteral("none");
-    // Keyboard setup does not require a physical pad or an enabled console port.
-    assignButton_->setEnabled(targetSelected && (gamePage || deviceSelected));
-    sequenceButton_->setEnabled(gamePage || deviceSelected);
+    assignButton_->setEnabled(targetSelected);
+    sequenceButton_->setEnabled(true);
     skipButton_->setEnabled(captureTarget_ >= 0 && !sequence_.isEmpty());
-    clearKeyButton_->setVisible(gamePage);
-    clearKeyButton_->setEnabled(gamePage && targetSelected);
+    clearKeyButton_->setVisible(true);
+    clearKeyButton_->setEnabled(targetSelected);
     clearButton_->setEnabled(targetSelected);
     diagram_->setSelectedTarget(gamePage ? selectedTarget_ : -1, captureTarget_ >= 0);
 }
@@ -948,34 +957,77 @@ void ControlsPage::selectFailure(int profile, int player, bool commandTab) {
     tabs_->setCurrentIndex(commandTab ? tabs_->count() - 1 : playerBox_->currentIndex());
 }
 
+void ControlsPage::clearGameKeyConflicts(int key, int profileFilter,
+                                         int exceptPlayer, int exceptTarget) {
+    if (!key) return;
+    for (int profile = 0; profile < 4; ++profile) {
+        if (profileFilter >= 0 && profile != profileFilter) continue;
+        for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+            const int mappingKey = profile * int(MaxControllerPlayers) + player;
+            const PlayerMapping mapping = drafts_.contains(mappingKey)
+                ? drafts_.value(mappingKey)
+                : input_.mapping(ConsoleProfile(profile), player);
+            if (profileFilter >= 0 && player != exceptPlayer) {
+                const bool listed = playerBox_->findData(player) >= 0;
+                const bool active = mapping.connected ||
+                    (selectedJCartPlayer(player) && !dirty_.contains(mappingKey));
+                if (!listed || !active) continue;
+            }
+            for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
+                if (it.value() != key ||
+                    (profile == profileFilter && player == exceptPlayer &&
+                     it.key() == exceptTarget))
+                    continue;
+                if (!drafts_.contains(mappingKey)) drafts_.insert(mappingKey, mapping);
+                drafts_[mappingKey].keyboard[it.key()] = 0;
+                dirty_.insert(mappingKey);
+                if (profile == int(selectedProfile()) && player == selectedPlayer())
+                    refreshKeyboardCell(it.key());
+            }
+        }
+    }
+}
+
+void ControlsPage::clearCommandKeyConflicts(int key, int exceptTarget) {
+    if (!key) return;
+    for (int command : commands) {
+        if (command == exceptTarget || commandKeyDrafts_.value(command) != key) continue;
+        commandKeyDrafts_[command] = 0;
+        dirtyCommandKeys_ = true;
+        refreshKeyboardCell(command);
+    }
+}
+
 bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
-    if (refreshing_) return false;
-    int key = 0;
-    const Qt::KeyboardModifiers modifiers = sequence.isEmpty() ? Qt::NoModifier
+    if (refreshing_ || target < 0) return false;
+    const int key = sequence.isEmpty() ? 0 : sequence[0].toCombined();
+    const auto modifiers = sequence.isEmpty() ? Qt::NoModifier
         : sequence[0].keyboardModifiers() & ~Qt::KeypadModifier;
-    if (!sequence.isEmpty())
-        key = sequence[0].toCombined();
     QString error;
-    if (sequence.count() > 1 || modifiers != Qt::NoModifier)
-        error = Localization::text(QStringLiteral("Назначьте одну клавишу без Ctrl, Alt или Shift."));
+    if (sequence.count() > 1 || (target < 16 && modifiers != Qt::NoModifier))
+        error = Localization::text(QStringLiteral("Для кнопки игры назначьте одну клавишу без Ctrl, Alt или Shift."));
     else if (reservedKey(key))
-        error = Localization::text(QStringLiteral("0–9 выбирают слот; Tab, Esc, P, M, R, F5, F8, F12, запятая и точка зарезервированы."));
+        error = Localization::text(QStringLiteral("Эта клавиша или сочетание зарезервированы."));
     if (!error.isEmpty()) {
         setFeedback(error, true);
         return false;
     }
-    PlayerMapping& mapping = draft();
-    if (key) {
-        const auto targets = activeGameTargets();
-        for (auto it = mapping.keyboard.begin(); it != mapping.keyboard.end(); ++it) {
-            if (it.key() == target || !targets.contains(it.key()) || it.value() != key) continue;
-            it.value() = 0;
-            refreshKeyboardCell(it.key());
+    if (target >= 16) {
+        if (key) {
+            clearCommandKeyConflicts(key, target);
+            clearGameKeyConflicts(key);
         }
+        commandKeyDrafts_[target] = key;
+        dirtyCommandKeys_ = true;
+    } else {
+        if (key) {
+            clearGameKeyConflicts(key, int(selectedProfile()), selectedPlayer(), target);
+            clearCommandKeyConflicts(key);
+        }
+        draft().keyboard[target] = key;
+        dirty_.insert(draftKey());
     }
-    mapping.keyboard[target] = key;
     refreshKeyboardCell(target);
-    dirty_.insert(draftKey());
     setFeedback(key
         ? Localization::text(QStringLiteral("Клавиша назначена."))
         : Localization::text(QStringLiteral("Клавиша очищена.")));
@@ -988,11 +1040,6 @@ void ControlsPage::beginCaptureFor(int target) {
     bool padPresent = false;
     for (const InputDevice& device : input_.devices())
         padPresent |= device.key == deviceKey;
-    if (target >= 16 && !padPresent) {
-        stopCapture();
-        setFeedback(Localization::text(QStringLiteral("Для назначения команды подключите геймпад. Сочетания клавиатуры указаны в таблице.")), true);
-        return;
-    }
     captureTarget_ = target;
     selectTarget(target);
     setFocus(Qt::OtherFocusReason);
@@ -1001,7 +1048,7 @@ void ControlsPage::beginCaptureFor(int target) {
         : commandName(target);
     setFeedback((target < 16
         ? Localization::text(QStringLiteral("Назначение «%1»: нажмите клавишу или кнопку геймпада. Esc — отмена."))
-        : Localization::text(QStringLiteral("Назначение «%1»: нажмите кнопку геймпада. Esc — отмена."))).arg(label));
+        : Localization::text(QStringLiteral("Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена."))).arg(label));
     if (padPresent)
         input_.beginCapture(deviceKey, selectedPlayer());
     updateActionButtons();
@@ -1055,19 +1102,31 @@ void ControlsPage::onCaptured(const PadBinding& binding) {
     if (captureTarget_ < 0) return;
     const int target = captureTarget_;
     captureTarget_ = -1;
-    PlayerMapping& current = draft();
-    const auto targets = activeGameTargets();
     const QString deviceKey = captureDeviceKey();
-    for (auto it = current.pad.begin(); it != current.pad.end(); ++it) {
-        if ((it.key() >= 16 || targets.contains(it.key())) &&
-            it.key() != target && it.value().kind != PadBinding::None &&
-            input_.capturedBindingConflicts(selectedProfile(), deviceKey,
-                                            it.key(), it.value(), binding)) {
-            it.value() = PadBinding{};
-            refreshPadCell(it.key());
+    const auto deviceKeys = resolvedDeviceKeys();
+    const int profile = int(selectedProfile());
+    for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+        if (deviceKeys.value(player) != deviceKey) continue;
+        const int mappingKey = profile * int(MaxControllerPlayers) + player;
+        const PlayerMapping mapping = drafts_.contains(mappingKey)
+            ? drafts_.value(mappingKey) : input_.mapping(selectedProfile(), player);
+        const ControllerType type = selectedAdapter() == ControllerAdapter::None &&
+            !selectedJCartPlayer(player) ? mapping.controllerType : ControllerType::Pad;
+        const auto gameTargets = InputManager::gameTargets(selectedProfile(), mapping.sixButton, type);
+        for (auto it = mapping.pad.cbegin(); it != mapping.pad.cend(); ++it) {
+            if (player == selectedPlayer() && it.key() == target) continue;
+            if (it.key() < 16 && !gameTargets.contains(it.key())) continue;
+            if (player != selectedPlayer() && target < 16 && it.key() < 16) continue;
+            if (!input_.capturedBindingConflicts(selectedProfile(), deviceKey,
+                                                 it.key(), it.value(), binding))
+                continue;
+            if (!drafts_.contains(mappingKey)) drafts_.insert(mappingKey, mapping);
+            drafts_[mappingKey].pad[it.key()] = PadBinding{};
+            dirty_.insert(mappingKey);
+            if (player == selectedPlayer()) refreshPadCell(it.key());
         }
     }
-    current.pad[target] = binding;
+    draft().pad[target] = binding;
     dirty_.insert(draftKey());
     refreshPadCell(target);
     if (sequence_.isEmpty()) {
@@ -1094,6 +1153,33 @@ void ControlsPage::onCaptureCancelled() {
 }
 
 bool ControlsPage::validateDrafts() {
+    QSet<int> commandKeys;
+    for (int command : commands) {
+        const int key = commandKeyDrafts_.value(command);
+        if (!key) continue;
+        if (reservedKey(key) || commandKeys.contains(key)) {
+            selectFailure(int(selectedProfile()), selectedPlayer(), true);
+            setFeedback(Localization::text(QStringLiteral(
+                "Проверьте клавиши команд: есть повтор или зарезервированное сочетание.")), true);
+            return false;
+        }
+        commandKeys.insert(key);
+        for (int profile = 0; profile < 4; ++profile) {
+            for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+                const int mappingKey = profile * int(MaxControllerPlayers) + player;
+                const PlayerMapping mapping = drafts_.contains(mappingKey)
+                    ? drafts_.value(mappingKey)
+                    : input_.mapping(ConsoleProfile(profile), player);
+                for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
+                    if (it.value() != key) continue;
+                    selectFailure(profile, player, true);
+                    setFeedback(Localization::text(QStringLiteral(
+                        "Клавиша команды также назначена кнопке игры.")), true);
+                    return false;
+                }
+            }
+        }
+    }
     for (int profile = 0; profile < 4; ++profile) {
         bool touched = dirtyAdapters_.contains(profile);
         for (int player = 0; player < int(MaxControllerPlayers); ++player)
@@ -1244,6 +1330,13 @@ bool ControlsPage::apply() {
         input_.setMapping(static_cast<ConsoleProfile>(key / int(MaxControllerPlayers)),
                           key % int(MaxControllerPlayers), drafts_[key]);
     dirty_.clear();
+    if (dirtyCommandKeys_) {
+        input_.setCommandKeys(commandKeyDrafts_);
+        dirtyCommandKeys_ = false;
+        for (int command : commands)
+            commandKeyDrafts_[command] = input_.commandKey(command);
+        fillCommandTable();
+    }
     input_.setBackgroundGamepadEnabled(backgroundGamepadBox_->isChecked());
     input_.setMouseCaptureEnabled(mouseCaptureBox_->isChecked());
     return true;
@@ -1292,13 +1385,10 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
     if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt ||
         key == Qt::Key_AltGr || key == Qt::Key_Meta || key == Qt::Key_unknown)
         return true;
-    if (captureTarget_ >= 16) {
-        setFeedback(Localization::text(QStringLiteral("У команд фиксированные сочетания клавиатуры. Нажмите кнопку геймпада или Esc.")), true);
-        return true;
-    }
     const int target = captureTarget_;
-    if (!onKeyboardChanged(target, QKeySequence(QKeyCombination::fromCombined(
-            key | int(keyEvent->modifiers() & ~Qt::KeypadModifier)))))
+    const int capturedKey = target >= 16 ? InputManager::keyboardChord(*keyEvent)
+        : key | int(keyEvent->modifiers() & ~Qt::KeypadModifier);
+    if (!onKeyboardChanged(target, QKeySequence(QKeyCombination::fromCombined(capturedKey))))
         return true;
     captureTarget_ = -1;
     if (input_.capturing()) input_.cancelCapture();

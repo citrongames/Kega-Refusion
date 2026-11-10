@@ -577,51 +577,75 @@ void testHardResetCommand() {
             "adding hard reset changed existing soft reset or rewind bindings");
 }
 
-void testReservedRewindKey() {
+void testMovableRewindKey() {
     using Codes = KeyboardScanCodes;
     for (const auto codes : {Codes::Windows, Codes::Xkb}) {
         const int scan = 0x13 + (codes == Codes::Xkb ? 8 : 0);
         for (const int logical : {int(Qt::Key_R), 0x041a}) {
             const int key = InputManager::keyboardKey(logical, scan, codes);
-            require(key == Qt::Key_R && InputManager::reservedKeyboardKey(key),
-                    "physical Russian/English R was not reserved for rewind");
+            require(key == Qt::Key_R && !InputManager::reservedKeyboardKey(key),
+                    "physical Russian/English R cannot be assigned to gameplay");
         }
     }
     QTemporaryDir temp;
-    require(temp.isValid(), "cannot create reserved rewind settings directory");
+    require(temp.isValid(), "cannot create movable rewind settings directory");
     const QString path = temp.path() + "/settings.ini";
     {
         QSettings settings(path, QSettings::IniFormat);
         settings.setValue("input/md/player1/device", "none");
         settings.setValue("input/md/player1/key/0", Qt::Key_R);
-        settings.setValue("input/md/player1/key/8", 0x041a); // Russian К -> R
         settings.setValue("keys/button_0", 0x043a); // legacy lowercase к -> R
         settings.sync();
     }
     InputManager manager(path);
-    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == 0 &&
-                manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
-            "saved English/Russian R remained bound to gameplay");
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == Qt::Key_R,
+            "saved gameplay R was removed during hotkey migration");
     for (const auto profile : {ConsoleProfile::MasterSystem, ConsoleProfile::GameGear,
                               ConsoleProfile::SG1000})
-        require(manager.mapping(profile, 0).keyboard.value(0) == 0,
-                "legacy Russian R remained bound to gameplay");
+        require(manager.mapping(profile, 0).keyboard.value(0) == Qt::Key_R,
+                "legacy Russian R was not migrated to gameplay");
+    require(manager.commandKey(RewindCommand) == 0,
+            "default rewind shortcut conflicted with saved gameplay R");
 
     auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
-    mapping.keyboard[0] = Qt::Key_R;
-    mapping.keyboard[8] = 0x041a;
+    mapping.keyboard[0] = 0x041a;
     manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
-    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == 0 &&
-                manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
-            "mapping update accepted reserved English/Russian R");
-    require(!manager.keyEvent(Qt::Key_R, true) && !manager.keyEvent(0x041a, true),
-            "reserved rewind key was treated as gameplay input");
+    require(manager.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == Qt::Key_R,
+            "mapping update did not canonicalize Russian R");
+    require(manager.keyEvent(Qt::Key_R, true) && manager.keyEvent(0x041a, false),
+            "movable R key did not control gameplay");
     InputManager reloaded(path);
-    require(reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == 0 &&
-                reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(8) == 0,
-            "reserved rewind keyboard mappings reappeared after reload");
+    require(reloaded.mapping(ConsoleProfile::MegaDrive, 0).keyboard.value(0) == Qt::Key_R &&
+                reloaded.commandKey(RewindCommand) == 0,
+            "gameplay R and cleared rewind shortcut did not survive reload");
 }
 
+void testCommandKeyboardSettings() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "cannot create command keyboard settings directory");
+    const QString path = temp.path() + "/settings.ini";
+    InputManager manager(path);
+    require(InputManager::defaultCommandKey(FullscreenCommand) ==
+                (int(Qt::AltModifier) | Qt::Key_Return) &&
+            InputManager::defaultCommandKey(HardResetCommand) ==
+                (int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_R),
+            "default command chords changed");
+    QMap<int, int> keys;
+    for (int command = PauseCommand; command <= ScreenshotCommand; ++command)
+        keys[command] = manager.commandKey(command);
+    keys[PauseCommand] = int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_K;
+    keys[FastForwardCommand] = int(Qt::AltModifier) | Qt::Key_G;
+    manager.setCommandKeys(keys);
+    require(manager.commandKey(PauseCommand) == keys[PauseCommand] &&
+                manager.commandKey(FastForwardCommand) == keys[FastForwardCommand] &&
+                manager.commandKey(FullscreenCommand) == keys[FullscreenCommand],
+            "command keyboard update lost a chord or unrelated shortcut");
+    InputManager reloaded(path);
+    require(reloaded.commandKey(PauseCommand) == keys[PauseCommand] &&
+                reloaded.commandKey(FastForwardCommand) == keys[FastForwardCommand] &&
+                reloaded.commandKey(FullscreenCommand) == keys[FullscreenCommand],
+            "global command keyboard chords did not survive restart");
+}
 void testLegacyKeyboardSettings() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create legacy settings directory");
@@ -648,6 +672,13 @@ void testLegacyKeyboardSettings() {
 void testPhysicalKeyboard() {
     for (int key : {Qt::Key_Plus,Qt::Key_Equal,Qt::Key_Minus})
         require(InputManager::reservedKeyboardKey(key),"master volume key was not reserved");
+    require(InputManager::reservedKeyboardKey(Qt::Key_Escape),
+            "fixed Escape key was not reserved");
+    for (int key : {Qt::Key_P, Qt::Key_Tab, Qt::Key_M, Qt::Key_R,
+                    Qt::Key_F5, Qt::Key_F8, Qt::Key_F12, Qt::Key_Period,
+                    Qt::Key_Comma, Qt::Key_BracketLeft, Qt::Key_BracketRight})
+        require(!InputManager::reservedKeyboardKey(key),
+                "movable command key was reserved for gameplay");
 
     using Codes = KeyboardScanCodes;
     struct Key { int scan; int english; int russian; };
@@ -1339,7 +1370,9 @@ int main(int argc, char** argv) {
             testPhysicalKeyboard();
             testDistinctKeypad();
             testKeyboardSettingsMigration();
-            std::puts("physical keyboard, keypad and reserved hotkey tests passed");
+            testMovableRewindKey();
+            testCommandKeyboardSettings();
+            std::puts("physical keyboard, keypad and movable command tests passed");
             return 0;
         }
         if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--analog")) {
@@ -1377,7 +1410,8 @@ int main(int argc, char** argv) {
         testIndependentCapture();
         testRewindCommand();
         testHardResetCommand();
-        testReservedRewindKey();
+        testMovableRewindKey();
+        testCommandKeyboardSettings();
         testLegacyKeyboardSettings();
         testUnknownRawJoystick();
         testBackgroundGamepad();

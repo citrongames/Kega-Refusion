@@ -18,7 +18,7 @@
 
 namespace {
 constexpr int playerCount = int(MaxControllerPlayers); // Slot 2 also stores the legacy chained Justifier.
-constexpr int targetCount = SpeedResetCommand + 1;
+constexpr int targetCount = ScreenshotCommand + 1;
 constexpr int captureMilliseconds = 10000;
 constexpr int captureAxisThreshold = 16000;
 
@@ -182,6 +182,39 @@ int storedKeyboardKey(int key) {
     key = legacyKeyboardKey(key);
     return InputManager::reservedKeyboardKey(key) ? 0 : key;
 }
+constexpr int commandModifierMask = Qt::ShiftModifier | Qt::ControlModifier |
+                                    Qt::AltModifier | Qt::MetaModifier;
+int normalizedCommandKey(int chord) {
+    if (!chord) return 0;
+    int modifiers = chord & commandModifierMask;
+    if (chord & Qt::GroupSwitchModifier) modifiers |= Qt::AltModifier;
+    int key = chord & ~(commandModifierMask | int(Qt::GroupSwitchModifier) | int(Qt::KeypadModifier));
+    if (key == Qt::Key_Backtab) {
+        key = Qt::Key_Tab;
+        modifiers |= Qt::ShiftModifier;
+    }
+    if (key == Qt::Key_unknown || key == Qt::Key_Control || key == Qt::Key_Shift ||
+        key == Qt::Key_Alt || key == Qt::Key_AltGr || key == Qt::Key_Meta || key <= 0)
+        return 0;
+    key = legacyKeyboardKey(key);
+    return modifiers | (chord & Qt::KeypadModifier) | key;
+}
+bool reservedCommandChord(int chord) {
+    const bool keypad = (chord & Qt::KeypadModifier) != 0;
+    const int key = chord & ~(commandModifierMask | int(Qt::KeypadModifier));
+    const int modifiers = chord & commandModifierMask;
+    if (!keypad && modifiers == 0 &&
+        ((key >= Qt::Key_0 && key <= Qt::Key_9) || key == Qt::Key_Escape))
+        return true;
+    if (!keypad && modifiers == Qt::ControlModifier &&
+        (key == Qt::Key_O || key == Qt::Key_Q)) return true;
+    if (!keypad && modifiers == Qt::AltModifier && key == Qt::Key_F4) return true;
+    if (keypad) return false;
+    // These physical combinations control the fixed master volume.
+    if ((key == Qt::Key_Equal || key == Qt::Key_Plus) &&
+        (modifiers == 0 || modifiers == Qt::ShiftModifier)) return true;
+    return key == Qt::Key_Minus && modifiers == 0;
+}
 QString guidString(SDL_Joystick* joystick) {
     char text[33]{};
     SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), text, sizeof(text));
@@ -293,6 +326,7 @@ struct InputManager::Impl {
     bool legacyPortOneGun = false;
     bool legacyGunMoved = false;
     bool legacyGunMovedToChain = false;
+    QMap<int,int> commandKeys;
     std::array<bool, targetCount - 16> commands{};
     std::array<bool, targetCount - 16> commandBlocked{};
     bool capture = false;
@@ -409,6 +443,12 @@ struct InputManager::Impl {
                 if (player == 2 && p != profileIndex(ConsoleProfile::MegaDrive))
                     slot.connected = false;
             }
+        for (int command = PauseCommand; command < targetCount; ++command) {
+            const QString key = QStringLiteral("input/commands/key/%1").arg(command);
+            commandKeys[command] = normalizedCommandKey(settings.value(
+                key, InputManager::defaultCommandKey(command)).toInt());
+        }
+        sanitizeCommandKeys();
         SDL_SetMainReady(); // Qt owns main(), including in SDL's Windows builds.
         if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) == 0) {
             sdlReady = true;
@@ -422,6 +462,36 @@ struct InputManager::Impl {
     ~Impl() {
         devices.clear();
         if (sdlReady) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK);
+    }
+    bool gameplayUsesKey(int key) const {
+        for (const auto& profileMappings : mappings)
+            for (const auto& mapping : profileMappings)
+                for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
+                    if (gameplayTarget(it.key()) && it.value() == key) return true;
+        return false;
+    }
+    bool sanitizeCommandKeys() {
+        bool changed = false;
+        QSet<int> used;
+        for (int command = PauseCommand; command < targetCount; ++command) {
+            const int requested = normalizedCommandKey(commandKeys.value(command));
+            const bool gameplayConflict = (requested & commandModifierMask) == 0 &&
+                gameplayUsesKey(requested);
+            const int accepted = requested && !reservedCommandChord(requested) &&
+                !gameplayConflict && !used.contains(requested) ? requested : 0;
+            if (commandKeys.value(command) != accepted) changed = true;
+            commandKeys[command] = accepted;
+            if (accepted) used.insert(accepted);
+        }
+        return changed;
+    }
+    void writeCommandKeys(QSettings& settings) const {
+        for (int command = PauseCommand; command < targetCount; ++command) {
+            const QString key = QStringLiteral("input/commands/key/%1").arg(command);
+            const int value = commandKeys.value(command);
+            if (value == InputManager::defaultCommandKey(command)) settings.remove(key);
+            else settings.setValue(key, value);
+        }
     }
     Device* findById(int id) const {
         for (const auto& device : devices) if (device->instanceId == id) return device.get();
@@ -864,7 +934,10 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
             else settings.setValue(key, button);
         }
     }
+    const bool commandKeysChanged = d->sanitizeCommandKeys();
+    if (commandKeysChanged) d->writeCommandKeys(settings);
     settings.sync();
+    if (commandKeysChanged) emit this->commandKeysChanged();
     if (profile == d->profile) {
         if (oldJCartBase != d->effectiveJCartBase()) {
             emit jcartChanged(d->effectiveJCart());
@@ -1043,6 +1116,9 @@ QString InputManager::targetName(ConsoleProfile profile, int target, ControllerT
     case PreviousSlotCommand: return Localization::text(QStringLiteral("Предыдущий слот"));
     case MenuCommand: return Localization::text(QStringLiteral("Меню"));
     case RewindCommand: return Localization::text(QStringLiteral("Перемотка назад"));
+    case SaveFileCommand: return Localization::text(QStringLiteral("Сохранить в файл"));
+    case LoadFileCommand: return Localization::text(QStringLiteral("Загрузить из файла"));
+    case ScreenshotCommand: return Localization::text(QStringLiteral("Сохранить скриншот"));
     default: return Localization::text(QStringLiteral("Кнопка %1")).arg(target);
     }
 }
@@ -1382,25 +1458,63 @@ int InputManager::keyboardKey(int logicalKey, quint32 nativeScanCode, KeyboardSc
     }
     return legacyKeyboardKey(logicalKey);
 }
-bool InputManager::reservedKeyboardKey(int key) {
-    return (key >= Qt::Key_0 && key <= Qt::Key_9) ||
-           key == Qt::Key_Tab || key == Qt::Key_Escape ||
-           key == Qt::Key_P || key == Qt::Key_M || key == Qt::Key_R ||
-           key == Qt::Key_F5 || key == Qt::Key_F8 || key == Qt::Key_F12 ||
-           key == Qt::Key_Period || key == Qt::Key_Comma || key == Qt::Key_Plus ||
-           key == Qt::Key_Equal || key == Qt::Key_Minus ||
-           key == Qt::Key_BracketLeft || key == Qt::Key_BracketRight;
+int InputManager::keyboardChord(const QKeyEvent& event) {
+    int modifiers = int(event.modifiers()) & commandModifierMask;
+    if (event.modifiers().testFlag(Qt::GroupSwitchModifier)) modifiers |= Qt::AltModifier;
+    return normalizedCommandKey(keyboardKey(event) | modifiers);
 }
-bool InputManager::keyEvent(int key, bool pressed) {
+int InputManager::defaultCommandKey(int command) {
+    switch (command) {
+    case PauseCommand: return Qt::Key_P;
+    case FastForwardCommand: return Qt::Key_Tab;
+    case SaveCommand: return Qt::Key_F5;
+    case LoadCommand: return Qt::Key_F8;
+    case ResetCommand: return (Qt::ControlModifier | Qt::Key_R).toCombined();
+    case FullscreenCommand: return (Qt::AltModifier | Qt::Key_Return).toCombined();
+    case MuteCommand: return Qt::Key_M;
+    case RewindCommand: return Qt::Key_R;
+    case HardResetCommand: return (Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_R).toCombined();
+    case FrameAdvanceCommand: return Qt::Key_Period;
+    case FrameBackCommand: return Qt::Key_Comma;
+    case SpeedDecreaseCommand: return Qt::Key_BracketLeft;
+    case SpeedIncreaseCommand: return Qt::Key_BracketRight;
+    case SaveFileCommand: return (Qt::ShiftModifier | Qt::Key_F5).toCombined();
+    case LoadFileCommand: return (Qt::ShiftModifier | Qt::Key_F8).toCombined();
+    case ScreenshotCommand: return Qt::Key_F12;
+    default: return 0;
+    }
+}
+int InputManager::commandKey(int command) const {
+    return command >= PauseCommand && command < targetCount ? d->commandKeys.value(command) : 0;
+}
+void InputManager::setCommandKeys(const QMap<int,int>& keys) {
+    const QMap<int,int> previous = d->commandKeys;
+    for (int command = PauseCommand; command < targetCount; ++command)
+        d->commandKeys[command] = normalizedCommandKey(keys.value(command, defaultCommandKey(command)));
+    d->sanitizeCommandKeys();
+    if (d->commandKeys == previous) return;
+    QSettings settings(d->settingsPath, QSettings::IniFormat);
+    d->writeCommandKeys(settings);
+    settings.sync();
+    emit commandKeysChanged();
+}
+bool InputManager::reservedKeyboardKey(int key) {
+    return reservedCommandChord(normalizedCommandKey(key));
+}
+bool InputManager::hasGameplayKey(int key) const {
     key = legacyKeyboardKey(key);
-    if (reservedKeyboardKey(key)) return false;
-    bool bound = false;
+    if (!key || reservedKeyboardKey(key)) return false;
     for (int player = 0; player < playerCount; ++player) {
         const auto& mapping = d->effective(player);
         for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
-            if (activeGameplayTarget(d->profile, mapping, it.key(), d->inputSourceType(player)) && it.value() == key && key != 0) bound = true;
+            if (activeGameplayTarget(d->profile, mapping, it.key(), d->inputSourceType(player)) &&
+                it.value() == key) return true;
     }
-    if (!bound) return false;
+    return false;
+}
+bool InputManager::keyEvent(int key, bool pressed) {
+    key = legacyKeyboardKey(key);
+    if (!hasGameplayKey(key)) return false;
     if (!d->enabled || d->capture) return true;
     if (pressed) d->keys.insert(key); else d->keys.remove(key);
     d->recompute();

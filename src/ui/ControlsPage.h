@@ -55,6 +55,7 @@ private:
     PlayerMapping displayMapping() const;
     int draftKey() const;
     PlayerMapping& draft();
+    QVector<QString> resolvedDeviceKeys() const;
     QVector<int> activeGameTargets();
     void refreshPlayerChoices();
     bool commandTabSelected() const;
@@ -70,6 +71,9 @@ private:
     void setFeedback(const QString& message, bool warning = false);
     void selectFailure(int profile, int player, bool commandTab = false);
     bool onKeyboardChanged(int target, const QKeySequence& sequence);
+    void clearGameKeyConflicts(int key, int profileFilter = -1, int exceptPlayer = -1,
+                               int exceptTarget = -1);
+    void clearCommandKeyConflicts(int key, int exceptTarget = -1);
     void beginCaptureFor(int target);
     void startSequence();
     void advanceSequence();
@@ -113,6 +117,8 @@ private:
     QPushButton* clearKeyButton_ = nullptr;
     QPushButton* clearButton_ = nullptr;
     QMap<int, PlayerMapping> drafts_;
+    QMap<int, int> commandKeyDrafts_;
+    bool dirtyCommandKeys_ = false;
     QMap<int, ControllerAdapter> adapterDrafts_;
     QMap<int, bool> ordinaryConnectionDrafts_;
     QMap<int, bool> adapterConnectionDrafts_;

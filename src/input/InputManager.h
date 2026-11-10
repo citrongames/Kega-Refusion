@@ -17,7 +17,8 @@ enum class KeyboardScanCodes { Native, Windows, Xkb, Unavailable };
 enum InputCommand { PauseCommand=16, FastForwardCommand, SaveCommand, LoadCommand,
                     ResetCommand, FullscreenCommand, MuteCommand, NextSlotCommand,
                     PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand, FrameAdvanceCommand,
-                    FrameBackCommand, SpeedDecreaseCommand, SpeedIncreaseCommand, SpeedResetCommand };
+                    FrameBackCommand, SpeedDecreaseCommand, SpeedIncreaseCommand, SpeedResetCommand,
+                    SaveFileCommand, LoadFileCommand, ScreenshotCommand };
 struct PadBinding {
     enum Kind { None, Button, Axis, Hat, Automatic };
     Kind kind = None;
@@ -85,7 +86,12 @@ public:
     static int keyboardKey(int logicalKey, quint32 nativeScanCode = 0,
                            KeyboardScanCodes codes = KeyboardScanCodes::Native,
                            Qt::KeyboardModifiers modifiers = Qt::NoModifier);
+    static int keyboardChord(const QKeyEvent& event); // Physical key with Ctrl/Shift/Alt/Meta modifiers.
+    int commandKey(int command) const; // 0 means unbound.
+    void setCommandKeys(const QMap<int,int>& keys); // Complete map; omitted commands use defaults.
+    static int defaultCommandKey(int command);
     static bool reservedKeyboardKey(int key);
+    bool hasGameplayKey(int key) const;
     bool keyEvent(int key, bool pressed);
     void releaseKeyboard();
     void beginCapture(const QString& deviceKey, int player); // arm each input independently; ignore a previously held input
@@ -107,6 +113,7 @@ signals:
     void paddleMoved(unsigned player, int position); // signed absolute X, -32768..32767
     void aimMoved(unsigned player, double dx, double dy); // screen fractions, includes elapsed time
     void commandChanged(int command, bool pressed);
+    void commandKeysChanged();
     void captureReady(); // ready for a fresh input; other held controls do not block it
     void bindingCaptured(const PadBinding& binding);
     void captureCancelled();

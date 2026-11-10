@@ -2,6 +2,12 @@
   "code": "en",
   "name": "English",
   "translations": {
+    "Назначение «%1»: нажмите сочетание клавиш или кнопку геймпада. Esc — отмена.": "Binding “%1”: press a keyboard shortcut or a gamepad button. Esc cancels.",
+    "Клавиши команд и кнопки геймпада этого порта сброшены к исходным.": "Command shortcuts and this port’s gamepad bindings have been reset to their defaults.",
+    "Для кнопки игры назначьте одну клавишу без Ctrl, Alt или Shift.": "For a game button, choose a single key without Ctrl, Alt or Shift.",
+    "Эта клавиша или сочетание зарезервированы.": "This key or shortcut is reserved.",
+    "Проверьте клавиши команд: есть повтор или зарезервированное сочетание.": "Check command shortcuts for duplicate or reserved combinations.",
+    "Клавиша команды также назначена кнопке игры.": "The command shortcut is also assigned to a game button.",
     "Не удалось создать папку сохранений: %1": "Could not create the save folder: %1",
     "Отдельная память сохранений Sega CD для каждой игры": "Separate Sega CD backup memory for each game",
     "Если выключено, используется общая память. Применится при следующем открытии игры.": "When off, games use shared backup memory. Takes effect the next time a game is opened.",

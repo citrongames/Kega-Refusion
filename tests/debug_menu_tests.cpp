@@ -24,6 +24,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QLabel>
 #include <QListWidget>
@@ -353,6 +354,52 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
 
     inspect(ConsoleProfile::MegaDrive, 0, -1, -1);
     open(smsPath, 1, ConsoleProfile::MasterSystem);
+    {
+        QMap<int, int> keys;
+        for (int command = PauseCommand; command <= ScreenshotCommand; ++command)
+            keys[command] = input->commandKey(command);
+        keys[FastForwardCommand] = int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_K;
+        input->setCommandKeys(keys);
+        auto* view = window.findChild<GameView*>();
+        require(view, "running game view is missing");
+        window.activateWindow();
+        view->setFocus();
+        QApplication::processEvents();
+        require(window.isActiveWindow() && view->hasFocus(),
+                "running game view did not receive keyboard focus");
+        const auto release = [&](int key, Qt::KeyboardModifiers modifiers) {
+            QKeyEvent event(QEvent::KeyRelease, key, modifiers);
+            QApplication::sendEvent(view, &event);
+        };
+        press(*view, Qt::Key_Return, Qt::AltModifier);
+        require(window.isFullScreen(), "Alt+Enter did not enter fullscreen");
+        release(Qt::Key_Return, Qt::AltModifier);
+        press(*view, Qt::Key_Return, Qt::AltModifier);
+        require(!window.isFullScreen(), "Alt+Enter did not leave fullscreen");
+        release(Qt::Key_Return, Qt::AltModifier);
+        window.activateWindow();
+        view->setFocus();
+        QApplication::processEvents();
+        const auto pressChord = [&] {
+            press(*view, Qt::Key_Control, Qt::ControlModifier);
+            press(*view, Qt::Key_Shift, Qt::ControlModifier | Qt::ShiftModifier);
+            require(!view->fastForwardActive(), "modifier alone triggered held command");
+            press(*view, Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+            require(view->fastForwardActive(), "Ctrl+Shift+K did not hold fast forward");
+        };
+        pressChord();
+        release(Qt::Key_Shift, Qt::ControlModifier);
+        require(!view->fastForwardActive(),
+                "held command stayed active after its modifier was released first");
+        release(Qt::Key_K, Qt::ControlModifier);
+        release(Qt::Key_Control, Qt::NoModifier);
+        pressChord();
+        release(Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+        require(!view->fastForwardActive(),
+                "held command stayed active after its primary key was released");
+        release(Qt::Key_Shift, Qt::ControlModifier);
+        release(Qt::Key_Control, Qt::NoModifier);
+    }
     for (int key : {Qt::Key_F5, Qt::Key_F8}) {
         bool correctPicker = false;
         QTimer dismiss;
@@ -492,6 +539,71 @@ void testControlsLayout(MainWindow& window) {
             QApplication::sendEvent(controls, &release);
             check(oldKey->text() == QStringLiteral("—") && newKey->text() == QStringLiteral("X"),
                   QStringLiteral("new keyboard binding did not clear the previous target"));
+        }
+
+        tabs->setCurrentIndex(tabs->count() - 1);
+        QApplication::processEvents();
+        const int pauseRow = rowFor(commandTable, PauseCommand);
+        const int fastRow = rowFor(commandTable, FastForwardCommand);
+        const int fullscreenRow = rowFor(commandTable, FullscreenCommand);
+        const int hardResetRow = rowFor(commandTable, HardResetCommand);
+        check(pauseRow >= 0 && fastRow >= 0 && fullscreenRow >= 0 && hardResetRow >= 0,
+              QStringLiteral("keyboard command rows are missing"));
+        if (first >= 0 && second >= 0 && pauseRow >= 0 && fastRow >= 0 &&
+            fullscreenRow >= 0 && hardResetRow >= 0) {
+            auto* pauseKey = commandTable->item(pauseRow, 1);
+            const QString originalPause = pauseKey->text();
+            auto* commandView = commandTable->viewport();
+            const QPoint point = commandTable->visualItemRect(pauseKey).center();
+            const auto clickCommand = [&](QEvent::Type type, Qt::MouseButtons held) {
+                QMouseEvent event(type, point, commandView->mapToGlobal(point),
+                                  Qt::LeftButton, held, Qt::NoModifier);
+                QApplication::sendEvent(commandView, &event);
+            };
+            clickCommand(QEvent::MouseButtonPress, Qt::LeftButton);
+            clickCommand(QEvent::MouseButtonRelease, Qt::NoButton);
+            press(*controls, Qt::Key_X);
+            QKeyEvent plainRelease(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
+            QApplication::sendEvent(controls, &plainRelease);
+            check(!input->capturing() && pauseKey->text() == originalPause,
+                  QStringLiteral("one command click armed keyboard capture"));
+
+            const auto captureCommand = [&](int row, int key, Qt::KeyboardModifiers modifiers) {
+                commandTable->cellDoubleClicked(row, 1);
+                press(*controls, key, modifiers);
+                QKeyEvent release(QEvent::KeyRelease, key, modifiers);
+                QApplication::sendEvent(controls, &release);
+            };
+            captureCommand(pauseRow, Qt::Key_X, Qt::NoModifier);
+            check(pauseKey->text() == QStringLiteral("X") &&
+                  gameTable->item(second, 1)->text() == QStringLiteral("—"),
+                  QStringLiteral("command keyboard assignment did not take gameplay X"));
+            captureCommand(fastRow, Qt::Key_X, Qt::NoModifier);
+            check(pauseKey->text() == QStringLiteral("—") &&
+                  commandTable->item(fastRow, 1)->text() == QStringLiteral("X"),
+                  QStringLiteral("new command keyboard assignment did not clear previous hotkey"));
+
+            tabs->setCurrentIndex(0);
+            QApplication::processEvents();
+            gameTable->cellDoubleClicked(second, 1);
+            press(*controls, Qt::Key_X);
+            QKeyEvent gameRelease(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
+            QApplication::sendEvent(controls, &gameRelease);
+            check(gameTable->item(second, 1)->text() == QStringLiteral("X") &&
+                  commandTable->item(fastRow, 1)->text() == QStringLiteral("—"),
+                  QStringLiteral("gameplay keyboard assignment did not clear command hotkey"));
+
+            tabs->setCurrentIndex(tabs->count() - 1);
+            QApplication::processEvents();
+            captureCommand(fullscreenRow, Qt::Key_Return, Qt::AltModifier);
+            check(commandTable->item(fullscreenRow, 1)->text() ==
+                  QKeySequence(int(Qt::AltModifier) | Qt::Key_Return).toString(QKeySequence::NativeText),
+                  QStringLiteral("Alt+Enter command chord was not captured"));
+            captureCommand(hardResetRow, Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+            check(commandTable->item(hardResetRow, 1)->text() ==
+                  QKeySequence(int(Qt::ControlModifier) | int(Qt::ShiftModifier) |
+                               Qt::Key_K).toString(QKeySequence::NativeText),
+                  QStringLiteral("Ctrl+Shift+key command chord was not captured"));
         }
 
         tabs->setCurrentIndex(1);
