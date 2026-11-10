@@ -67,6 +67,8 @@ void configurePluginPaths() {
 
 int main(int argc, char* argv[]) {
     configurePluginPaths(); // The platform plugin loads in QApplication's constructor.
+    // Platform-native pickers own their title bars and can re-enable maximize.
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
     // Select before achievements or any other SSL client initializes a backend.
     // Direct netplay uses PSK ciphers supplied by the bundled OpenSSL backend.

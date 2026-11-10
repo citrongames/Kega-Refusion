@@ -942,6 +942,9 @@ void MainWindow::buildMenus() {
     });
     saveFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Сохранить в файл…")));
     saveFileAction_->setObjectName(QStringLiteral("saveStateFileAction"));
+    saveFileAction_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
+    saveFileAction_->setAutoRepeat(false);
+    shortcut(saveFileAction_);
     saveFileAction_->setEnabled(false);
     connect(saveFileAction_, &QAction::triggered, this, [this] {
         if (!session_.hasGame() || loading_ || moviePending_ || session_.networkClient()) return;
@@ -965,6 +968,9 @@ void MainWindow::buildMenus() {
     });
     loadFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Загрузить из файла…")));
     loadFileAction_->setObjectName(QStringLiteral("loadStateFileAction"));
+    loadFileAction_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F8));
+    loadFileAction_->setAutoRepeat(false);
+    shortcut(loadFileAction_);
     loadFileAction_->setEnabled(false);
     connect(loadFileAction_, &QAction::triggered, this, [this] {
         if (!session_.hasGame() || loading_ || moviePending_ || achievementsHardcore_ || session_.networkClient()) return;
@@ -3126,14 +3132,21 @@ void MainWindow::handleInputCommand(int command, bool pressed) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    // Apply before the first native show, including Qt-created message/file
-    // dialogs. MainWindow and the modeless lobby keep their own window flags.
-    if (event->type() == QEvent::Polish) {
-        if (auto* dialog = qobject_cast<QDialog*>(watched)) {
-            auto flags = dialog->windowFlags();
-            flags &= ~(Qt::WindowMinMaxButtonsHint | Qt::WindowContextHelpButtonHint);
-            flags |= Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint;
-            if (flags != dialog->windowFlags()) dialog->setWindowFlags(flags);
+    if (event->type() == QEvent::Polish || event->type() == QEvent::WindowStateChange) {
+        auto* window = qobject_cast<QWidget*>(watched);
+        if (window && window != this && (window->windowType() == Qt::Dialog ||
+                window->windowType() == Qt::Window || window->windowType() == Qt::Tool ||
+                window->windowType() == Qt::Sheet)) {
+            if (event->type() == QEvent::Polish) {
+                auto flags = window->windowFlags();
+                flags &= ~(Qt::WindowMinMaxButtonsHint | Qt::WindowContextHelpButtonHint);
+                flags |= Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowCloseButtonHint;
+                if (flags != window->windowFlags()) window->setWindowFlags(flags);
+            } else if (window->isMaximized()) {
+                // Some window managers also offer maximize through title-bar gestures.
+                window->setWindowState(window->windowState() & ~Qt::WindowMaximized);
+                return true;
+            }
         }
     }
     if (watched == this && event->type() == QEvent::WindowBlocked) {
@@ -3206,6 +3219,9 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (key == Qt::Key_F5) commandAction = saveAction_;
         else if (key == Qt::Key_F8) commandAction = loadAction_;
         else if (key == Qt::Key_F12) commandAction = screenshotAction_;
+    } else if (modifiers == Qt::ShiftModifier) {
+        if (key == Qt::Key_F5) commandAction = saveFileAction_;
+        else if (key == Qt::Key_F8) commandAction = loadFileAction_;
     } else if (modifiers == Qt::ControlModifier && key == Qt::Key_R) {
         commandAction = resetAction_;
     } else if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier) && key == Qt::Key_R) {

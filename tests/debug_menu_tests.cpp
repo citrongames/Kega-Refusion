@@ -20,6 +20,7 @@
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileDialog>
 #include <QDir>
 #include <QFileInfo>
 #include <QKeyEvent>
@@ -349,6 +350,24 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
 
     inspect(ConsoleProfile::MegaDrive, 0, -1, -1);
     open(smsPath, 1, ConsoleProfile::MasterSystem);
+    for (int key : {Qt::Key_F5, Qt::Key_F8}) {
+        bool correctPicker = false;
+        QTimer dismiss;
+        dismiss.setSingleShot(true);
+        QObject::connect(&dismiss, &QTimer::timeout, &window, [&] {
+            if (auto* picker = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
+                correctPicker = picker->acceptMode() == (key == Qt::Key_F5
+                    ? QFileDialog::AcceptSave : QFileDialog::AcceptOpen);
+                picker->reject();
+            }
+        });
+        window.activateWindow();
+        QApplication::processEvents();
+        dismiss.start(0);
+        press(window, key, Qt::ShiftModifier);
+        require(correctPicker, "shifted quick-state key did not open the matching file picker");
+    }
+
     inspect(ConsoleProfile::MasterSystem, 0, 1, -1);
     open(ggPath, 2, ConsoleProfile::GameGear);
     inspect(ConsoleProfile::GameGear, 0, -1, int(ConsoleProfile::MegaDrive));
@@ -383,6 +402,12 @@ void testControlsLayout(MainWindow& window) {
         const auto check = [&](bool okay, const QString& message) {
             if (!okay && failure.isEmpty()) failure = message;
         };
+        check(!(dialog->windowFlags() & Qt::WindowMinMaxButtonsHint) &&
+              dialog->windowFlags().testFlag(Qt::WindowCloseButtonHint),
+              QStringLiteral("settings title-bar actions are incorrect"));
+        dialog->showMaximized();
+        QApplication::processEvents();
+        check(!dialog->isMaximized(), QStringLiteral("settings accepted maximize"));
         const auto finish = [&] { inspected = true; dialog->reject(); };
         auto* navigation = dialog->findChild<QListWidget*>(QStringLiteral("settingsNavigation"));
         if (!navigation) { check(false, QStringLiteral("settings navigation missing")); finish(); return; }

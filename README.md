@@ -50,6 +50,7 @@ Settings and saves live in `data/`. Keep this folder when updating; use `--data 
 | [ · ] | Decrease / increase game speed by 5 percentage points |
 | Tab · R | Hold fast-forward · hold rewind (doubles every 2 seconds up to 16× by default) |
 | 0–9 · F5/F8 | Select save slot · save/load slot |
+| Shift+F5 · Shift+F8 | Save to file · load from file |
 | Alt+Enter · Esc | Fullscreen · show/hide fullscreen menu or release captured mouse |
 | + / − · F12 | Master volume · screenshot |
 
