@@ -73,8 +73,8 @@ void kega_drc_publish(const void *start, const void *end) {
     __builtin___clear_cache((char *)start,(char *)end);
 #endif
 }
-/* First backend intentionally emits handler accesses, including constant
- * addresses. No direct pointer can evade machine waits, peers or SoC MMIO. */
+/* Constant folding stays disabled: the mapper and writable code can change.
+ * Runtime read maps below bypass callbacks only for plain SDRAM. */
 void *p32x_sh2_get_mem_ptr(u32 a, u32 *mask, SH2 *s) {
     (void)a; (void)s; *mask=0; return NULL;
 }
@@ -112,6 +112,12 @@ static void setup_maps(SH2 *s) {
     for(w=0;w<3;++w) for(b=0;b<128;++b) {
         read_maps[i][w][b].addr=((uptr)readers[w]>>1)|((uptr)1<<(sizeof(uptr)*8-1));
         read_maps[i][w][b].mask=0;
+        /* Each entry covers 32 MiB. The SDRAM chip select mirrors the
+           same 256 KiB in every window, including cache-through aliases. */
+        if (s->p_sdram && (((u32)b << SH2_READ_SHIFT) & 0xc6000000u)==0x06000000u) {
+            read_maps[i][w][b].addr=(uptr)s->p_sdram >> 1;
+            read_maps[i][w][b].mask=0x3ffffu & ~((1u << w)-1);
+        }
         write_maps[i][w][b]=writers[w];
     }
     s->read8_map=read_maps[i][0]; s->read16_map=read_maps[i][1]; s->read32_map=read_maps[i][2];

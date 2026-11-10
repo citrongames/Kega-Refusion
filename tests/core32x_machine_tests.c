@@ -19,6 +19,12 @@ int main(void)
     uint8_t mb[2048]={0},sb[1024]={0};
     Kega32xMachineHost h={0};Kega32xMachine *m;Kega32xBus *b;
     program(mb,0x20004020,0x42);program(sb,0x20004022,0x24);
+    /* Read one unaligned address at the end of an SDRAM mirror with the
+       three SH-2 load widths, including byte/word sign extension. */
+    put16(mb,0x140,0x6010); /* MOV.B @R1,R0 */
+    put16(mb,0x142,0x6211); /* MOV.W @R1,R2 */
+    put16(mb,0x144,0x6312); /* MOV.L @R1,R3 */
+    put16(mb,0x146,0xaffe); put16(mb,0x148,0x0009);
     h.peripheral_read=peripheral;
     CHECK(!kega32x_machine_create(&h,mb,2047,sb,sizeof(sb),0,0));
     m=kega32x_machine_create(&h,mb,sizeof(mb),sb,sizeof(sb),0,0);CHECK(m);
@@ -38,6 +44,15 @@ int main(void)
     CHECK(kega32x_machine_read(m,0,0xffffff00,4)==0xface);
     kega32x_machine_write(m,0,0x46000100,0,4);
     CHECK(kega32x_machine_read(m,0,0x06000100,4)==0x12345678);
+    KegaSh2 *master=kega32x_machine_cpu(m,0);
+    KegaSh2State state;
+    CHECK(kega_sh2_get_state(master,&state));
+    state.pc=0x140;state.delay=0;state.r[1]=0x27ffffff;
+    kega32x_machine_write(m,1,0x0603fffc,0x1234abcd,4);
+    CHECK(kega_sh2_set_state(master,&state));
+    CHECK(kega_sh2_run(master,32)>=32);
+    CHECK(kega_sh2_get_state(master,&state));
+    CHECK(state.r[0]==0xffffffcd && state.r[2]==0xffffabcd && state.r[3]==0x1234abcd);
     kega32x_machine_destroy(m);
     puts("32X assembly: two synthetic BIOS programs, held reset, shared/private memory passed");
     return 0;

@@ -127,7 +127,6 @@ uint32_t kega32x_machine_read(Kega32xMachine *m,unsigned c,uint32_t address,unsi
     uint32_t a=address>=0xc0000000?address:address&0xc7ffffff,off,v=0;
     uint64_t t;
     if(!m || c>1 || (size!=1 && size!=2 && size!=4))return 0;
-    t=kega32x_machine_cpu_mclk(m,c);
     if(a>=0xc0000000 && a<0xe0000000) {
         uint8_t *data=kega_sh2_native(m->cpu[c])->data_array;
         /* Native donor data_array is in 16-bit word-swapped format. */
@@ -145,6 +144,7 @@ uint32_t kega32x_machine_read(Kega32xMachine *m,unsigned c,uint32_t address,unsi
             return v;
         }
         if ((off>=0x4000 && off<0x4040) || (off>=0x4100 && off<0x4110) || (off>=0x4200 && off<0x4400)) {
+            t=kega32x_machine_cpu_mclk(m,c);
             sync_peer(m,c,t);
             kega_sh2_add_wait_cycles(m->cpu[c],2);
             off-=0x4000;
@@ -174,7 +174,6 @@ void kega32x_machine_write(Kega32xMachine *m,unsigned c,uint32_t address,uint32_
     uint32_t a=address>=0xc0000000?address:address&0xc7ffffff,off;
     uint64_t t;
     if(!m || c>1 || (size!=1 && size!=2 && size!=4))return;
-    t=kega32x_machine_cpu_mclk(m,c);
 #ifdef KEGA_SH2_DRC
     if(m->soc_running)kega_sh2_drc_invalidate(m->cpu[c],a,size);
 #endif
@@ -188,6 +187,7 @@ void kega32x_machine_write(Kega32xMachine *m,unsigned c,uint32_t address,uint32_
     case 0:
         off=a&0x3ffff;
         if(!((off>=0x4000 && off<0x4040)||(off>=0x4100 && off<0x4110)||(off>=0x4200 && off<0x4400)))return;
+        t=kega32x_machine_cpu_mclk(m,c);
         sync_peer(m,c,t);
         off-=0x4000;
         if(size==1)kega32x_bus_write8(&m->bus,c,off,(uint8_t)value,t);
@@ -195,6 +195,7 @@ void kega32x_machine_write(Kega32xMachine *m,unsigned c,uint32_t address,uint32_
         else {kega32x_bus_write16(&m->bus,c,off,(uint16_t)(value>>16),t);kega32x_bus_write16(&m->bus,c,off+2,(uint16_t)value,t);}
         break;
     case 0x04000000:
+        t=kega32x_machine_cpu_mclk(m,c);
         kega32x_fb_sync(&m->bus,t);
         if(size==1)kega32x_fb_write8(&m->bus,a,(uint8_t)value);
         else if(size==2)kega32x_fb_write16(&m->bus,a,(uint16_t)value);
@@ -282,6 +283,10 @@ Kega32xMachine *kega32x_machine_create(const Kega32xMachineHost *h,const uint8_t
     ch.fetch16=instruction_fetch16;ch.can_idle_fetch=can_idle_fetch;
     m->cpu[0]=kega_sh2_create(&ch,0);m->cpu[1]=kega_sh2_create(&ch,1);
     if(!m->cpu[0] || !m->cpu[1]) {kega32x_machine_destroy(m);return NULL;}
+    /* Shared SDRAM is word-swapped plain storage for the lifetime of this
+       machine. All writes still go through the code invalidation path. */
+    kega_sh2_native(m->cpu[0])->p_sdram=m->memory.sdram;
+    kega_sh2_native(m->cpu[1])->p_sdram=m->memory.sdram;
     kega_sh2_set_peer(m->cpu[0],m->cpu[1]);kega_sh2_set_peer(m->cpu[1],m->cpu[0]);
     sh.user=m;sh.read8=r8;sh.read16=r16;sh.read32=r32;sh.write8=w8;sh.write16=w16;sh.write32=w32;
     sh.schedule_changed=schedule_changed;sh.dreq_available=fifo_available;sh.dreq_pop=fifo_pop;

@@ -37,6 +37,8 @@ static uint16_t read16(SH2 *s, uint32_t a) {
 }
 static uint16_t fetch16(SH2 *s, uint32_t a) {
     KegaSh2 *c = owner(s);
+    if ((a & 0xc6000001u)==0x06000000u && s->p_sdram)
+        return ((const uint16_t *)s->p_sdram)[(a & 0x3ffffu) >> 1];
     return c->host.fetch16 ? c->host.fetch16(c->host.user, c, a) : read16(s, a);
 }
 static uint32_t read32(SH2 *s, uint32_t a) {

@@ -154,8 +154,10 @@ static void frt_irq(KegaSh2Soc *c, uint8_t changed) {
 }
 static void sync_timers(KegaSh2Soc *c, uint64_t now) {
     uint64_t count;
-    unsigned divisor = frt_divisor(c);
+    unsigned divisor;
     if (now < c->s.now) return;
+    if (now == c->s.now && c->s.frt_last == now && c->s.wdt_last == now) return;
+    divisor = frt_divisor(c);
     c->s.now = now;
     if (divisor) {
         unsigned counter = get16(c, 0x12), a = distance16(counter, c->s.ocra);
@@ -234,7 +236,7 @@ static void dma_refresh(KegaSh2Soc *c, bool reset_count, unsigned changed_channe
             c->s.dma_due[ch] = add_time(c->s.now, dma_units(c, ch) * 2);
     }
 }
-uint64_t kega_sh2_soc_next_deadline(const KegaSh2Soc *c, uint64_t now) {
+static uint64_t calculate_deadline(const KegaSh2Soc *c, uint64_t now) {
     uint64_t deadline = UINT64_MAX, candidate;
     unsigned divisor;
     if (!c) return deadline;
@@ -278,11 +280,18 @@ uint64_t kega_sh2_soc_next_deadline(const KegaSh2Soc *c, uint64_t now) {
 }
 static void notify(KegaSh2Soc *c) {
     resample_irq(c);
-    uint64_t deadline = kega_sh2_soc_next_deadline(c, c->s.now);
+    uint64_t deadline = calculate_deadline(c, c->s.now);
     if (deadline != c->notified) {
         c->notified = deadline;
         if (c->host.schedule_changed) c->host.schedule_changed(c->host.user, c->cpu, deadline);
     }
+}
+uint64_t kega_sh2_soc_next_deadline(const KegaSh2Soc *c, uint64_t now) {
+    if (!c) return UINT64_MAX;
+    /* Register changes, DREQs and state restores publish the new deadline.
+       A reentrant query during DMA must see the in-progress register values. */
+    if (c->advancing || now < c->s.now) return calculate_deadline(c, now);
+    return c->notified < now ? now : c->notified;
 }
 static void touch(KegaSh2Soc *c) { sync_timers(c, current(c)); }
 
@@ -476,6 +485,19 @@ static bool dma_transfer(KegaSh2Soc *c, unsigned ch, unsigned *used) {
 void kega_sh2_soc_advance(KegaSh2Soc *c, uint64_t target) {
     unsigned work = 0;
     if (!c || c->advancing || target < c->s.now) return;
+    /* Idle DMA has no bus work. An enabled serial port can change from the
+       peer CPU, so keep the full IRQ resample there. Before a timer deadline
+       counting and masked flags still advance without changing the IRQ line. */
+    if (!(get32(c, 0x1b0) & DMA_DME) && !(get8(c, 2) & 0x30) && target < c->notified &&
+        !c->s.dma_active[0] && !c->s.dma_active[1] &&
+        c->s.dma_due[0] == UINT64_MAX && c->s.dma_due[1] == UINT64_MAX) {
+        uint32_t pending = c->s.irq_pending;
+        sync_timers(c, target);
+        /* Timer matches can latch masked flags. The published interrupt
+           selection is unchanged until an enabled event or register write. */
+        c->s.irq_pending = pending;
+        return;
+    }
     c->advancing = true; sync_timers(c, target); dma_refresh(c, false, 0);
     while (work < 4) {
         unsigned selected = 2, first = get32(c, 0x1b0) & 8 ? c->s.dma_turn : 0;

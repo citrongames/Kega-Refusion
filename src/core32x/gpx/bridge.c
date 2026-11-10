@@ -44,6 +44,7 @@ typedef struct Gpx32x {
     int line, skip_video;
     unsigned line_start;
     Gpx32xVideoRow video[3];
+    uint64_t video_due;
     Kega32xNtsc565 *filter;
     int filter_preset;
     Kega32xMachineState *snapshot;
@@ -65,9 +66,11 @@ static unsigned requested_filter_preset;
 static void video_sync(uint64_t);
 static void video_reset(void) {
     unsigned i;
+    ctx->video_due=UINT64_MAX;
     for(i=0;i<3;i++)ctx->video[i].valid=0;
     if(ctx->machine)kega32x_machine_bus(ctx->machine)->video_watch_banks=0;
 }
+static uint64_t video_next_event(void);
 static Gpx32xVideoRow *video_row(int logical,uint64_t start) {
     Gpx32xVideoRow *row=&ctx->video[(start/MCYCLES_PER_LINE)%3];
     if(!row->valid || row->start!=start || row->logical!=logical) {
@@ -80,6 +83,7 @@ static Gpx32xVideoRow *video_row(int logical,uint64_t start) {
         row->valid=1;row->start=start;row->logical=logical;
         row->latch_due=start+active-216u;row->pixels_due=start+active;
         row->md_ready=row->latched=row->decoded_ready=0;
+        ctx->video_due=video_next_event();
     }
     return row;
 }
@@ -461,7 +465,7 @@ void kegarefusion_32x_run(unsigned target)
         uint64_t event,video_event;
         video_sync(ctx->frame_base+ctx->now);
         event=kega32x_machine_next_event(ctx->machine);
-        video_event=video_next_event();if(video_event<event)event=video_event;
+        video_event=ctx->video_due;if(video_event<event)event=video_event;
         unsigned hb0=(reg[12]&1)?228:280,hb1=(reg[12]&1)?872:860;
         if(next-ctx->now>448)next=ctx->now+448;
         edge=ctx->now-phase+(phase<hb0?hb0:phase<hb1?hb1:MCYCLES_PER_LINE);
@@ -533,8 +537,9 @@ static void video_decode(Gpx32xVideoRow *row)
 static void video_sync(uint64_t t)
 {
     Kega32xBus *b;unsigned i,watch=0;
-    if(!ctx || !ctx->machine)return;
+    if(!ctx || !ctx->machine || t<ctx->video_due)return;
     b=kega32x_machine_bus(ctx->machine);
+    ctx->video_due=UINT64_MAX;
     for(i=0;i<3;i++) {
         Gpx32xVideoRow *row=&ctx->video[i];
         if(!row->valid || row->decoded_ready)continue;
@@ -549,7 +554,11 @@ static void video_sync(uint64_t t)
                remap late, so decode it even before that remap arrives. */
             if(!ctx->skip_video)video_decode(row);
         }
-        if(!ctx->skip_video && row->latched && !row->decoded_ready)watch|=1u<<row->bank;
+        if(!row->decoded_ready) {
+            uint64_t due=row->latched?row->pixels_due:row->latch_due;
+            if(due<ctx->video_due)ctx->video_due=due;
+            if(!ctx->skip_video && row->latched)watch|=1u<<row->bank;
+        }
     }
     b->video_watch_banks=watch;
 }
