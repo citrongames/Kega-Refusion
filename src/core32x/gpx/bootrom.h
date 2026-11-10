@@ -101,67 +101,6 @@ static const uint16_t slave_program[] = {
 };
 
 
-/* Executed once after reset: establish GBR and, for a cartridge, VBR.
- * The master also transfers the initial data through the cartridge mapper.
- * CD software instead sends its program, entry points and vectors through
- * the framebuffer after the _CD_ handshake in master_program. */
-static const uint16_t master_entry[] = {
-    0xd012, /* mov.l sys,r0 */
-    0x401e, /* ldc r0,gbr */
-    0xc400, /* mov.b @(0,gbr),r0 */
-    0xc801, /* tst #1,r0 */
-    0x8b1b, /* bf start */
-    0xd111, /* mov.l header,r1 */
-    0x5015, /* mov.l @(20,r1),r0 */
-    0x402e, /* ldc r0,vbr */
-    0x6212, /* mov.l @r1,r2      ; initial data offset in cartridge */
-    0x5311, /* mov.l @(4,r1),r3  ; initial data offset in SDRAM */
-    0x5412, /* mov.l @(8,r1),r4  ; byte count */
-    0xd00f, /* mov.l capacity,r0 */
-    0x3406, /* cmp/hi r0,r4 */
-    0x8914, /* bt trap */
-    0x4409, /* shlr2 r4 */
-    0x2448, /* tst r4,r4 */
-    0x890c, /* bt sum */
-    0xd00d, /* mov.l rom_mask,r0 */
-    0x2209, /* and r0,r2 */
-    0xd00d, /* mov.l cart,r0 */
-    0x220b, /* or r0,r2 */
-    0xd00d, /* mov.l ram_mask,r0 */
-    0x2309, /* and r0,r3 */
-    0xd00d, /* mov.l ram,r0 */
-    0x230b, /* or r0,r3 */
-    0x6026, /* mov.l @r2+,r0 */
-    0x2302, /* mov.l r0,@r3 */
-    0x7304, /* add #4,r3 */
-    0x4410, /* dt r4 */
-    0x8bfa, /* bf copy */
-    0xd10a, /* mov.l checksum,r1 */
-    0x6011, /* mov.w @r1,r0 */
-    0xc114, /* mov.w r0,@(0x28,gbr) */
-    0xafa7, /* bra guest_start */
-    0x0009, /* nop */
-    0xafa3, /* bra guest_trap */
-    0x0009, /* nop */
-    0x0009, /* alignment */
-    0x2000, /* sys */
-    0x4000,
-    0x2200, /* header */
-    0x03d4,
-    0x0004, /* capacity */
-    0x0000,
-    0x003f, /* rom_mask */
-    0xfffc,
-    0x2200, /* cart */
-    0x0000,
-    0x0003, /* ram_mask */
-    0xfffc,
-    0x2600, /* ram */
-    0x0000,
-    0x2200, /* checksum */
-    0x018e,
-};
-
 static const uint16_t slave_entry[] = {
     0xd004, /* mov.l sys,r0 */
     0x401e, /* ldc r0,gbr */
@@ -179,6 +118,46 @@ static const uint16_t slave_entry[] = {
     0x03d4,
 };
 
+/* Cartridge master, revision 2. The 68000 consumes COMM4 during its own
+ * hardware initialization. Compute the word sum on the SH-2 clock, publish
+ * it before copying the IPL, and only then allow the M_OK/S_OK handshake.
+ * This also preserves the meaning of a zero checksum field (skip the sum).
+ * The header end is inclusive and the boot ROM masks the word count to 22 bits. */
+static const uint16_t cart_checksum[] = {
+    0x402e, /* ldc r0,vbr (r1 is the IPL header and must survive this call) */
+    0xd20a, /* mov.l checksum_field,r2 */
+    0x6021, /* mov.w @r2,r0 */
+    0x2008, /* tst r0,r0 */
+    0x890d, /* bt publish */
+    0xd209, /* mov.l rom_end_field,r2 */
+    0x6322, /* mov.l @r2,r3 */
+    0xd409, /* mov.l first_offset,r4 */
+    0x3348, /* sub r4,r3 */
+    0x4301, /* shlr r3 */
+    0xd408, /* mov.l word_mask,r4 */
+    0x2349, /* and r4,r3 */
+    0x7301, /* add #1,r3 */
+    0xd208, /* mov.l first_word,r2 */
+    0xe000, /* mov #0,r0 */
+    0x6525, /* mov.w @r2+,r5 */
+    0x305c, /* add r5,r0 */
+    0x4310, /* dt r3 */
+    0x8bfb, /* bf sum */
+    0xc114, /* mov.w r0,@(0x28,gbr) */
+    0x000b, /* rts */
+    0x0009, /* nop */
+    0x2200, /* checksum_field */
+    0x018e,
+    0x2200, /* rom_end_field */
+    0x01a4,
+    0x0000, /* first_offset */
+    0x0200,
+    0x003f, /* word_mask */
+    0xffff,
+    0x2200, /* first_word */
+    0x0200,
+};
+
 static void boot_word(uint8_t *p, unsigned offset, uint16_t v)
 {
     p[offset] = (uint8_t)(v >> 8);
@@ -194,6 +173,73 @@ static void boot_words(uint8_t *p, unsigned offset, const uint16_t *code, unsign
     for (unsigned i = 0; i < bytes / 2; ++i)
         boot_word(p, offset + 2 * i, code[i]);
 }
+/* Executed once after reset: establish GBR and, for a cartridge, VBR.
+ * The master also transfers the initial data through the cartridge mapper.
+ * CD software instead sends its program, entry points and vectors through
+ * the framebuffer after the _CD_ handshake in master_program. */
+static void write_master_entry(uint8_t *p, int cartridge)
+{
+    const uint16_t code[] = {
+        0xd012, /* mov.l sys,r0 */
+        0x401e, /* ldc r0,gbr */
+        0xc400, /* mov.b @(0,gbr),r0 */
+        0xc801, /* tst #1,r0 */
+        0x8b1b, /* bf start */
+        0xd111, /* mov.l header,r1 */
+        cartridge ? 0xb040 : 0x5015, /* bsr cart_checksum / mov.l @(20,r1),r0 */
+        cartridge ? 0x5015 : 0x402e, /* delay: load VBR / ldc r0,vbr */
+        0x6212, /* mov.l @r1,r2      ; initial data offset in cartridge */
+        0x5311, /* mov.l @(4,r1),r3  ; initial data offset in SDRAM */
+        0x5412, /* mov.l @(8,r1),r4  ; byte count */
+        0xd00f, /* mov.l capacity,r0 */
+        0x3406, /* cmp/hi r0,r4 */
+        0x8914, /* bt trap */
+        0x4409, /* shlr2 r4 */
+        0x2448, /* tst r4,r4 */
+        0x890c, /* bt sum */
+        0xd00d, /* mov.l rom_mask,r0 */
+        0x2209, /* and r0,r2 */
+        0xd00d, /* mov.l cart,r0 */
+        0x220b, /* or r0,r2 */
+        0xd00d, /* mov.l ram_mask,r0 */
+        0x2309, /* and r0,r3 */
+        0xd00d, /* mov.l ram,r0 */
+        0x230b, /* or r0,r3 */
+        0x6026, /* mov.l @r2+,r0 */
+        0x2302, /* mov.l r0,@r3 */
+        0x7304, /* add #4,r3 */
+        0x4410, /* dt r4 */
+        0x8bfa, /* bf copy */
+        /* The current cart path has already published COMM4. Keep the CD
+           boot image byte-identical to revision 1, including its unused cart path. */
+        cartridge ? 0xafaa : 0xd10a, /* bra guest_start / mov.l checksum,r1 */
+        cartridge ? 0x0009 : 0x6011, /* nop / mov.w @r1,r0 */
+        0xc114, /* mov.w r0,@(0x28,gbr) */
+        0xafa7, /* bra guest_start */
+        0x0009, /* nop */
+        0xafa3, /* bra guest_trap */
+        0x0009, /* nop */
+        0x0009, /* alignment */
+        0x2000, /* sys */
+        0x4000,
+        0x2200, /* header */
+        0x03d4,
+        0x0004, /* capacity */
+        0x0000,
+        0x003f, /* rom_mask */
+        0xfffc,
+        0x2200, /* cart */
+        0x0000,
+        0x0003, /* ram_mask */
+        0xfffc,
+        0x2600, /* ram */
+        0x0000,
+        0x2200, /* checksum */
+        0x018e,
+    };
+    boot_words(p, 0x270, code, sizeof(code));
+}
+
 static void builtin_boot_68k(uint8_t *p)
 {
     static const uint16_t write_byte[] = {
@@ -217,7 +263,7 @@ static void builtin_boot_68k(uint8_t *p)
     boot_words(p, 0xd4, write_banks, sizeof(write_banks));
     boot_word(p, 0xfe, 0x4e75);
 }
-static void builtin_boot_sh2(uint8_t *p, int slave)
+static void builtin_boot_sh2(uint8_t *p, int slave, int cartridge)
 {
     unsigned vector_end = slave ? 0x200 : 0x140;
     memset(p, 0, slave ? 1024 : 2048);
@@ -237,7 +283,9 @@ static void builtin_boot_sh2(uint8_t *p, int slave)
         boot_word(p, 0x1fc, 0xa038); /* bra 0x270 */
         boot_word(p, 0x1fe, 0x0009);
         boot_words(p, 0x200, master_program, sizeof(master_program));
-        boot_words(p, 0x270, master_entry, sizeof(master_entry));
+        write_master_entry(p, cartridge);
+        if (cartridge)
+            boot_words(p, 0x300, cart_checksum, sizeof(cart_checksum));
     }
 }
 #endif

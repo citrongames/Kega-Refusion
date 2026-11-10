@@ -1,4 +1,5 @@
 #include "core32x/machine.h"
+#include "core32x/gpx/bootrom.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,8 +15,45 @@ static void program(uint8_t *p,uint32_t port,uint8_t value)
 }
 static uint32_t peripheral(void *p,unsigned cpu,uint32_t address,unsigned size)
 { (void)p;(void)cpu;(void)size;return address==0xffffff00?0xface:0; }
+static uint16_t cart_word(void *data, uint32_t address)
+{
+    const uint8_t *rom = data;
+    return address < 0x400 ? (uint16_t)((rom[address] << 8) | rom[address + 1]) : 0;
+}
+
+static int cart_boot_checksum(void)
+{
+    uint8_t cart[0x400] = {0}, master[2048], slave[1024];
+    put16(cart, 0x18e, 1); /* Intentionally different from the computed sum. */
+    put32(cart, 0x1a4, sizeof(cart) - 1);
+    put32(cart, 0x3d4, 0x200);
+    put32(cart, 0x3dc, 4);
+    put32(cart, 0x200, 0xfffe8123);
+    uint16_t sum = 0;
+    for (unsigned i = 0x200; i < sizeof(cart); i += 2)
+        sum += cart_word(cart, i);
+    builtin_boot_sh2(master, 0, 1);
+    builtin_boot_sh2(slave, 1, 1);
+    Kega32xMachineHost host = {.userdata = cart, .rom_read16 = cart_word};
+    Kega32xMachine *m = kega32x_machine_create(&host, master, sizeof(master), slave, sizeof(slave), 0, 0);
+    CHECK(m);
+    Kega32xBus *bus = kega32x_machine_bus(m);
+    KegaSh2 *cpu = kega32x_machine_cpu(m, 0);
+    kega32x_bus_write16(bus, KEGA32X_M68K, 0, 3, 0);
+    for (int i = 0; i < 4000 && !bus->s.regs[0x28/2]; ++i)
+        kega_sh2_run(cpu, 1);
+    CHECK(bus->s.regs[0x28/2] == sum);
+    CHECK(kega32x_machine_read(m, 0, 0x06000000, 4) == 0);
+    kega32x_bus_write16(bus, KEGA32X_M68K, 0x28, 0, kega32x_machine_cpu_mclk(m, 0));
+    kega_sh2_run(cpu, 250);
+    CHECK(kega32x_machine_read(m, 0, 0x06000000, 4) == 0xfffe8123);
+    CHECK(bus->s.regs[0x28/2] == 0); /* The IPL must not republish after acknowledgement. */
+    kega32x_machine_destroy(m);
+    return 0;
+}
 int main(void)
 {
+    CHECK(cart_boot_checksum() == 0);
     uint8_t mb[2048]={0},sb[1024]={0};
     Kega32xMachineHost h={0};Kega32xMachine *m;Kega32xBus *b;
     program(mb,0x20004020,0x42);program(sb,0x20004022,0x24);

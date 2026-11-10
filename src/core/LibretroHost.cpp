@@ -46,7 +46,7 @@ QString resolvedBiosPath(const QString& dataPath, const QString& role) {
 }
 // The fallback is part of 32X execution. Bump a role's version if its
 // built-in boot program or deterministic boot behavior changes.
-QString biosFingerprint(const QString& dataPath, const QString& role) {
+QString biosFingerprint(const QString& dataPath, const QString& role, bool cartridge) {
     int index = 0;
     while (index < 6 && role != QLatin1String(biosRoleNames[index])) ++index;
     if (index == 6) return {};
@@ -56,7 +56,7 @@ QString biosFingerprint(const QString& dataPath, const QString& role) {
         QStringLiteral("builtin-32x-m-v1"),QStringLiteral("builtin-32x-s-v1")};
     QFile file(resolvedBiosPath(dataPath,role));
     if (file.fileName().isEmpty() || !file.open(QIODevice::ReadOnly))
-        return fallback[index];
+        return index == 4 && cartridge ? QStringLiteral("builtin-32x-m-v2") : fallback[index];
     if (file.size() != sizes[index]) return QStringLiteral("invalid");
     QCryptographicHash hash(QCryptographicHash::Sha256);
     return hash.addData(&file) ? QString::fromLatin1(hash.result().toHex())
@@ -1873,14 +1873,14 @@ void LibretroHost::snapshot32xBios() {
     if (!api_->features || !(api_->features() & 2u)) return;
     for (int i = 3; i < 6; ++i) {
         const auto name = QLatin1String(biosRoleNames[i]);
-        active32xBiosFingerprints_.insert(name,biosFingerprint(dataPath_,name));
+        active32xBiosFingerprints_.insert(name,biosFingerprint(dataPath_,name,!isCd()));
     }
 }
 QJsonObject LibretroHost::movieBiosFingerprints() const {
     QJsonObject result;
     if (hasCdHardware()) for (int i = 0; i < 3; ++i) {
         const auto name = QLatin1String(biosRoleNames[i]);
-        result.insert(name,biosFingerprint(dataPath_,name));
+        result.insert(name,biosFingerprint(dataPath_,name,false));
     }
     for (auto it = active32xBiosFingerprints_.begin(); it != active32xBiosFingerprints_.end(); ++it)
         result.insert(it.key(),it.value());
@@ -2004,7 +2004,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     const auto recordedBios = configuration.value(QStringLiteral("bios")).toObject();
     QJsonObject installedBios;
     for (auto it = recordedBios.begin(); it != recordedBios.end(); ++it) {
-        const auto value = biosFingerprint(dataPath_,it.key());
+        const auto value = biosFingerprint(dataPath_,it.key(),!isCd());
         if (!value.isEmpty()) installedBios.insert(it.key(),value);
     }
     if (recordedBios != installedBios) {

@@ -233,7 +233,7 @@ void verifyMixedBiosGuards(const QString& corePath, const QString& dataPath,
     require(bios.value(QStringLiteral("32X_G_BIOS.BIN")).toString().size() == 64,
             "original 68000 BIOS fingerprint disappeared");
     require(bios.value(QStringLiteral("32X_M_BIOS.BIN")).toString() ==
-                QStringLiteral("builtin-32x-m-v1"),
+                QStringLiteral("builtin-32x-m-v2"),
             "built-in Master SH2 BIOS lacks a role-specific identity");
     require(bios.value(QStringLiteral("32X_S_BIOS.BIN")).toString().size() == 64,
             "original Slave SH2 BIOS fingerprint disappeared");

@@ -370,13 +370,14 @@ int kegarefusion_32x_attach(const uint8_t *g,const uint8_t *m,const uint8_t *s)
     uint8_t builtin_g[256], builtin_m[2048], builtin_s[1024];
     unsigned builtin_mask = (g ? 0u : 1u) | (m ? 0u : 2u) | (s ? 0u : 4u);
     if (!g) { builtin_boot_68k(builtin_g); g = builtin_g; }
-    if (!m) { builtin_boot_sh2(builtin_m, 0); m = builtin_m; }
-    if (!s) { builtin_boot_sh2(builtin_s, 1); s = builtin_s; }
     kegarefusion_32x_detach();
     next=calloc(1,sizeof(*next));if(!next)return 0;
     ctx=next;
-    ctx->boot_identity = builtin_mask ? (1u << 8) | builtin_mask : 0; /* replacement boot ROMs v1 */
     maps_capture();
+    unsigned boot_revision = !m && ctx->has_cart_rom ? 2u : 1u;
+    ctx->boot_identity = builtin_mask ? (boot_revision << 8) | builtin_mask : 0;
+    if (!m) { builtin_boot_sh2(builtin_m, 0, ctx->has_cart_rom); m = builtin_m; }
+    if (!s) { builtin_boot_sh2(builtin_s, 1, ctx->has_cart_rom); s = builtin_s; }
     for(i=0;i<256;i++)WRITE_BYTE(ctx->boot_page,i,g[i]);
     host.rom_read16=rom_read;host.rom_fetch_is_pure=rom_fetch_is_pure;host.changed=changed;host.render_sync=render_sync;host.audio_delta=audio_delta;
     ctx->machine=kega32x_machine_create(&host,m,2048,s,1024,vdp_pal,!ctx->has_cart_rom);
