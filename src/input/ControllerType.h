@@ -1,6 +1,8 @@
 #pragma once
 
 // Shared by the input UI and the emulation host; no Qt dependency.
+enum class ConsoleProfile { MegaDrive, MasterSystem, GameGear, SG1000 };
+
 enum class ControllerType {
     Pad = 0, LightPhaser = 1, Menacer = 2, Justifier = 3, Mouse = 4, Paddle = 5
 };

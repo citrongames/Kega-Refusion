@@ -12,7 +12,6 @@
 // Targets 0..15 are libretro joypad IDs. Commands are separate from game inputs.
 // Qt uses Windows Set-1 codes or XKB keycodes (evdev + 8) on Linux.
 enum class KeyboardScanCodes { Native, Windows, Xkb, Unavailable };
-enum class ConsoleProfile { MegaDrive, MasterSystem, GameGear, SG1000 };
 enum InputCommand { PauseCommand=16, FastForwardCommand, SaveCommand, LoadCommand,
                     ResetCommand, FullscreenCommand, MuteCommand, NextSlotCommand,
                     PreviousSlotCommand, MenuCommand, RewindCommand, HardResetCommand, FrameAdvanceCommand,

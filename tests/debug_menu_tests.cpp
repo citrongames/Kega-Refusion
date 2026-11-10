@@ -18,6 +18,7 @@
 #include <QColor>
 #include <QCryptographicHash>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
@@ -36,10 +37,12 @@
 #include <QTableWidget>
 #include <QTabBar>
 #include <QTimer>
+#include <QThread>
 #include <SDL.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <stdexcept>
 
 namespace {
@@ -245,6 +248,120 @@ void press(QWidget& target, int key, Qt::KeyboardModifiers modifiers = Qt::NoMod
            bool repeat = false) {
     QKeyEvent event(QEvent::KeyPress, key, modifiers, QString(), repeat);
     QApplication::sendEvent(&target, &event);
+}
+
+void testControlsSystem(const QString& corePath, const QString& dataPath) {
+    QSettings settings(QDir(dataPath).filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("achievements/enabled"), false);
+    settings.sync();
+
+    QByteArray z80(32768, char(0));
+    const auto program = QByteArray::fromHex("f331f0df2100c03418fd");
+    z80.replace(0, program.size(), program);
+    z80.replace(0x7ff0, 8, "TMR SEGA");
+    z80[0x7fff] = char(0x4c);
+    QByteArray gg = z80;
+    gg[0x7fff] = char(0x6c);
+    QByteArray sg = z80;
+    sg.replace(0x7ff0, 8, QByteArray(8, char(0)));
+    const auto writeRom = [&](const QString& name, const QByteArray& bytes) {
+        const QString path = QDir(dataPath).filePath(name);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(),
+                "controls system ROM fixture write failed");
+        return path;
+    };
+    const QString smsPath = writeRom(QStringLiteral("master.sms"), z80);
+    const QString ggPath = writeRom(QStringLiteral("handheld.gg"), gg);
+    const QString sgPath = writeRom(QStringLiteral("early.sg"), sg);
+
+    EmulationSession session(corePath, dataPath);
+    MainWindow window(session, dataPath, true);
+    window.show();
+    QApplication::processEvents();
+    auto* input = window.findChild<InputManager*>();
+    require(input, "controls system input manager unavailable");
+    int loaded = 0, closed = 0, errors = 0;
+    QObject::connect(&session, &EmulationSession::gameLoaded, &window,
+                     [&](const QString&, double, const QString&, ConsoleProfile) { ++loaded; });
+    QObject::connect(&session, &EmulationSession::gameClosed, &window, [&] { ++closed; });
+    QObject::connect(&session, &EmulationSession::errorOccurred, &window,
+                     [&](const QString& message) {
+        ++errors;
+        std::fprintf(stderr, "%s\n", qPrintable(message));
+    });
+    const auto waitFor = [&](const std::function<bool()>& predicate, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < 5000) {
+            QApplication::processEvents();
+            QThread::msleep(2);
+        }
+        require(predicate(), message);
+    };
+    const auto inspect = [&](ConsoleProfile expected, int expectedPlayer,
+                             int selectPlayer, int selectProfile) {
+        bool inspected = false;
+        QString failure;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("emulatorSettingsDialog"));
+            auto* navigation = dialog ? dialog->findChild<QListWidget*>(QStringLiteral("settingsNavigation")) : nullptr;
+            if (!navigation) {
+                failure = QStringLiteral("controls system settings dialog missing");
+            } else {
+                navigation->setCurrentRow(7);
+                QApplication::processEvents();
+                auto* profile = dialog->findChild<QComboBox*>(QStringLiteral("profileBox"));
+                auto* player = dialog->findChild<QComboBox*>(QStringLiteral("playerBox"));
+                if (!profile || !player) {
+                    failure = QStringLiteral("controls system selector missing");
+                } else if (profile->currentData().toInt() != int(expected) ||
+                           player->currentData().toInt() != expectedPlayer) {
+                    failure = QStringLiteral("controls opened on wrong system or port");
+                } else {
+                    if (selectPlayer >= 0) {
+                        const int index = player->findData(selectPlayer);
+                        if (index < 0) failure = QStringLiteral("remembered port unavailable");
+                        else player->setCurrentIndex(index);
+                    }
+                    if (selectProfile >= 0) {
+                        const int index = profile->findData(selectProfile);
+                        if (index < 0) failure = QStringLiteral("manual system unavailable");
+                        else profile->setCurrentIndex(index);
+                    }
+                }
+            }
+            inspected = true;
+            if (dialog) dialog->reject();
+            else if (auto* active = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                active->reject();
+        });
+        child<QAction>(window, "emulatorSettingsAction")->trigger();
+        require(inspected && failure.isEmpty(), qPrintable(failure));
+    };
+    const auto open = [&](const QString& path, int expectedCount, ConsoleProfile expected) {
+        window.openRom(path);
+        waitFor([&] { return loaded == expectedCount || errors; },
+                "controls system ROM load timed out");
+        require(errors == 0 && input->profile() == expected,
+                "loaded ROM selected wrong input system");
+    };
+
+    inspect(ConsoleProfile::MegaDrive, 0, -1, -1);
+    open(smsPath, 1, ConsoleProfile::MasterSystem);
+    inspect(ConsoleProfile::MasterSystem, 0, 1, -1);
+    open(ggPath, 2, ConsoleProfile::GameGear);
+    inspect(ConsoleProfile::GameGear, 0, -1, int(ConsoleProfile::MegaDrive));
+    inspect(ConsoleProfile::GameGear, 0, -1, -1);
+    open(sgPath, 3, ConsoleProfile::SG1000);
+    inspect(ConsoleProfile::SG1000, 0, -1, -1);
+    open(smsPath, 4, ConsoleProfile::MasterSystem);
+    inspect(ConsoleProfile::MasterSystem, 1, -1, -1);
+    session.closeGame();
+    waitFor([&] { return closed == 1 || errors; }, "controls system close timed out");
+    require(errors == 0, "controls system close failed");
+    inspect(ConsoleProfile::MegaDrive, 0, -1, -1);
+    session.shutdown();
 }
 
 void testControlsLayout(MainWindow& window) {
@@ -459,6 +576,13 @@ int main(int argc, char** argv) {
         if (app.arguments().contains(QStringLiteral("--shader-migration"))) {
             testShaderMigration();
             std::puts("Dither menu, exact built-in migration, parameters, custom presets and Blargg persistence passed");
+            return 0;
+        }
+
+        if (app.arguments().contains(QStringLiteral("--controls-system"))) {
+            require(argc == 4, "controls system test requires a core library");
+            testControlsSystem(QString::fromLocal8Bit(argv[2]), data.path());
+            std::puts("Controls system selection, manual override, remembered port and unload passed");
             return 0;
         }
 

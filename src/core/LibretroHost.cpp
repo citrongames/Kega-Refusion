@@ -968,15 +968,24 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error) {
     localBlarggFilter_ = values[size_t(filter)];
     return true;
 }
+ConsoleProfile LibretroHost::controllerProfile() const {
+    switch (achievementConsoleId()) {
+    case RC_CONSOLE_MASTER_SYSTEM: return ConsoleProfile::MasterSystem;
+    case RC_CONSOLE_GAME_GEAR:     return ConsoleProfile::GameGear;
+    case RC_CONSOLE_SG1000:        return ConsoleProfile::SG1000;
+    default:                       return ConsoleProfile::MegaDrive;
+    }
+}
+
 InputDisplayState LibretroHost::inputDisplay(bool withButtons) const {
     InputDisplayState state;
     if (!loaded_) return state;
-    const unsigned console = achievementConsoleId();
+    const auto profile = controllerProfile();
     // The callback map already resolves port gaps, multitaps, the J-Cart
     // and a second chained Justifier into stable logical player numbers.
     for (const int player : callbackPlayers_) {
         if (player < 0 || !controllerConnected_[player]) continue;
-        if (console == RC_CONSOLE_GAME_GEAR && player != 0) continue;
+        if (profile == ConsoleProfile::GameGear && player != 0) continue;
         auto& slot = state.players[player];
         const auto kind = controllerKind(unsigned(player));
         switch (kind) {
@@ -986,9 +995,9 @@ InputDisplayState LibretroHost::inputDisplay(bool withButtons) const {
         case ControllerType::Mouse: slot.device = InputDisplayDevice::Mouse; break;
         case ControllerType::Paddle: slot.device = InputDisplayDevice::Paddle; break;
         case ControllerType::Pad:
-            if (console == RC_CONSOLE_MASTER_SYSTEM) slot.device = InputDisplayDevice::MasterSystem;
-            else if (console == RC_CONSOLE_GAME_GEAR) slot.device = InputDisplayDevice::GameGear;
-            else if (console == RC_CONSOLE_SG1000) slot.device = InputDisplayDevice::SG1000;
+            if (profile == ConsoleProfile::MasterSystem) slot.device = InputDisplayDevice::MasterSystem;
+            else if (profile == ConsoleProfile::GameGear) slot.device = InputDisplayDevice::GameGear;
+            else if (profile == ConsoleProfile::SG1000) slot.device = InputDisplayDevice::SG1000;
             else slot.device = controllerSixButton_[player] ? InputDisplayDevice::MegaDrive6
                                                            : InputDisplayDevice::MegaDrive3;
             break;

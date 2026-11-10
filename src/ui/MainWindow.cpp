@@ -598,10 +598,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     }, Qt::DirectConnection);
     connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear, Qt::DirectConnection);
     connect(audio_, &AudioOutput::clockFeedback, &session_, &EmulationSession::updateAudioClock, Qt::DirectConnection);
-    connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName) {
+    connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName, ConsoleProfile profile) {
         setLoadingUi(false);
         currentRom_ = path;
-        activeInputProfile_ = isCdPath(path) ? ConsoleProfile::MegaDrive : profileFor(QFileInfo(contentName));
+        activeInputProfile_ = profile;
         input_->setProfile(activeInputProfile_);
         updateGunConfiguration();
         currentGameName_ = displayName(contentName);
@@ -2352,7 +2352,10 @@ void MainWindow::editSettings(int initialPage) {
         if (row == kControlsSettingsPage && !controls) {
             controls = new ControlsPage(*input_, controlsViewport);
             controls->setExternalFeedback(true);
-            if (hasControlsViewState_) controls->setViewState(controlsViewState_);
+            const auto profile = session_.hasGame() ? activeInputProfile_ : ConsoleProfile::MegaDrive;
+            auto& state = controlsViewStates_[size_t(profile)];
+            state.profile = int(profile);
+            controls->setViewState(state);
             connect(controls, &ControlsPage::feedbackChanged, controlsError,
                     [controlsError, pages](const QString& message, bool error) {
                 const bool dark = controlsError->palette().color(QPalette::Window).lightness() < 128;
@@ -2387,8 +2390,8 @@ void MainWindow::editSettings(int initialPage) {
     const int result = dialog.exec();
     settingsPage_ = navigation->currentRow();
     if (controls) {
-        controlsViewState_ = controls->viewState();
-        hasControlsViewState_ = true;
+        const auto state = controls->viewState();
+        controlsViewStates_[size_t(state.profile)] = state;
     }
     if (result == QDialog::Accepted) {
         if (startupUpdates->isChecked() != checkUpdatesOnStartup) {

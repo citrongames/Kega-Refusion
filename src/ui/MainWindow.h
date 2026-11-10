@@ -106,8 +106,7 @@ private:
     EmulationSession& session_;
     QSettings settings_;
     int settingsPage_ = 0;
-    ControlsPage::ViewState controlsViewState_;
-    bool hasControlsViewState_ = false;
+    std::array<ControlsPage::ViewState, 4> controlsViewStates_{};
     QString dataPath_;
     GameView* view_ = nullptr;
     AudioOutput* audio_ = nullptr;

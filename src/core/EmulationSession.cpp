@@ -1399,7 +1399,7 @@ void EmulationSession::run() {
                     rewind_.store(false); rewindStatus(false); clearHistory();
                     clearAudio();
                     resetMetrics();
-                    emit gameLoaded(host.gamePath(),host.fps(),host.contentName());
+                    emit gameLoaded(host.gamePath(),host.fps(),host.contentName(),host.controllerProfile());
                     emit stateSlotsChanged(-1,host.occupiedStateSlots());
                     emit pausedChanged(false);
                     pacer.reset(nowNs());

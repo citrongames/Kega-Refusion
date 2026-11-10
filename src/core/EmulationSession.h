@@ -160,7 +160,7 @@ signals:
     void performanceMetricsChanged(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
-    void gameLoaded(const QString& path, double fps, const QString& contentName);
+    void gameLoaded(const QString& path, double fps, const QString& contentName, ConsoleProfile profile);
     void gameClosed();
     void masterSystemChanged(bool masterSystem);
     void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
