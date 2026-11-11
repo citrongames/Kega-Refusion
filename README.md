@@ -67,10 +67,10 @@ The default port is **33445 TCP and UDP**. Internet play requires a reachable ho
 ## Requirements and building
 
 - **Windows:** x86-64, Windows 10 1809+ or Windows 11 for the current Qt 6.10 package.
-- **Linux:** x86-64, X11 or Wayland. Current packaged builds require glibc 2.43+; older distributions may need a source build.
+- **Linux:** x86-64, X11 or Wayland. The Linux packaging target is glibc 2.36 (Debian 12). Qt is bundled. The older v0.22.0 GitHub release still requires glibc 2.43.
 - **Graphics:** desktop OpenGL 2.1 with a working driver. Emulation runs on the CPU; external shader requirements can vary.
 
-The reference build environment is **Ubuntu 26.04 / WSL2 with Qt 6.10.2**. Both platforms use Release builds and a minimal FFmpeg containing PNG/AAC encoding and MOV muxing. Windows is cross-compiled with MinGW-w64.
+Linux builds from source with Qt 6.4 or later. Windows is cross-compiled with MinGW-w64 and Qt 6.10.2. Both packages use a minimal FFmpeg for PNG/AAC recording in MOV.
 
 See [Building and packaging](docs/building.md) for dependencies, commands, incremental builds and focused checks. Build outputs and downloaded dependencies stay under the ignored `build/` directory.
 

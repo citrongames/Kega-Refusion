@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import tarfile
 import urllib.request
+from safe_tar import extract_verified_tar
 root = Path(__file__).resolve().parents[1]
 deps = root / "build" / "deps"
 archive = deps / "SDL2-devel-2.32.10-mingw.tar.gz"
@@ -21,5 +22,5 @@ if not (sdk / "lib/cmake/SDL2/sdl2-config.cmake").is_file():
     if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
         raise SystemExit("SDL2 archive checksum mismatch")
     with tarfile.open(archive) as package:
-        package.extractall(deps, filter="data")
+        extract_verified_tar(package, deps)
 print(sdk)

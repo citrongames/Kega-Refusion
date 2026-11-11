@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+from safe_tar import extract_verified_tar
 
 sys.dont_write_bytecode = True
 
@@ -75,7 +76,7 @@ def source():
     if not directory.is_dir():
         parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive) as package:
-            package.extractall(parent, filter="data")
+            extract_verified_tar(package, parent)
     return directory
 
 

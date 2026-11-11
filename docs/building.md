@@ -2,25 +2,36 @@
 
 [← Project overview](../README.md)
 
-The maintained build path is **Linux x86-64 / WSL2**, using native GCC for Linux and MinGW-w64 POSIX for Windows. The reference environment is Ubuntu 26.04, Qt 6.10.2 and CMake/Ninja. Native MSVC and macOS builds are not documented or validated.
+The maintained build path is **Linux x86-64 / WSL2**, using native GCC for Linux and MinGW-w64 POSIX for Windows. The portable Linux build uses Debian 12 (bookworm), GCC 12, Qt 6.4.2 and glibc 2.36. The Windows cross-build uses Ubuntu 26.04 with Qt 6.10.2. Native MSVC and macOS builds are not documented or validated.
 
-Keep the checkout in the Linux filesystem when using WSL. Run the commands below from the repository root. Initial preparation downloads pinned dependency sources; subsequent builds reuse `build/` and external caches.
+Keep the checkout in the Linux filesystem when using WSL. Start from a clean checkout:
+
+```sh
+git clone https://github.com/citrongames/Kega-Refusion.git
+cd Kega-Refusion
+```
+
+Run the following commands from that directory. Initial preparation downloads pinned dependency sources; subsequent builds reuse `build/` and external caches.
 
 ## 1. Prepare the Linux host
 
-On the reference Ubuntu environment:
+On Debian 12 or an apt-based build host:
 
 ```sh
 sudo apt update
 sudo apt install build-essential cmake ninja-build git python3 pkg-config \
   rsync perl nasm ca-certificates qt6-base-dev qt6-base-dev-tools \
-  qt6-multimedia-dev libsdl2-dev libssl-dev \
-  libwayland-dev wayland-protocols qt6-wayland
+  qt6-multimedia-dev libqt6opengl6-dev libsdl2-dev libssl-dev \
+  libwayland-dev wayland-protocols qt6-wayland libqt6svg6 qt6-translations-l10n
 ```
 
-Qt Core, Gui, Widgets, Network, Multimedia, OpenGL and OpenGLWidgets are required. Wayland headers/protocols enable native mouse capture on Wayland. CMake declares Qt 6.5 as its lower bound, but the maintained binaries are built with **6.10.2**; older Qt versions are not a tested compatibility promise.
+Qt Core, Gui, Widgets, Network, Multimedia, OpenGL and OpenGLWidgets are required. The minimum is Qt 6.4. Qt 6.5 and later expose the native Wayland display through public headers. On Qt 6.4, install the matching QPA headers for Wayland mouse capture:
 
-Use Python 3.12+ for the dependency tools. Installing NASM explicitly avoids reliance on the optional Ubuntu-package bootstrap in `prepare-video.py`. The full system FFmpeg development libraries are **not** required: the project builds its own minimal recording libraries.
+```sh
+sudo apt install qt6-base-private-dev
+```
+
+Python 3.11 works with the dependency tools. Installing NASM explicitly avoids reliance on the optional Ubuntu-package bootstrap in `prepare-video.py`. The full system FFmpeg development libraries are **not** required: the project builds its own minimal recording libraries.
 
 ## 2. Build Linux
 
@@ -33,21 +44,21 @@ python3 tools/prepare-video.py --platform linux
 cmake -S . -B build/linux -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DKEGA_TEST_CORE="$PWD/build/linux/core/genesis_plus_gx_libretro.so"
-cmake --build build/linux --target KegaRefusion -j "$(nproc)"
+cmake --build build/linux --target KegaRefusion -j 4
 ./build/linux/bin/KegaRefusion \
   --core "$PWD/build/linux/core/genesis_plus_gx_libretro.so"
 ```
 
 The explicit `--core` path also locates the sibling Link Cable module. For a complete build **including all test targets and the registered test suite**, `./tools/build-linux.sh` is the convenience wrapper. Do not run it for every small edit when a targeted build is sufficient.
 
-Package the runtime:
+For a portable release, run the preceding steps and the packager in the same clean Debian 12 environment. Start with a fresh checkout so all native dependencies and both core modules are built against that baseline.
 
 ```sh
 python3 tools/package-linux.py \
-  --destination "$PWD/dist/KegaRefusion-linux-x86_64.tar.gz"
+  --max-glibc 2.36 --destination "$PWD/dist/KegaRefusion-linux-x86_64.tar.gz"
 ```
 
-The archive includes Qt, SDL, TLS and other runtime libraries, plus a `run.sh` launcher. It uses the host's glibc and graphics drivers; building on a newer distribution does not produce a universally compatible Linux binary. The package records its glibc requirement.
+The packager checks the glibc symbol versions required by the executables, both cores, plugins and bundled libraries. It rejects an archive above the requested limit. Omit `--max-glibc` for a local build targeting your own system. The launcher uses the bundled Qt, SDL and TLS libraries with the host’s glibc, GCC runtime (Debian 12 ships GCC 12), Wayland libraries and OpenGL drivers. Keeping the system Wayland client avoids loading an older copy into a newer Mesa driver.
 
 ## 3. Cross-build Windows from WSL/Linux
 
@@ -76,7 +87,7 @@ Keep the packaged compiler runtimes. In particular, replacing `libwinpthread-1.d
 For a frontend-only change, reuse the configured build directory:
 
 ```sh
-cmake --build build/linux --target KegaRefusion -j "$(nproc)"
+cmake --build build/linux --target KegaRefusion -j 4
 cmake --build build/windows --target KegaRefusion -j "$(nproc)"
 ```
 

@@ -16,7 +16,7 @@ Attach these exact filenames, replacing `X.Y.Z` with the version:
 
 The source archive includes the corresponding integrated-core and dependency sources and their build instructions. GitHub's automatically generated checkout archives do not replace it. `SHA256SUMS.txt` lists the SHA-256 and filename of each of the three attached archives in `sha256sum` format.
 
-Build the binary archives from Release configurations using the [build guide](building.md). Verify the actual packaged application's version against the release tag on both platforms, then calculate checksums from those final archives. Preserve the user's `data/`, games and BIOS files when testing upgrades.
+Build the binary archives from Release configurations using the [build guide](building.md). For Linux, use the Debian 12 build environment and pass `--max-glibc 2.36` to the packager. Verify the actual packaged application's version against the release tag on both platforms, then calculate checksums from those final archives. Preserve the user's `data/`, games and BIOS files when testing upgrades.
 
 The updater discovers the latest stable tag through GitHub's public `/releases/latest` redirect, then reads `update.json` from that tag's release assets. Runtime checks do not need a GitHub API token or anonymous REST quota. The snapshot contains the two binary assets' `digest` fields from the authenticated GitHub API. Each must contain `sha256:` followed by 64 hexadecimal digits and match the final archive and `SHA256SUMS.txt`; a checksum file alone does not satisfy this requirement.
 

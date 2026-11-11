@@ -361,3 +361,7 @@ Added a 0–100% master-volume slider to Settings / Sound with a numeric percent
 - Actual game reached its Options screen. Its state/rewind roundtrip reproduced subsequent video and PCM; reset and power returned to the introductory sequence. This is startup/input/state evidence, not a full-game completion claim.
 - An isolated input probe moved the in-game cursor with a six-button pad. Mega Mouse movement and click did not change the matched menu frame. The ROM contains a generic mouse driver, but the tested game path does not consume it; mouse gameplay support is not claimed.
 - Linux and Windows Release builds completed. Windows EXE, both physically separate core DLLs and both language catalogs in `testbuild` matched package SHA-256 values. User BIOS/ROM/settings/saves were preserved; transient diagnostics were removed. No ROM or BIOS is committed.
+
+## Portable Linux build (2026-11-11)
+
+Built the Linux application, updater, both core modules and pinned dependencies from a fresh GitHub checkout with an empty dependency cache, using Debian 12 x86-64, Qt 6.4.2, glibc 2.36, GCC 12, CMake 3.25.1 and Python 3.11.2. The package passed the glibc 2.36 symbol check. Verified all 168 manifest entries after extraction. The packaged launcher reported version 0.22.0 through both the X11 and Wayland platform plugins on WSLg. Mesa EGL/GLX and the OpenSSL and xdg-shell plugins resolved their symbols with the bundled libraries. Steam Deck requirements were checked against Valve’s package metadata only.

@@ -9,6 +9,7 @@ import sys
 import tarfile
 import urllib.request
 from pathlib import Path
+from safe_tar import extract_verified_tar
 
 VERSION = "3.5.8"
 SHA256 = "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2"
@@ -65,7 +66,7 @@ def main() -> None:
     verified_archive()
     if not SOURCE.exists():
         with tarfile.open(ARCHIVE, "r:gz") as package:
-            package.extractall(CACHE, filter="data")
+            extract_verified_tar(package, CACHE)
     environment = os.environ.copy()
     environment["CC"] = "x86_64-w64-mingw32-gcc-posix"
     environment["AR"] = "x86_64-w64-mingw32-ar"

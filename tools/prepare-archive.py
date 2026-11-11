@@ -7,11 +7,12 @@ from pathlib import Path
 import subprocess
 import tarfile
 import urllib.request
+from safe_tar import extract_verified_tar
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPS = ROOT / "build/deps"
 SOURCES = (
-    ("zlib-1.3.2", "https://zlib.net/fossils/zlib-1.3.2.tar.xz",
+    ("zlib-1.3.2", "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
      "d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3"),
     ("xz-5.8.4", "https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.xz",
      "4ce24038fd4221e0d13bc1a2de7a4db56e90b92b3bf75321f6c14be73f65de4b"),
@@ -35,11 +36,11 @@ def source(name, url, digest):
     # Restore patched files from the verified tarball for every rebuild.
     with tarfile.open(download) as package:
         if not directory.is_dir():
-            package.extractall(DEPS, filter="data")
+            extract_verified_tar(package, DEPS)
         elif name.startswith("libarchive-"):
             for relative in ("libarchive/archive_read_support_format_7zip.c",
                              "libarchive/archive_read_support_format_zip.c"):
-                package.extract(name + "/" + relative, DEPS, filter="data")
+                extract_verified_tar(package, DEPS, [package.getmember(name + "/" + relative)])
     return directory
 
 

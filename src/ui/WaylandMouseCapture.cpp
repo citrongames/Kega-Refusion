@@ -2,8 +2,11 @@
 
 #include <QWidget>
 
-#if defined(KEGA_WAYLAND_CAPTURE) && QT_CONFIG(wayland)
+#if defined(KEGA_WAYLAND_CAPTURE) && (!defined(QT_FEATURE_wayland) || QT_FEATURE_wayland == 1)
 #include <QGuiApplication>
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+#include <qpa/qplatformnativeinterface.h>
+#endif
 #include <QMetaObject>
 #include <QPointer>
 #include <QTimer>
@@ -12,13 +15,32 @@
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include <cstring>
+#include <vector>
+
+namespace {
+wl_display* qtWaylandDisplay() {
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    auto* native = QGuiApplication::platformNativeInterface();
+    return native ? static_cast<wl_display*>(native->nativeResourceForIntegration("display")) : nullptr;
+#else
+    const auto* native = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
+    return native ? native->display() : nullptr;
+#endif
+}
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+wl_seat* qtWaylandSeatWithPointer() {
+    const auto* native = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
+    return native && native->pointer() ? native->seat() : nullptr;
+}
+#endif
+}
 
 struct WaylandMouseCapture::Impl {
     explicit Impl(WaylandMouseCapture* owner) : owner(owner) {
         if (!QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
             return;
-        const auto* native=qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
-        if (!native || !(display=native->display())) return;
+        if (!(display=qtWaylandDisplay())) return;
         registry=wl_display_get_registry(display);
         if (registry) {
             static const wl_registry_listener listener{global,globalRemoved};
@@ -28,19 +50,61 @@ struct WaylandMouseCapture::Impl {
     }
     ~Impl() {
         end();
-        if (pointer) {
-            if (wl_pointer_get_version(pointer)>=3) wl_pointer_release(pointer);
-            else wl_pointer_destroy(pointer);
-        }
+        releasePointer();
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+        for (const auto& seat : seats) releaseSeat(seat->proxy);
+#endif
         if (relativeManager) zwp_relative_pointer_manager_v1_destroy(relativeManager);
         if (constraintsManager) zwp_pointer_constraints_v1_destroy(constraintsManager);
         if (registry) wl_registry_destroy(registry);
     }
+    void releasePointer() {
+        if (!pointer) return;
+        if (wl_pointer_get_version(pointer)>=3) wl_pointer_release(pointer);
+        else wl_pointer_destroy(pointer);
+        pointer=nullptr;
+        focusSurface=nullptr;
+    }
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    struct Seat {
+        Impl* owner;
+        uint32_t name;
+        wl_seat* proxy;
+        bool hasPointer=false;
+    };
+    static void seatCapabilities(void* data,wl_seat*,uint32_t capabilities) {
+        auto* seat=static_cast<Seat*>(data);
+        auto* self=seat->owner;
+        seat->hasPointer=(capabilities & WL_SEAT_CAPABILITY_POINTER)!=0;
+        if (self->selectedSeat==seat && !seat->hasPointer) {
+            const bool wasActive=self->requested;
+            self->end();
+            self->releasePointer();
+            self->selectedSeat=nullptr;
+            if (wasActive) emit self->owner->lost();
+        }
+        self->ensurePointer();
+    }
+    static void seatName(void*,wl_seat*,const char*) {}
+    static void releaseSeat(wl_seat* seat) {
+        if (wl_seat_get_version(seat)>=5) wl_seat_release(seat);
+        else wl_seat_destroy(seat);
+    }
+#endif
     void ensurePointer() {
         if (pointer || !display) return;
-        const auto* native=qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
-        if (!native || !native->seat() || !native->pointer()) return;
-        pointer=wl_seat_get_pointer(native->seat());
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+        // Qt 6.4's QPA wl_seat/wl_pointer lookup dereferences a missing default
+        // input device. Bind a seat ourselves and wait for its pointer capability.
+        wl_seat* seat=nullptr;
+        for (const auto& candidate : seats) {
+            if (candidate->hasPointer) { seat=candidate->proxy; selectedSeat=candidate.get(); break; }
+        }
+#else
+        wl_seat* seat=qtWaylandSeatWithPointer();
+#endif
+        if (!seat) return;
+        pointer=wl_seat_get_pointer(seat);
         if (pointer) {
             static const wl_pointer_listener listener{
                 entered,left,ignoredMotion,ignoredButton,ignoredAxis,
@@ -95,10 +159,35 @@ struct WaylandMouseCapture::Impl {
                 wl_registry_bind(registry,name,&zwp_pointer_constraints_v1_interface,
                                  version<1?version:1));
             self->constraintsGlobal=name;
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+        } else if (!std::strcmp(interface,wl_seat_interface.name)) {
+            auto seat=std::make_unique<Seat>(Seat{self,name,static_cast<wl_seat*>(
+                wl_registry_bind(registry,name,&wl_seat_interface,version<5?version:5))});
+            static const wl_seat_listener listener{seatCapabilities,seatName};
+            wl_seat_add_listener(seat->proxy,&listener,seat.get());
+            self->seats.push_back(std::move(seat));
+#endif
         }
     }
     static void globalRemoved(void* data,wl_registry*,uint32_t name) {
         auto* self=static_cast<Impl*>(data);
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+        for (auto it=self->seats.begin();it!=self->seats.end();++it) {
+            if ((*it)->name!=name) continue;
+            const bool selected=self->selectedSeat==it->get();
+            const bool wasActive=selected && self->requested;
+            if (selected) {
+                self->end();
+                self->releasePointer();
+                self->selectedSeat=nullptr;
+            }
+            releaseSeat((*it)->proxy);
+            self->seats.erase(it);
+            if (wasActive) emit self->owner->lost();
+            if (selected) self->ensurePointer();
+            return;
+        }
+#endif
         if(name!=self->relativeGlobal && name!=self->constraintsGlobal)return;
         const bool wasActive=self->requested;
         self->end();
@@ -172,6 +261,10 @@ struct WaylandMouseCapture::Impl {
     wl_display* display=nullptr;
     wl_registry* registry=nullptr;
     wl_pointer* pointer=nullptr;
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
+    std::vector<std::unique_ptr<Seat>> seats;
+    Seat* selectedSeat=nullptr;
+#endif
     wl_surface* focusSurface=nullptr;
     wl_surface* lockedSurface=nullptr;
     zwp_relative_pointer_manager_v1* relativeManager=nullptr;

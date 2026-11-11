@@ -1395,7 +1395,12 @@ bool GameView::event(QEvent* event) {
         }
     }
     if (event->type() == QEvent::Enter) resetAnalogPointer();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
     if (event->type() == QEvent::DevicePixelRatioChange) {
+#else
+    // Qt 6.4 forwards screen changes to every child widget through this event.
+    if (event->type() == QEvent::ScreenChangeInternal) {
+#endif
         resetAnalogPointer();
         if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();
     }
