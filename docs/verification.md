@@ -373,3 +373,9 @@ On Mesa llvmpipe, 595 of 608 presets in the supplied GLSL collection loaded and 
 The 13 remaining failures come from three individual presets and two shared sources. `simple_dither.glslp` specifies `shaders = 1_`, `MMJ_Cel_Shader_3dfx.glslp` references missing passes, and `gb-dot-matrix-inverted.glslp` references a missing palette. Eight border presets use an invalid vector assignment in `box-center.glsl`. Two xSal presets use fragment types defined only in the vertex stage.
 
 At 320×224 input and 1280×720 output, median software-rendering times across three trials were 3.661 → 3.696 ms/frame for bilinear, 11.572 → 12.058 for crt-geom and 2.381 → 2.486 for aa-shader-4.0. CRT Royale, NTSC S-Video and HQ4x also rendered multiple frames at that size. These measurements cover the software OpenGL driver.
+
+## Release 0.24.0
+
+The published Linux 0.23.2 updater displayed the new release notes, downloaded 0.24.0 from GitHub and restarted into the new version. All 169 installed package files matched the manifest. A portable setting and a battery save survived the update. The Debian 12 package requires at most glibc 2.36.
+
+The public Windows ZIP matched the updater SHA-256. All 124 manifest entries matched and the packaged executable reported 0.24.0 on Windows. Both production targets built. The separate Windows video UI test target still lacks the Qt private platform header in its include path.
