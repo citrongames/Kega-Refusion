@@ -75,6 +75,9 @@
 #include <optional>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
+#include <dwmapi.h>
+#include <QWindow>
+#include <qpa/qplatformwindow_p.h>
 #endif
 
 namespace {
@@ -175,6 +178,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     resize(920, 620);
     setAcceptDrops(true);
     view_ = new GameView(this);
+    const bool hideIdleCursor = settings_.value(QStringLiteral("view/hideIdleCursor"), true).toBool();
+    const int cursorIdleSeconds = qBound(1, settings_.value(QStringLiteral("view/cursorIdleSeconds"), 1).toInt(), 60);
+    view_->setCursorIdleTimeout(hideIdleCursor ? cursorIdleSeconds : 0);
     view_->setOsdEnabled(settings_.value(QStringLiteral("view/osd"), true).toBool());
     view_->setMovieCounterAsTime(settings_.value(QStringLiteral("recording/counterUnit"),
         QStringLiteral("time")).toString() != QLatin1String("frames"));
@@ -1817,6 +1823,19 @@ void MainWindow::editSettings(int initialPage) {
     showOsd->setObjectName(QStringLiteral("osdEnabled"));
     showOsd->setChecked(osdEnabled);
     general->addRow(showOsd);
+
+    const bool hideIdleCursor = settings_.value(QStringLiteral("view/hideIdleCursor"), true).toBool();
+    const int cursorIdleSeconds = qBound(1, settings_.value(QStringLiteral("view/cursorIdleSeconds"), 1).toInt(), 60);
+    auto* hideCursor = new QCheckBox(Localization::text(QStringLiteral("Скрывать неподвижный курсор через")), &dialog);
+    hideCursor->setChecked(hideIdleCursor);
+    auto* cursorDelay = new QSpinBox(&dialog);
+    cursorDelay->setRange(1, 60);
+    cursorDelay->setSuffix(Localization::text(QStringLiteral(" с")));
+    cursorDelay->setValue(cursorIdleSeconds);
+    cursorDelay->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    cursorDelay->setEnabled(hideIdleCursor);
+    connect(hideCursor, &QCheckBox::toggled, cursorDelay, &QWidget::setEnabled);
+    general->addRow(hideCursor, cursorDelay);
     auto* speed = new QComboBox(&dialog);
     speed->setObjectName(QStringLiteral("fastForwardFactor"));
     for (int factor : {2, 3, 4, 6, 8, 12, 16, 32, 0})
@@ -2404,6 +2423,11 @@ void MainWindow::editSettings(int initialPage) {
         if ((screenshotFormat->currentIndex() == 1) != jpeg)
             settings_.setValue(QStringLiteral("screenshot/format"), screenshotFormat->currentData());
         osdAction_->setChecked(showOsd->isChecked());
+        if (hideCursor->isChecked() != hideIdleCursor)
+            settings_.setValue(QStringLiteral("view/hideIdleCursor"), hideCursor->isChecked());
+        if (cursorDelay->value() != cursorIdleSeconds)
+            settings_.setValue(QStringLiteral("view/cursorIdleSeconds"), cursorDelay->value());
+        view_->setCursorIdleTimeout(hideCursor->isChecked() ? cursorDelay->value() : 0);
         fpsAction_->setChecked(emulationFps->isChecked());
         gameFpsAction_->setChecked(gameFps->isChecked());
         if (language->currentData().toString() != selectedLanguage)
@@ -3061,10 +3085,48 @@ void MainWindow::setFullscreenMode(bool enabled) {
     view_->setFocus();
 }
 
+#ifdef Q_OS_WIN
+void MainWindow::updateFullscreenComposition() {
+    if (!windowHandle()) return;
+    auto* native = windowHandle()->nativeInterface<QNativeInterface::Private::QWindowsWindow>();
+    if (!native) return;
+
+    // Win32 can present a monitor-sized OpenGL window above its own popups.
+    // Request composition only while the menu or another application window is shown.
+    bool needsFrame = false;
+    if (isFullScreen()) {
+        needsFrame = menuBar()->isVisible() || modalWindowBlocked_;
+        if (!needsFrame) {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                if (widget != this && widget->isVisible() && widget->windowType() != Qt::ToolTip &&
+                    widget->windowType() != Qt::Desktop) {
+                    needsFrame = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (native->hasBorderInFullScreen() == needsFrame) return;
+    const auto hwnd = reinterpret_cast<HWND>(windowHandle()->winId());
+    native->setHasBorderInFullScreen(needsFrame);
+    // Windows 11 can keep the compositing style without drawing its accent outline.
+    const COLORREF color = needsFrame ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color, sizeof(color));
+    if (isFullScreen()) {
+        // Apply the style's client-area change immediately in both directions.
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+#endif
+
 void MainWindow::toggleFullscreenMenu() {
     if (!isFullScreen()) return;
     const bool visible = !menuBar()->isVisible();
     menuBar()->setVisible(visible);
+#ifdef Q_OS_WIN
+    updateFullscreenComposition();
+#endif
     view_->setFocus();
 }
 
@@ -3146,6 +3208,16 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+#ifdef Q_OS_WIN
+    if (watched == this && (event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowUnblocked)) {
+        modalWindowBlocked_ = event->type() == QEvent::WindowBlocked;
+        updateFullscreenComposition();
+    } else if (isFullScreen() && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
+        auto* widget = qobject_cast<QWidget*>(watched);
+        if (widget && widget != this && widget->isWindow() && widget->windowType() != Qt::ToolTip)
+            updateFullscreenComposition();
+    }
+#endif
     if (event->type() == QEvent::Polish || event->type() == QEvent::Show) {
         auto* window = qobject_cast<QWidget*>(watched);
         if (window && window != this && !qobject_cast<QFileDialog*>(window) &&
@@ -3328,6 +3400,9 @@ void MainWindow::changeEvent(QEvent* event) {
         }
         if (isFullScreen() && !(change->oldState() & Qt::WindowFullScreen)) menuBar()->hide();
         else if (!isFullScreen()) menuBar()->show();
+#ifdef Q_OS_WIN
+        updateFullscreenComposition();
+#endif
     }
     QMainWindow::changeEvent(event);
 }

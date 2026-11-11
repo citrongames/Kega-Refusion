@@ -2,6 +2,8 @@
   "code": "en",
   "name": "English",
   "translations": {
+    "Скрывать неподвижный курсор через": "Hide the idle cursor after",
+    " с": " s",
     "Для назначения кнопки подключите геймпад.": "Connect a gamepad to assign a button.",
     "Назначение «%1»: нажмите клавишу. Esc — отмена.": "Assign “%1”: press a key. Esc cancels.",
     "Назначение «%1»: нажмите сочетание клавиш. Esc — отмена.": "Assign “%1”: press a keyboard shortcut. Esc cancels.",

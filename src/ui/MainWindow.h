@@ -238,6 +238,10 @@ private:
     bool fastForwardHeld_ = false;
     bool fastForwardPadHeld_ = false;
     bool fastForwardActive_ = false;
+#ifdef Q_OS_WIN
+    void updateFullscreenComposition();
+    bool modalWindowBlocked_ = false;
+#endif
     bool wasMaximizedBeforeFullscreen_ = false;
     bool loading_ = false;
     bool applyingSessionControllers_ = false;

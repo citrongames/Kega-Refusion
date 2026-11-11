@@ -5,6 +5,7 @@
 #include "core/InputDisplay.h"
 
 #include <QElapsedTimer>
+#include <QCursor>
 #include <QImage>
 #include <QPointF>
 #include <QPixmap>
@@ -78,6 +79,7 @@ public:
     void setAnalogMousePlayer(int player, ControllerType type); // -1 disables desktop pointer input.
     void resetAnalogPointer();
     void setMouseCaptureEnabled(bool enabled);
+    void setCursorIdleTimeout(int seconds); // 0 disables idle hiding; otherwise 1..60 seconds.
     bool mouseCaptured() const { return mouseCaptured_; }
     bool releaseMouseCapture();
     void setLightgunInputEnabled(bool enabled);
@@ -97,6 +99,7 @@ signals:
 
 protected:
     bool event(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -123,6 +126,17 @@ private:
     void clearAnalogMouse();
     bool beginMouseCapture();
     void capturedMouseMotion(double dx, double dy);
+    bool idleCursorAllowed() const;
+    void pointerActivity(const QPointF& position);
+    void resetIdleCursor(bool arm = true);
+    void restoreIdleCursor();
+    QTimer cursorIdleTimer_;
+    QPointF cursorPosition_;
+    QCursor cursorBeforeIdle_;
+    bool cursorInside_ = false;
+    bool cursorIdleHidden_ = false;
+    bool cursorWasExplicit_ = false;
+    bool changingIdleCursor_ = false;
     WaylandMouseCapture* waylandMouse_ = nullptr;
     bool mouseCaptured_ = false;
     bool mouseCaptureEnabled_ = true;

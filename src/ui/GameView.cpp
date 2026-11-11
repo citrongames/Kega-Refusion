@@ -3,6 +3,8 @@
 #include "InputDisplayPainter.h"
 #include "WaylandMouseCapture.h"
 #include <QCursor>
+#include <QApplication>
+#include <QEnterEvent>
 #include <QKeyEvent>
 #include "../core/VideoFrameGeometry.h"
 
@@ -102,6 +104,8 @@ public:
         setFormat(format);
         setFocusPolicy(Qt::NoFocus);
         setAttribute(Qt::WA_TransparentForMouseEvents);
+        setMouseTracking(true);
+        installEventFilter(owner_);
         setObjectName(QStringLiteral("gpuVideo"));
     }
     ~ShaderView() override {
@@ -205,6 +209,17 @@ GameView::GameView(QWidget* parent) : QWidget(parent) {
     connect(waylandMouse_, &WaylandMouseCapture::lost, this, [this] { releaseMouseCapture(); });
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
+    cursorIdleTimer_.setSingleShot(true);
+    cursorIdleTimer_.setTimerType(Qt::PreciseTimer);
+    cursorIdleTimer_.setInterval(1000);
+    connect(&cursorIdleTimer_, &QTimer::timeout, this, [this] {
+        if (!idleCursorAllowed() || cursor().shape() == Qt::BlankCursor) return;
+        cursorBeforeIdle_ = cursor();
+        cursorWasExplicit_ = testAttribute(Qt::WA_SetCursor);
+        cursorIdleHidden_ = true;
+        const QScopedValueRollback<bool> changing(changingIdleCursor_, true);
+        setCursor(Qt::BlankCursor);
+    });
     setMinimumSize(400, 280);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     const int fontId = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/osd.ttf"));
@@ -258,6 +273,7 @@ QImage GameView::captureGameImage() {
 }
 
 void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
+    const bool hadFrame = !frame_.isNull();
     const QSize previousNative = VideoFrameGeometry::nativeSize(frame_);
     const double previousAspect = aspectRatio_;
     frame_ = frame;
@@ -269,6 +285,8 @@ void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& s
         aspectRatio_ = aspectRatio;
     if (previousNative != VideoFrameGeometry::nativeSize(frame_) ||
         previousAspect != aspectRatio_) resetAnalogPointer();
+    // A frame arrival must not continually postpone the mouse idle deadline.
+    if (hadFrame != !frame_.isNull()) resetIdleCursor();
     repaintView();
 }
 
@@ -301,6 +319,7 @@ void GameView::setLoading(bool loading, const QString& fileName) {
     loading_ = loading;
     if (loading_) { clearMouseGun(); clearAnalogMouse(); clearAchievementNotices(); }
     loadingFileName_ = name;
+    resetIdleCursor();
     repaintView();
     if (loading && isVisible()) {
         // One immediate presentation also precedes a synchronous archive scan.
@@ -980,9 +999,17 @@ void GameView::setMouseCaptureEnabled(bool enabled) {
     clearMouseGun(); clearAnalogMouse();
 }
 
+void GameView::setCursorIdleTimeout(int seconds) {
+    const int interval = qBound(0, seconds, 60) * 1000;
+    if (cursorIdleTimer_.interval() == interval) return;
+    cursorIdleTimer_.setInterval(interval);
+    resetIdleCursor();
+}
+
 bool GameView::beginMouseCapture() {
     if (mouseCaptured_) return true;
     if (!mouseCaptureEnabled_ || (!analogMouseAvailable() && !mouseGunAvailable())) return false;
+    resetIdleCursor(false);
     if (mouseGunAvailable()) capturedPointer_ = guns_[mouseGunPlayer_].aim;
     else if (analogMouseType_ == ControllerType::Paddle)
         capturedPointer_ = QPointF((analogPaddlePosition_ + 32768.0) / 65535.0, 0.5);
@@ -1027,6 +1054,7 @@ bool GameView::releaseMouseCapture() {
         return notice.category == QLatin1String("mouse-capture");
     }), notices_.end());
     repaintView();
+    resetIdleCursor();
     return true;
 }
 
@@ -1151,6 +1179,7 @@ void GameView::clearMouseGun() {
 }
 
 void GameView::mousePressEvent(QMouseEvent* event) {
+    if (!mouseCaptured_) pointerActivity(event->position());
     if (!loading_ && frame_.isNull() && event->button() == Qt::LeftButton &&
         openArea().contains(event->position().toPoint())) {
         emit openGameRequested();
@@ -1187,6 +1216,7 @@ void GameView::mousePressEvent(QMouseEvent* event) {
 }
 
 void GameView::mouseReleaseEvent(QMouseEvent* event) {
+    if (!mouseCaptured_) pointerActivity(event->position());
     const unsigned bit = unsigned(event->button()) & unsigned(Qt::LeftButton | Qt::RightButton |
         Qt::MiddleButton | Qt::BackButton | Qt::ForwardButton);
     if (mouseGunPlayer_ >= 0 && mouseGunPlayer_ < int(kGunSlots) && bit && (mouseGunButtons_ & bit)) {
@@ -1217,6 +1247,7 @@ void GameView::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
+    pointerActivity(event->position());
     if (!mouseCaptureEnabled_) {
         if (mouseGunAvailable()) updateMouseAim(event->position());
         if (analogMouseAvailable()) updateAnalogPointer(event->position());
@@ -1225,6 +1256,8 @@ void GameView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void GameView::leaveEvent(QEvent* event) {
+    cursorInside_ = false;
+    resetIdleCursor(false);
     if (mouseCaptured_) { QWidget::leaveEvent(event); return; }
     clearMouseGun();
     clearAnalogMouse();
@@ -1235,6 +1268,7 @@ void GameView::focusOutEvent(QFocusEvent* event) {
     releaseMouseCapture();
     clearMouseGun();
     clearAnalogMouse();
+    resetIdleCursor(false);
     QWidget::focusOutEvent(event);
 }
 
@@ -1317,6 +1351,8 @@ void GameView::paintRaster(QPainter& painter) {
 
 
 GameView::~GameView() {
+    cursorInside_ = false;
+    resetIdleCursor(false);
     releaseMouseCapture();
     delete shaderView_;
 }
@@ -1390,9 +1426,62 @@ void GameView::ensureGpu() {
     });
 }
 
+bool GameView::idleCursorAllowed() const {
+    if (cursorIdleTimer_.interval() <= 0 || mouseCaptured_ || !cursorInside_ || !isVisible() || !isEnabled() || !isActiveWindow()
+        || loading_ || QApplication::activePopupWidget() || QApplication::activeModalWidget()) return false;
+    if (window()->isFullScreen()) return rect().contains(cursorPosition_.toPoint());
+    return !frame_.isNull() && gameRect().contains(cursorPosition_);
+}
+
+void GameView::restoreIdleCursor() {
+    if (!cursorIdleHidden_) return;
+    cursorIdleHidden_ = false;
+    const QScopedValueRollback<bool> changing(changingIdleCursor_, true);
+    if (cursorWasExplicit_) setCursor(cursorBeforeIdle_);
+    else unsetCursor();
+}
+
+void GameView::resetIdleCursor(bool arm) {
+    cursorIdleTimer_.stop();
+    restoreIdleCursor();
+    if (arm && idleCursorAllowed() && cursor().shape() != Qt::BlankCursor)
+        cursorIdleTimer_.start();
+}
+
+void GameView::pointerActivity(const QPointF& position) {
+    cursorPosition_ = position;
+    cursorInside_ = rect().contains(position.toPoint());
+    resetIdleCursor();
+}
+
+bool GameView::eventFilter(QObject* watched, QEvent* event) {
+    // The transparent GPU child normally sends pointer input to GameView. Also
+    // handle direct child enter/move events without changing controller input.
+    if (watched == shaderView_) {
+        if (event->type() == QEvent::MouseMove && !mouseCaptured_)
+            pointerActivity(shaderView_->mapTo(this, static_cast<QMouseEvent*>(event)->position().toPoint()));
+        else if (event->type() == QEvent::Enter && !mouseCaptured_) {
+            const auto* enter = dynamic_cast<QEnterEvent*>(event);
+            pointerActivity(enter ? shaderView_->mapTo(this, enter->position().toPoint())
+                                  : mapFromGlobal(QCursor::pos()));
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 bool GameView::event(QEvent* event) {
-    if (event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate)
+    if (event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate) {
         releaseMouseCapture();
+        resetIdleCursor(false);
+        if (event->type() == QEvent::Hide) cursorInside_ = false;
+    }
+    if (event->type() == QEvent::FocusIn || event->type() == QEvent::WindowActivate)
+        resetIdleCursor();
+    if (event->type() == QEvent::CursorChange && cursorIdleHidden_ && !changingIdleCursor_) {
+        // An explicit controller cursor change takes ownership from idle hiding.
+        cursorIdleHidden_ = false;
+        cursorIdleTimer_.stop();
+    }
     if (event->type() == QEvent::UngrabMouse && mouseCaptured_ && !waylandMouse_->active())
         releaseMouseCapture();
     if (mouseCaptured_ && (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)) {
@@ -1402,7 +1491,11 @@ bool GameView::event(QEvent* event) {
             event->accept(); return true;
         }
     }
-    if (event->type() == QEvent::Enter) resetAnalogPointer();
+    if (event->type() == QEvent::Enter) {
+        resetAnalogPointer();
+        const auto* enter = dynamic_cast<QEnterEvent*>(event);
+        pointerActivity(enter ? enter->position() : QPointF(mapFromGlobal(QCursor::pos())));
+    }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
     if (event->type() == QEvent::DevicePixelRatioChange) {
 #else
@@ -1424,6 +1517,7 @@ void GameView::showEvent(QShowEvent* event) {
 void GameView::resizeEvent(QResizeEvent* event) {
     releaseMouseCapture();
     QWidget::resizeEvent(event);
+    resetIdleCursor();
     resetAnalogPointer();
     if (!achievementQueue_.isEmpty()) rebuildAchievementPixmap();
     if (shaderView_) shaderView_->setGeometry(rect());
