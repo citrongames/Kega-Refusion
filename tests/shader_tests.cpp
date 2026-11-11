@@ -464,6 +464,12 @@ void screenshotWidgetTests() {
     require(qAbs(centre.red()-120) <= 2 && qAbs(centre.blue()-120) <= 2,
             "clean native screenshot omitted the dither filter shader");
     require(view.captureImage() == overlays, "clean native screenshot changed visible OSD");
+    require(view.setShaderPreset({}, &error), qPrintable(error));
+    const QImage unfiltered = view.captureGameImage();
+    require(unfiltered.size() == clean.size(), "disabling shader changed game dimensions");
+    const QColor pixel = unfiltered.pixelColor(unfiltered.width()/2, unfiltered.height()/2);
+    require(pixel == source.pixelColor(0, 0) || pixel == source.pixelColor(1, 0),
+            "disabling shader did not restore unfiltered pixels");
 }
 
 void widgetTests(const QString& directory) {

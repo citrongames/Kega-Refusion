@@ -247,7 +247,8 @@ bool ShaderPipeline::compile(const QByteArray& source, std::unique_ptr<Program>&
 
 bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
     initializeOpenGLFunctions();
-    if (preset.passes.isEmpty() || preset.passes.size() > ShaderPreset::maxPasses ||
+    // Disabling GLSL keeps the stock display pass, also used for Blargg output.
+    if ((!preset.path.isEmpty() && preset.passes.isEmpty()) || preset.passes.size() > ShaderPreset::maxPasses ||
         preset.feedbackPass < -1 || preset.feedbackPass >= preset.passes.size())
         return fail(error, QStringLiteral("Invalid GLSL pass count or feedback pass."));
     preset_ = preset;
@@ -428,7 +429,7 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
         std::swap(texture_, historyTextures_.front());
         std::swap(textureSize_, historySizes_.front());
     }
-    const bool inputMips = preset_.passes.front().mipmap;
+    const bool inputMips = !preset_.passes.isEmpty() && preset_.passes.front().mipmap;
     std::array<QSize, ShaderPreset::maxPasses> outputs;
     QSize input = frame.size();
     qint64 videoBytes = lutBytes_ + textureBytes(input, 4, inputMips);
