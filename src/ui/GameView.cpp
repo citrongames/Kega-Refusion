@@ -1019,6 +1019,7 @@ bool GameView::beginMouseCapture() {
     const bool wayland = QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
     if (wayland) {
         if (!waylandMouse_->begin(this)) {
+            resetIdleCursor();
             showOsd(Localization::text(QStringLiteral("Захват мыши недоступен.")));
             return false;
         }
@@ -1027,7 +1028,10 @@ bool GameView::beginMouseCapture() {
         captureReturnPosition_ = QCursor::pos();
         captureAnchor_ = mapToGlobal(gameRect().center().toPoint());
         grabMouse(Qt::BlankCursor);
-        if (QWidget::mouseGrabber() != this) return false;
+        if (QWidget::mouseGrabber() != this) {
+            resetIdleCursor();
+            return false;
+        }
     }
     mouseCaptured_ = true;
     if (!wayland) QCursor::setPos(captureAnchor_);
