@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "SegaCdBios.h"
+#include "DataFolders.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -44,8 +45,8 @@ const Region* findRegion(char code) {
     return nullptr;
 }
 
-QString biosPath(const QString& dataPath, const Region& region) {
-    return QDir(dataPath).filePath(QStringLiteral("bios/") + QString::fromLatin1(region.filename));
+QString biosPath(const QString& biosDirectory, const Region& region) {
+    return QDir(biosDirectory).filePath(QString::fromLatin1(region.filename));
 }
 
 // These are fingerprints of the user's six read-only source images, not BIOS data.
@@ -167,13 +168,17 @@ const Region* recognizeFile(const QFileInfo& info, QString& reason) {
 } // namespace
 
 QString SegaCdBios::resolve(const QString& dataPath, int region, QString& error) {
+    return resolveInDirectory(DataFolders::path(dataPath, QStringLiteral("bios")), region, error);
+}
+
+QString SegaCdBios::resolveInDirectory(const QString& biosDirectory, int region, QString& error) {
     error.clear();
     const Region* expected = findRegion(region);
     if (!expected) {
         error = Localization::text(QStringLiteral("Неизвестный регион Sega CD: %1.")).arg(region);
         return {};
     }
-    const QString canonical = biosPath(dataPath, *expected);
+    const QString canonical = biosPath(biosDirectory, *expected);
     QString canonicalError;
     const QFileInfo canonicalInfo(canonical);
     if (canonicalInfo.exists()) {
@@ -188,7 +193,7 @@ QString SegaCdBios::resolve(const QString& dataPath, int region, QString& error)
                      Localization::text(QString::fromUtf8(expected->label)));
         }
     }
-    QDir directory(QDir(dataPath).filePath(QStringLiteral("bios")));
+    QDir directory(biosDirectory);
     auto entries = directory.entryInfoList(QDir::Files | QDir::Readable | QDir::NoDotAndDotDot, QDir::NoSort);
     std::sort(entries.begin(), entries.end(), [](const QFileInfo& a, const QFileInfo& b) {
         return a.fileName() < b.fileName();
@@ -210,8 +215,12 @@ bool SegaCdBios::validate(const QString& dataPath, int region, QString& error) {
 }
 
 QString SegaCdBios::status(const QString& dataPath, int region) {
+    return statusInDirectory(DataFolders::path(dataPath, QStringLiteral("bios")), region);
+}
+
+QString SegaCdBios::statusInDirectory(const QString& biosDirectory, int region) {
     QString error;
-    const QString path = resolve(dataPath, region, error);
+    const QString path = resolveInDirectory(biosDirectory, region, error);
     if (path.isEmpty()) return error;
     const Region* expected = findRegion(region);
     return Localization::text(QStringLiteral("BIOS Sega CD для региона «%1» установлен: %2"))
@@ -228,6 +237,7 @@ QStringList SegaCdBios::importDirectory(const QString& sourceDirectory, const QS
         return imported;
     }
 
+    const QString biosDirectory = DataFolders::path(dataPath, QStringLiteral("bios"));
     struct Candidate { QString path; QByteArray bytes; };
     std::array<Candidate, 3> candidates;
     for (const QFileInfo& info : source.entryInfoList(QDir::Files | QDir::Readable | QDir::NoDotAndDotDot,
@@ -248,9 +258,9 @@ QStringList SegaCdBios::importDirectory(const QString& sourceDirectory, const QS
         const Candidate& candidate = candidates.at(static_cast<size_t>(region.id - 1));
         if (candidate.path.isEmpty()) continue;
         found = true;
-        const QString destination = biosPath(dataPath, region);
+        const QString destination = biosPath(biosDirectory, region);
         QString validationError;
-        if (!resolve(dataPath, region.id, validationError).isEmpty()) continue;
+        if (!resolveInDirectory(biosDirectory, region.id, validationError).isEmpty()) continue;
         const QFileInfo existing(destination);
         if (existing.exists() || existing.isSymLink()) {
             appendError(error, Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1"))

@@ -1,13 +1,19 @@
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -126,10 +126,10 @@
- char CD_BIOS_EU[256];
- char CD_BIOS_US[256];
- char CD_BIOS_JP[256];
+@@ -123,13 +123,13 @@
+ char MS_BIOS_EU[256];
+ char MS_BIOS_JP[256];
+ char MS_BIOS_US[256];
+-char CD_BIOS_EU[256];
+-char CD_BIOS_US[256];
+-char CD_BIOS_JP[256];
 -char CD_BRAM_JP[256];
 -char CD_BRAM_US[256];
 -char CD_BRAM_EU[256];
 -char CART_BRAM[256];
++char CD_BIOS_EU[4096];
++char CD_BIOS_US[4096];
++char CD_BIOS_JP[4096];
 +char CD_BRAM_JP[4096];
 +char CD_BRAM_US[4096];
 +char CD_BRAM_EU[4096];
@@ -15,3 +21,30 @@
  
  static int vwidth;
  static int vheight;
+@@ -4036,9 +4036,10 @@
+ 
+ static bool kegarefusion_read_32x_bios(const char *dir, const char *name, uint8_t *data, size_t length)
+ {
+-   char path[1024];
++   char path[4096];
+    RFILE *file;
+    bool okay;
++   if (!dir || strlen(dir) + 1 + strlen(name) >= sizeof(path)) return false;
+    fill_pathname_join(path, dir, name, sizeof(path));
+    file = filestream_open(path, RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE);
+    if (!file) return false;
+--- a/libretro/osd.h
++++ b/libretro/osd.h
+@@ -152,9 +152,9 @@
+ extern char SK_UPMEM[256];
+ extern char GG_BIOS[256];
+ extern char MD_BIOS[256];
+-extern char CD_BIOS_EU[256];
+-extern char CD_BIOS_US[256];
+-extern char CD_BIOS_JP[256];
++extern char CD_BIOS_EU[4096];
++extern char CD_BIOS_US[4096];
++extern char CD_BIOS_JP[4096];
+ extern char MS_BIOS_US[256];
+ extern char MS_BIOS_EU[256];
+ extern char MS_BIOS_JP[256];

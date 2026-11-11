@@ -1,6 +1,7 @@
 #include "core/LibretroHost.h"
 #include "core/Sega32xBios.h"
 #include "core/SegaCdBios.h"
+#include "core/DataFolders.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -294,6 +295,54 @@ void verifyMixedBiosGuards(const QString& corePath, const QString& dataPath,
             "recording ignored the removed BIOS on its next power cycle");
 }
 
+void verifyConfiguredBios(const QString& corePath, const QString& source, const QString& discPath,
+                          const QString& cartridgePath) {
+    QTemporaryDir temp;
+    require(temp.isValid(),"cannot create configured host BIOS test directory");
+    const QString data=temp.filePath("data"),
+        first=temp.filePath(QStringLiteral("first/")+QString(110,QLatin1Char('a'))+'/'+QString(110,QLatin1Char('b'))+QStringLiteral("/\u0441\u0435\u0433\u0430/bios")),
+        second=temp.filePath("second/bios");
+    require(first.toUtf8().size()>256,"long BIOS path fixture is too short");
+    copyBios(source,data+"/bios"); // A valid default set must never mask an empty override.
+    copyBios(source,first);
+    renameBios(first);
+    QString error;
+    require(DataFolders::save(data,{{QStringLiteral("bios"),first}},error),qPrintable(error));
+    LibretroHost host(corePath,data);
+    require(host.load(discPath,error),qPrintable(error));
+    requireFrame(host);
+    const auto original=snapshot(host);
+    require(DataFolders::save(data,{{QStringLiteral("bios"),second}},error),qPrintable(error));
+    require(host.hardReset(error),qPrintable(error));
+    requireFrame(host);
+    sameIdentity(snapshot(host),original);
+    require(host.dataFolder("bios")==first,"power cycle changed the loaded BIOS folder");
+    require(!host.load(discPath,error) && host.loaded(),"empty BIOS override fell back to default or unloaded running game");
+    require(host.hardReset(error),qPrintable(error));
+    copyBios(source,second);
+    renameBios(second);
+    require(host.load(discPath,error),qPrintable(error));
+    requireFrame(host);
+    require(host.dataFolder("bios")==second,"next game did not adopt selected BIOS folder");
+    sameIdentity(snapshot(host),original);
+    requireOnlyRenamedBios(first);
+    requireOnlyRenamedBios(second);
+
+    host.unload();
+    host.setExpansionDevices(false,true);
+    require(host.load(cartridgePath,error),qPrintable(error)); // Short folder baseline.
+    const auto original32x=host.captureMovieState();
+    const auto identity32x=snapshot(host);
+    require(!original32x.isEmpty(),"cannot snapshot original 32X BIOS state");
+    require(DataFolders::save(data,{{QStringLiteral("bios"),first}},error),qPrintable(error));
+    require(host.load(cartridgePath,error),qPrintable(error));
+    // The native decoder independently checks original/built-in BIOS identity.
+    require(host.restoreMovieState(original32x,error),"long BIOS path silently selected built-in 32X firmware");
+    requireFrame(host);
+    sameIdentity(snapshot(host),identity32x);
+    require(host.hardReset(error) && host.restoreMovieState(original32x,error),qPrintable(error));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -324,6 +373,7 @@ int main(int argc, char** argv) {
         sameIdentity(exercise32x(corePath, dataPath, cartridgePath, true), canonical32x);
         requireOnlyRenamedBios(biosPath);
         verifyMixedBiosGuards(corePath, dataPath, cartridgePath, biosPath, source);
+        verifyConfiguredBios(corePath, source, discPath, cartridgePath);
         std::puts("Real-core CD and 32X BIOS loads, hard resets, quick-state compatibility, identities and no-copy rename passed");
         return 0;
     } catch (const std::exception& error) {

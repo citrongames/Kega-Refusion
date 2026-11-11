@@ -32,6 +32,7 @@ public:
     ViewState viewState() const;
     void setViewState(const ViewState& state);
     void setExternalFeedback(bool external);
+    bool validate();
     bool apply();
     void setHardwareConfigurationLocked(bool locked);
     void setTopologyLocked(bool locked);

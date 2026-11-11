@@ -28,6 +28,7 @@
 #include <QMouseEvent>
 #include <QLabel>
 #include <QListWidget>
+#include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
@@ -868,6 +869,29 @@ int main(int argc, char** argv) {
         if (app.arguments().contains(QStringLiteral("--shader-migration"))) {
             testShaderMigration();
             std::puts("Dither menu, exact built-in migration, parameters, custom presets and Blargg persistence passed");
+            return 0;
+        }
+
+        if (app.arguments().contains(QStringLiteral("--folders"))) {
+            EmulationSession session(QString(), data.path());
+            MainWindow window(session, data.path(), true);
+            bool portableDefault = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto* dialog = window.findChild<QDialog*>("emulatorSettingsDialog");
+                if (!dialog) return;
+                auto* nav = dialog->findChild<QListWidget*>("settingsNavigation");
+                auto* field = dialog->findChild<QLineEdit*>("folderPath_screenshots");
+                auto* buttons = dialog->findChild<QDialogButtonBox*>("settingsButtons");
+                if (!nav || !field || !buttons) { dialog->reject(); return; }
+                nav->setCurrentRow(nav->count() - 1);
+                portableDefault = field->isVisible() && field->text() == QLatin1String("screenshots");
+                field->setText(QStringLiteral("images/test"));
+                buttons->button(QDialogButtonBox::Ok)->click();
+                if (dialog->isVisible()) dialog->reject();
+            });
+            child<QAction>(window, "emulatorSettingsAction")->trigger();
+            require(portableDefault && QFileInfo(data.filePath("images/test")).isDir(),
+                    "folders page did not apply the portable screenshot path");
             return 0;
         }
 

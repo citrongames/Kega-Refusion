@@ -1375,13 +1375,16 @@ void ControlsPage::setHardwareConfigurationLocked(bool locked) {
     secondJustifierBox_->setToolTip(hint);
 }
 
-bool ControlsPage::apply() {
+bool ControlsPage::validate() {
     if (captureTarget_ >= 0 || !sequence_.isEmpty() || input_.capturing()) {
         setFeedback(Localization::text(QStringLiteral("Завершите или отмените текущее назначение.")), true);
         return false;
     }
-    if (!validateDrafts())
-        return false;
+    return validateDrafts();
+}
+
+bool ControlsPage::apply() {
+    if (!validate()) return false;
     for (int profile : dirtyAdapters_)
         input_.setAdapter(ConsoleProfile(profile), adapterDrafts_[profile]);
     dirtyAdapters_.clear();

@@ -1,6 +1,7 @@
 #include "i18n/Localization.h"
 #include "LibretroHost.h"
 #include "LibretroHostApi.h"
+#include "DataFolders.h"
 #include <zlib.h>
 #include <QSysInfo>
 #include <rc_hash.h>
@@ -34,19 +35,19 @@ namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
 constexpr const char* biosRoleNames[]{"bios_CD_J.bin", "bios_CD_U.bin", "bios_CD_E.bin",
     "32X_G_BIOS.BIN", "32X_M_BIOS.BIN", "32X_S_BIOS.BIN"};
-QString resolvedBiosPath(const QString& dataPath, const QString& role) {
+QString resolvedBiosPath(const QString& biosDirectory, const QString& role) {
     QString error;
     for (int i=0; i<3; ++i)
-        if (role == QLatin1String(biosRoleNames[i])) return SegaCdBios::resolve(dataPath,i+1,error);
+        if (role == QLatin1String(biosRoleNames[i])) return SegaCdBios::resolveInDirectory(biosDirectory,i+1,error);
     constexpr Sega32xBios::Piece pieces[]{Sega32xBios::Piece::M68k,
         Sega32xBios::Piece::MasterSh2,Sega32xBios::Piece::SlaveSh2};
     for (int i=0; i<3; ++i)
-        if (role == QLatin1String(biosRoleNames[i+3])) return Sega32xBios::resolve(dataPath,pieces[i],error);
+        if (role == QLatin1String(biosRoleNames[i+3])) return Sega32xBios::resolveInDirectory(biosDirectory,pieces[i],error);
     return {};
 }
 // The fallback is part of 32X execution. Bump a role's version if its
 // built-in boot program or deterministic boot behavior changes.
-QString biosFingerprint(const QString& dataPath, const QString& role, bool cartridge) {
+QString biosFingerprint(const QString& biosDirectory, const QString& role, bool cartridge) {
     int index = 0;
     while (index < 6 && role != QLatin1String(biosRoleNames[index])) ++index;
     if (index == 6) return {};
@@ -54,7 +55,7 @@ QString biosFingerprint(const QString& dataPath, const QString& role, bool cartr
     static const QString fallback[]{QStringLiteral("missing"),QStringLiteral("missing"),
         QStringLiteral("missing"),QStringLiteral("builtin-32x-g-v1"),
         QStringLiteral("builtin-32x-m-v1"),QStringLiteral("builtin-32x-s-v1")};
-    QFile file(resolvedBiosPath(dataPath,role));
+    QFile file(resolvedBiosPath(biosDirectory,role));
     if (file.fileName().isEmpty() || !file.open(QIODevice::ReadOnly))
         return index == 4 && cartridge ? QStringLiteral("builtin-32x-m-v2") : fallback[index];
     if (file.size() != sizes[index]) return QStringLiteral("invalid");
@@ -147,16 +148,32 @@ std::uint64_t LibretroHost::papriumMusicRead(void* user, unsigned track,
     }
     return music.read(track, frame, interleaved, frames);
 }
+QString LibretroHost::dataFolder(const QString& category) const {
+    const auto found = dataFolders_.constFind(category);
+    return found == dataFolders_.cend() ? DataFolders::path(dataPath_,category) : found.value();
+}
+bool LibretroHost::selectDataFolders(QString& error) {
+    const auto folders = linkParent_ ? linkParent_->dataFolders_ : DataFolders::paths(dataPath_);
+    for (const auto& name : {"bios", "saves", "states"}) {
+        const QString directory = folders.value(QString::fromLatin1(name));
+        if (directory.isEmpty() || !QDir().mkpath(directory)) {
+            error = Localization::text(QStringLiteral("Нет доступа для записи в каталог данных: %1")).arg(directory);
+            return false;
+        }
+    }
+    dataFolders_ = folders;
+    // The native core requests these pointers at each load. Keep their backing
+    // storage unchanged until the previous content has finished unloading.
+    systemPath_ = QDir::toNativeSeparators(dataFolder(QStringLiteral("bios"))).toUtf8();
+    savePath_ = QDir::toNativeSeparators(dataFolder(QStringLiteral("saves"))).toUtf8();
+    return true;
+}
 bool LibretroHost::initialize(QString& error) {
     if (initialized_) return true;
     if (active_ && active_ != this && active_ != linkParent_) {
         error = Localization::text(QStringLiteral("В одном потоке может работать только одно ядро.")); return false;
     }
-    for (const auto& name : {"bios", "saves", "states"}) {
-        if (!QDir().mkpath(dataPath_ + '/' + name)) {
-            error = Localization::text(QStringLiteral("Нет доступа для записи в каталог данных: %1")).arg(dataPath_); return false;
-        }
-    }
+    if (!selectDataFolders(error)) return false;
     QFile binary(library_.fileName());
     if (!binary.open(QIODevice::ReadOnly)) {
         error = Localization::text(QStringLiteral("Не найдено ядро: %1")).arg(library_.fileName()); return false;
@@ -238,8 +255,6 @@ bool LibretroHost::initialize(QString& error) {
         error = Localization::text(QStringLiteral("В приложении уже работает экземпляр ядра.")); return false;
     }
     active_ = this;
-    systemPath_ = QDir::toNativeSeparators(dataPath_ + "/bios").toUtf8();
-    savePath_ = QDir::toNativeSeparators(dataPath_ + "/saves").toUtf8();
     api_->set_environment(environment);
     api_->set_video_refresh(video);
     api_->set_audio_sample(audioSample);
@@ -261,7 +276,8 @@ QStringList LibretroHost::discPaths() const {
 bool LibretroHost::discEjected() const {
     return isCd() && disk_.get_eject_state && disk_.get_eject_state();
 }
-bool LibretroHost::checkDiscBios(const DiscImage& image, QString& error) const {
+bool LibretroHost::checkDiscBios(const DiscImage& image, QString& error, const QString& biosDirectory) const {
+    const QString directory = biosDirectory.isEmpty() ? dataFolder(QStringLiteral("bios")) : biosDirectory;
     int region = image.region;
     const auto found = optionOverrides_.find("genesis_plus_gx_region_detect");
     if (found != optionOverrides_.end()) {
@@ -269,10 +285,10 @@ bool LibretroHost::checkDiscBios(const DiscImage& image, QString& error) const {
         else if (found->second == "ntsc-u") region = 2;
         else if (found->second == "pal") region = 3;
     }
-    if (region) return SegaCdBios::validate(dataPath_,region,error);
+    if (region) return !SegaCdBios::resolveInDirectory(directory,region,error).isEmpty();
     // CHD's compressed header is decoded by the core. At least one installed
     // BIOS is needed; a failed core load reports the available region statuses.
-    for (int candidate : {1,2,3}) if (SegaCdBios::validate(dataPath_,candidate,error)) { error.clear(); return true; }
+    for (int candidate : {1,2,3}) if (!SegaCdBios::resolveInDirectory(directory,candidate,error).isEmpty()) { error.clear(); return true; }
     error = Localization::text(QStringLiteral("Не найден BIOS Sega CD. Импортируйте BIOS через Настройки → Настройки эмулятора… → BIOS → Sega CD."));
     return false;
 }
@@ -297,7 +313,7 @@ void LibretroHost::setDiscIdentity() {
     identity += region == optionOverrides_.end() ? QByteArray("auto") : region->second;
     identity += '\0';
     for (int i=0; i<3; ++i) {
-        QFile bios(resolvedBiosPath(dataPath_,QString::fromLatin1(biosRoleNames[i])));
+        QFile bios(resolvedBiosPath(dataFolder(QStringLiteral("bios")),QString::fromLatin1(biosRoleNames[i])));
         identity += !bios.fileName().isEmpty() && bios.open(QIODevice::ReadOnly) && bios.size() == 131072
             ? digest(bios.read(131073)) : QByteArray(32,'\0');
     }
@@ -337,7 +353,8 @@ bool LibretroHost::registerDiscs(QString& error) {
 }
 bool LibretroHost::loadCd(const QString& path, QString& error) {
     QVector<DiscImage> images;
-    if (!DiscMedia::read(path,images,error) || !checkDiscBios(images.first(),error)) return false;
+    if (!DiscMedia::read(path,images,error) ||
+        !checkDiscBios(images.first(),error,DataFolders::path(dataPath_,QStringLiteral("bios")))) return false;
     if (!initialize(error)) return false;
     const bool needs32x = images.first().needs32x;
     if (needs32x || attach32x_) {
@@ -348,11 +365,12 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     }
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
+    if (!selectDataFolders(error)) return false;
     discs_ = images; discIndex_ = 0;
     // A disc set owns one backup memory for its whole session, including
     // tray changes and power cycles. Use the original playlist/image name.
     if (perGameCdBackup_) {
-        const QString directory = dataPath_ + "/saves/" + readableSaveStem(QFileInfo(path).fileName());
+        const QString directory = QDir(dataFolder(QStringLiteral("saves"))).filePath(readableSaveStem(QFileInfo(path).fileName()));
         cdSavePath_ = QDir::toNativeSeparators(directory).toUtf8();
         // Older cores write BRAM themselves and require the directory up front.
         if (!api_->get_bram && !QDir().mkpath(directory)) {
@@ -365,12 +383,14 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     setDiscIdentity();
     retro_game_info game{}; game.path = encodedGamePath_.constData();
     contentInfoActive_ = true;
-    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; return false; }
+    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; unload(); return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) {
         error = Localization::text(QStringLiteral("Не удалось загрузить Sega CD. Проверьте образ, дорожки и BIOS региона.\n%1\n%2\n%3"))
-            .arg(SegaCdBios::status(dataPath_,1),SegaCdBios::status(dataPath_,2),SegaCdBios::status(dataPath_,3));
+            .arg(SegaCdBios::statusInDirectory(dataFolder(QStringLiteral("bios")),1),
+                 SegaCdBios::statusInDirectory(dataFolder(QStringLiteral("bios")),2),
+                 SegaCdBios::statusInDirectory(dataFolder(QStringLiteral("bios")),3));
         unload(); return false;
     }
     loaded_ = true;
@@ -541,10 +561,12 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
         return false;
     }
-    if (attachCd_ && mdCartridge && !checkDiscBios(DiscImage{}, error)) return false;
+    if (attachCd_ && mdCartridge &&
+        !checkDiscBios(DiscImage{}, error, DataFolders::path(dataPath_,QStringLiteral("bios")))) return false;
     // Preserve the previous game's battery saves before switching content.
     if (loaded_ && !flushSaveRam(error)) return false;
     unload();
+    if (!selectDataFolders(error)) return false;
     content_ = std::move(content);
     contentNeeds32x_ = needs32x;
     encodedGamePath_ = encodedPath;
@@ -570,7 +592,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
-    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; return false; }
+    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; unload(); return false; }
     const bool accepted = api_->load_game(&game);
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
@@ -633,6 +655,7 @@ void LibretroHost::unload() {
     saveRamWritable_ = true;
     saveMemorySizes_.fill(0);
     batterySave_.clear(); cheats_.clear(); movieCheats_.clear(); movieCheatsActive_ = false; activeCheatCodes_.clear();
+    dataFolders_.clear();
 
 }
 bool LibretroHost::frameInputPolled() const {
@@ -649,13 +672,23 @@ void LibretroHost::setExpansionDevices(bool cd, bool x32) {
     attachCd_ = cd; attach32x_ = x32;
 }
 bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
+    // Match the native CD/32X BIOS and BRAM buffers, including the longest
+    // actual leaf and this disc set's selected per-game save subdirectory.
+    for (const auto& path : {
+             QDir(dataFolder(QStringLiteral("bios"))).filePath(QStringLiteral("32X_M_BIOS.BIN")),
+             QDir(QString::fromUtf8(activeSavePath())).filePath(QStringLiteral("128Kbit_cart.brm"))}) {
+        if (QDir::toNativeSeparators(path).toUtf8().size() >= 4096) {
+            error = Localization::text(QStringLiteral("Слишком длинный путь для ядра эмуляции: %1")).arg(path);
+            return false;
+        }
+    }
     // Refresh BIOS aliases and 32X fallback masks at a power/load boundary, never during
     // emulation. Disc aliases remain mounted. The peer shares this thread's VFS.
     if (!linkParent_) for (const auto* name : biosRoleNames) {
         const QString role = QString::fromLatin1(name);
-        const QString virtualPath = QDir(dataPath_ + "/bios").filePath(role);
+        const QString virtualPath = QDir(dataFolder(QStringLiteral("bios"))).filePath(role);
         CoreFileSystem::removeVirtualFile(virtualPath);
-        const QString actual = resolvedBiosPath(dataPath_,role);
+        const QString actual = resolvedBiosPath(dataFolder(QStringLiteral("bios")),role);
         if (!actual.isEmpty()) CoreFileSystem::addAlias(virtualPath,actual);
         else if (role.startsWith(QLatin1String("32X_")))
             CoreFileSystem::hideFile(virtualPath);
@@ -928,7 +961,7 @@ void LibretroHost::clearCoreCheats() {
 void LibretroHost::loadCheats() {
     clearCoreCheats();
     QString error;
-    if (!cheats_.load(dataPath_ + "/cheats/" + gameKey_ + ".json",cheatPlatform(),error) && message)
+    if (!cheats_.load(QDir(dataFolder(QStringLiteral("cheats"))).filePath(gameKey_ + ".json"),cheatPlatform(),error) && message)
         message(error);
     if (cheatsSupported()) applyCheats();
     else if (message && std::any_of(cheats_.entries().begin(),cheats_.entries().end(),
@@ -1044,7 +1077,7 @@ bool LibretroHost::setRegion(int region, QString& error, bool* changed) {
     if (changed) *changed = false;
     if (isCd()) {
         const int needed = region ? region : discs_[discIndex_].region;
-        if (needed && !SegaCdBios::validate(dataPath_,needed,error)) return false;
+        if (needed && SegaCdBios::resolveInDirectory(dataFolder(QStringLiteral("bios")),needed,error).isEmpty()) return false;
     }
     static const std::array<QByteArray,4> values{"auto", "ntsc-j", "ntsc-u", "pal"};
     if (region < 0 || region >= int(values.size())) {
@@ -1497,9 +1530,12 @@ bool LibretroHost::restoreCore(const char* data, qsizetype size, bool transactio
     runClock_ = clock;
     return true;
 }
-QString LibretroHost::statePath(int slot) const { return dataPath_ + "/states/" + gameKey_ + (linkRequested_ ? QStringLiteral(".link") : QString()) + QStringLiteral(".slot%1.krs").arg(slot); }
+QString LibretroHost::statePath(int slot) const {
+    return QDir(dataFolder(QStringLiteral("states"))).filePath(gameKey_ +
+        (linkRequested_ ? QStringLiteral(".link") : QString()) + QStringLiteral(".slot%1.krs").arg(slot));
+}
 QString LibretroHost::saveReadPath(const QString& directory, const QString& suffix) const {
-    const QString prefix = dataPath_ + QLatin1Char('/') + directory + QLatin1Char('/');
+    const QString prefix = dataFolder(directory) + QLatin1Char('/');
     const QString linkSuffix=directory==QLatin1String("states")&&linkRequested_?QStringLiteral(".link"):QString();
     const QString preferred = prefix + gameKey_ + linkSuffix + suffix;
     const QFileInfo existing(preferred);
@@ -2022,14 +2058,14 @@ void LibretroHost::snapshot32xBios() {
     if (!api_->features || !(api_->features() & 2u)) return;
     for (int i = 3; i < 6; ++i) {
         const auto name = QLatin1String(biosRoleNames[i]);
-        active32xBiosFingerprints_.insert(name,biosFingerprint(dataPath_,name,!isCd()));
+        active32xBiosFingerprints_.insert(name,biosFingerprint(dataFolder(QStringLiteral("bios")),name,!isCd()));
     }
 }
 QJsonObject LibretroHost::movieBiosFingerprints() const {
     QJsonObject result;
     if (hasCdHardware()) for (int i = 0; i < 3; ++i) {
         const auto name = QLatin1String(biosRoleNames[i]);
-        result.insert(name,biosFingerprint(dataPath_,name,false));
+        result.insert(name,biosFingerprint(dataFolder(QStringLiteral("bios")),name,false));
     }
     for (auto it = active32xBiosFingerprints_.begin(); it != active32xBiosFingerprints_.end(); ++it)
         result.insert(it.key(),it.value());
@@ -2153,7 +2189,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     const auto recordedBios = configuration.value(QStringLiteral("bios")).toObject();
     QJsonObject installedBios;
     for (auto it = recordedBios.begin(); it != recordedBios.end(); ++it) {
-        const auto value = biosFingerprint(dataPath_,it.key(),!isCd());
+        const auto value = biosFingerprint(dataFolder(QStringLiteral("bios")),it.key(),!isCd());
         if (!value.isEmpty()) installedBios.insert(it.key(),value);
     }
     if (recordedBios != installedBios) {
@@ -2525,7 +2561,8 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         const auto data = api_->get_memory_data(id);
         if (!size || !data) continue;
-        const auto path = dataPath_ + "/saves/" + gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm");
+        const auto path = QDir(dataFolder(QStringLiteral("saves"))).filePath(
+            gameKey_ + (id == RETRO_MEMORY_RTC ? ".rtc" : ".srm"));
         if (size > size_t(maxStateSize)) {
             error = Localization::text(QStringLiteral("Ядро вернуло неверный размер памяти сохранения.")); return false;
         }

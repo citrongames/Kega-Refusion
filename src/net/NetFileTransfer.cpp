@@ -1,4 +1,5 @@
 #include "NetFileTransfer.h"
+#include "../core/DataFolders.h"
 #include "../core/PapriumMusic.h"
 #include "../yx5200/yx5200_detect.h"
 #include <QCryptographicHash>
@@ -443,7 +444,7 @@ void NetFileTransfer::TemporaryArea::migrateLegacySessions(const QString& dataPa
         if (!temporaryName(scope.fileName(), Kind::Session)) continue;
         for (const QString& category : {QStringLiteral("saves"), QStringLiteral("states")}) {
             const QString sourceDir = scope.absoluteFilePath() + '/' + category;
-            const QString destinationDir = QDir(dataPath).absoluteFilePath(category);
+            const QString destinationDir = DataFolders::path(dataPath, category);
             if (QFileInfo(sourceDir).isSymLink() || QFileInfo(destinationDir).isSymLink() ||
                 !QFileInfo(sourceDir).isDir() || !QDir().mkpath(destinationDir)) continue;
             const auto files = QDir(sourceDir).entryInfoList(

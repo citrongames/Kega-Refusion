@@ -1,6 +1,9 @@
 #include "core/BatterySave.h"
 #include "core/LibretroHost.h"
 #include "core/SegaCdBios.h"
+#include "core/DataFolders.h"
+#include "core/MovieSession.h"
+#include <QDirIterator>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -165,6 +168,56 @@ void cartridgeIntegration(const QString& core, const QString& oldCore) {
         require(read(ram)==original&&quint8(read(ram+".bak")[0])==0x55,"rewound SRAM did not persist correctly");
     }
 }
+void storageRootsIntegration(const QString& core) {
+    QTemporaryDir temp; require(temp.isValid(),"temporary directory failed"); QString error;
+    const QString data=temp.filePath("data"), path=temp.filePath("original.md");
+    const auto rom=makeSaveRamRom(); write(path,rom);
+    const QString legacy=QString::fromLatin1(QCryptographicHash::hash(rom,QCryptographicHash::Sha256).toHex());
+    QMap<QString,QString> first,second;
+    for (const auto& category:DataFolders::categories()) {
+        first.insert(category,temp.filePath(QStringLiteral("first folders/\u0441\u0435\u0433\u0430/")+category));
+        second.insert(category,temp.filePath("second folders/"+category));
+    }
+    require(DataFolders::save(data,first,error),qPrintable(error));
+    require(QDir().mkpath(first.value("saves")),"cannot create selected legacy save folder");
+    write(first.value("saves")+'/'+legacy+".srm",QByteArray(65536,char(0x33)));
+    LibretroHost host(core,data);
+    require(host.load(path,error),qPrintable(error));
+    QLibrary lib(core);
+    const auto memory=reinterpret_cast<void*(*)(unsigned)>(lib.resolve("retro_get_memory_data"));
+    require(memory && quint8(static_cast<char*>(memory(RETRO_MEMORY_SAVE_RAM))[0])==0x33,
+            "selected folder legacy battery save was not restored");
+    static_cast<char*>(memory(RETRO_MEMORY_SAVE_RAM))[0]=0x55;
+    require(host.flushSaveRam(error) && host.saveState(0,error),qPrintable(error));
+    require(DataFolders::save(data,second,error),qPrintable(error));
+    require(host.hardReset(error),qPrintable(error));
+    require(quint8(static_cast<char*>(memory(RETRO_MEMORY_SAVE_RAM))[0])==0x55,
+            "power cycle moved battery restore to changed settings");
+    static_cast<char*>(memory(RETRO_MEMORY_SAVE_RAM))[0]=0x66;
+    require(host.flushSaveRam(error) && host.saveState(1,error),qPrintable(error));
+    require(host.setCheats({{QStringLiteral("FF0000:0001"),QStringLiteral("selected folder"),false}},error),qPrintable(error));
+    require(QFile::exists(first.value("cheats")+"/original.json") &&
+            !QFile::exists(second.value("cheats")+"/original.json"),"loaded game cheat file moved with settings");
+    require(quint8(read(first.value("saves")+"/original.srm")[0])==0x66 &&
+            !QFile::exists(second.value("saves")+"/original.srm"),"loaded game battery writes split across roots");
+    require(QFile::exists(first.value("states")+"/original.slot1.krs") &&
+            !QFile::exists(second.value("states")+"/original.slot1.krs"),"loaded game quick states moved with settings");
+    MovieSession movie(host,data);
+    require(QDir().mkpath(first.value("movies")),"cannot create movie test folder");
+    require(movie.startRecording(first.value("movies")+"/original.krm",error) && movie.saveSlot(2,error),qPrintable(error));
+    QDirIterator movieStates(first.value("states")+"/movies",{QStringLiteral("slot2.krs")},QDir::Files,QDirIterator::Subdirectories);
+    require(movieStates.hasNext(),"movie-bound quick state ignored selected states folder");
+    require(movie.finish(false,error),qPrintable(error));
+    host.unload();
+    require(host.load(path,error),qPrintable(error));
+    require(host.dataFolder("saves")==second.value("saves"),"next load did not select changed folders");
+    static_cast<char*>(memory(RETRO_MEMORY_SAVE_RAM))[0]=0x77;
+    require(host.flushSaveRam(error) && host.saveState(3,error),qPrintable(error));
+    require(quint8(read(second.value("saves")+"/original.srm")[0])==0x77 &&
+            QFile::exists(second.value("states")+"/original.slot3.krs"),"next game ignored changed storage folders");
+    require(!QDir(data+"/bios").exists() && !QDir(data+"/saves").exists() &&
+            !QDir(data+"/states").exists(),"core created default storage folders despite overrides");
+}
 void cdIntegration(const QString& core, const QString& bios) {
     QTemporaryDir temp; require(temp.isValid(),"temporary directory failed");QString error;
     const auto data=temp.filePath("data");
@@ -248,11 +301,37 @@ void cdIntegration(const QString& core, const QString& bios) {
     require(host.load(cue,error),qPrintable(error));
     require(QByteArray(bramMemory(sharedBrm),8192)==shared,
             "legacy shared CD BRAM is no longer reachable");
+
+    const QString selected=temp.filePath(QStringLiteral("selected saves/\u0441\u0435\u0433\u0430"));
+    require(DataFolders::save(data,{{QStringLiteral("saves"),selected}},error),qPrintable(error));
+    require(host.hardReset(error),qPrintable(error));
+    require(QByteArray(bramMemory(sharedBrm),8192)==shared,
+            "power cycle moved running CD BRAM into changed settings");
+    host.unload();
+    require(host.load(cue,error),qPrintable(error));
+    const QString selectedShared=selected+"/scd_U.brm";
+    writable=bramMemory(selectedShared);
+    require(!QFile::exists(selectedShared) && QByteArray(writable,8192)!=shared,
+            "configured shared CD BRAM fell back to default save root");
+    writable[0]^=16;
+    require(host.flushSaveRam(error),qPrintable(error));
+    require(read(selectedShared).size()==8192,"configured shared CD BRAM was not written");
+    host.unload();
+    host.setPerGameCdBackup(true);
+    require(host.load(cue,error),qPrintable(error));
+    const QString selectedGroup=selected+"/original/scd_U.brm";
+    writable=bramMemory(selectedGroup); writable[0]^=32;
+    require(host.flushSaveRam(error),qPrintable(error));
+    const auto selectedBytes=read(selectedGroup);
+    require(host.hardReset(error),qPrintable(error));
+    require(QByteArray(bramMemory(selectedGroup),8192)==selectedBytes,
+            "configured per-game CD BRAM did not survive power cycle");
 }
 int main(int argc,char** argv){
     QCoreApplication app(argc,argv);
     try{
         policy();
+        if(argc>=2) storageRootsIntegration(QString::fromLocal8Bit(argv[1]));
         if(argc==4) {
             cartridgeIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
             cdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[3]));

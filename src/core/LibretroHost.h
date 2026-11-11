@@ -6,6 +6,7 @@
 #include <QLibrary>
 #include <QString>
 #include <QList>
+#include <QMap>
 #include <map>
 #include <array>
 #include "input/ControllerTopology.h"
@@ -30,6 +31,8 @@ public:
               const RomArchive::Entry* archiveEntry = nullptr);
     void unload();
     bool isCd() const { return loaded_ && !discs_.isEmpty(); }
+    // A loaded game keeps one storage snapshot through resets and settings edits.
+    QString dataFolder(const QString& category) const;
     QStringList discPaths() const;
     int discIndex() const { return discIndex_; }
     bool discEjected() const;
@@ -202,6 +205,7 @@ private:
     bool restoreCore(const char* data, qsizetype size, bool transactional = true);
     struct Api;
     bool initialize(QString& error);
+    bool selectDataFolders(QString& error);
     void prepareCoreContent();
     bool applyPowerOnOptions(QString& error, bool applyPending = true);
     bool hasCdHardware() const;
@@ -210,7 +214,7 @@ private:
     void clearCoreCheats();
     void applyControllerPorts(bool force = false);
     bool loadCd(const QString& path, QString& error);
-    bool checkDiscBios(const DiscImage& image, QString& error) const;
+    bool checkDiscBios(const DiscImage& image, QString& error, const QString& biosDirectory = {}) const;
     bool registerDiscs(QString& error);
     bool refreshDiscFiles(QString& error);
     void setDiscIdentity();
@@ -240,6 +244,7 @@ private:
     QLibrary library_;
     std::unique_ptr<Api> api_;
     QString dataPath_, gamePath_, gameKey_, legacyGameKey_, contentName_;
+    QMap<QString,QString> dataFolders_;
     QString movieCompatibilityWarning_;
     void refreshRecordingIdentity();
     QByteArray systemPath_, savePath_, content_, coreContent_, encodedGamePath_, romHash_, coreHash_, exactCoreHash_, recordingAbi_, recordingCoreHash_;

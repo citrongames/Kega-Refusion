@@ -52,8 +52,8 @@ void applyInput(LibretroHost& host, const MovieInput& input) {
     }
 }
 }
-MovieSession::MovieSession(LibretroHost& host, QString dataPath)
-    : host_(host), dataPath_(std::move(dataPath)) {}
+MovieSession::MovieSession(LibretroHost& host, QString)
+    : host_(host) {}
 
 bool MovieSession::startRecording(const QString& path, QString& error) {
     if (active() || !host_.loaded()) { error = Localization::text(QStringLiteral("Сначала откройте игру и закончите текущую запись.")); return false; }
@@ -187,7 +187,7 @@ QByteArray MovieSession::controllers() const {
 QString MovieSession::slotPath(int slot) const {
     const QString name = QFileInfo(path_).completeBaseName();
     // Readable movie name plus recording identity prevents same-named movies sharing slots.
-    return QDir(dataPath_).filePath(QStringLiteral("states/movies/%1_%2/slot%3.krs")
+    return QDir(host_.dataFolder(QStringLiteral("states"))).filePath(QStringLiteral("movies/%1_%2/slot%3.krs")
         .arg(name, QString::fromLatin1(tape_.id().toHex())).arg(slot));
 }
 unsigned MovieSession::occupiedSlots() const {

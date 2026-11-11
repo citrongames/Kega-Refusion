@@ -38,7 +38,7 @@ private:
     QString slotPath(int slot) const;
     bool saveRecording(QString& error);
     LibretroHost& host_;
-    QString dataPath_, path_;
+    QString path_;
     MovieTape tape_;
     quint64 cursor_ = 0;
     Mode mode_ = Off;

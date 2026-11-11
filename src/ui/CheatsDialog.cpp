@@ -38,8 +38,8 @@ public:
     }
 };
 }
-CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, const QString& gameName, QWidget* parent)
-    : QDialog(parent, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint), platform_(platform), gameName_(gameName), result_(entries) {
+CheatsDialog::CheatsDialog(const CheatList& entries, Cheats::Platform platform, const QString& gameName, QWidget* parent, const QString& directory)
+    : QDialog(parent, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint), platform_(platform), gameName_(gameName), directory_(directory), result_(entries) {
     setWindowTitle(Localization::text(QStringLiteral("Читы — %1")).arg(gameName));
     resize(640,380); setMinimumSize(500,300); setSizeGripEnabled(true);
     auto* layout = new QVBoxLayout(this);
@@ -167,7 +167,7 @@ void CheatsDialog::setFeedback(const QString& text, bool error) {
 void CheatsDialog::importCht() {
     const QString path = QFileDialog::getOpenFileName(this,
         Localization::text(QStringLiteral("Загрузить RetroArch CHT")),
-        {}, Localization::text(QStringLiteral("Файлы RetroArch CHT (*.cht);;Все файлы (*)")));
+        directory_, Localization::text(QStringLiteral("Файлы RetroArch CHT (*.cht);;Все файлы (*)")));
     if (path.isEmpty()) return;
     Cheats::ImportResult imported;
     QString error;
@@ -264,7 +264,8 @@ void CheatsDialog::exportCht() {
     stem = stem.trimmed().left(80);
     if (stem.isEmpty()) stem = QStringLiteral("cheats");
     QFileDialog dialog(this, Localization::text(QStringLiteral("Сохранить RetroArch CHT")),
-                       QDir::home().filePath(stem + QStringLiteral(".cht")),
+                       QDir(directory_.isEmpty() ? QDir::homePath() : directory_)
+                           .filePath(stem + QStringLiteral(".cht")),
                        Localization::text(QStringLiteral("Файлы RetroArch CHT (*.cht);;Все файлы (*)")));
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setDefaultSuffix(QStringLiteral("cht"));

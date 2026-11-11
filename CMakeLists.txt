@@ -31,7 +31,8 @@ endif()
 add_library(kega_libco STATIC third_party/libco/amd64.c)
 target_include_directories(kega_libco PUBLIC third_party/libco)
 target_compile_definitions(kega_libco PRIVATE LIBCO_MP)
-add_library(core_host STATIC src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
+add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
+    src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/Cheats.cpp src/core/Cheats.h
     src/core/CheatImport.cpp src/core/CheatImport.h
     src/core/CheatSearch.cpp src/core/CheatSearch.h

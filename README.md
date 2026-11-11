@@ -29,7 +29,7 @@ Supply your own games and Sega CD BIOS files. The 32X uses each recognized origi
 - **Record and export:** a game time display in the upper-right corner showing elapsed time or frames since reset, replayable input recordings, screenshots, live video capture and input-recording export. Video uses native-resolution lossless PNG frames with AAC audio in MOV, without OSD.
 - **Explore games:** Game Genie / Action Replay, CHT import/export, manual cheat search and graphics/audio-channel debugging windows.
 - **Achievements:** RetroAchievements integration, a sortable achievement list and optional notifications. Sign-in is required to fetch achievement sets; netplay supports Softcore.
-- **Keep it portable:** settings and saves beside the application; English and Russian included, with external JSON translations and English fallback.
+- **Keep it portable:** settings and saves live beside the application by default. In **Settings → Folders**, relative paths move with the data folder. Custom absolute paths are specific to Windows or Linux. English and Russian are included, with external JSON translations and English fallback.
 
 ## Getting started
 

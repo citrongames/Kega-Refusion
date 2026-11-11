@@ -9,7 +9,7 @@ class CheatsDialog final : public QDialog {
     Q_OBJECT
 public:
     CheatsDialog(const CheatList& entries, Cheats::Platform platform, const QString& gameName,
-                 QWidget* parent = nullptr);
+                 QWidget* parent = nullptr, const QString& directory = {});
     CheatList cheats() const { return result_; }
 private:
     void addRow(const CheatEntry& entry);
@@ -23,6 +23,7 @@ private:
     void save();
     Cheats::Platform platform_;
     QString gameName_;
+    QString directory_;
     CheatList result_;
     QTableWidget* table_ = nullptr;
     QPushButton* add_ = nullptr;

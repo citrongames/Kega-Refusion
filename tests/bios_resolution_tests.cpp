@@ -1,11 +1,14 @@
 #include "core/SegaCdBios.h"
 #include "core/Sega32xBios.h"
+#include "core/DataFolders.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
+#include <QSettings>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -47,6 +50,42 @@ QByteArray cdImage() {
     // The zero-filled body has a valid checksum of zero in the header.
     return bytes;
 }
+void portableFolders() {
+    QTemporaryDir original, moved;
+    require(original.isValid() && moved.isValid(), "cannot create portable data roots");
+    QString error;
+    const QString category = QStringLiteral("screenshots");
+    const QString nested = QStringLiteral("captures/скриншоты");
+    require(DataFolders::configuredPath(original.path(), category) == category,
+            "default folder should be stored relative to settings");
+    require(DataFolders::save(original.path(), {{category, nested}}, error), qPrintable(error));
+    require(QFileInfo(original.filePath(nested)).isDir(), "nested destination was not created");
+    require(QFile::copy(original.filePath("settings.ini"), moved.filePath("settings.ini")),
+            "cannot copy portable settings");
+    {
+        QSettings settings(moved.filePath("settings.ini"), QSettings::IniFormat);
+#ifdef Q_OS_WIN
+        settings.setValue("folders/linux/screenshots", "/mnt/other/captures");
+#else
+        settings.setValue("folders/windows/screenshots", "D:/other/captures");
+#endif
+    }
+    require(DataFolders::path(moved.path(), category) == moved.filePath(nested),
+            "relative destination did not move with data");
+    require(DataFolders::path(moved.path(), "bios") == moved.filePath("bios"),
+            "default BIOS directory did not move with data");
+    const QString fixed = original.filePath("external");
+    require(DataFolders::save(moved.path(), {{category, fixed}}, error), qPrintable(error));
+    require(DataFolders::path(moved.path(), category) == fixed, "absolute destination moved");
+    QString failed;
+    require(!DataFolders::save(moved.path(), {{category, "settings.ini/child"}}, error, &failed)
+            && failed == category && DataFolders::path(moved.path(), category) == fixed,
+            "invalid destination replaced the previous setting");
+    require(DataFolders::save(moved.path(), {{category, category}}, error), qPrintable(error));
+    require(DataFolders::path(moved.path(), category) == moved.filePath(category),
+            "reset did not restore portable default");
+}
+
 void cdResolution() {
     QTemporaryDir temp;
     require(temp.isValid(),"cannot create CD test directory");
@@ -86,6 +125,27 @@ void cdResolution() {
             "CD import duplicated a valid renamed image");
     require(!QFile::exists(QDir(importedBios).filePath("bios_CD_U.bin")),
             "CD import created a redundant canonical image");
+}
+void configuredCdDirectory() {
+    QTemporaryDir temp;
+    require(temp.isValid(),"cannot create configured BIOS test directory");
+    const QString data=temp.filePath("data"), selected=temp.filePath("selected BIOS");
+    require(QDir().mkpath(data+"/bios") && QDir().mkpath(selected),"cannot create configured BIOS folders");
+    write(data+"/bios/bios_CD_U.bin",cdImage());
+    QString error;
+    require(DataFolders::save(data,{{QStringLiteral("bios"),selected}},error),qPrintable(error));
+    require(SegaCdBios::resolve(data,2,error).isEmpty(),"configured BIOS search fell back to default folder");
+    const QString renamed=selected+"/renamed.rom";
+    write(renamed,cdImage());
+    require(SegaCdBios::resolve(data,2,error)==renamed,"configured renamed BIOS was not resolved");
+    require(QFile::remove(renamed),"cannot remove configured test image");
+    QTemporaryDir source;
+    require(source.isValid(),"cannot create configured BIOS import source");
+    write(source.filePath("original.rom"),cdImage());
+    require(!SegaCdBios::importDirectory(source.path(),data,error).isEmpty(),qPrintable(error));
+    require(SegaCdBios::resolve(data,2,error)==selected+"/bios_CD_U.bin","BIOS import ignored configured folder");
+    require(QFile::remove(selected+"/bios_CD_U.bin"),"cannot remove imported test image");
+    require(SegaCdBios::resolve(data,2,error).isEmpty(),"missing configured BIOS used default image");
 }
 void x32Resolution(const QString& source) {
     QTemporaryDir temp;
@@ -135,7 +195,9 @@ void x32Resolution(const QString& source) {
 int main(int argc,char** argv) {
     QCoreApplication app(argc,argv);
     try {
+        portableFolders();
         cdResolution();
+        configuredCdDirectory();
         if (argc>1) x32Resolution(QString::fromLocal8Bit(argv[1]));
         std::puts("BIOS resolution tests passed");
         return 0;

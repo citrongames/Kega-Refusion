@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "Sega32xBios.h"
+#include "DataFolders.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -35,8 +36,8 @@ const Image* imageFor(Sega32xBios::Piece piece) {
     for (const auto& image:images) if (image.piece==piece) return &image;
     return nullptr;
 }
-QString pathFor(const QString& dataPath,const Image& image) {
-    return QDir(dataPath).filePath(QStringLiteral("bios/")+QString::fromLatin1(image.name));
+QString pathFor(const QString& biosDirectory,const Image& image) {
+    return QDir(biosDirectory).filePath(QString::fromLatin1(image.name));
 }
 bool readImage(const QString& path, qsizetype size, QByteArray& bytes, QString& error) {
     QFile file(path);
@@ -122,16 +123,19 @@ bool Sega32xBios::validateFile(const QString& path,Piece piece,QString& error) {
     return true;
 }
 QString Sega32xBios::resolve(const QString& dataPath,Piece piece,QString& error) {
+    return resolveInDirectory(DataFolders::path(dataPath,QStringLiteral("bios")),piece,error);
+}
+QString Sega32xBios::resolveInDirectory(const QString& biosDirectory,Piece piece,QString& error) {
     error.clear();
     const Image* expected=imageFor(piece);
     if (!expected) {
         error=Localization::text(QStringLiteral("Неизвестная часть BIOS 32X."));
         return {};
     }
-    const QString canonical=pathFor(dataPath,*expected);
+    const QString canonical=pathFor(biosDirectory,*expected);
     const QFileInfo canonicalInfo(canonical);
     if (canonicalInfo.exists() && recognizeFile(canonicalInfo)==expected) return canonical;
-    QDir directory(QDir(dataPath).filePath(QStringLiteral("bios")));
+    QDir directory(biosDirectory);
     auto entries=directory.entryInfoList(QDir::Files|QDir::Readable|QDir::NoDotAndDotDot,QDir::NoSort);
     std::sort(entries.begin(),entries.end(),[](const QFileInfo& a,const QFileInfo& b) {
         return a.fileName()<b.fileName();
@@ -169,6 +173,7 @@ QStringList Sega32xBios::importDirectory(const QString& sourceDirectory,const QS
         error=Localization::text(QStringLiteral("Каталог BIOS не найден: %1")).arg(sourceDirectory);
         return imported;
     }
+    const QString biosDirectory=DataFolders::path(dataPath,QStringLiteral("bios"));
     std::array<QByteArray,3> candidates;
     for (const auto& entry:source.entryInfoList(QDir::Files|QDir::Readable|QDir::NoDotAndDotDot,QDir::Name)) {
         if (entry.size()!=256 && entry.size()!=1024 && entry.size()!=2048) continue;
@@ -184,9 +189,9 @@ QStringList Sega32xBios::importDirectory(const QString& sourceDirectory,const QS
         if (candidates[i].isEmpty()) continue;
         found=true;
         const auto& image=images[i];
-        const QString destination=pathFor(dataPath,image);
+        const QString destination=pathFor(biosDirectory,image);
         QString detail;
-        if (!resolve(dataPath,image.piece,detail).isEmpty()) continue;
+        if (!resolveInDirectory(biosDirectory,image.piece,detail).isEmpty()) continue;
         const QFileInfo existing(destination);
         if (existing.exists() || existing.isSymLink()) {
             append(error,Localization::text(QStringLiteral("Существующий файл сохранён без замены. %1")).arg(detail));

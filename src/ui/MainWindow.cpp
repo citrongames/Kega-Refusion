@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../core/EmulationSession.h"
+#include "../core/DataFolders.h"
 #include "../core/RomArchive.h"
 #include "../core/SegaCdBios.h"
 #include "../core/Sega32xBios.h"
@@ -84,6 +85,7 @@ namespace {
 constexpr int kBiosSettingsPage = 6;
 constexpr int kControlsSettingsPage = 7;
 constexpr int kNetplaySettingsPage = 8;
+constexpr int kFoldersSettingsPage = 9;
 
 // Small native line icons; created only when opening settings, with palette-aware selection.
 QIcon settingsSectionIcon(int section, const QPalette& palette) {
@@ -134,6 +136,10 @@ QIcon settingsSectionIcon(int section, const QPalette& palette) {
             p.drawLine(QPointF(17,6),QPointF(13,18));
             p.setBrush(color);p.drawEllipse(QPointF(7,8),2,2);
             p.drawEllipse(QPointF(17,6),2,2);p.drawEllipse(QPointF(13,18),2,2);break;
+        case 9: // folder
+            path.moveTo(3,7);path.lineTo(3,5);path.lineTo(10,5);path.lineTo(12,8);
+            path.lineTo(21,8);path.lineTo(21,20);path.lineTo(3,20);path.closeSubpath();
+            p.drawPath(path);p.drawLine(3,10,21,10);break;
         }
         p.end();icon.addPixmap(image,mode);
     }
@@ -741,7 +747,7 @@ void MainWindow::buildMenus() {
     movieResumeAction_->setObjectName(QStringLiteral("movieResume"));
     connect(movieResumeAction_, &QAction::triggered, this, [this] {
         releaseInput();
-        const QString directory = QDir(dataPath_).filePath(QStringLiteral("movies"));
+        const QString directory = DataFolders::path(dataPath_, QStringLiteral("movies"));
         const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Продолжить запись управления")),
             directory, Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
         view_->setFocus();
@@ -755,7 +761,7 @@ void MainWindow::buildMenus() {
     moviePlayAction_->setObjectName(QStringLiteral("moviePlay"));
     connect(moviePlayAction_, &QAction::triggered, this, [this] {
         releaseInput();
-        const QString directory = QDir(dataPath_).filePath(QStringLiteral("movies"));
+        const QString directory = DataFolders::path(dataPath_, QStringLiteral("movies"));
         const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Воспроизвести запись управления")),
             directory, Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
         view_->setFocus();
@@ -839,7 +845,7 @@ void MainWindow::buildMenus() {
     screenshotAction_->setObjectName(QStringLiteral("saveScreenshot"));
     screenshotAction_->setAutoRepeat(false);
     screenshotAction_->setEnabled(false);
-    screenshotAction_->setToolTip(Localization::text(QStringLiteral("Чистое изображение игры без OSD; папка screenshots рядом с settings.ini.")));
+    screenshotAction_->setToolTip(Localization::text(QStringLiteral("Чистое изображение игры без OSD")));
     connect(screenshotAction_, &QAction::triggered, this, &MainWindow::saveScreenshot);
     fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(Localization::text(QStringLiteral("Выход")));
@@ -955,8 +961,7 @@ void MainWindow::buildMenus() {
             if (stem.at(i).unicode() < 32 || QStringLiteral("\\/:*?\"<>|").contains(stem.at(i)))
                 stem[i] = QLatin1Char('_');
         if (stem.trimmed().isEmpty()) stem = QStringLiteral("game");
-        const QString directory = settings_.value(QStringLiteral("emulation/stateFileDirectory"),
-            QFileInfo(currentRom_).absolutePath()).toString();
+        const QString directory = DataFolders::path(dataPath_, QStringLiteral("states"));
         QString path = QFileDialog::getSaveFileName(this,
             Localization::text(QStringLiteral("Сохранить в файл")),
             QDir(directory).filePath(stem + QStringLiteral(".krs")),
@@ -964,7 +969,6 @@ void MainWindow::buildMenus() {
         view_->setFocus();
         if (path.isEmpty()) return;
         if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".krs");
-        settings_.setValue(QStringLiteral("emulation/stateFileDirectory"), QFileInfo(path).absolutePath());
         session_.saveStateToFile(QFileInfo(path).absoluteFilePath());
     });
     loadFileAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Загрузить из файла…")));
@@ -974,14 +978,12 @@ void MainWindow::buildMenus() {
     connect(loadFileAction_, &QAction::triggered, this, [this] {
         if (!session_.hasGame() || loading_ || moviePending_ || achievementsHardcore_ || session_.networkClient()) return;
         releaseInput();
-        const QString directory = settings_.value(QStringLiteral("emulation/stateFileDirectory"),
-            QFileInfo(currentRom_).absolutePath()).toString();
+        const QString directory = DataFolders::path(dataPath_, QStringLiteral("states"));
         const QString path = QFileDialog::getOpenFileName(this,
             Localization::text(QStringLiteral("Загрузить из файла")), directory,
             Localization::text(QStringLiteral("Сохранения Kega Refusion (*.krs);;Все файлы (*)")));
         view_->setFocus();
         if (path.isEmpty()) return;
-        settings_.setValue(QStringLiteral("emulation/stateFileDirectory"), QFileInfo(path).absolutePath());
         session_.loadStateFromFile(QFileInfo(path).absoluteFilePath());
     });
     QMenu* slotMenu = emulationMenu->addMenu(Localization::text(QStringLiteral("Слот сохранения")));
@@ -1595,7 +1597,7 @@ void MainWindow::saveScreenshot() {
         failed(Localization::text(QStringLiteral("кадр игры ещё не готов")));
         return;
     }
-    const QDir directory(QDir(dataPath_).filePath(QStringLiteral("screenshots")));
+    const QDir directory(DataFolders::path(dataPath_, QStringLiteral("screenshots")));
     if (!QDir().mkpath(directory.absolutePath())) {
         failed(Localization::text(QStringLiteral("не удалось создать папку %1")).arg(QDir::toNativeSeparators(directory.absolutePath())));
         return;
@@ -1781,7 +1783,8 @@ void MainWindow::editSettings(int initialPage) {
                           Localization::text(QStringLiteral("Перемотка")), Localization::text(QStringLiteral("Запись")),
                           Localization::text(QStringLiteral("Достижения")), Localization::text(QStringLiteral("Звук")), QStringLiteral("BIOS"),
                           Localization::text(QStringLiteral("Управление")),
-                          Localization::text(QStringLiteral("Сетевая игра"))});
+                          Localization::text(QStringLiteral("Сетевая игра")),
+                          Localization::text(QStringLiteral("Папки"))});
     for (int row = 0; row < navigation->count(); ++row)
         navigation->item(row)->setIcon(settingsSectionIcon(row, dialog.palette()));
     auto* pages = new QStackedWidget(&dialog);
@@ -2378,6 +2381,96 @@ void MainWindow::editSettings(int initialPage) {
         netplaySettings->setBannedPeers(netplay_->bannedPeers());
     });
     pages->addWidget(netplaySettings);
+
+    auto* folders = addPage(Localization::text(QStringLiteral("Папки")),
+        Localization::text(QStringLiteral(
+            "Относительные пути отсчитываются от папки settings.ini. Полные пути сохраняются отдельно для Windows и Linux. "
+            "При нажатии «ОК» недостающие папки будут созданы. Уже сохранённые файлы останутся на месте.")));
+    folders->setHorizontalSpacing(12);
+    folders->setVerticalSpacing(10);
+    auto* foldersViewport = qobject_cast<QScrollArea*>(pages->widget(kFoldersSettingsPage));
+    foldersViewport->setObjectName(QStringLiteral("foldersPageViewport"));
+    const QMap<QString, QString> folderLabels{
+        {QStringLiteral("bios"), QStringLiteral("BIOS")},
+        {QStringLiteral("cheats"), Localization::text(QStringLiteral("Читы"))},
+        {QStringLiteral("movies"), Localization::text(QStringLiteral("Записи ввода"))},
+        {QStringLiteral("saves"), Localization::text(QStringLiteral("Память игр"))},
+        {QStringLiteral("screenshots"), Localization::text(QStringLiteral("Скриншоты"))},
+        {QStringLiteral("states"), Localization::text(QStringLiteral("Быстрые сохранения"))},
+        {QStringLiteral("videos"), Localization::text(QStringLiteral("Видео"))}};
+    QMap<QString, QLineEdit*> folderEdits;
+    QMap<QString, QLabel*> folderErrors;
+    QMap<QString, QString> initialFolders;
+    auto* folderSaveError = new QLabel(&dialog);
+    folderSaveError->setObjectName(QStringLiteral("folderSaveError"));
+    folderSaveError->setWordWrap(true);
+    const QColor folderErrorColor = dialog.palette().color(QPalette::Window).lightness() < 128
+        ? QColor("#f08c82") : QColor("#a43028");
+    folderSaveError->setStyleSheet(QStringLiteral("color: %1;").arg(folderErrorColor.name()));
+    folderSaveError->hide();
+    for (const QString& category : DataFolders::categories()) {
+        const QString configuredPath = DataFolders::configuredPath(dataPath_, category);
+        const QString currentPath = DataFolders::path(dataPath_, category);
+        const QString defaultPath = DataFolders::defaultPath(dataPath_, category);
+        initialFolders.insert(category, QDir::cleanPath(QDir::fromNativeSeparators(configuredPath)));
+        auto* field = new QWidget(&dialog);
+        auto* fieldLayout = new QVBoxLayout(field);
+        fieldLayout->setContentsMargins(0, 0, 0, 0);
+        fieldLayout->setSpacing(4);
+        auto* row = new QHBoxLayout;
+        row->setSpacing(6);
+        auto* edit = new QLineEdit(QDir::toNativeSeparators(configuredPath), field);
+        edit->setObjectName(QStringLiteral("folderPath_%1").arg(category));
+        edit->setAccessibleName(folderLabels.value(category));
+        edit->setMinimumWidth(80);
+        edit->setPlaceholderText(category);
+        edit->setToolTip(QDir::toNativeSeparators(currentPath));
+        row->addWidget(edit, 1);
+        auto* browse = new QPushButton(field);
+        browse->setObjectName(QStringLiteral("browseFolder_%1").arg(category));
+        browse->setIcon(dialog.style()->standardIcon(QStyle::SP_DirOpenIcon));
+        browse->setFixedWidth(32);
+        browse->setToolTip(Localization::text(QStringLiteral("Выбрать папку…")));
+        browse->setAccessibleName(browse->toolTip());
+        row->addWidget(browse);
+        auto* reset = new QPushButton(field);
+        reset->setObjectName(QStringLiteral("defaultFolder_%1").arg(category));
+        reset->setIcon(dialog.style()->standardIcon(QStyle::SP_DialogResetButton));
+        reset->setFixedWidth(32);
+        reset->setToolTip(Localization::text(QStringLiteral("Папка по умолчанию: %1"))
+                              .arg(QDir::toNativeSeparators(defaultPath)));
+        reset->setAccessibleName(Localization::text(QStringLiteral("По умолчанию")));
+        row->addWidget(reset);
+        fieldLayout->addLayout(row);
+        auto* error = new QLabel(field);
+        error->setObjectName(QStringLiteral("folderError_%1").arg(category));
+        error->setWordWrap(true);
+        error->setStyleSheet(folderSaveError->styleSheet());
+        error->hide();
+        fieldLayout->addWidget(error);
+        folderEdits.insert(category, edit);
+        folderErrors.insert(category, error);
+        folders->addRow(folderLabels.value(category) + QLatin1Char(':'), field);
+        connect(edit, &QLineEdit::textChanged, &dialog, [edit, error, folderSaveError](const QString& text) {
+            edit->setToolTip(text);
+            error->clear();
+            error->hide();
+            folderSaveError->clear();
+            folderSaveError->hide();
+        });
+        connect(reset, &QPushButton::clicked, &dialog, [edit, category] {
+            edit->setText(category);
+        });
+        connect(browse, &QPushButton::clicked, &dialog,
+                [this, &dialog, edit, defaultPath, label = folderLabels.value(category)] {
+            const QString value = QDir::fromNativeSeparators(edit->text().trimmed());
+            const QString path = QFileDialog::getExistingDirectory(&dialog,
+                Localization::text(QStringLiteral("Папка: %1")).arg(label),
+                value.isEmpty() ? defaultPath : QDir(dataPath_).absoluteFilePath(value));
+            if (!path.isEmpty()) edit->setText(QDir::toNativeSeparators(path));
+        });
+    }
+    folders->addRow(folderSaveError);
     auto* controlsError = new QLabel(&dialog);
     controlsError->setObjectName(QStringLiteral("settingsValidationError"));
     controlsError->setWordWrap(true);
@@ -2416,15 +2509,46 @@ void MainWindow::editSettings(int initialPage) {
         pages->setCurrentIndex(row);
         controlsError->setVisible(row == kControlsSettingsPage && !controlsError->text().isEmpty());
     });
-    navigation->setCurrentRow(qBound(0, initialPage < 0 ? settingsPage_ : initialPage, kNetplaySettingsPage));
+    navigation->setCurrentRow(qBound(0, initialPage < 0 ? settingsPage_ : initialPage, kFoldersSettingsPage));
     layout->addWidget(controlsError);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("settingsButtons"));
     buttons->button(QDialogButtonBox::Ok)->setText(Localization::text(QStringLiteral("ОК")));
     buttons->button(QDialogButtonBox::Cancel)->setText(Localization::text(QStringLiteral("Отмена")));
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, navigation, &controls] {
-        if (!controls || controls->apply()) dialog.accept();
-        else navigation->setCurrentRow(kControlsSettingsPage);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog,
+            [this, &dialog, navigation, &controls, folderEdits, folderErrors, initialFolders,
+             foldersViewport, folderSaveError] {
+        // Validate before creating folders or committing any settings drafts.
+        if (controls && !controls->validate()) {
+            navigation->setCurrentRow(kControlsSettingsPage);
+            return;
+        }
+        QMap<QString, QString> changedFolders;
+        for (auto it = folderEdits.cbegin(); it != folderEdits.cend(); ++it) {
+            const QString value = QDir::fromNativeSeparators(it.value()->text().trimmed());
+            const QString effective = QDir::cleanPath(value.isEmpty() ? it.key() : value);
+            if (effective != initialFolders.value(it.key())) changedFolders.insert(it.key(), value);
+            folderErrors.value(it.key())->clear();
+            folderErrors.value(it.key())->hide();
+        }
+        folderSaveError->clear();
+        folderSaveError->hide();
+        if (!changedFolders.isEmpty()) {
+            QString error, failedCategory;
+            if (!DataFolders::save(dataPath_, changedFolders, error, &failedCategory)) {
+                navigation->setCurrentRow(kFoldersSettingsPage);
+                auto* label = folderErrors.value(failedCategory, folderSaveError);
+                label->setText(error);
+                label->show();
+                if (auto* edit = folderEdits.value(failedCategory)) edit->setFocus();
+                QTimer::singleShot(0, foldersViewport, [foldersViewport, label] {
+                    foldersViewport->ensureWidgetVisible(label);
+                });
+                return;
+            }
+        }
+        if (controls) controls->apply(); // The validated drafts cannot change within this callback.
+        dialog.accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, [&dialog, &controls] {
         if (controls) controls->cancelCapture();
@@ -2586,7 +2710,8 @@ void MainWindow::showAchievements() {
 void MainWindow::editCheats() {
     if (!session_.hasGame() || loading_ || !cheatsSupported_ || achievementsHardcore_) return;
     releaseInput();
-    CheatsDialog dialog(cheats_,cheatPlatform_,currentGameName_,this);
+    CheatsDialog dialog(cheats_, cheatPlatform_, currentGameName_, this,
+                        DataFolders::path(dataPath_, QStringLiteral("cheats")));
     if (dialog.exec() == QDialog::Accepted && dialog.cheats() != cheats_)
         session_.setCheats(dialog.cheats());
     view_->setFocus();
@@ -2736,7 +2861,7 @@ void MainWindow::editControls() { editSettings(kControlsSettingsPage); }
 
 QString MainWindow::chooseMovieSavePath(bool branch) {
     releaseInput();
-    const QDir movies(QDir(dataPath_).filePath(QStringLiteral("movies")));
+    const QDir movies(DataFolders::path(dataPath_, QStringLiteral("movies")));
     if (!QDir().mkpath(movies.absolutePath())) {
         QMessageBox::warning(this, Localization::text(QStringLiteral("Запись")),
             Localization::text(QStringLiteral("Не удалось создать папку записей: %1")).arg(movies.absolutePath()));
@@ -2785,8 +2910,7 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
 
 QString MainWindow::chooseVideoSavePath(bool exporting) {
     releaseInput();
-    const QString fallback = QDir(dataPath_).filePath(QStringLiteral("videos"));
-    const QDir directory(settings_.value(QStringLiteral("video/lastDirectory"), fallback).toString());
+    const QDir directory(DataFolders::path(dataPath_, QStringLiteral("videos")));
     if (!QDir().mkpath(directory.absolutePath())) {
         QMessageBox::warning(this, Localization::text(QStringLiteral("Видео")),
             Localization::text(QStringLiteral("Не удалось создать папку видео: %1"))
@@ -2816,7 +2940,6 @@ QString MainWindow::chooseVideoSavePath(bool exporting) {
                 .arg(QDir::toNativeSeparators(file.absoluteFilePath())));
         return {};
     }
-    settings_.setValue(QStringLiteral("video/lastDirectory"), file.absolutePath());
     return file.absoluteFilePath();
 }
 
@@ -2836,7 +2959,7 @@ void MainWindow::exportInputVideo() {
     releaseInput();
     const QString source = QFileDialog::getOpenFileName(this,
         Localization::text(QStringLiteral("Экспортировать запись управления в видео")),
-        QDir(dataPath_).filePath(QStringLiteral("movies")),
+        DataFolders::path(dataPath_, QStringLiteral("movies")),
         Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
     view_->setFocus();
     if (source.isEmpty()) return;

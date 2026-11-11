@@ -9,10 +9,12 @@ public:
     static QString fileName(Piece piece);
     // Returns the actual installed image path, or an empty string with a diagnostic.
     static QString resolve(const QString& dataPath, Piece piece, QString& error);
+    // Explicit folder for a loaded session whose configured root is pinned.
+    static QString resolveInDirectory(const QString& biosDirectory, Piece piece, QString& error);
     static bool validateFile(const QString& path, Piece piece, QString& error);
     static bool validate(const QString& dataPath, QString& error);
     static QString status(const QString& dataPath);
-    // Recognizes by content, imports into dataPath/bios, never replaces a file.
+    // Recognizes by content, imports into the configured BIOS folder, never replaces a file.
     static QStringList importDirectory(const QString& sourceDirectory, const QString& dataPath,
                                        QString& error);
 };
