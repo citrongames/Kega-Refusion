@@ -399,7 +399,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     for (QAction* action : menuBar()->actions()) {
 #ifdef Q_OS_WIN
         // Native menus use the Windows menu loop and do not send QMenu::aboutToHide.
-        if (menuBar()->isNativeMenuBar()) break;
+        if (menuBar()->isNativeMenuBar()) {
+            connect(action, &QAction::changed, this, [this] {
+                if (darkNativeMenu_ && fullscreenMenuShown_ && isMainMenuVisible())
+                    WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), true, true);
+            });
+            continue;
+        }
 #endif
         QMenu* menu = action->menu();
         if (!menu) continue;
@@ -3264,7 +3270,7 @@ void MainWindow::setMainMenuVisible(bool visible) {
         if (visible != isMainMenuVisible()) {
             native->handleReparent(visible ? windowHandle() : nullptr);
             if (visible)
-                WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_);
+                WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_, fullscreenMenuShown_);
         }
         return;
     }
@@ -3286,7 +3292,7 @@ void MainWindow::refreshWindowsMenuTheme(bool newWindow) {
     if (!newWindow && darkNativeMenu_ == dark) return;
     darkNativeMenu_ = dark;
     WindowsMenuTheme::applyPopupTheme(hwnd, dark);
-    WindowsMenuTheme::refreshMenuBar(hwnd, dark);
+    WindowsMenuTheme::refreshMenuBar(hwnd, dark, fullscreenMenuShown_);
 }
 
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {

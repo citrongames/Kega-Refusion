@@ -138,66 +138,128 @@ bool drawBackground(const MSG& message) {
     return saved && fill(menu->dc, rectangle, background);
 }
 
-bool drawItem(const MSG& message) {
-    const auto* drawing = reinterpret_cast<const UahDrawMenuItem*>(message.lParam);
-    RECT barRect{};
-    if (!drawing || !drawing->menu.dc || drawing->position < 0
-            || !menuBarRect(message.hwnd, drawing->menu.menu, barRect)) {
-        return false;
-    }
+struct MenuLabel {
     MENUITEMINFOW info{};
-    info.cbSize = sizeof(info);
-    info.fMask = MIIM_STRING | MIIM_FTYPE | MIIM_STATE | MIIM_BITMAP;
-    const auto position = static_cast<UINT>(drawing->position);
-    if (!GetMenuItemInfoW(drawing->menu.menu, position, TRUE, &info)
-            || (info.fType & (MFT_OWNERDRAW | MFT_BITMAP | MFT_SEPARATOR))
-            || info.hbmpItem || info.cch > 32767) {
-        return false;
-    }
-    std::wstring label(info.cch + 1, L'\0');
-    const UINT itemType = info.fType;
-    const UINT itemState = info.fState;
-    info.fMask = MIIM_STRING;
-    info.dwTypeData = label.data();
-    info.cch = static_cast<UINT>(label.size());
-    if (!GetMenuItemInfoW(drawing->menu.menu, position, TRUE, &info)) return false;
+    std::wstring text;
 
-    const UINT state = drawing->item.itemState;
+    bool read(HMENU menu, UINT position) {
+        info.cbSize = sizeof(info);
+        info.fMask = MIIM_STRING | MIIM_FTYPE | MIIM_STATE | MIIM_BITMAP | MIIM_SUBMENU | MIIM_DATA;
+        if (!GetMenuItemInfoW(menu, position, TRUE, &info) || !info.hSubMenu || info.hbmpItem ||
+            (info.fType & (MFT_BITMAP | MFT_SEPARATOR)) || info.cch > 32767)
+            return false;
+        text.resize(info.cch + 1);
+        info.dwTypeData = text.data();
+        info.cch = static_cast<UINT>(text.size());
+        if (!GetMenuItemInfoW(menu, position, TRUE, &info)) return false;
+        text.resize(info.cch);
+        return true;
+    }
+    bool custom() const {
+        return (info.fType & MFT_OWNERDRAW) && info.dwItemData == reinterpret_cast<ULONG_PTR>(info.hSubMenu);
+    }
+};
+
+int headingPosition(HMENU bar, ULONG_PTR data) {
+    if (!data) return -1;
+    const int count = GetMenuItemCount(bar);
+    for (int i = 0; i < count; ++i)
+        if (reinterpret_cast<ULONG_PTR>(GetSubMenu(bar, i)) == data) return i;
+    return -1;
+}
+
+bool paintHeading(HWND window, HDC dc, HMENU menu, UINT position, RECT itemRect, UINT state) {
+    MenuLabel label;
+    if (!dc || !label.read(menu, position) ||
+        ((label.info.fType & MFT_OWNERDRAW) && !label.custom())) return false;
+    const UINT itemState = label.info.fState;
     const bool disabled = (state & (ODS_DISABLED | ODS_GRAYED))
             || (itemState & MFS_DISABLED);
-    const bool inactive = (state & ODS_INACTIVE) != 0;
-    const bool selected = (state & (ODS_SELECTED | ODS_FOCUS)) != 0;
-    const bool hot = (state & ODS_HOTLIGHT) != 0;
-    const MenuFont font(message.hwnd, (state & ODS_DEFAULT) || (itemState & MFS_DEFAULT));
+    bool selected = (state & (ODS_SELECTED | ODS_FOCUS)) != 0;
+    bool hot = (state & ODS_HOTLIGHT) != 0;
+    if (label.custom() && (hot || selected || (itemState & MFS_HILITE))) {
+        // The classic bar also marks a hovered heading as selected. Only use
+        // the pressed color when Windows is actually tracking this window's menu.
+        GUITHREADINFO gui{};
+        gui.cbSize = sizeof(gui);
+        if (GetGUIThreadInfo(GetCurrentThreadId(), &gui)) {
+            selected = (gui.flags & GUI_INMENUMODE) && gui.hwndMenuOwner == window;
+            hot = !selected;
+        }
+    }
+    const MenuFont font(window, (state & ODS_DEFAULT) || (itemState & MFS_DEFAULT));
     if (!font.get()) return false;
     // Restore the DC before MenuFont is destroyed, so it is never deleted while
     // selected. The caller owns the DC; every color, font and clip is restored.
-    const SavedDc saved(drawing->menu.dc);
+    const SavedDc saved(dc);
     if (!saved) return false;
-    HDC dc = drawing->menu.dc;
-    RECT itemRect = drawing->item.rcItem;
-    RECT clip{};
-    if (!IntersectRect(&clip, &itemRect, &barRect)) return false;
-    if (IntersectClipRect(dc, clip.left, clip.top, clip.right, clip.bottom) == ERROR) {
+    if (IntersectClipRect(dc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom) == ERROR)
         return false;
-    }
     COLORREF color = background;
-    if (!inactive && !disabled) {
+    if (!disabled) {
         if (selected) color = selectedBackground;
         else if (hot) color = hoverBackground;
     }
     if (!fill(dc, itemRect, color)) return false;
     if (!SelectObject(dc, font.get())) return false;
     SetBkMode(dc, TRANSPARENT);
+    const bool inactive = (state & ODS_INACTIVE) && !selected && !hot && !label.custom();
     SetTextColor(dc, disabled ? disabledTextColor : inactive ? inactiveTextColor : textColor);
     UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
     if (state & ODS_NOACCEL) format |= DT_HIDEPREFIX;
-    const auto exStyle = GetWindowLongPtrW(message.hwnd, GWL_EXSTYLE);
-    if ((itemType & MFT_RIGHTORDER) || (exStyle & (WS_EX_LAYOUTRTL | WS_EX_RTLREADING))) {
+    const auto exStyle = GetWindowLongPtrW(window, GWL_EXSTYLE);
+    if ((label.info.fType & MFT_RIGHTORDER) || (exStyle & (WS_EX_LAYOUTRTL | WS_EX_RTLREADING))) {
         format |= DT_RTLREADING;
     }
-    return !info.cch || DrawTextW(dc, label.data(), static_cast<int>(info.cch),
-                                 &itemRect, format) != 0;
+    return label.text.empty() || DrawTextW(dc, label.text.data(), static_cast<int>(label.text.size()),
+                                          &itemRect, format) != 0;
+}
+
+bool measureHeading(HWND window, HMENU bar, MEASUREITEMSTRUCT& item) {
+    const int pos = headingPosition(bar, item.itemData);
+    MenuLabel label;
+    if (pos < 0 || !label.read(bar, pos) || !label.custom()) return false;
+    const MenuFont font(window, label.info.fState & MFS_DEFAULT);
+    HDC dc = GetDC(window);
+    if (!dc) return false;
+    RECT size{};
+    TEXTMETRICW metrics{};
+    {
+        const SavedDc saved(dc);
+        if (saved && font.get() && SelectObject(dc, font.get()) && GetTextMetricsW(dc, &metrics))
+            DrawTextW(dc, label.text.data(), static_cast<int>(label.text.size()), &size,
+                      DT_SINGLELINE | DT_CALCRECT);
+    }
+    ReleaseDC(window, dc);
+    if (!size.bottom) return false;
+    // USER32 adds two extra average character widths for an owner-drawn item.
+    item.itemWidth = std::max(1L, size.right - 2 * metrics.tmAveCharWidth);
+    item.itemHeight = size.bottom;
+    return true;
+}
+
+// Preserve access keys for owner-drawn headings, including cycling duplicate mnemonics.
+bool headingMnemonic(HMENU bar, wchar_t key, qintptr* result) {
+    int matches = 0, first = -1, next = -1, highlighted = -1;
+    const int count = GetMenuItemCount(bar);
+    for (int i = 0; i < count; ++i) {
+        MenuLabel label;
+        if (!label.read(bar, i) || !label.custom() || (label.info.fState & MFS_DISABLED)) continue;
+        if (label.info.fState & MFS_HILITE) highlighted = i;
+        for (size_t n = 0; n + 1 < label.text.size(); ++n) {
+            if (label.text[n] != L'&') continue;
+            const auto& mnemonic = label.text[++n];
+            if (mnemonic == L'&') continue;
+            if (CompareStringOrdinal(&key, 1, &mnemonic, 1, TRUE) == CSTR_EQUAL) {
+                if (matches++ == 0) first = i;
+                if (highlighted >= 0 && next < 0 && i > highlighted) next = i;
+            }
+            break;
+        }
+    }
+    if (!matches) return false;
+    *result = MAKELRESULT(next >= 0 ? next : first, matches == 1 ? MNC_EXECUTE : MNC_SELECT);
+    return true;
 }
 
 } // namespace
@@ -206,7 +268,34 @@ bool WindowsMenuTheme::drawMenuBar(const MSG& message, qintptr* result) {
     bool handled = false;
     switch (message.message) {
     case uahDrawMenu: handled = drawBackground(message); break;
-    case uahDrawMenuItem: handled = drawItem(message); break;
+    case uahDrawMenuItem: {
+        const auto* drawing = reinterpret_cast<const UahDrawMenuItem*>(message.lParam);
+        if (drawing && drawing->position >= 0 && drawing->menu.menu == GetMenu(message.hwnd))
+            handled = paintHeading(message.hwnd, drawing->menu.dc, drawing->menu.menu,
+                                   drawing->position, drawing->item.rcItem, drawing->item.itemState);
+        break;
+    }
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(message.lParam);
+        const HMENU bar = GetMenu(message.hwnd);
+        if (!item || item->CtlType != ODT_MENU || reinterpret_cast<HMENU>(item->hwndItem) != bar) return false;
+        const int pos = headingPosition(bar, item->itemData);
+        if (pos < 0 || !paintHeading(message.hwnd, item->hDC, bar, pos, item->rcItem, item->itemState))
+            return false;
+        *result = TRUE;
+        return true;
+    }
+    case WM_MEASUREITEM: {
+        auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(message.lParam);
+        if (!item || item->CtlType != ODT_MENU || !measureHeading(message.hwnd, GetMenu(message.hwnd), *item))
+            return false;
+        *result = TRUE;
+        return true;
+    }
+    case WM_MENUCHAR: {
+        const auto bar = reinterpret_cast<HMENU>(message.lParam);
+        return bar && bar == GetMenu(message.hwnd) && headingMnemonic(bar, LOWORD(message.wParam), result);
+    }
     default: return false;
     }
     if (handled && result) *result = 0;
@@ -251,9 +340,32 @@ const PopupThemeApi& popupApi() {
 }
 }
 
-void WindowsMenuTheme::refreshMenuBar(HWND hwnd, bool dark) {
+void WindowsMenuTheme::refreshMenuBar(HWND hwnd, bool dark, bool fullscreen) {
     const HMENU menu = GetMenu(hwnd);
     if (!menu) return;
+    // Without a caption USER32 may skip the themed (UAH) item notifications.
+    // Ask it to send WM_DRAWITEM for these headings; keep the strings, submenu
+    // handles and commands in the native menu. Drop-down items are untouched.
+    const bool custom = dark && fullscreen;
+    const int count = GetMenuItemCount(menu);
+    for (int i = 0; i < count; ++i) {
+        MENUITEMINFOW item{};
+        item.cbSize = sizeof(item);
+        item.fMask = MIIM_FTYPE | MIIM_DATA | MIIM_SUBMENU;
+        if (!GetMenuItemInfoW(menu, i, TRUE, &item) || !item.hSubMenu) continue;
+        const auto tag = reinterpret_cast<ULONG_PTR>(item.hSubMenu);
+        if (custom && !item.dwItemData && !(item.fType & (MFT_OWNERDRAW | MFT_BITMAP | MFT_SEPARATOR))) {
+            item.fType |= MFT_OWNERDRAW;
+            item.dwItemData = tag;
+        } else if (!custom && item.dwItemData == tag && (item.fType & MFT_OWNERDRAW)) {
+            item.fType &= ~MFT_OWNERDRAW;
+            item.dwItemData = 0;
+        } else {
+            continue;
+        }
+        item.fMask = MIIM_FTYPE | MIIM_DATA;
+        SetMenuItemInfoW(menu, i, TRUE, &item);
+    }
     // A borderless window can use the classic menu background instead of UAH.
     // Set the root brush only; popup menus keep their native theme.
     struct BackgroundBrush {
