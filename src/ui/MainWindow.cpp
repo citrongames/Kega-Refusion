@@ -77,6 +77,7 @@
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #include <dwmapi.h>
+#include <QPlatformSurfaceEvent>
 #include <QWindow>
 #include <qpa/qplatformmenu.h>
 #include <qpa/qplatformwindow_p.h>
@@ -3229,6 +3230,10 @@ void MainWindow::setFullscreenMode(bool enabled) {
         wasMaximizedBeforeFullscreen_ = isMaximized();
         showFullScreen();
     } else {
+#ifdef Q_OS_WIN
+        // Restore the monitor-sized client before Qt restores the window style.
+        if (fullscreenMenuShown_) setMainMenuVisible(false);
+#endif
         if (wasMaximizedBeforeFullscreen_) showMaximized();
         else showNormal();
     }
@@ -3250,6 +3255,7 @@ bool MainWindow::isMainMenuVisible() const {
 void MainWindow::setMainMenuVisible(bool visible) {
 #ifdef Q_OS_WIN
     if (auto* native = menuBar()->platformMenuBar()) {
+        fullscreenMenuShown_ = isFullScreen() && visible;
         // QWidget visibility only describes the unused Qt menu widget on Windows.
         if (visible != isMainMenuVisible())
             native->handleReparent(visible ? windowHandle() : nullptr);
@@ -3405,6 +3411,17 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 #ifdef Q_OS_WIN
+    if (event->type() == QEvent::PlatformSurface && watched == windowHandle()) {
+        // Creating the OpenGL widget can replace the main HWND. Windows destroys
+        // an attached HMENU with its HWND, including every submenu.
+        if (auto* native = menuBar()->platformMenuBar()) {
+            const auto type = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
+            if (type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed)
+                native->handleReparent(nullptr);
+            else if (!isFullScreen() || fullscreenMenuShown_)
+                native->handleReparent(windowHandle());
+        }
+    }
     if (watched == this && (event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowUnblocked)) {
         modalWindowBlocked_ = event->type() == QEvent::WindowBlocked;
         updateFullscreenComposition();
@@ -3588,12 +3605,27 @@ void MainWindow::changeEvent(QEvent* event) {
     if (event->type() == QEvent::ActivationChange && !isActiveWindow()) releaseInput();
     if (event->type() == QEvent::WindowStateChange) {
         const auto* change = static_cast<QWindowStateChangeEvent*>(event);
+#ifdef Q_OS_WIN
+        // Qt infers fullscreen from the client rectangle. An attached Win32 menu
+        // shortens that rectangle while the borderless window still fills the monitor.
+        if (fullscreenMenuShown_ && !isFullScreen() && !isMinimized() &&
+            (change->oldState() & Qt::WindowFullScreen)) {
+            overrideWindowState(windowState() | Qt::WindowFullScreen);
+            return;
+        }
+#endif
         if (fullscreenAction_) {
             const QSignalBlocker blocker(fullscreenAction_);
             fullscreenAction_->setChecked(isFullScreen());
         }
-        if (isFullScreen() && !(change->oldState() & Qt::WindowFullScreen)) setMainMenuVisible(false);
-        else if (!isFullScreen()) setMainMenuVisible(true);
+        if (isFullScreen() && !(change->oldState() & Qt::WindowFullScreen)) {
+#ifdef Q_OS_WIN
+            if (!fullscreenMenuShown_)
+#endif
+                setMainMenuVisible(false);
+        } else if (!isFullScreen()) {
+            setMainMenuVisible(true);
+        }
 #ifdef Q_OS_WIN
         updateFullscreenComposition();
 #endif

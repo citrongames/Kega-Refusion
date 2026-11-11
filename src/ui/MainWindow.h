@@ -253,6 +253,7 @@ private:
 #ifdef Q_OS_WIN
     void updateFullscreenComposition();
     bool modalWindowBlocked_ = false;
+    bool fullscreenMenuShown_ = false;
 #endif
     bool wasMaximizedBeforeFullscreen_ = false;
     bool loading_ = false;
