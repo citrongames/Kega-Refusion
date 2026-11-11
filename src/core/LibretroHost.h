@@ -44,8 +44,10 @@ public:
     double aspectRatioForLinkRole(int role) const;
     void runFrame(bool renderVideo = true, bool captureAudio = true);
     // True when the previous checkpoint and input can reproduce this output mode.
-    bool rewindReplaySafe() const;
-    void runRewindPreviewFrame(bool renderVideo = true);
+    bool rewindPreviewNeedsPair() const;
+    void beginRewindPreview();
+    void endRewindPreview();
+    void runRewindPreviewFrame(bool renderVideo = true, bool singleFieldFallback = false, bool publishVideo = true);
     bool frameInputPolled() const;
     bool supportsInputPollMetrics() const;
     void setExpansionDevices(bool cd, bool x32);
@@ -287,6 +289,8 @@ private:
     QByteArray audio_;
     bool videoEnabled_ = true, audioEnabled_ = true;
     bool rewindPreview_ = false;
+    unsigned rewindPreviewDepth_ = 0;
+    bool rewindPreviewBeforeScope_ = false;
     bool recordingVideoEnabled_ = false;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;

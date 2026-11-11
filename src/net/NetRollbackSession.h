@@ -31,7 +31,8 @@ public:
         InputDisplayState input;
         MovieInput controls;
         quint64 position=0;
-        bool replay=false;
+        // Only a new line owns seed pixels. Woven output requests two inputs.
+        bool replay=false, twoFields=false;
     };
     void setHistoryEnabled(bool enabled);
     // Only final, locally earned frames reach the achievement runtime. Predicted

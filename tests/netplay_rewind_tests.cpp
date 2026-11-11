@@ -75,6 +75,7 @@ MovieInput expectedInput(quint64 frame,bool shared) {
 struct Baseline {
     std::array<QImage,2> image;
     InputDisplayState input;
+    bool twoFields=false;
 };
 QImage combine(const NetRollbackSession::RewindFrame& frame) {
     if(frame.secondImage.isNull())return frame.image;
@@ -98,31 +99,49 @@ QJsonObject verify(LibretroHost& host,NetRollbackSession& net,const QByteArray& 
     for(size_t position=1;position<baseline.size();++position) {
         NetplayTimeline::apply(host,expectedInput(position-1,shared));host.runFrame(true,false);
         auto& expected=baseline[position];expected.input=host.inputDisplay();
+        expected.twoFields=host.rewindPreviewNeedsPair();
         expected.image[0]=host.frameForLinkRole(1);
         if(link)expected.image[1]=host.frameForLinkRole(2);
     }
     RewindBuffer history(64*1024*1024),screenshots(64*1024*1024);
     history.configure(true);screenshots.configure(true);
     int regenerated=0;
+    const auto firstPosition=checkpoints.front().position;
+    check(firstPosition==28,"history restart did not begin after the fast-frame boundary");
+    const auto runPreview=[&](size_t index) {
+        const auto& frame=checkpoints[index];
+        const bool pair=frame.twoFields && index>=2;
+        host.beginRewindPreview();
+        checked(host.restoreMovieState(checkpoints[index-(pair?2:1)].state,error,true),error);
+        if(pair) {
+            NetplayTimeline::apply(host,checkpoints[index-1].controls);host.runRewindPreviewFrame(true,false,false);
+        }
+        NetplayTimeline::apply(host,frame.controls);host.runRewindPreviewFrame(true,frame.twoFields&&!pair);
+    };
+    const auto endPreview=[&](const QByteArray& canonical) {
+        checked(host.restoreMovieState(canonical,error,true),error);host.endRewindPreview();
+    };
     for(size_t i=0;i<checkpoints.size();++i) {
         const auto& frame=checkpoints[i];
         const auto position=frame.position;
-        check(position==i+1,"confirmed history gap or duplicate");
+        check(position==firstPosition+i,"confirmed history gap or duplicate");
+        check(frame.replay==(i>0),"periodic screenshot retained after the single line seed");
+        check(frame.twoFields==baseline[position].twoFields,"confirmed raster pair metadata differs from executed frame");
         check(frame.controls==expectedInput(position-1,shared),"history retained speculative/shared-role input");
         check(frame.input==baseline[position].input,"confirmed input display differs from final merged input");
         checked(host.restoreMovieState(frame.state,error,true),error);
         check(host.runClock().frames==position,"confirmed state clock differs from checkpoint position");
         if(frame.replay) {
-            check(i>0 && frame.image.isNull() && frame.secondImage.isNull(),"replay entry retained pixels");
-            checked(host.restoreMovieState(checkpoints[i-1].state,error,true),error);
-            NetplayTimeline::apply(host,frame.controls);host.runRewindPreviewFrame();
+            check(frame.image.isNull() && frame.secondImage.isNull(),"replay entry retained pixels");
+            runPreview(i);
             check(host.runClock().frames==position,"preview advanced an incorrect number of frames");
             for(int role=1;role<=(link?2:1);++role)
                 check(pixels(host.frameForLinkRole(role))==pixels(baseline[position].image[size_t(role-1)]),
                       "regenerated confirmed picture differs from original output");
             check(host.audio().isEmpty(),"preview retained audio for playback");
+            endPreview(frame.state);
             ++regenerated;
-            check(history.captureForReplay(frame.state,frame.aspect,frame.controls,&frame.input),"replay capture failed");
+            check(history.captureForReplay(frame.state,frame.aspect,frame.controls,&frame.input,frame.twoFields),"replay capture failed");
         } else check(history.capture(frame.state,combine(frame),frame.aspect,&frame.input),"boundary capture failed");
         auto exact=frame;exact.image=baseline[position].image[0];exact.secondImage=link?baseline[position].image[1]:QImage();
         // The old network path kept every second post-frame screenshot.
@@ -137,10 +156,8 @@ QJsonObject verify(LibretroHost& host,NetRollbackSession& net,const QByteArray& 
             const auto controlState=host.serialize(),controlPcm=host.audio();
             const auto controlImage=host.frameForLinkRole(role);
             if(frame.replay) {
-                checked(host.restoreMovieState(checkpoints[i-1].state,error,true),error);
-                NetplayTimeline::apply(host,frame.controls);host.runRewindPreviewFrame();
-            }
-            checked(host.restoreMovieState(frame.state,error,true),error);
+                runPreview(i);endPreview(frame.state);
+            } else checked(host.restoreMovieState(frame.state,error,true),error);
             host.setLinkPresentationRole(role);
             NetplayTimeline::apply(host,expectedInput(position,shared));host.runFrame(true,true);
             if(host.serialize()!=controlState) {
@@ -161,16 +178,21 @@ QJsonObject verify(LibretroHost& host,NetRollbackSession& net,const QByteArray& 
     while(history.size()>1) {
         QByteArray state;QImage image;double aspect=0;InputDisplayState input;RewindBuffer::ReplayFrame replay;
         check(history.stepBack(state,image,aspect,1,&input,&replay),"history step failed");--position;
-        check(state==checkpoints[position-1].state && input==baseline[position].input,"rewind landed on wrong confirmed frame/input");
+        check(state==checkpoints[position-firstPosition].state && input==baseline[position].input,"rewind landed on wrong confirmed frame/input");
         if(!replay.previousState.isEmpty()) {
+            host.beginRewindPreview();
             checked(host.restoreMovieState(replay.previousState,error,true),error);
-            NetplayTimeline::apply(host,replay.controls);host.runRewindPreviewFrame();
+            if(replay.firstFieldControls) {
+                NetplayTimeline::apply(host,*replay.firstFieldControls);host.runRewindPreviewFrame(true,false,false);
+            }
+            NetplayTimeline::apply(host,replay.controls);host.runRewindPreviewFrame(true,replay.singleFieldFallback);
             check(host.runClock().frames==position,"buffer replay predecessor/input incorrect");
         }
         checked(host.restoreMovieState(state,error,true),error);
+        if(!replay.previousState.isEmpty())host.endRewindPreview();
     }
-    check(position==1,"oldest confirmed frame lost");
-    return {{"verified",int(checkpoints.size())},{"regenerated",regenerated},
+    check(position==firstPosition,"oldest confirmed frame lost");
+    return {{"verified",int(checkpoints.size())},{"regenerated",regenerated},{"firstPosition",int(firstPosition)},
             {"compactBytes",double(compactBytes)},{"oldHalfRateScreenshotBytes",double(screenshotBytes)}};
 }
 int worker(const QString& core,const QString& rom,const QString& data,int id,bool shared,bool link) {
@@ -185,15 +207,17 @@ int worker(const QString& core,const QString& rom,const QString& data,int id,boo
     };
     const QJsonArray roster{QJsonObject{{"id","0"},{"role",1}},QJsonObject{{"id","1"},{"role",shared?1:2}}};
     checked(net.start(host,1,roster,quint64(id),send,error),error);net.setHistoryEnabled(true);
-    std::vector<NetRollbackSession::RewindFrame> checkpoints;int wrongPredictions=0;reply({{"ready",true}});
+    std::vector<NetRollbackSession::RewindFrame> checkpoints;
+    int wrongPredictions=0,seedFrames=0;bool historyEnabled=true;reply({{"ready",true}});
     std::string line;
     while(std::getline(std::cin,line)) {
         const auto command=QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
         if(command.value("verify").toBool()) {
             if(id==0) {
                 check(wrongPredictions>0,"test did not execute incorrect speculative input");
+                check(seedFrames==2,"history restart retained extra/missing seed pictures");
                 auto result=verify(host,net,initial,checkpoints,shared,link);
-                result.insert("wrongPredictions",wrongPredictions);reply(result);
+                result.insert("wrongPredictions",wrongPredictions);result.insert("seedFrames",seedFrames);reply(result);
             } else reply({{"verified",true}});
             return 0;
         }
@@ -204,12 +228,27 @@ int worker(const QString& core,const QString& rom,const QString& data,int id,boo
         const auto decision=net.beforeFrame(localInput(id,net.position()),merged,error);
         check(decision!=NetRollbackSession::Failed,qPrintable(error));
         if(decision==NetRollbackSession::Run) {
+            // Emulate fast forward clearing history while delayed input can
+            // still make GGPO correct frames from before the restart boundary.
+            const bool enabled=net.position()<22 || net.position()>=27;
+            if(enabled!=historyEnabled) {
+                historyEnabled=enabled;net.setHistoryEnabled(enabled);
+                if(!enabled)checkpoints.clear();
+            }
             if(merged!=expectedInput(net.position(),shared))++wrongPredictions;
             NetplayTimeline::apply(host,merged);host.runFrame(true,false);checked(net.afterFrame(error),error);
         }
         NetRollbackSession::RewindFrame frame;
         while(net.takeConfirmedHistory(frame)) {
             check(id==0,"non-host exported rewind history");check(checkpoints.size()<512,"rewind test queue overflow");
+            if(checkpoints.empty()) {
+                check(!frame.replay && !frame.image.isNull(),"new history line has no exact seed");
+                if(link)check(!frame.secondImage.isNull(),"linked history seed missed a console");
+                ++seedFrames;
+            } else {
+                check(frame.position==checkpoints.back().position+1,"confirmed export gap after history restart");
+                check(frame.replay && frame.image.isNull() && frame.secondImage.isNull(),"history exported a middle-of-line screenshot");
+            }
             checkpoints.push_back(frame);
         }
         reply({{"out",outgoing}});outgoing={};

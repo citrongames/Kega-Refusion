@@ -256,7 +256,7 @@ int main(int argc,char** argv) {
                     require(host.recordingFrame()==image,QStringLiteral("Native 32X capture retained filtered pixels or lost mixed detail."));
                     require(host.frame()==presented,QStringLiteral("Reading native 32X capture changed presentation."));
                     if (h40 && !blank && filter==3) {
-                        require(host.rewindReplaySafe(),QStringLiteral("Progressive attached 32X did not enable state replay."));
+                        require(!host.rewindPreviewNeedsPair(),QStringLiteral("Progressive attached 32X requested two-field replay."));
                         const QByteArray predecessor=host.captureRewindState();
                         host.runFrame();
                         const QImage landed=host.frame();const double landedAspect=host.aspectRatio();

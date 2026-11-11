@@ -48,11 +48,17 @@ bool measureRestore(RewindBuffer& history, LibretroHost& host, std::vector<qint6
         if (!history.stepBack(state, image, aspect, 1, &input, &replay)) return false;
         bool previewRestored = true;
         if (!replay.previousState.isEmpty()) {
+            host.beginRewindPreview();
             previewRestored = host.restoreRewindState(replay.previousState);
             if (previewRestored) {
+                if (replay.firstFieldControls) {
+                    if (replay.firstFieldControls->commands & MovieTape::SoftReset) host.reset();
+                    NetplayTimeline::apply(host, *replay.firstFieldControls);
+                    host.runRewindPreviewFrame(true,false,false);
+                }
                 if (replay.controls.commands & MovieTape::SoftReset) host.reset();
                 NetplayTimeline::apply(host, replay.controls);
-                host.runRewindPreviewFrame();
+                host.runRewindPreviewFrame(true,replay.singleFieldFallback);
                 image = host.frame();
                 aspect = host.aspectRatio();
                 previewRestored = !image.isNull();
@@ -61,6 +67,7 @@ bool measureRestore(RewindBuffer& history, LibretroHost& host, std::vector<qint6
         // Preview generation may change noncanonical native scratch state.
         // Production always restores the retained target before continuing.
         const bool restored = host.restoreRewindState(state);
+        if (!replay.previousState.isEmpty()) host.endRewindPreview();
         if (!restored || !previewRestored) return false;
         host.restoreFramePreview(image, aspect);
         times.push_back(timer.nsecsElapsed());
@@ -104,7 +111,8 @@ int main(int argc, char** argv) {
         const auto initialInput = host.inputDisplay();
         if (!pixels.capture(initialState, seed, host.aspectRatio(), &initialInput) ||
             !current.capture(initialState, seed, host.aspectRatio(), &initialInput)) return 3;
-        bool previousReplaySafe = false, pixelEvicted = false, currentEvicted = false;
+        const bool needsFirstPicture = seed.width() <= 1 || seed.height() <= 1;
+        bool pixelEvicted = false, currentEvicted = false;
         int replayCaptures = 0, pixelFallbackCaptures = 0;
         std::vector<qint64> serializeTimes, pixelTimes, currentTimes, pixelRestoreTimes, currentRestoreTimes;
         QElapsedTimer timer;
@@ -122,12 +130,10 @@ int main(int argc, char** argv) {
             timer.restart();
             if (!pixels.capture(state, host.frame(), host.aspectRatio(), &input)) return 3;
             pixelTimes.push_back(timer.nsecsElapsed());
-            const bool replaySafe = host.rewindReplaySafe();
-            const bool canReplay = replaySafe && previousReplaySafe;
-            previousReplaySafe = replaySafe;
+            const bool canReplay = i > 0 || !needsFirstPicture;
             timer.restart();
             const bool captured = canReplay
-                ? current.captureForReplay(state, host.aspectRatio(), controls, &input)
+                ? current.captureForReplay(state, host.aspectRatio(), controls, &input, host.rewindPreviewNeedsPair())
                 : current.capture(state, host.frame(), host.aspectRatio(), &input);
             if (!captured) return 3;
             currentTimes.push_back(timer.nsecsElapsed());

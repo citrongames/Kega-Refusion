@@ -144,5 +144,20 @@ int main(int argc,char** argv) {
          image==shots[7].frame && replay.previousState.isEmpty() && aspect==1.5,"stored branch picture lost");
  require(replayBuffer.stepBack(actual,image,aspect,1,nullptr,&replay) &&
          actual==shots[2].state && replay.previousState==shots[1].state,"branch corrupted replay");
+ // A woven target uses exactly its two recorded inputs, even on a multi-step jump.
+ replayBuffer.clear();
+ require(replayBuffer.capture(shots[0].state,shots[0].frame,1.0),"woven seed");
+ for(int i=1;i<8;++i) {
+   controls.buttons[0]=quint16(i);
+   require(replayBuffer.captureForReplay(shots[i].state,1.0,controls,nullptr,true),"woven capture");
+ }
+ require(replayBuffer.stepBack(actual,image,aspect,3,nullptr,&replay) && actual==shots[4].state &&
+         replay.previousState==shots[2].state && replay.firstFieldControls &&
+         replay.firstFieldControls->buttons[0]==3 && replay.controls.buttons[0]==4 &&
+         !replay.singleFieldFallback && image.isNull(),"wrong pair of fields");
+ replayBuffer.setByteLimit(replayBuffer.bytesUsed()-1);
+ require(replayBuffer.stepBack(actual,image,aspect,20,nullptr,&replay) && actual==shots[2].state &&
+         replay.previousState==shots[1].state && !replay.firstFieldControls &&
+         replay.singleFieldFallback && image.isNull(),"missing oldest-field fallback");
  std::puts("Reverse deltas: sparse/dense changes, dimensions, branches, budgets, input and disabled history passed");
 }

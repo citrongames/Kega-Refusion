@@ -185,6 +185,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->link_audio_load = reinterpret_cast<decltype(api_->link_audio_load)>(library_.resolve("retro_kegarefusion_link_audio_load"));
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
     api_->input_polled = reinterpret_cast<decltype(api_->input_polled)>(library_.resolve("retro_kegarefusion_input_polled"));
+    api_->rewind_video = reinterpret_cast<decltype(api_->rewind_video)>(library_.resolve("retro_kegarefusion_rewind_video"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
     api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
@@ -598,6 +599,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     return true;
 }
 void LibretroHost::unload() {
+    while (rewindPreviewDepth_) endRewindPreview();
     runClock_ = {};
     stopLinkedPair();
     debugVideoMask_ = 0; debugAudioMask_ = 0;
@@ -695,22 +697,27 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     // libretro's fast-savestate or hard-disable-audio flags.
     videoEnabled_ = audioEnabled_ = true;
 }
-bool LibretroHost::rewindReplaySafe() const {
-    if (!loaded_ || !api_->system_hw || frame_.width() <= 1 || frame_.height() <= 1) return false;
-    const auto system = api_->system_hw();
-    if (!mdControllerHardware(system) && system != 0x82) { // Pico also uses the 16-bit VDP.
-        const bool eightBit = smsControllerHardware(system) || (system >= 0x01 && system <= 0x03) ||
-                              system == 0x40 || system == 0x41;
-        if (!eightBit || !smsPauseStateSupported()) return false;
-        if (system == 0x40 || system == 0x41) {
-            const auto lcd = variables_.find("genesis_plus_gx_lcd_filter");
-            if (lcd != variables_.end() && lcd->second == "enabled") return false;
-        }
-    }
-    // Woven video retains the previous field outside the native machine state.
-    return frame_.height() <= 288 && (!linkPeer_ || linkPeer_->rewindReplaySafe());
+bool LibretroHost::rewindPreviewNeedsPair() const {
+    const bool woven = loaded_ && (api_->rewind_video ? (api_->rewind_video(0) & 1u) != 0 : frame_.height() > 288);
+    return woven || (linkPeer_ && linkPeer_->rewindPreviewNeedsPair());
 }
-void LibretroHost::runRewindPreviewFrame(bool renderVideo) {
+void LibretroHost::beginRewindPreview() {
+    if (rewindPreviewDepth_++ == 0) {
+        rewindPreviewBeforeScope_ = rewindPreview_;
+        rewindPreview_ = true;
+        if (loaded_ && api_->rewind_video) api_->rewind_video(1);
+    }
+    if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->beginRewindPreview(); }
+}
+void LibretroHost::endRewindPreview() {
+    if (!rewindPreviewDepth_) return;
+    if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->endRewindPreview(); }
+    if (--rewindPreviewDepth_ == 0) {
+        if (loaded_ && api_->rewind_video) api_->rewind_video(2);
+        rewindPreview_ = rewindPreviewBeforeScope_;
+    }
+}
+void LibretroHost::runRewindPreviewFrame(bool renderVideo, bool singleFieldFallback, bool publishVideo) {
     struct PreviewScope {
         bool& flag; bool previous;
         explicit PreviewScope(bool& value):flag(value),previous(value) {flag=true;}
@@ -720,6 +727,13 @@ void LibretroHost::runRewindPreviewFrame(bool renderVideo) {
         PreviewScope peerScope(linkPeer_->rewindPreview_);
         runFrame(renderVideo,false);
     } else runFrame(renderVideo,false);
+    if (renderVideo && publishVideo && loaded_) {
+        if (api_->rewind_video) api_->rewind_video(singleFieldFallback ? 4 : 3);
+        if (linkPeer_) {
+            Activation peerScope(linkPeer_.get());
+            if (linkPeer_->api_->rewind_video) linkPeer_->api_->rewind_video(singleFieldFallback ? 4 : 3);
+        }
+    }
 }
 void LibretroHost::reset() {
     runClock_ = {};

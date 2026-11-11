@@ -264,7 +264,6 @@ void exerciseRewindWindow(LibretroHost& host, int firstFrame) {
         double aspect;
         InputDisplayState display;
         MovieInput controls;
-        bool replaySafe = false;
     };
     std::vector<Reference> reference;
     RewindBuffer pixels, replay;
@@ -272,14 +271,13 @@ void exerciseRewindWindow(LibretroHost& host, int firstFrame) {
     int replayCaptures = 0, pictureCaptures = 0;
     auto remember = [&](const MovieInput& controls, bool retain) {
         const auto display = host.inputDisplay();
-        reference.push_back({host.captureRewindState(),host.audio(),host.frame(),host.aspectRatio(),display,controls,host.rewindReplaySafe()});
+        reference.push_back({host.captureRewindState(),host.audio(),host.frame(),host.aspectRatio(),display,controls});
         require(!reference.back().state.isEmpty() && !host.frame().isNull(), "CD rewind reference capture failed");
         if (!retain) return;
         require(pixels.capture(reference.back().state,host.frame(),host.aspectRatio(),&display), "CD picture history capture failed");
-        const bool canReplay = reference.size() > 1 && reference.back().replaySafe &&
-            reference[reference.size()-2].replaySafe;
+        const bool canReplay = reference.size() > 1;
         require(canReplay
-            ? replay.captureForReplay(reference.back().state,host.aspectRatio(),controls,&display)
+            ? replay.captureForReplay(reference.back().state,host.aspectRatio(),controls,&display,host.rewindPreviewNeedsPair())
             : replay.capture(reference.back().state,host.frame(),host.aspectRatio(),&display),
             "CD state/input history capture failed");
         canReplay ? ++replayCaptures : ++pictureCaptures;
@@ -321,14 +319,19 @@ void exerciseRewindWindow(LibretroHost& host, int firstFrame) {
                 continuation.front().state == reference[size_t(i+1)].state,
                 "CD picture restore changed the ordinary forward video/state/PCM continuation");
         if (!preview.previousState.isEmpty()) {
+            host.beginRewindPreview();
             require(host.restoreRewindState(preview.previousState), "CD preview predecessor restore failed");
-            NetplayTimeline::apply(host,preview.controls); host.runRewindPreviewFrame();
+            if (preview.firstFieldControls) {
+                NetplayTimeline::apply(host,*preview.firstFieldControls); host.runRewindPreviewFrame(true,false,false);
+            }
+            NetplayTimeline::apply(host,preview.controls); host.runRewindPreviewFrame(true,preview.singleFieldFallback);
             image = host.frame();
             require(host.audio().isEmpty(), "CD preview published audio");
         }
         if (image != reference[size_t(i)].image)
             throw std::runtime_error(QStringLiteral("CD rewind picture mismatch at %1").arg(firstFrame+i-1).toStdString());
         require(host.restoreRewindState(target), "CD canonical target restore failed");
+        if (!preview.previousState.isEmpty()) host.endRewindPreview();
         require(host.captureRewindState() == normalizedTarget, "CD canonical target changed after preview");
         host.restoreFramePreview(reference[size_t(i)].image,reference[size_t(i)].aspect);
         for (const auto& next : continuation) {

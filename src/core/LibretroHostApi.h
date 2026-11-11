@@ -40,6 +40,7 @@ struct LibretroHost::Api {
     bool (*recording_video)(bool) = nullptr;
     bool (*recording_frame)(const void**,unsigned*,unsigned*,size_t*,unsigned*) = nullptr;
     bool (*input_polled)() = nullptr;
+    unsigned (*rewind_video)(unsigned) = nullptr;
     bool (*get_cd_header)(void*, size_t) = nullptr;
     void (*invalidate_code)() = nullptr;
     int (*preserve_header_checksum)(const std::uint8_t*, size_t, unsigned) = nullptr;

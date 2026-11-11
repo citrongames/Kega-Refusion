@@ -1,0 +1,148 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -49,6 +49,9 @@
+ #endif
+ 
+ extern int8 reset_do_not_clear_buffers;
++int kegarefusion_rewind_preview_active;
++int kegarefusion_rewind_needs_field;
++extern unsigned kegarefusion_preview_fields;
+ extern uint32_t kega_debug_video_mask;
+ extern uint8_t *kega_recording_bitmap;
+ extern uint8_t *kega_sprite_hint_bitmap;
+@@ -5034,8 +5037,14 @@
+ {
+   if (!reset_do_not_clear_buffers)
+   {
+-    /* Clear display bitmap */
+-    memset(bitmap.data, 0, bitmap.pitch * bitmap.height);
++    /* A rewind preview retains its reconstructed fields through the final
++       canonical state restore. Machine/cache state is still reset below. */
++    if (!kegarefusion_rewind_preview_active)
++    {
++      memset(bitmap.data, 0, bitmap.pitch * bitmap.height);
++      kegarefusion_rewind_needs_field = 1;
++    }
++    kegarefusion_preview_fields = 0;
+ 
+     /* Clear line buffers */
+     memset(linebuf, 0, sizeof(linebuf));
+@@ -5300,7 +5309,7 @@
+ #else
+     /* Convert VDP pixel data to output pixel format */
+     PIXEL_OUT_T *dst = ((PIXEL_OUT_T *)&bitmap.data[(line * bitmap.pitch)]);
+-    if (config.lcd)
++    if (config.lcd && !kegarefusion_rewind_preview_active)
+     {
+       do
+       {
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -4609,6 +4609,87 @@
+    return kegarefusion_input_polled != 0;
+ }
+ 
++extern int kegarefusion_rewind_preview_active;
++extern int kegarefusion_rewind_needs_field;
++unsigned kegarefusion_preview_fields;
++static int kegarefusion_preview_width, kegarefusion_preview_height;
++
++/* A single transient native raster is sufficient for weave. It is never
++   included in rewind history. The LCD ghosting filter recursively depends on
++   every earlier output; previews instead seed its next real frame with raw T. */
++static void kegarefusion_preview_frame(void)
++{
++   if (!kegarefusion_rewind_preview_active) return;
++   if (!interlaced || !config.render)
++   {
++      kegarefusion_preview_fields = 0;
++      kegarefusion_preview_width = vwidth;
++      kegarefusion_preview_height = vheight;
++      return;
++   }
++   if (kegarefusion_preview_width != vwidth || kegarefusion_preview_height != vheight)
++      kegarefusion_preview_fields = 0;
++   kegarefusion_preview_width = vwidth;
++   kegarefusion_preview_height = vheight;
++   kegarefusion_preview_fields |= 1u << odd_frame;
++}
++
++static void kegarefusion_preview_bob(void)
++{
++   int y;
++   const size_t bytes = (size_t)bitmap.pitch;
++   for (y = 0; y + 1 < vheight && y + 1 < bitmap.height; y += 2)
++   {
++      uint8 *row = bitmap.data + (size_t)(y + odd_frame) * bitmap.pitch;
++      uint8 *other = bitmap.data + (size_t)(y + (odd_frame ^ 1)) * bitmap.pitch;
++      memcpy(other, row, bytes);
++   }
++}
++
++/* Commands: 0=query mode, 1=begin scope, 2=end scope,
++   3=finish rendered preview, 4=finish with a single current field. */
++RETRO_API unsigned retro_kegarefusion_rewind_video(unsigned command)
++{
++   if (command == 1)
++   {
++      kegarefusion_rewind_preview_active = 1;
++      kegarefusion_preview_fields = 0;
++      kegarefusion_preview_width = kegarefusion_preview_height = 0;
++   }
++   else if (command == 2)
++   {
++      /* A pending progressive-to-weave switch needs a legal previous field
++         for the next real frame too. Seed it from transient raw T, without
++         altering the already published progressive preview. */
++      if (kegarefusion_rewind_preview_active && config.render && !interlaced && (reg[12] & 2))
++      {
++         int y, height = vheight;
++         if (height > bitmap.height / 2) height = bitmap.height / 2;
++         for (y = height - 1; y >= 0; y--)
++         {
++            uint8 *row = bitmap.data + (size_t)y * bitmap.pitch;
++            uint8 *first = bitmap.data + (size_t)y * 2 * bitmap.pitch;
++            memmove(first, row, bitmap.pitch);
++            memcpy(first + bitmap.pitch, first, bitmap.pitch);
++         }
++      }
++      kegarefusion_rewind_preview_active = 0;
++   }
++   else if ((command == 3 || command == 4) && kegarefusion_rewind_preview_active)
++   {
++      if (interlaced && config.render &&
++          (command == 4 || kegarefusion_preview_fields != 3))
++      {
++         /* A changed viewport or repeated parity cannot borrow an unrelated
++            field. Duplicate only the actual current field. */
++         kegarefusion_preview_bob();
++      }
++      kegarefusion_rewind_needs_field = 0;
++      video_cb(bitmap.data + bmdoffset, vwidth - vwoffset, vheight, 720 * 2);
++   }
++   return (interlaced && config.render ? 1u : 0u) | (config.lcd ? 2u : 0u);
++}
++
+ void retro_run(void)
+ {
+    kegarefusion_input_polled = 0;
+@@ -4763,8 +4844,17 @@
+    kega_sprite_hint_frame_ready = !do_skip && kega_sprite_hint_active;
+    kega_recording_frame_ready = !do_skip && kega_recording_bitmap != NULL;
+    if (!do_skip)
+-      video_cb(bitmap.data + bmdoffset, vwidth - vwoffset, vheight, 720 * 2);
+-   else
++   {
++      kegarefusion_preview_frame();
++      if (!kegarefusion_rewind_preview_active)
++      {
++         if (kegarefusion_rewind_needs_field && interlaced && config.render)
++            kegarefusion_preview_bob();
++         kegarefusion_rewind_needs_field = 0;
++         video_cb(bitmap.data + bmdoffset, vwidth - vwoffset, vheight, 720 * 2);
++      }
++   }
++   else if (!kegarefusion_rewind_preview_active)
+       video_cb(NULL, vwidth - vwoffset, vheight, 720 * 2);
+ 
+    audio_cb(soundbuffer, soundbuffer_size);

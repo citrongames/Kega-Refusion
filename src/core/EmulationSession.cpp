@@ -633,6 +633,7 @@ void EmulationSession::run() {
         emit discStateChanged(host.discPaths(),host.discIndex(),lastDiscEjected);
     };
     Cheats::Search cheatSearch;
+    NetRollbackSession networkTimeline;
     RewindBuffer history;
     bool historyEnabled = rewindEnabled_.load();
     int historyMemoryMiB = rewindMemoryMiB_.load();
@@ -642,6 +643,7 @@ void EmulationSession::run() {
         history.setByteLimit(qsizetype(historyMemoryMiB) * 1024 * 1024);
         history.configure(true);
         history.clear();
+        networkTimeline.setHistoryEnabled(false);
         historyHealthy = true;
         manualHistory = false;
     };
@@ -687,7 +689,6 @@ void EmulationSession::run() {
         slowAudio.clear(); slowDeadlineNs = 0; resampler = {};
         audioClockAvailable_.store(false); emit audioReset();
     };
-    NetRollbackSession networkTimeline;
     bool networkAchievementTracking=false;
     const auto resetNetworkAchievements = [&] {
         networkTimeline.setAchievementsEnabled(false);
@@ -831,7 +832,7 @@ void EmulationSession::run() {
         resetMetrics();
     };
     MovieInput frameControls;
-    bool previousReplaySafe = false;
+    bool needsFirstPicture = false;
     auto beforeFrame = [&] {
         QString error;
         if(networkMode) {
@@ -953,18 +954,18 @@ void EmulationSession::run() {
                 QByteArray packed(geometry.isEmpty()?"KRGGORW1":"KRGGORW2",8);
                 packed.reserve(8+geometry.size()+frame.state.size());packed+=geometry;packed+=frame.state;
                 if(frame.replay) {
-                    if(!history.captureForReplay(packed,frame.aspect,frame.controls,&frame.input))return false;
+                    if(!history.captureForReplay(packed,frame.aspect,frame.controls,&frame.input,frame.twoFields))return false;
                 } else if(!history.capture(packed,image,frame.aspect,&frame.input))return false;
             }
             return true;
         }
-        const bool replaySafe = host.rewindReplaySafe();
-        const bool canReplay = replaySafe && previousReplaySafe;
-        previousReplaySafe = replaySafe;
         const auto state = captureHistory();
-        return canReplay
-            ? history.captureForReplay(state,host.aspectRatio(),frameControls,inputDisplayEnabled ? &frameInput : nullptr)
-            : history.capture(state,host.frame(),host.aspectRatio(),inputDisplayEnabled ? &frameInput : nullptr);
+        const auto* display = inputDisplayEnabled ? &frameInput : nullptr;
+        if (needsFirstPicture) {
+            needsFirstPicture = false;
+            return history.capture(state,host.frame(),host.aspectRatio(),display);
+        }
+        return history.captureForReplay(state,host.aspectRatio(),frameControls,display,host.rewindPreviewNeedsPair());
     };
     // Capture the pre-input state once when a new local timeline starts.
     // At power-on the core has not delivered its first picture yet.
@@ -972,8 +973,8 @@ void EmulationSession::run() {
         if (history.size() || !historyHealthy) return;
         // The first produced picture may use startup raster/viewport data that
         // native states do not retain. Keep that single boundary picture exact.
-        previousReplaySafe = false;
         QImage frame = host.frame();
+        needsFirstPicture = frame.width() <= 1 || frame.height() <= 1;
         if (frame.isNull()) {
             frame = QImage(1,1,QImage::Format_RGB32);
             frame.fill(Qt::black);
@@ -992,6 +993,7 @@ void EmulationSession::run() {
         QString error;
         bool previewRestored = true;
         if (!replay.previousState.isEmpty()) {
+            host.beginRewindPreview();
             QByteArray coreState, ignoredProgress;
             previewRestored = networkMode ? restoreHistory(replay.previousState,error) :
                 historyPayload(replay.previousState,coreState,ignoredProgress) &&
@@ -999,9 +1001,13 @@ void EmulationSession::run() {
             if (previewRestored) {
                 // Rendering must use the actual recorded controls, including mouse
                 // deltas. Never consume live input or append/branch the movie here.
-                if (replay.controls.commands & MovieTape::SoftReset) host.reset();
-                NetplayTimeline::apply(host,replay.controls);
-                host.runRewindPreviewFrame();
+                auto runInput = [&](const MovieInput& controls, bool singleField, bool publish) {
+                    if (controls.commands & MovieTape::SoftReset) host.reset();
+                    NetplayTimeline::apply(host,controls);
+                    host.runRewindPreviewFrame(true,singleField,publish);
+                };
+                if (replay.firstFieldControls) runInput(*replay.firstFieldControls,false,false);
+                runInput(replay.controls,replay.singleFieldFallback,true);
                 frame = host.frame(); aspect = host.aspectRatio();
                 if(networkMode && host.linkCableEnabled()) {
                     frame=combineLinkPreview(host.frameForLinkRole(1),host.aspectRatioForLinkRole(1),
@@ -1016,6 +1022,7 @@ void EmulationSession::run() {
         const auto regeneratedGeometry = networkMode && !replay.previousState.isEmpty()
             ? networkRewindLinkPreview : QByteArray();
         const bool restored = restoreHistory(state,error);
+        if (!replay.previousState.isEmpty()) host.endRewindPreview();
         if(restored && !regeneratedGeometry.isEmpty())networkRewindLinkPreview=regeneratedGeometry;
         if (!restored || !previewRestored) {
             clearHistory(); historyHealthy = false;
@@ -1026,7 +1033,7 @@ void EmulationSession::run() {
             ? host.inputDisplay(false) : previousInput;
         if (!networkMode) {
             host.restoreFramePreview(frame,aspect);
-            previousReplaySafe = host.rewindReplaySafe();
+            needsFirstPicture = frame.width() <= 1 || frame.height() <= 1;
         }
         const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
         if (!selected.isNull()) presentFrame(selected,aspect);

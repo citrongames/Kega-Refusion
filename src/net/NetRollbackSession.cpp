@@ -60,7 +60,7 @@ struct NetRollbackSession::Impl {
     std::array<double, GGPO_MAX_PREDICTION_FRAMES + 2> aspects{}, secondAspects{};
     std::array<InputDisplayState, GGPO_MAX_PREDICTION_FRAMES + 2> historyInputs{};
     std::array<MovieInput, GGPO_MAX_PREDICTION_FRAMES + 2> historyControls{};
-    std::array<bool, GGPO_MAX_PREDICTION_FRAMES + 2> historyRecorded{}, historySafe{}, historyReplay{};
+    std::array<bool, GGPO_MAX_PREDICTION_FRAMES + 2> historyRecorded{}, historyReplay{}, historyTwoFields{};
     MovieInput executedControls;
     bool historyEnabled=false, achievementsEnabled=false;
     struct AchievementFrame { QByteArray memory; int frame=-1; };
@@ -77,7 +77,7 @@ struct NetRollbackSession::Impl {
         }
         slot.frame=host->captureAchievementMemory(slot.memory) ? frame : -1;
     }
-    int rollbackPosition=0,lastHistoryFrame=0;
+    int rollbackPosition=0,lastHistoryFrame=0,historyStartFrame=0;
     Send send;
     bool running = false, localQueued = false;
     QVector<RemoteQuality> remoteQuality;
@@ -101,23 +101,35 @@ struct NetRollbackSession::Impl {
         for(size_t i=0;i<self.states.size();++i) if(self.states[i].isEmpty()) {
             auto& slot=self.states[i];slot=std::move(state);self.stateBytes+=slot.size();
             self.stateFrames[i]=frame;
-            if(self.historyEnabled && self.localId==0 && frame>0) {
-                self.historyRecorded[i]=true;
-                self.historySafe[i]=self.host->rewindReplaySafe();
-                self.historyControls[i]=self.executedControls;
-                self.historyInputs[i]=self.host->inputDisplay();
-                self.aspects[i]=self.host->aspectRatioForLinkRole(1);
-                self.secondAspects[i]=self.host->aspectRatioForLinkRole(2);
-                // Consecutive GGPO saves already provide the predecessor. Keep
-                // pixels only at a new timeline or an unsafe raster boundary.
+            if(self.historyEnabled && self.localId==0 && frame>self.historyStartFrame) {
+                // A restart begins after the live GGPO position. Corrections may
+                // revisit older frames; they must never seed an invisible line
+                // before this boundary and leave its first exported frame alone.
+                bool predecessor=false;
                 for(size_t previous=0;previous<self.states.size();++previous)
                     if(self.stateFrames[previous]==frame-1 && self.historyRecorded[previous])
-                        self.historyReplay[i]=self.historySafe[i] && self.historySafe[previous];
-                if(!self.historyReplay[i]) {
-                    self.images[i]=self.host->frameForLinkRole(1);
-                    if(self.host->linkCableEnabled())self.secondImages[i]=self.host->frameForLinkRole(2);
-                    self.stateBytes+=self.images[i].sizeInBytes()+self.secondImages[i].sizeInBytes();
-                    if(self.stateBytes>StateLimit)throw std::runtime_error("GGPO rewind previews exceed memory budget");
+                        predecessor=true;
+                self.historyReplay[i]=predecessor;
+                self.historyRecorded[i]=predecessor;
+                if(!predecessor) {
+                    // One exact picture anchors a new line. There are no
+                    // periodic raster/platform screenshots in the rollback pool.
+                    const auto& first=self.host->frameForLinkRole(1);
+                    const auto& second=self.host->frameForLinkRole(2);
+                    if(!first.isNull() && (!self.host->linkCableEnabled() || !second.isNull())) {
+                        self.images[i]=first;
+                        if(self.host->linkCableEnabled())self.secondImages[i]=second;
+                        self.historyRecorded[i]=true;
+                        self.stateBytes+=self.images[i].sizeInBytes()+self.secondImages[i].sizeInBytes();
+                        if(self.stateBytes>StateLimit)throw std::runtime_error("GGPO rewind preview exceeds memory budget");
+                    }
+                }
+                if(self.historyRecorded[i]) {
+                    self.historyControls[i]=self.executedControls;
+                    self.historyInputs[i]=self.host->inputDisplay();
+                    self.aspects[i]=self.host->aspectRatioForLinkRole(1);
+                    self.secondAspects[i]=self.host->aspectRatioForLinkRole(2);
+                    self.historyTwoFields[i]=self.host->rewindPreviewNeedsPair();
                 }
             }
             *buffer=reinterpret_cast<unsigned char*>(slot.data());*length=int(slot.size());*checksum=0;
@@ -139,7 +151,7 @@ struct NetRollbackSession::Impl {
         for(size_t i=0;i<current->states.size();++i)if(current->states[i].constData()==buffer) {
             current->stateBytes-=current->states[i].size()+current->images[i].sizeInBytes()+current->secondImages[i].sizeInBytes();
             current->states[i].clear();current->images[i]={};current->secondImages[i]={};
-            current->historyRecorded[i]=current->historySafe[i]=current->historyReplay[i]=false;return;
+            current->historyRecorded[i]=current->historyReplay[i]=current->historyTwoFields[i]=false;return;
         }
     }
     MovieInput synchronize() {
@@ -208,11 +220,11 @@ void NetRollbackSession::stop() {
 void NetRollbackSession::setHistoryEnabled(bool enabled) {
     if(d->historyEnabled==enabled)return;
     d->historyEnabled=enabled;
-    d->lastHistoryFrame=int(d->frame);
+    d->lastHistoryFrame=d->historyStartFrame=int(d->frame);
     for(size_t i=0;i<d->images.size();++i) {
         d->stateBytes-=d->images[i].sizeInBytes()+d->secondImages[i].sizeInBytes();
         d->images[i]={};d->secondImages[i]={};
-        d->historyRecorded[i]=d->historySafe[i]=d->historyReplay[i]=false;
+        d->historyRecorded[i]=d->historyReplay[i]=d->historyTwoFields[i]=false;
     }
 }
 void NetRollbackSession::setAchievementsEnabled(bool enabled) {
@@ -246,7 +258,7 @@ bool NetRollbackSession::takeConfirmedHistory(RewindFrame& output) {
         }
     if(index<0)return false;
     output={d->states[index],d->images[index],d->aspects[index],d->secondImages[index],d->secondAspects[index],
-            d->historyInputs[index],d->historyControls[index],quint64(earliest),d->historyReplay[index]};
+            d->historyInputs[index],d->historyControls[index],quint64(earliest),d->historyReplay[index],d->historyTwoFields[index]};
     d->lastHistoryFrame=earliest;return true;
 }
 bool NetRollbackSession::active() const {return d->session!=nullptr;}

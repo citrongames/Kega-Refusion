@@ -137,6 +137,7 @@ void RewindBuffer::trimToBudget() {
 void RewindBuffer::clear() {
     entries_.clear(); inputRuns_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
     currentControls_.reset();
+    currentTwoFields_ = false;
     bytesUsed_ = 0;
 }
 bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect,
@@ -147,21 +148,21 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     const QImage rgb = frame.convertToFormat(QImage::Format_RGB32);
     if (rgb.isNull() || rgb.sizeInBytes()>maxBytes) return false;
     const QByteArray pixels(reinterpret_cast<const char*>(rgb.constBits()),rgb.sizeInBytes());
-    return append(state, pixels, rgb.size(), VideoFrameGeometry::nativeSize(frame), aspect, std::nullopt, input);
+    return append(state, pixels, rgb.size(), VideoFrameGeometry::nativeSize(frame), aspect, std::nullopt, input, false);
 }
 bool RewindBuffer::captureForReplay(const QByteArray& state, double aspect, const MovieInput& controls,
-                                    const InputDisplayState* input) {
+                                    const InputDisplayState* input, bool twoFields) {
     if (!enabled_) return true;
     if (state.isEmpty() || state.size() > maxBytes || !std::isfinite(aspect) || aspect <= 0) return false;
-    return append(state, {}, {}, {}, aspect, controls, input);
+    return append(state, {}, {}, {}, aspect, controls, input, twoFields);
 }
 bool RewindBuffer::append(const QByteArray& state, const QByteArray& pixels, QSize size, QSize nativeSize,
-                          double aspect, std::optional<MovieInput> controls, const InputDisplayState* input) {
+                          double aspect, std::optional<MovieInput> controls, const InputDisplayState* input, bool twoFields) {
     const qsizetype anchorBytes = state.capacity()+pixels.capacity();
     if (anchorBytes>byteLimit_) { clear(); return false; }
     const size_t previousCount = currentState_.isEmpty() ? 0 : entries_.size() + 1;
     if (!currentState_.isEmpty()) {
-        Entry previous{encode(currentState_,state), {}, currentSize_, currentNativeSize_, currentAspect_, currentControls_};
+        Entry previous{encode(currentState_,state), {}, currentSize_, currentNativeSize_, currentAspect_, currentControls_, currentTwoFields_};
         if (!currentControls_) previous.pixels = encode(currentPixels_,pixels);
         if (previous.state.bytes.isEmpty() || (!currentControls_ && previous.pixels.bytes.isEmpty())) { clear(); return false; }
         bytesUsed_ += entryBytes(previous);
@@ -169,7 +170,7 @@ bool RewindBuffer::append(const QByteArray& state, const QByteArray& pixels, QSi
     }
     bytesUsed_ += anchorBytes-currentState_.capacity()-currentPixels_.capacity();
     currentState_ = state; currentPixels_ = pixels; currentSize_ = size; currentNativeSize_ = nativeSize;
-    currentAspect_ = aspect; currentControls_ = controls;
+    currentAspect_ = aspect; currentControls_ = controls; currentTwoFields_ = twoFields;
     // A history captured before input tracking began has neutral input. Runs
     // keep long holds to one snapshot rather than copying it every frame.
     if (input && inputRuns_.empty() && previousCount) {
@@ -202,7 +203,7 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, in
         }
         bytesUsed_ += newBytes - oldBytes - entryBytes(target);
         currentSize_ = target.size; currentNativeSize_ = target.nativeSize; currentAspect_ = target.aspect;
-        currentControls_ = target.controls;
+        currentControls_ = target.controls; currentTwoFields_ = target.twoFields;
         entries_.pop_back();
         dropNewestInput();
     }
@@ -211,6 +212,18 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, in
         replay->previousState = decode(entries_.back().state,currentState_);
         if (replay->previousState.isEmpty()) { clear(); return false; }
         replay->controls = *currentControls_;
+        if (currentTwoFields_) {
+            // The preceding field has its own inputs. If eviction or the seed
+            // removed its predecessor, display the available field on both rows.
+            const auto& preceding = entries_.back();
+            if (entries_.size() >= 2 && preceding.controls) {
+                replay->firstFieldControls = preceding.controls;
+                replay->previousState = decode(entries_[entries_.size()-2].state, std::move(replay->previousState));
+                if (replay->previousState.isEmpty()) { clear(); return false; }
+            } else {
+                replay->singleFieldFallback = true;
+            }
+        }
         frame = {};
     } else {
         QImage image(currentSize_,QImage::Format_RGB32);
