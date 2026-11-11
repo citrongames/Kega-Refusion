@@ -641,6 +641,7 @@ void EmulationSession::run() {
     auto clearHistory = [&] {
         history.setByteLimit(qsizetype(historyMemoryMiB) * 1024 * 1024);
         history.configure(true);
+        history.clear();
         historyHealthy = true;
         manualHistory = false;
     };
@@ -829,6 +830,8 @@ void EmulationSession::run() {
         pacer.reset(nowNs()); nextPresentationNs = 0;
         resetMetrics();
     };
+    MovieInput frameControls;
+    bool previousReplaySafe = false;
     auto beforeFrame = [&] {
         QString error;
         if(networkMode) {
@@ -851,7 +854,7 @@ void EmulationSession::run() {
             NetplayTimeline::apply(host,input); return true;
         }
         const auto local=liveInput();
-        if (movie.beforeFrame(local, error)) {consumeMouseInput(local);return true;}
+        if (movie.beforeFrame(local, error, &frameControls)) {consumeMouseInput(local);return true;}
         paused = true; frameAdvanceHeld_.store(false);
         clearAudio(); emit pausedChanged(true);
         if (movie.recording() && !error.isEmpty()) {
@@ -909,6 +912,17 @@ void EmulationSession::run() {
         wrapped += state; wrapped += progress;
         return wrapped;
     };
+    auto historyPayload = [](const QByteArray& packed, QByteArray& state, QByteArray& progress) {
+        state = packed;
+        progress.clear();
+        if (!packed.startsWith("KRACHRW1")) return true;
+        if (packed.size() < 16) return false;
+        const auto stateSize = qFromBigEndian<quint32>(packed.constData()+8);
+        const auto progressSize = qFromBigEndian<quint32>(packed.constData()+12);
+        if (progressSize > 2*1024*1024 || quint64(stateSize)+progressSize+16 != quint64(packed.size())) return false;
+        state = packed.mid(16,stateSize); progress = packed.mid(16+stateSize,progressSize);
+        return true;
+    };
     auto restoreHistory = [&](const QByteArray& packed, QString& error) {
         if(networkMode && packed.startsWith("KRGGORW1")) {
             networkRewindLinkPreview.clear();return host.restoreMovieState(packed.mid(8),error,true);
@@ -920,14 +934,8 @@ void EmulationSession::run() {
             if(!host.restoreMovieState(packed.mid(8+LinkPreviewBytes),error,true))return false;
             networkRewindLinkPreview=bytes;return true;
         }
-        QByteArray state = packed, progress;
-        if (packed.startsWith("KRACHRW1")) {
-            if (packed.size() < 16) return false;
-            const auto stateSize = qFromBigEndian<quint32>(packed.constData()+8);
-            const auto progressSize = qFromBigEndian<quint32>(packed.constData()+12);
-            if (progressSize > 2*1024*1024 || quint64(stateSize)+progressSize+16 != quint64(packed.size())) return false;
-            state = packed.mid(16,stateSize); progress = packed.mid(16+stateSize,progressSize);
-        }
+        QByteArray state, progress;
+        if (!historyPayload(packed,state,progress)) return false;
         const bool ok = movie.active() ? movie.restoreRewind(state,error) : host.restoreRewindState(state);
         if (ok) achievements.restoreProgress(progress,true);
         return ok;
@@ -949,13 +957,21 @@ void EmulationSession::run() {
             }
             return true;
         }
-        return history.capture(captureHistory(),host.frame(),host.aspectRatio(),
-                               inputDisplayEnabled ? &frameInput : nullptr);
+        const bool replaySafe = host.rewindReplaySafe();
+        const bool canReplay = replaySafe && previousReplaySafe;
+        previousReplaySafe = replaySafe;
+        const auto state = captureHistory();
+        return canReplay
+            ? history.captureForReplay(state,host.aspectRatio(),frameControls,inputDisplayEnabled ? &frameInput : nullptr)
+            : history.capture(state,host.frame(),host.aspectRatio(),inputDisplayEnabled ? &frameInput : nullptr);
     };
     // Capture the pre-input state once when a new local timeline starts.
     // At power-on the core has not delivered its first picture yet.
     auto seedHistory = [&] {
         if (history.size() || !historyHealthy) return;
+        // The first produced picture may use startup raster/viewport data that
+        // native states do not retain. Keep that single boundary picture exact.
+        previousReplaySafe = false;
         QImage frame = host.frame();
         if (frame.isNull()) {
             frame = QImage(1,1,QImage::Format_RGB32);
@@ -970,16 +986,38 @@ void EmulationSession::run() {
         double aspect = 4.0 / 3.0;
         InputDisplayState previousInput;
         const bool needInput = inputDisplayEnabled || networkMode == 1;
-        if (!history.stepBack(state,frame,aspect,steps,needInput ? &previousInput : nullptr)) return false;
+        RewindBuffer::ReplayFrame replay;
+        if (!history.stepBack(state,frame,aspect,steps,needInput ? &previousInput : nullptr,&replay)) return false;
         QString error;
-        if (!restoreHistory(state,error)) {
+        bool previewRestored = true;
+        if (!replay.previousState.isEmpty()) {
+            QByteArray coreState, ignoredProgress;
+            previewRestored = historyPayload(replay.previousState,coreState,ignoredProgress) &&
+                (movie.active() ? movie.restoreRewindCore(coreState,error) : host.restoreRewindState(coreState));
+            if (previewRestored) {
+                // Rendering must use the actual recorded controls, including mouse
+                // deltas. Never consume live input or append/branch the movie here.
+                if (replay.controls.commands & MovieTape::SoftReset) host.reset();
+                NetplayTimeline::apply(host,replay.controls);
+                host.runRewindPreviewFrame();
+                frame = host.frame(); aspect = host.aspectRatio();
+                previewRestored = !frame.isNull();
+            }
+        }
+        // Restore canonical post-frame core, battery, clock, achievement progress
+        // and movie position even if preview generation failed partway through.
+        const bool restored = restoreHistory(state,error);
+        if (!restored || !previewRestored) {
             clearHistory(); historyHealthy = false;
             emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
             return false;
         }
         if (needInput) frameInput = previousInput == InputDisplayState{}
             ? host.inputDisplay(false) : previousInput;
-        if (!networkMode) host.restoreFramePreview(frame,aspect);
+        if (!networkMode) {
+            host.restoreFramePreview(frame,aspect);
+            previousReplaySafe = host.rewindReplaySafe();
+        }
         const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
         if (!selected.isNull()) presentFrame(selected,aspect);
         if (networkMode) { networkRewindImage = frame; networkRewindAspect = aspect; }
@@ -1024,7 +1062,9 @@ void EmulationSession::run() {
                 emit actionNotice(QStringLiteral("Завершите онлайн-сессию перед этим действием.")); continue;
             }
             if(networkMode==1 && command.networkAuthorized && command.type!=Type::Cheats && command.type!=Type::Save && command.type!=Type::NetStepHold && command.type!=Type::FrameAdvance && command.type!=Type::NetReverse &&
-               command.type!=Type::Port && command.type!=Type::ControllerType && command.type!=Type::ControllerKind)
+               command.type!=Type::Port && command.type!=Type::ControllerType && command.type!=Type::ControllerKind &&
+               command.type!=Type::Region && command.type!=Type::CdLoading && command.type!=Type::SpriteLimit &&
+               command.type!=Type::DiscIndex && command.type!=Type::Eject)
                 networkDirty=true;
             if (achievementHardcore) {
                 const bool prohibited = command.type == Type::Restore || command.type == Type::RestoreFile || command.type == Type::FrameAdvance || command.type == Type::FrameBack ||
@@ -1294,7 +1334,6 @@ void EmulationSession::run() {
                 achievementHardcoreRequested = bool(command.value & 2);
                 configureAchievements();
                 if (host.loaded()) loadAchievements();
-                clearHistory();
                 break;
             case Type::AchievementsLogin:
                 achievementStatusOverride.clear();
@@ -1302,7 +1341,7 @@ void EmulationSession::run() {
                 if (host.loaded()) loadAchievements();
                 break;
             case Type::AchievementsLogout:
-                achievementStatusOverride.clear(); achievements.logout(); clearHistory();
+                achievementStatusOverride.clear(); achievements.logout();
                 break;
             case Type::AchievementsRefresh: achievements.refresh(); break;
             case Type::AchievementsResponse:
@@ -1557,14 +1596,18 @@ void EmulationSession::run() {
             case Type::Disc:
             case Type::DiscIndex:
             case Type::Eject: {
-                const bool ok = command.type == Type::Disc ? host.changeDisc(command.path,error) :
-                    command.type == Type::DiscIndex ? host.selectDisc(command.value,error) :
-                    host.setDiscEjected(command.value != 0,error);
-                // Failed mounts can also disturb the drive; do not retain an
-                // older timeline across any attempted media operation.
-                clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
+                bool timelineChanged = false;
+                const bool ok = command.type == Type::Disc ? host.changeDisc(command.path,error,&timelineChanged) :
+                    command.type == Type::DiscIndex ? host.selectDisc(command.value,error,&timelineChanged) :
+                    host.setDiscEjected(command.value != 0,error,&timelineChanged);
+                // Validation failures and repeated tray/disc requests leave the
+                // timeline intact; attempted mounts can disturb it even on failure.
+                if (timelineChanged) {
+                    clearHistory(); clearAudio(); rewindStatus(false); pacer.reset(nowNs());
+                    if (networkMode == 1) networkDirty = true;
+                }
                 discStatus(); cheatStatus(); emit stateSlotsChanged(-1,host.occupiedStateSlots());
-                if (ok && command.type != Type::Eject) loadAchievements(true);
+                if (ok && timelineChanged && command.type != Type::Eject) loadAchievements(true);
                 if (ok) emit actionCompleted(command.type == Type::Eject ?
                     (command.value ? Localization::text(QStringLiteral("Привод открыт")) : Localization::text(QStringLiteral("Привод закрыт"))) :
                     Localization::text(QStringLiteral("Диск: %1")).arg(QFileInfo(host.discPaths().value(host.discIndex())).completeBaseName()));
@@ -1585,16 +1628,26 @@ void EmulationSession::run() {
                     pacer.reset(nowNs());
                 }
                 break;
-            case Type::SpriteLimit:
-                if (host.setRemoveSpriteLimit(command.value != 0,error)) {
-                    optionsPending = true; clearHistory();
+            case Type::SpriteLimit: {
+                bool changed = false;
+                if (host.setRemoveSpriteLimit(command.value != 0,error,&changed)) {
+                    if (changed) {
+                        optionsPending = true; clearHistory();
+                        if (networkMode == 1) networkDirty = true;
+                    }
                 } else emit errorOccurred(error);
                 break;
-            case Type::CdLoading:
-                if (host.setFastCdLoading(command.value != 0,error)) {
-                    if (host.isCd()) { optionsPending = true; clearHistory(); }
+            }
+            case Type::CdLoading: {
+                bool changed = false;
+                if (host.setFastCdLoading(command.value != 0,error,&changed)) {
+                    if (changed) {
+                        if (host.isCd()) { optionsPending = true; clearHistory(); }
+                        if (networkMode == 1) networkDirty = true;
+                    }
                 } else emit errorOccurred(error);
                 break;
+            }
             case Type::PerGameCdBackup:
                 host.setPerGameCdBackup(command.value != 0);
                 break;
@@ -1604,17 +1657,25 @@ void EmulationSession::run() {
                 if (!host.setAutoFixChecksum(command.value != 0,error))
                     emit errorOccurred(error);
                 break;
-            case Type::Region:
-            case Type::Filter:
-                if (command.type == Type::Region ? host.setRegion(command.value,error)
-                                                 : host.setBlarggFilter(command.value,error)) {
-                    if (command.type == Type::Region && host.isCd()) {
-                        if (!host.hardReset(error)) emit errorOccurred(error);
-                        achievements.reset();
-                        loaded_.store(host.loaded()); discStatus();
+            case Type::Region: {
+                bool changed = false;
+                if (host.setRegion(command.value,error,&changed)) {
+                    if (changed) {
+                        if (host.isCd()) {
+                            if (!host.hardReset(error)) emit errorOccurred(error);
+                            achievements.reset();
+                            loaded_.store(host.loaded()); discStatus();
+                        }
+                        optionsPending = true; clearHistory(); clearAudio();
+                        if (networkMode == 1) networkDirty = true;
                     }
-                    optionsPending = true; clearHistory(); clearAudio();
                 } else emit errorOccurred(error);
+                break;
+            }
+            case Type::Filter:
+                // Blargg changes presentation, not native execution. Replayed
+                // local frames use the current filter; stored previews retain geometry.
+                if (!host.setBlarggFilter(command.value,error)) emit errorOccurred(error);
                 break;
             case Type::Save:
             case Type::SaveFile: {
@@ -1815,9 +1876,20 @@ void EmulationSession::run() {
         }
         const bool requestedHistoryEnabled = rewindEnabled_.load() && !achievementHardcore && networkMode!=2;
         const int requestedHistoryMemoryMiB = rewindMemoryMiB_.load();
-        if (historyEnabled != requestedHistoryEnabled || historyMemoryMiB != requestedHistoryMemoryMiB) {
-            historyEnabled = requestedHistoryEnabled; historyMemoryMiB = requestedHistoryMemoryMiB;
+        if (historyEnabled != requestedHistoryEnabled) {
+            historyEnabled = requestedHistoryEnabled;
             clearHistory();
+        }
+        if (historyMemoryMiB != requestedHistoryMemoryMiB) {
+            historyMemoryMiB = requestedHistoryMemoryMiB;
+            const auto checkpoints = history.size();
+            history.setByteLimit(qsizetype(historyMemoryMiB) * 1024 * 1024);
+            if (rewindLatched && history.size() < checkpoints) {
+                const auto removedMs = qint64(std::llround(double(checkpoints-history.size()) * rewindStepMs));
+                rewindLastProgressMs = rewindAvailableMs();
+                rewindTotalMs = std::max(rewindLastProgressMs,rewindTotalMs-removedMs);
+                emit rewindProgress(rewindLastProgressMs,rewindTotalMs);
+            }
         }
         const bool background = !networkMode && backgroundPaused_.load();
         if (background && !lastAchievementBackground && achievementHardcore && !achievements.canPause()) {
@@ -1831,7 +1903,10 @@ void EmulationSession::run() {
         if (nowPaused != effectivePaused) {
             effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); clearAudio(); pacer.reset(nowNs());
         }
-        const bool reverse = rewind_.load() && historyEnabled && host.loaded() && !background && !achievementHardcore && !optionsPending;
+        // Enter only when there is a previous checkpoint. Once at the oldest
+        // one, keep holding there until release instead of running forward.
+        const bool canReverse = history.size() > 1 || (rewindLatched && history.size() > 0);
+        const bool reverse = rewind_.load() && historyEnabled && canReverse && host.loaded() && !background && !achievementHardcore && !optionsPending;
         const bool metricsRunning = (performanceMetricsEnabled || gameFpsEnabled) &&
             host.loaded() && !nowPaused && !reverse && !networkRemoteRewinding;
         if (metricsRunning != metricsWindowRunning) {
@@ -1925,7 +2000,7 @@ void EmulationSession::run() {
             if (!achievementSuppressed && !networkMode) achievements.frame();
             afterFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
-            if (optionsPending) { optionsPending = false; clearHistory(); }
+            if (optionsPending) optionsPending = false;
             if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
                 history.clear(); historyHealthy = false;
             }
@@ -1943,9 +2018,6 @@ void EmulationSession::run() {
             previousSpeedPercent = speedPercent;
             fastLatched = fast; clearAudio(); pacer.reset(nowNs()); nextPresentationNs = 0;
             resetMetrics();
-            // Fast-forward creates a gap: discard the old timeline so rewind
-            // cannot jump across it when normal recording resumes.
-            if (fast) clearHistory();
         }
         // At 5% a PAL frame lasts 400 ms. Feed the device small chunks
         // throughout that interval and service commands between them.
@@ -1973,9 +2045,12 @@ void EmulationSession::run() {
         const int factor = fast ? fastForwardFactor_.load() : 1;
         const bool finalMovieFrame = movie.readOnly() && movie.position() + 1 >= movie.length();
         const bool present = !fast || finalMovieFrame || nowNs() >= nextPresentationNs;
-        networkTimeline.setHistoryEnabled(historyEnabled&&networkMode==1&&!fast);
         if (!networkMode && !fast && historyEnabled && !optionsPending) seedHistory();
         if (!beforeFrame()) continue;
+        networkTimeline.setHistoryEnabled(historyEnabled&&networkMode==1&&!fast);
+        // Only an executed fast frame creates a gap. Toggles while paused or
+        // waiting for network input must preserve the existing timeline.
+        if (fast && history.size()) clearHistory();
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
         const bool capture = videoPending && videoRecorder.accepting();
@@ -1988,7 +2063,7 @@ void EmulationSession::run() {
             clearHistory(); discStatus();
         }
         if (optionsPending) {
-            optionsPending = false; clearHistory(); clearAudio(); pacer.reset(nowNs());
+            optionsPending = false; clearAudio(); pacer.reset(nowNs());
         }
         if (!fast && historyEnabled && historyHealthy) {
             if (!recordHistory()) {

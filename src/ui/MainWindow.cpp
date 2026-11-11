@@ -1957,8 +1957,7 @@ void MainWindow::editSettings(int initialPage) {
     });
     rewind->addRow(Localization::text(QStringLiteral("Постоянная скорость:")), rewindFixedSpeed);
     auto* rewindHelp = new QLabel(Localization::text(QStringLiteral(
-        "История ограничена только памятью. При заполнении удаляются старые кадры. "
-        "Изменение лимита очищает историю; память выделяется по мере накопления.")), &dialog);
+        "Память выделяется по мере записи. При заполнении или уменьшении лимита удаляются самые старые кадры. 1 МиБ = 1 048 576 байт.")), &dialog);
     rewindHelp->setWordWrap(true);
     rewind->addRow(rewindHelp);
     rewindMemory->setToolTip(Localization::text(QStringLiteral(

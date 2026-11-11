@@ -105,9 +105,44 @@ int main(int argc,char** argv) {
    require(restored.players[0].buttons==quint16(100-i),"bounded input landed on wrong frame");
    require(boundedInput.bytesUsed()<=4000,"bounded input reverse memory cap exceeded");
  }
- buffer.configure(true);for(int i=0;i<10;++i)buffer.capture(shots[i].state,shots[i].frame,1.0);
+ buffer.clear();for(int i=0;i<10;++i)buffer.capture(shots[i].state,shots[i].frame,1.0);
  require(buffer.size()==10,"history was limited by checkpoint count");
+ const auto used=buffer.bytesUsed();
+ buffer.configure(true);
+ buffer.setByteLimit(used*2);
+ require(buffer.size()==10,"increasing budget or reapplying enabled state discarded history");
+ buffer.setByteLimit(used-1);
+ require(buffer.size()==9 && buffer.bytesUsed()<used,"smaller budget did not evict only oldest checkpoint");
+ require(buffer.stepBack(actual,image,aspect,20) && actual==shots[1].state,"resize lost retained timeline");
+ buffer.setByteLimit(0);
+ require(!buffer.size() && !buffer.bytesUsed(),"zero budget retained the anchor");
  require(!buffer.capture({},shots[0].frame,1.0),"empty state accepted");
  require(!buffer.capture(shots[0].state,{},1.0),"empty image accepted");
+ // Mix a seed picture with replay-only checkpoints, then evict the seed.
+ RewindBuffer replayBuffer;
+ replayBuffer.configure(true);
+ require(replayBuffer.capture(shots[0].state,shots[0].frame,1.0),"seed for replay");
+ MovieInput controls;
+ for(int i=1;i<=12;++i) {
+   controls.buttons[1]=quint16(i);
+   require(replayBuffer.captureForReplay(shots[i].state,1.0,controls),"append replay state");
+ }
+ RewindBuffer::ReplayFrame replay;
+ require(replayBuffer.stepBack(actual,image,aspect,3,nullptr,&replay) &&
+         actual==shots[9].state && replay.previousState==shots[8].state &&
+         replay.controls.buttons[1]==9 && image.isNull(),"wrong replay landing state or input");
+ replayBuffer.setByteLimit(replayBuffer.bytesUsed()-1);
+ require(replayBuffer.size()==8,"evicted predecessor counted as a rewind step");
+ require(replayBuffer.stepBack(actual,image,aspect,20,nullptr,&replay) &&
+         actual==shots[2].state && replay.previousState==shots[1].state &&
+         replay.controls.buttons[1]==2,"oldest replay frame lost predecessor or input");
+ require(!replayBuffer.stepBack(actual,image,aspect,1,nullptr,&replay),"rewound to unavailable predecessor");
+ replayBuffer.setByteLimit(128*1024);
+ require(replayBuffer.capture(shots[7].state,shots[7].frame,1.5),"capture picture on branched timeline");
+ require(replayBuffer.captureForReplay(shots[8].state,1.0,controls),"return to replay after picture");
+ require(replayBuffer.stepBack(actual,image,aspect,1,nullptr,&replay) &&
+         image==shots[7].frame && replay.previousState.isEmpty() && aspect==1.5,"stored branch picture lost");
+ require(replayBuffer.stepBack(actual,image,aspect,1,nullptr,&replay) &&
+         actual==shots[2].state && replay.previousState==shots[1].state,"branch corrupted replay");
  std::puts("Reverse deltas: sparse/dense changes, dimensions, branches, budgets, input and disabled history passed");
 }

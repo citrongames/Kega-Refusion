@@ -33,15 +33,20 @@ public:
     QStringList discPaths() const;
     int discIndex() const { return discIndex_; }
     bool discEjected() const;
-    bool changeDisc(const QString& path, QString& error);
-    bool selectDisc(int index, QString& error);
-    bool setDiscEjected(bool ejected, QString& error);
+    // Reports only operations capable of disturbing the drive, even if they fail.
+    bool changeDisc(const QString& path, QString& error, bool* timelineChanged = nullptr);
+    bool selectDisc(int index, QString& error, bool* timelineChanged = nullptr);
+    bool setDiscEjected(bool ejected, QString& error, bool* timelineChanged = nullptr);
     bool setLinkCableEnabled(bool enabled, QString& error);
     bool linkCableEnabled() const { return linkRequested_; }
     void setLinkPresentationRole(int role) { linkPresentationRole_ = role == 2 ? 2 : 1; }
     const QImage& frameForLinkRole(int role) const;
     double aspectRatioForLinkRole(int role) const;
     void runFrame(bool renderVideo = true, bool captureAudio = true);
+    // Progressive local MD/32X can redraw a saved moment from its predecessor.
+    // External media, unserialized input edges and retained fields keep pictures.
+    bool rewindReplaySafe() const;
+    void runRewindPreviewFrame();
     bool frameInputPolled() const;
     bool supportsInputPollMetrics() const;
     void setExpansionDevices(bool cd, bool x32);
@@ -58,10 +63,10 @@ public:
     quint64 debugAudioMask() const { return debugAudioMask_; }
     // Region: 0 Auto, 1 Japan, 2 USA, 3 Europe. Filter: 0 Off, 1 Mono,
     // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
-    bool setRegion(int region, QString& error);
-    bool setBlarggFilter(int filter, QString& error);
-    bool setFastCdLoading(bool enabled, QString& error);
-    bool setRemoveSpriteLimit(bool enabled, QString& error);
+    bool setRegion(int region, QString& error, bool* changed = nullptr);
+    bool setBlarggFilter(int filter, QString& error, bool* changed = nullptr);
+    bool setFastCdLoading(bool enabled, QString& error, bool* changed = nullptr);
+    bool setRemoveSpriteLimit(bool enabled, QString& error, bool* changed = nullptr);
     // Applies to the core's ROM copy at load/power cycle, never to source bytes.
     bool setAutoFixChecksum(bool enabled, QString& error);
     const CheatList& cheats() const { return movieCheatsActive_ ? movieCheats_ : cheats_.entries(); }
@@ -202,7 +207,7 @@ private:
     bool registerDiscs(QString& error);
     bool refreshDiscFiles(QString& error);
     void setDiscIdentity();
-    bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error);
+    bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error, bool* changed = nullptr);
     bool saveStateFile(const QString& path, QString& error, bool keepPrevious);
     QString statePath(int slot) const;
     QString saveReadPath(const QString& directory, const QString& suffix) const;
@@ -281,6 +286,7 @@ private:
     bool spriteOwnershipEnabled_ = false;
     QByteArray audio_;
     bool videoEnabled_ = true, audioEnabled_ = true;
+    bool rewindPreview_ = false;
     bool recordingVideoEnabled_ = false;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;

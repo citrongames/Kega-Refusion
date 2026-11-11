@@ -13,7 +13,7 @@ public:
     bool play(const QString& path, bool resumeRecording, QString& error);
     bool rerecord(const QString& path, QString& error);
     bool finish(bool unload, QString& error);
-    bool beforeFrame(const MovieInput& live, QString& error);
+    bool beforeFrame(const MovieInput& live, QString& error, MovieInput* applied = nullptr);
     void afterFrame();
     bool saveSlot(int slot, QString& error);
     bool saveFile(const QString& path, QString& error);
@@ -22,6 +22,8 @@ public:
     unsigned occupiedSlots() const;
     QByteArray captureRewind() const;
     bool restoreRewind(const QByteArray& state, QString& error);
+    // Restore only the core/battery payload for a preview; leave tape/cursor untouched.
+    bool restoreRewindCore(const QByteArray& state, QString& error);
     Mode mode() const { return mode_; }
     bool active() const { return mode_ != Off; }
     bool recording() const { return mode_ == Recording; }

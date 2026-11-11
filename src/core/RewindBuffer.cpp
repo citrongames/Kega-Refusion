@@ -108,7 +108,15 @@ void RewindBuffer::dropNewestInput() {
         bytesUsed_ -= sizeof(InputRun);
     }
 }
+size_t RewindBuffer::size() const {
+    if (currentState_.isEmpty()) return 0;
+    // After eviction, a replay-only oldest entry is a rendering prerequisite,
+    // not another frame the user can land on.
+    if (!entries_.empty() && entries_.front().controls) return entries_.size();
+    return entries_.size() + 1;
+}
 void RewindBuffer::configure(bool enabled) {
+    if (enabled_ == enabled) return;
     clear();
     enabled_ = enabled;
 }
@@ -116,10 +124,19 @@ void RewindBuffer::setByteLimit(qsizetype byteLimit) {
     byteLimit = std::max<qsizetype>(0,byteLimit);
     if (byteLimit_ == byteLimit) return;
     byteLimit_ = byteLimit;
-    clear();
+    trimToBudget();
+}
+void RewindBuffer::trimToBudget() {
+    while (!entries_.empty() && bytesUsed_ > byteLimit_) {
+        bytesUsed_ -= entryBytes(entries_.front());
+        entries_.pop_front();
+        dropOldestInput();
+    }
+    if (bytesUsed_ > byteLimit_) clear();
 }
 void RewindBuffer::clear() {
     entries_.clear(); inputRuns_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
+    currentControls_.reset();
     bytesUsed_ = 0;
 }
 bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect,
@@ -130,17 +147,29 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
     const QImage rgb = frame.convertToFormat(QImage::Format_RGB32);
     if (rgb.isNull() || rgb.sizeInBytes()>maxBytes) return false;
     const QByteArray pixels(reinterpret_cast<const char*>(rgb.constBits()),rgb.sizeInBytes());
+    return append(state, pixels, rgb.size(), VideoFrameGeometry::nativeSize(frame), aspect, std::nullopt, input);
+}
+bool RewindBuffer::captureForReplay(const QByteArray& state, double aspect, const MovieInput& controls,
+                                    const InputDisplayState* input) {
+    if (!enabled_) return true;
+    if (state.isEmpty() || state.size() > maxBytes || !std::isfinite(aspect) || aspect <= 0) return false;
+    return append(state, {}, {}, {}, aspect, controls, input);
+}
+bool RewindBuffer::append(const QByteArray& state, const QByteArray& pixels, QSize size, QSize nativeSize,
+                          double aspect, std::optional<MovieInput> controls, const InputDisplayState* input) {
     const qsizetype anchorBytes = state.capacity()+pixels.capacity();
     if (anchorBytes>byteLimit_) { clear(); return false; }
-    const size_t previousCount = size();
+    const size_t previousCount = currentState_.isEmpty() ? 0 : entries_.size() + 1;
     if (!currentState_.isEmpty()) {
-        Entry previous{encode(currentState_,state),encode(currentPixels_,pixels),currentSize_,currentNativeSize_,currentAspect_};
-        if (previous.state.bytes.isEmpty() || previous.pixels.bytes.isEmpty()) { clear(); return false; }
+        Entry previous{encode(currentState_,state), {}, currentSize_, currentNativeSize_, currentAspect_, currentControls_};
+        if (!currentControls_) previous.pixels = encode(currentPixels_,pixels);
+        if (previous.state.bytes.isEmpty() || (!currentControls_ && previous.pixels.bytes.isEmpty())) { clear(); return false; }
         bytesUsed_ += entryBytes(previous);
         entries_.push_back(std::move(previous));
     }
     bytesUsed_ += anchorBytes-currentState_.capacity()-currentPixels_.capacity();
-    currentState_ = state; currentPixels_ = pixels; currentSize_ = rgb.size(); currentNativeSize_ = VideoFrameGeometry::nativeSize(frame); currentAspect_ = aspect;
+    currentState_ = state; currentPixels_ = pixels; currentSize_ = size; currentNativeSize_ = nativeSize;
+    currentAspect_ = aspect; currentControls_ = controls;
     // A history captured before input tracking began has neutral input. Runs
     // keep long holds to one snapshot rather than copying it every frame.
     if (input && inputRuns_.empty() && previousCount) {
@@ -148,45 +177,52 @@ bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double 
         bytesUsed_ += sizeof(InputRun);
     }
     if (input || !inputRuns_.empty()) appendInput(input ? *input : InputDisplayState{});
-    while (!entries_.empty() && bytesUsed_>byteLimit_) {
-        bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
-        dropOldestInput();
-    }
-    if (bytesUsed_ > byteLimit_) { clear(); return false; }
-    return true;
+    trimToBudget();
+    return !currentState_.isEmpty();
 }
 bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, int steps,
-                            InputDisplayState* input) {
+                            InputDisplayState* input, ReplayFrame* replay) {
     if (input) *input = {};
-    if (steps < 1 || entries_.empty()) return false;
+    if (replay) *replay = {};
+    if (steps < 1 || size() < 2) return false;
+    const size_t count = std::min(size_t(steps), size() - 1);
+    if (!replay && entries_[entries_.size() - count].controls) return false;
     // Apply the reverse deltas in order. Only the landing frame needs an image
     // and a core restore, even when one display tick spans several checkpoints.
-    while (steps-- > 0 && !entries_.empty()) {
+    for (size_t i = 0; i < count; ++i) {
         const auto& target = entries_.back();
         const auto oldBytes = currentState_.capacity() + currentPixels_.capacity();
         currentState_ = decode(target.state,std::move(currentState_));
-        currentPixels_ = decode(target.pixels,std::move(currentPixels_));
+        currentPixels_ = target.controls ? QByteArray() : decode(target.pixels,std::move(currentPixels_));
         const auto newBytes = currentState_.capacity() + currentPixels_.capacity();
-        if (currentState_.isEmpty() || currentPixels_.isEmpty() || newBytes > byteLimit_ ||
-            quint64(target.size.width()) * target.size.height() * 4 != quint64(currentPixels_.size())) {
+        if (currentState_.isEmpty() || newBytes > byteLimit_ ||
+            (!target.controls && (currentPixels_.isEmpty() ||
+             quint64(target.size.width()) * target.size.height() * 4 != quint64(currentPixels_.size())))) {
             clear(); return false;
         }
         bytesUsed_ += newBytes - oldBytes - entryBytes(target);
         currentSize_ = target.size; currentNativeSize_ = target.nativeSize; currentAspect_ = target.aspect;
+        currentControls_ = target.controls;
         entries_.pop_back();
         dropNewestInput();
     }
-    // A size-changing older anchor can be larger than the newer one.
-    while (!entries_.empty() && bytesUsed_>byteLimit_) {
-        bytesUsed_ -= entryBytes(entries_.front()); entries_.pop_front();
-        dropOldestInput();
+    if (currentControls_) {
+        // Read the preceding state without moving the cursor a second time.
+        replay->previousState = decode(entries_.back().state,currentState_);
+        if (replay->previousState.isEmpty()) { clear(); return false; }
+        replay->controls = *currentControls_;
+        frame = {};
+    } else {
+        QImage image(currentSize_,QImage::Format_RGB32);
+        if (image.isNull() || image.sizeInBytes()!=currentPixels_.size()) { clear(); return false; }
+        std::memcpy(image.bits(),currentPixels_.constData(),size_t(currentPixels_.size()));
+        if (currentNativeSize_ != image.size()) VideoFrameGeometry::setNativeSize(image,currentNativeSize_);
+        frame = std::move(image);
     }
-    if (bytesUsed_ > byteLimit_) { clear(); return false; }
-    QImage image(currentSize_,QImage::Format_RGB32);
-    if (image.isNull() || image.sizeInBytes()!=currentPixels_.size()) { clear(); return false; }
-    std::memcpy(image.bits(),currentPixels_.constData(),size_t(currentPixels_.size()));
-    if (currentNativeSize_ != image.size()) VideoFrameGeometry::setNativeSize(image,currentNativeSize_);
-    state = currentState_; frame = std::move(image); aspect = currentAspect_;
+    // A size-changing older anchor can be larger than the newer one.
+    trimToBudget();
+    if (currentState_.isEmpty()) return false;
+    state = currentState_; aspect = currentAspect_;
     if (input && !inputRuns_.empty()) *input = inputRuns_.back().state;
     return true;
 }

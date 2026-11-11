@@ -36,19 +36,23 @@ QByteArray frameBackRom(){
  word(0x33fc);word(0x8700);word(0x00c0);word(0x0004);
  word(0x13fc);word(0x0040);word(0x00a1);word(0x0009);
  word(0x13fc);word(0x0040);word(0x00a1);word(0x0003);
- word(0x7400);
+ word(0x7000);word(0x7400);
  const int waitOn=pc;
  word(0x3239);word(0x00c0);word(0x0004);word(0x0241);word(0x0008);
  const int branchOn=pc;word(0x6700);
- word(0x5442); // ADDQ.W #2,D2: CRAM changes on every frame.
- word(0x23fc);word(0xc000);word(0x0000);word(0x00c0);word(0x0004);
- word(0x33c2);word(0x00c0);word(0x0000);
- word(0x1039);word(0x00a1);word(0x0003);
- word(0x33c0);word(0x00ff);word(0x0000);
- word(0x13c0);word(0x0020);word(0x0000);
  const int waitOff=pc;
  word(0x3239);word(0x00c0);word(0x0004);word(0x0241);word(0x0008);
  const int branchOff=pc;word(0x6600);
+ // Sample and change CRAM at the start of active display, so actual input
+ // changes this frame's pixels as well as native state and cartridge SRAM.
+ word(0x1039);word(0x00a1);word(0x0003);
+ word(0x33c0);word(0x00ff);word(0x0000);
+ word(0x13c0);word(0x0020);word(0x0000);
+ word(0xd040); // ADD.W D0,D0: pad bits reach visible CRAM colour bits.
+ word(0x5442); // ADDQ.W #2,D2: pictures also change with neutral input.
+ word(0xb142); // EOR.W D0,D2.
+ word(0x23fc);word(0xc000);word(0x0000);word(0x00c0);word(0x0004);
+ word(0x33c2);word(0x00c0);word(0x0000);
  const int branchAgain=pc;word(0x6000);
  const int branches[][2]={{branchOn,waitOn},{branchOff,waitOff},{branchAgain,waitOn}};
  for(const auto& branch:branches){
@@ -70,11 +74,12 @@ int main(int argc,char** argv){
  const bool inputDisplayOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--input-display");
  const bool speedOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--game-speed");
  const bool timerOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--run-timer");
+ const bool rewindResetsOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--rewind-resets");
  const bool checksumOnly=argc==3 && QString::fromLocal8Bit(argv[2])==QLatin1String("--checksum");
- require(argc==2 || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || inputDisplayOnly || timerOnly || speedOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
+ require(argc==2 || rewindResetsOnly || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || inputDisplayOnly || timerOnly || speedOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
- if(frameBackOnly || inputDisplayOnly)rom=frameBackRom();
+ if(frameBackOnly || inputDisplayOnly || rewindResetsOnly)rom=frameBackRom();
  if(spriteOnly){
   const auto program=QByteArray::fromHex("33fc800400c0000433fc814400c0000460fe");
   rom.replace(0x200,program.size(),program);
@@ -387,6 +392,84 @@ int main(int argc,char** argv){
   std::puts("Run timer: paused hold, frame steps, reverse, state restore and resets passed");
   return 0;
  }
+ if(rewindResetsOnly){
+  struct Shot { QByteArray state;QImage frame;double aspect=0; };
+  int serial=0;
+  const auto state=[&]{
+   const auto target=temp.filePath(QStringLiteral("reset-%1.krs").arg(serial++));
+   const int completed=actions+1;session.saveStateToFile(target);
+   waitFor([&]{return actions>=completed && QFile::exists(target);},"rewind reset state save");
+   QFile saved(target);require(saved.open(QIODevice::ReadOnly),"rewind reset state read");return saved.readAll();
+  };
+  QImage image;double aspect=0;
+  const auto step=[&](bool backwards){
+   session.takeVideoFrame(image,aspect);const int before=frames.load();
+   if(backwards)session.backFrame();else session.advanceFrame();
+   waitFor([&]{return frames.load()>before;},"rewind reset frame step");
+   require(frames.load()==before+1 && session.takeVideoFrame(image,aspect) && paused,
+           "rewind reset frame step skipped or lost pause");
+  };
+  session.setPaused(true);waitFor([&]{return paused;},"rewind reset initial pause");
+  session.setRegion(2);session.setRemoveSpriteLimit(false);session.setBlarggFilter(0);
+  step(false);step(false);
+  const auto preserved=[&](const std::function<void()>& edit,const char* why,bool samePresentation=true){
+   step(false);const Shot previous{state(),image,aspect};
+   step(false);const auto current=state();
+   edit();require(state()==current,"presentation or no-op edit changed native state");
+   step(true);
+   require(state()==previous.state,why);
+   require(!image.isNull() && aspect>0 && aspect<8,"rewind preview has invalid geometry");
+   if(samePresentation)require(image==previous.frame && aspect==previous.aspect,why);
+  };
+  preserved([&]{session.setRewindMemoryMiB(64);},"memory reduction cleared history");
+  preserved([&]{session.setRewindMemoryMiB(256);},"memory increase cleared history");
+  preserved([&]{session.setRewindMemoryMiB(16);},"minimum memory limit cleared retained history");
+  preserved([&]{session.setRegion(2);},"no-op region command cleared history");
+  preserved([&]{session.setRemoveSpriteLimit(false);},"no-op sprite limit cleared history");
+  preserved([&]{session.setFastCdLoading(true);session.setFastCdLoading(true);},"CD policy on cartridge cleared history");
+  preserved([&]{session.setAutoFixChecksum(true);session.setExpansionDevices(true,true);},"pending power options cleared history");
+  preserved([&]{session.setControllerConnected(0,true);session.setControllerSixButton(0,true);
+                 session.setControllerKind(0,ControllerType::Pad);session.setControllerAdapter(ControllerAdapter::None);},
+            "no-op controller settings cleared history");
+  preserved([&]{session.configureAchievements(false,false);},"no-op achievements configuration cleared history");
+  preserved([&]{session.configureAchievements(true,false);},"softcore achievements configuration cleared history");
+  preserved([&]{session.logoutAchievements();},"achievement logout cleared native history");
+  preserved([&]{session.configureAchievements(false,false);},"achievement disable cleared native history");
+  preserved([&]{session.setDebugMasks(1,1);session.setDebugBackdrop(0x123456);session.setDebugAudioGain(0,75);},
+            "debug presentation controls cleared history",false);
+  preserved([&]{session.setDebugMasks(0,0);session.setDebugBackdrop(0);session.setDebugAudioGain(0,100);},
+            "restoring debug presentation controls cleared history",false);
+  const int plainWidth=image.width();
+  preserved([&]{session.setBlarggFilter(2);},"Blargg filter cleared history before its first frame",false);
+  require(image.width()!=plainWidth,"reverse did not regenerate the current Blargg filter");
+  step(false);require(image.width()!=plainWidth,"Blargg filter did not apply after reverse");
+  const Shot filtered{state(),image,aspect};
+  step(true);require(image.size()==filtered.frame.size() && aspect==filtered.aspect,
+                     "reverse did not preserve current filter geometry");
+  step(false);require(image==filtered.frame && aspect==filtered.aspect && state()==filtered.state,
+                      "filter transition changed native state or forward branch");
+  preserved([&]{session.setBlarggFilter(0);},"disabling Blargg cleared filtered history",false);
+  require(image.width()==plainWidth,"reverse did not regenerate with Blargg disabled");
+  step(false);require(image.width()==plainWidth,"Blargg filter did not disable after reverse");
+  const int expectedErrors=errors+1;
+  preserved([&]{session.changeDisc(temp.filePath("missing.cue"));},"failed media validation cleared history");
+  require(errors==expectedErrors,"failed media validation was not reported");
+  const auto cleared=[&](const std::function<void()>& edit,const char* why){
+   step(false);step(false);edit();state();const int before=frames.load();
+   session.backFrame();state();require(frames.load()==before,why);
+  };
+  cleared([&]{session.resetGame();},"reset retained old history");
+  cleared([&]{session.setControllerConnected(1,true);},"controller topology change retained old history");
+  cleared([&]{session.setRemoveSpriteLimit(true);},"sprite-limit change retained old history");
+  cleared([&]{session.setRegion(3);},"region change retained old history");
+  session.setRewindEnabled(false);state();step(false);
+  preserved([&]{session.setRewindMemoryMiB(32);},"memory increase cleared manual frame-back history");
+  preserved([&]{session.setRewindMemoryMiB(16);},"memory reduction cleared manual frame-back history");
+  require(errors==expectedErrors,"rewind reset scenario emitted an unexpected error");
+  session.shutdown();
+  std::puts("Rewind resets: memory, no-ops, presentation/filter geometry, softcore, media validation and real boundaries passed");
+  return 0;
+ }
  if(frameBackOnly){
   struct Shot { QByteArray state;QImage frame;double aspect=0; };
   const auto read=[&](const QString& target){
@@ -455,13 +538,15 @@ int main(int argc,char** argv){
    session.setButtons(0,unsigned((i&1)?1u<<4:1u<<5));step(false);
    manual[size_t(i)]={state(),image,aspect};
   }
+  session.setButtons(0,1u<<7); // Live input differs from every saved frame.
   for(int i=int(manual.size())-2;i>=0;--i){
    step(true);compare(manual[size_t(i)],"disabled-rewind manual history lost an exact frame");
   }
   const int oldest=frames.load();session.backFrame();state();
   require(frames.load()==oldest,"manual reverse passed its oldest frame");
   session.setButtons(0,1u<<6);step(false);
-  require(state()!=manual[1].state,"divergent input reused the discarded future");
+  require(state()!=manual[1].state && image!=manual[1].frame,
+          "divergent input reused the discarded future state or picture");
   step(true);compare(manual[0],"manual branch did not return to its exact origin");
 
   // A background pause alone must not authorize manual frame edits.
@@ -499,6 +584,7 @@ int main(int argc,char** argv){
    movie[size_t(i)]={state(),image,aspect};
    require(cursor(movie[size_t(i)].state)==initialCursor+quint64(i),"movie manual cursor skipped a frame");
   }
+  session.setButtons(0,1u<<7);
   for(int i=3;i>=1;--i){
    step(true);compare(movie[size_t(i)],"movie backward state, preview or cursor mismatch");
   }
@@ -510,6 +596,24 @@ int main(int argc,char** argv){
   require(tape.size()==initialCursor+2 && tape.resumeFrame()==tape.size(),"movie retained the discarded future");
   MovieInput input;require(tape.inputAt(tape.size()-1,input) && input.buttons[0]==(1u<<6),
                           "movie branch did not record divergent input");
+  // Replay must retain the tape's input while live controls disagree. Picture
+  // regeneration must neither append frames nor move the movie's cursor.
+  require(tape.size()>=3,"movie replay fixture too short");
+  session.setButtons(0,1u<<7);pauseNext=true;
+  session.playMovie(moviePath);
+  waitFor([&]{return movieMode.load()==2 && paused;},"frame-back playback start");
+  state();take();
+  std::array<Shot,3> playback;
+  playback[0]={state(),image,aspect};
+  for(int i=1;i<int(playback.size());++i){
+   step(false);playback[size_t(i)]={state(),image,aspect};
+  }
+  for(int i=int(playback.size())-2;i>=0;--i){
+   step(true);compare(playback[size_t(i)],"playback reverse used live input or changed the movie cursor");
+  }
+  session.stopMovie();waitFor([&]{return movieMode.load()==0;},"frame-back playback stop");
+  MovieTape unchanged;require(unchanged.load(moviePath,error) && unchanged.size()==tape.size(),
+                              "playback preview modified the recorded timeline");
   QObject::disconnect(liveConnection);
   require(errors==0,"frame-back worker reported a core error");session.shutdown();
   std::puts("Frame back: realtime exact history, disabled-rewind manual steps, branches, pause guard and movie cursor passed");
@@ -589,7 +693,15 @@ int main(int argc,char** argv){
  if(fastOnly){
   std::atomic<bool> reversed{false};
   QObject::connect(&session,&EmulationSession::rewindingChanged,&app,[&](bool value){reversed=value;},Qt::DirectConnection);
-  session.setFastForwardFactor(0);session.setFastForward(true);
+  session.setPaused(true);waitFor([&]{return paused;});
+  const int pausedFrames=frames.load(),completed=actions+1;
+  session.setFastForward(true);session.saveStateToFile(temp.filePath("fast-paused.krs"));
+  waitFor([&]{return actions>=completed;},"paused fast-forward toggle acknowledgement");
+  require(frames==pausedFrames,"paused fast-forward executed a frame");
+  session.setFastForward(false);session.backFrame();
+  waitFor([&]{return frames>pausedFrames;},"paused fast-forward toggle discarded history");
+  require(frames==pausedFrames+1 && paused,"paused fast-forward toggle lost exact backward step");
+  session.setFastForwardFactor(0);session.setFastForward(true);session.setPaused(false);
   const int initial=frames;waitFor([&]{return frames>=initial+8;});
   session.setPaused(true);waitFor([&]{return paused;});
   session.setFastForward(false);session.setRewind(true);
@@ -597,10 +709,11 @@ int main(int argc,char** argv){
   require(frames==boundary && !reversed,"rewind crossed fast-forward gap or recorded accelerated frames");
   session.setRewind(false);session.setPaused(false);waitFor([&]{return !paused && frames>=boundary+8;});
   session.setPaused(true);waitFor([&]{return paused;});
-  session.setRewind(true);waitFor([&]{return reversed.load();});
-  require(frames>boundary+8,"rewind did not resume after fast-forward");
+  const int beforeReverse=frames.load();
+  session.setRewind(true);
+  waitFor([&]{return reversed.load() && frames>beforeReverse;},"rewind did not resume after fast-forward");
   session.setRewind(false);session.shutdown();require(errors==0,"fast-forward session error");
-  std::puts("Unlimited fast-forward, no history across gap, normal rewind recording resumed: passed");
+  std::puts("Paused fast-forward preserves history; executed gap clears history; normal recording and rewind resume: passed");
   return 0;
  }
  const int before=frames;QThread::msleep(180);QCoreApplication::processEvents();

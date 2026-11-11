@@ -144,8 +144,12 @@ bool MovieSession::finish(bool unload, QString& error) {
     return true;
 }
 
-bool MovieSession::beforeFrame(const MovieInput& live, QString& error) {
-    if (mode_ == Off) { applyInput(host_, live); return true; }
+bool MovieSession::beforeFrame(const MovieInput& live, QString& error, MovieInput* applied) {
+    if (mode_ == Off) {
+        applyInput(host_, live);
+        if (applied) *applied = live;
+        return true;
+    }
     if (mode_ == Finished) return false;
     MovieInput input;
     if (recording()) {
@@ -156,6 +160,7 @@ bool MovieSession::beforeFrame(const MovieInput& live, QString& error) {
         error = Localization::text(QStringLiteral("Запись не содержит ожидаемый кадр.")); return false;
     }
     applyInput(host_, input);
+    if (applied) *applied = input;
     return true;
 }
 void MovieSession::afterFrame() {
@@ -291,8 +296,14 @@ QByteArray MovieSession::captureRewind() const {
 bool MovieSession::restoreRewind(const QByteArray& state, QString& error) {
     if (!active() || state.size() < 8) return false;
     const quint64 cursor = qFromBigEndian<quint64>(state.constData() + state.size() - 8);
-    if (cursor > tape_.size() || !host_.restoreMovieState(state.left(state.size()-8), error, true)) return false;
+    if (cursor > tape_.size() || !restoreRewindCore(state,error)) return false;
     cursor_ = cursor;
     if (readOnly()) mode_ = cursor == tape_.size() ? Finished : Playback;
     return true;
+}
+
+bool MovieSession::restoreRewindCore(const QByteArray& state, QString& error) {
+    if (!active() || state.size() < 8) return false;
+    const quint64 cursor = qFromBigEndian<quint64>(state.constData() + state.size() - 8);
+    return cursor <= tape_.size() && host_.restoreMovieState(state.left(state.size()-8),error,true);
 }

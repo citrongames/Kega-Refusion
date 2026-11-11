@@ -255,6 +255,30 @@ int main(int argc,char** argv) {
                     require(presented.width()>image.width(),QStringLiteral("32X diagnostic filter did not expand video."));
                     require(host.recordingFrame()==image,QStringLiteral("Native 32X capture retained filtered pixels or lost mixed detail."));
                     require(host.frame()==presented,QStringLiteral("Reading native 32X capture changed presentation."));
+                    if (h40 && !blank && filter==3) {
+                        require(host.rewindReplaySafe(),QStringLiteral("Progressive attached 32X did not enable state replay."));
+                        const QByteArray predecessor=host.captureRewindState();
+                        host.runFrame();
+                        const QImage landed=host.frame();const double landedAspect=host.aspectRatio();
+                        const QByteArray target=host.captureRewindState();
+                        // Control: the existing picture-based rewind restores this
+                        // same canonical checkpoint before its next normal frame.
+                        require(host.restoreRewindState(target),QStringLiteral("32X control restore failed."));
+                        host.restoreFramePreview(landed,landedAspect);
+                        host.runFrame();
+                        const QImage next=host.frame();const QByteArray nextAudio=host.audio();
+                        const QByteArray nextState=host.captureRewindState();
+                        require(host.restoreRewindState(predecessor),QStringLiteral("32X replay predecessor restore failed."));
+                        host.runRewindPreviewFrame();
+                        require(host.frame()==landed && host.aspectRatio()==landedAspect && host.audio().isEmpty(),
+                                QStringLiteral("32X S-Video replay did not regenerate the exact landed picture silently."));
+                        require(host.restoreRewindState(target) && host.captureRewindState()==target,
+                                QStringLiteral("32X replay did not restore its canonical post-frame state."));
+                        host.runFrame();
+                        require(host.frame()==next,QStringLiteral("32X replay changed subsequent video."));
+                        require(host.audio()==nextAudio,QStringLiteral("32X replay changed subsequent PCM."));
+                        require(host.captureRewindState()==nextState,QStringLiteral("32X replay changed subsequent native state."));
+                    }
                 }
                 require(host.setRecordingVideoEnabled(false),QStringLiteral("Native 32X capture stop failed."));
                 require(host.setBlarggFilter(0,error),error);host.runFrame();

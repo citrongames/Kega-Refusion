@@ -2095,7 +2095,7 @@ void testRewind(const QString& corePath) {
     // Initial erased SRAM must replace a future save after restoring the checkpoint.
     const QString ram=temp.path()+"/data/saves/rewind.srm";
     if (QFile::exists(ram)) require(quint8(readFile(ram)[0])==0xff, "rewind retained future SRAM");
-    history.configure(true);
+    history.clear();
     for (int i=0;i<10;++i) require(history.capture(states.back(),frames.back(),4.0/3.0), "bounded capture failed");
     require(history.size()==10, "history was limited by checkpoint count");
     RewindBuffer small(1);

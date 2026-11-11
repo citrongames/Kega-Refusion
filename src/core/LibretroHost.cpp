@@ -387,15 +387,19 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
     return true;
 }
-bool LibretroHost::setDiscEjected(bool ejected, QString& error) {
+bool LibretroHost::setDiscEjected(bool ejected, QString& error, bool* timelineChanged) {
     error.clear();
+    if (timelineChanged) *timelineChanged = false;
+    if (isCd() && disk_.get_eject_state && discEjected() == ejected) return true;
+    if (isCd() && disk_.set_eject_state && timelineChanged) *timelineChanged = true;
     if (!isCd() || !disk_.set_eject_state || !disk_.set_eject_state(ejected)) {
         error = Localization::text(QStringLiteral("Не удалось изменить состояние привода Sega CD.")); return false;
     }
     audio_.clear(); return true;
 }
-bool LibretroHost::selectDisc(int index, QString& error) {
+bool LibretroHost::selectDisc(int index, QString& error, bool* timelineChanged) {
     error.clear();
+    if (timelineChanged) *timelineChanged = false;
     if (!isCd() || index < 0 || index >= discs_.size()) {
         error = Localization::text(QStringLiteral("Неверный номер диска.")); return false;
     }
@@ -403,9 +407,11 @@ bool LibretroHost::selectDisc(int index, QString& error) {
         error = Localization::text(QStringLiteral("Для CD32X откройте образ через «Открыть игру».")); return false;
     }
     if (!DiscMedia::unchanged(discs_[index],error)) return false;
+    if (index == discIndex_ && !discEjected()) return true;
     CoreFileSystem::clearError();
     const auto state = serialize();
     const bool wasEjected = discEjected();
+    if (timelineChanged) *timelineChanged = true;
     if (!setDiscEjected(true,error)) return false;
     if (!disk_.set_image_index(unsigned(index)) || !CoreFileSystem::lastError().isEmpty()) {
         disk_.set_image_index(unsigned(discIndex_));
@@ -418,8 +424,9 @@ bool LibretroHost::selectDisc(int index, QString& error) {
     loadCheats();
     return setDiscEjected(false,error);
 }
-bool LibretroHost::changeDisc(const QString& path, QString& error) {
+bool LibretroHost::changeDisc(const QString& path, QString& error, bool* timelineChanged) {
     error.clear();
+    if (timelineChanged) *timelineChanged = false;
     if (!isCd()) { error = Localization::text(QStringLiteral("Игра Sega CD не запущена.")); return false; }
     DiscImage image;
     if (!DiscMedia::inspect(path,image,error)) return false;
@@ -431,6 +438,7 @@ bool LibretroHost::changeDisc(const QString& path, QString& error) {
     const auto previous = discs_[discIndex_];
     const auto state = serialize();
     const bool wasEjected = discEjected();
+    if (timelineChanged) *timelineChanged = true;
     if (!setDiscEjected(true,error)) return false;
     const auto encoded = QDir::toNativeSeparators(image.runtimePath).toUtf8();
     retro_game_info game{}; game.path = encoded.constData();
@@ -683,6 +691,20 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     // Serialization and normal calls retain accurate audio state: never set
     // libretro's fast-savestate or hard-disable-audio flags.
     videoEnabled_ = audioEnabled_ = true;
+}
+bool LibretroHost::rewindReplaySafe() const {
+    // The SMS Pause latch is outside native states. CD/Paprium/YX5200 can seek
+    // external streams during a frame. Interlace retains the opposite field in
+    // an unserialized raster; the session also checks its preceding checkpoint.
+    return loaded_ && !linkPeer_ && api_->system_hw && mdControllerHardware(api_->system_hw()) &&
+        !hasCdHardware() && !(api_->paprium_active && api_->paprium_active()) &&
+        !recordingAbi_.contains("-kaiserwave-") &&
+        frame().width() > 1 && frame().height() > 1 && frame().height() <= 288;
+}
+void LibretroHost::runRewindPreviewFrame() {
+    rewindPreview_ = true;
+    runFrame(true,false);
+    rewindPreview_ = false;
 }
 void LibretroHost::reset() {
     runClock_ = {};
@@ -952,8 +974,9 @@ void LibretroHost::prepareCoreContent() {
 bool LibretroHost::setAutoFixChecksum(bool enabled, QString& error) {
     error.clear(); autoFixChecksum_ = enabled; return true;
 }
-bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value, QString& error) {
+bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value, QString& error, bool* changed) {
     error.clear();
+    if (changed) *changed = false;
     if (initialized_) {
         const auto choices = variableValues_.find(key);
         if (choices == variableValues_.end() || !choices->second.contains(value)) {
@@ -961,15 +984,17 @@ bool LibretroHost::setCoreOption(const QByteArray& key, const QByteArray& value,
             return false;
         }
     }
-    if (linkPeer_) { Activation scope(linkPeer_.get()); if (!linkPeer_->setCoreOption(key,value,error)) return false; }
+    if (linkPeer_) { Activation scope(linkPeer_.get()); if (!linkPeer_->setCoreOption(key,value,error,changed)) return false; }
     optionOverrides_[key] = value;
     if (variables_[key] != value) {
         variables_[key] = value;
         variablesUpdated_ = true;
+        if (changed) *changed = true;
     }
     return true;
 }
-bool LibretroHost::setRegion(int region, QString& error) {
+bool LibretroHost::setRegion(int region, QString& error, bool* changed) {
+    if (changed) *changed = false;
     if (isCd()) {
         const int needed = region ? region : discs_[discIndex_].region;
         if (needed && !SegaCdBios::validate(dataPath_,needed,error)) return false;
@@ -978,22 +1003,25 @@ bool LibretroHost::setRegion(int region, QString& error) {
     if (region < 0 || region >= int(values.size())) {
         error = Localization::text(QStringLiteral("Неверный регион.")); return false;
     }
-    return setCoreOption("genesis_plus_gx_region_detect", values[size_t(region)], error);
+    return setCoreOption("genesis_plus_gx_region_detect", values[size_t(region)], error, changed);
 }
-bool LibretroHost::setRemoveSpriteLimit(bool enabled, QString& error) {
-    return setCoreOption("genesis_plus_gx_no_sprite_limit", enabled ? "enabled" : "disabled", error);
+bool LibretroHost::setRemoveSpriteLimit(bool enabled, QString& error, bool* changed) {
+    if (changed) *changed = false;
+    return setCoreOption("genesis_plus_gx_no_sprite_limit", enabled ? "enabled" : "disabled", error, changed);
 }
-bool LibretroHost::setFastCdLoading(bool enabled, QString& error) {
+bool LibretroHost::setFastCdLoading(bool enabled, QString& error, bool* changed) {
+    if (changed) *changed = false;
     // Keep the drive's sector/audio clock intact; GPX retains its minimum
     // BIOS handshake delay while omitting simulated mechanical seek time.
-    return setCoreOption("genesis_plus_gx_cd_latency", enabled ? "disabled" : "enabled", error);
+    return setCoreOption("genesis_plus_gx_cd_latency", enabled ? "disabled" : "enabled", error, changed);
 }
-bool LibretroHost::setBlarggFilter(int filter, QString& error) {
+bool LibretroHost::setBlarggFilter(int filter, QString& error, bool* changed) {
+    if (changed) *changed = false;
     static const std::array<QByteArray,5> values{"disabled", "monochrome", "composite", "svideo", "rgb"};
     if (filter < 0 || filter >= int(values.size())) {
         error = Localization::text(QStringLiteral("Неверный фильтр Blargg.")); return false;
     }
-    if (!setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error)) return false;
+    if (!setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error, changed)) return false;
     localBlarggFilter_ = values[size_t(filter)];
     return true;
 }
@@ -2485,7 +2513,7 @@ bool LibretroHost::environment(unsigned command, void* data) {
     case RETRO_ENVIRONMENT_GET_LANGUAGE: *static_cast<unsigned*>(data) = RETRO_LANGUAGE_ENGLISH; return true;
     case RETRO_ENVIRONMENT_SET_MESSAGE: {
         const auto* msg = static_cast<retro_message*>(data);
-        if (h->message && msg && msg->msg) h->message(QString::fromUtf8(msg->msg));
+        if (!h->rewindPreview_ && h->message && msg && msg->msg) h->message(QString::fromUtf8(msg->msg));
         return true;
     }
     case RETRO_ENVIRONMENT_GET_VFS_INTERFACE: {

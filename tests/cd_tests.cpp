@@ -120,15 +120,25 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
     requireFrame(host);
     require(host.restoreRewindState(rewind), "CD rewind restore failed on same disc");
     require(host.loadState(0, error), "CD state load failed on same disc");
+    bool mediaChanged = true;
+    const auto unchangedDiscState = host.captureRewindState();
+    require(host.selectDisc(0,error,&mediaChanged) && !mediaChanged &&
+            host.captureRewindState() == unchangedDiscState,
+            "selecting current CD disturbed the timeline");
+    require(host.setDiscEjected(false,error,&mediaChanged) && !mediaChanged &&
+            host.captureRewindState() == unchangedDiscState,
+            "closing an already closed CD tray disturbed the timeline");
 
-    require(host.selectDisc(1, error) && host.discIndex() == 1 && !host.discEjected(),
+    require(host.selectDisc(1, error,&mediaChanged) && mediaChanged && host.discIndex() == 1 && !host.discEjected(),
             "CD disc selection failed");
     require(!host.loadState(0, error) && !error.isEmpty(),
             "state from a different disc was accepted");
     error.clear();
     require(host.selectDisc(0, error) && host.loadState(0, error),
             "original CD state was not recoverable after returning to disc 1");
-    require(host.setDiscEjected(true, error) && host.discEjected(), "CD eject failed");
+    require(host.setDiscEjected(true, error,&mediaChanged) && mediaChanged && host.discEjected(), "CD eject failed");
+    require(host.setDiscEjected(true,error,&mediaChanged) && !mediaChanged,
+            "opening an already open CD tray reported a timeline change");
     require(!host.saveState(1, error) && !error.isEmpty(),
             "state was saved while the tray was open");
     error.clear();
@@ -140,7 +150,7 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
             host.discPaths().at(0) == disc3, "external disc replacement failed");
     requireBrmPath(corePath, playlistBrm);
     requireFrame(host);
-    require(!host.changeDisc(badCue, error) && !error.isEmpty(),
+    require(!host.changeDisc(badCue, error,&mediaChanged) && !mediaChanged && !error.isEmpty(),
             "CUE with missing track was accepted");
     require(host.isCd() && host.discPaths().at(0) == disc3 && !host.discEjected(),
             "failed CUE replacement lost the current disc");

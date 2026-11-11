@@ -448,7 +448,7 @@
     "Имя": "Name",
     "Имя пользователя:": "Username:",
     "Исправляется только копия ROM в памяти. Настройка применится при следующей загрузке игры или перезапуске питания.": "Only the in memory ROM copy is fixed. This setting takes effect when the next game loads or after a power cycle.",
-    "История ограничена только памятью. При заполнении удаляются старые кадры. Изменение лимита очищает историю; память выделяется по мере накопления.": "Rewind history is limited only by memory. Older frames are removed as it fills. Changing the limit clears history; memory is allocated as history grows.",
+    "Память выделяется по мере записи. При заполнении или уменьшении лимита удаляются самые старые кадры. 1 МиБ = 1 048 576 байт.": "Memory is allocated as history grows. Filling or reducing the limit removes the oldest frames first. 1 MiB = 1,048,576 bytes.",
     "История перемотки недоступна для текущей игры.": "Rewind history is not available for the current game.",
     "КАДР": "FRAME",
     "Кадр записи слишком велик.": "Recording frame is too large.",
