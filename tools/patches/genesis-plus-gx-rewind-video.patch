@@ -38,7 +38,7 @@
        {
 --- a/libretro/libretro.c
 +++ b/libretro/libretro.c
-@@ -4609,6 +4609,87 @@
+@@ -4609,6 +4609,92 @@
     return kegarefusion_input_polled != 0;
  }
  
@@ -67,16 +67,23 @@
 +   kegarefusion_preview_fields |= 1u << odd_frame;
 +}
 +
++static void kegarefusion_preview_copy_row(int from, int to)
++{
++   const size_t source = (size_t)from * bitmap.pitch;
++   const size_t target = (size_t)to * bitmap.pitch;
++   memmove(bitmap.data + target, bitmap.data + source, bitmap.pitch);
++   if (kega_recording_bitmap)
++      memmove(kega_recording_bitmap + target, kega_recording_bitmap + source, bitmap.pitch);
++   if (kega_sprite_hint_bitmap)
++      memmove(kega_sprite_hint_bitmap + (size_t)to * 720,
++            kega_sprite_hint_bitmap + (size_t)from * 720, 720);
++}
++
 +static void kegarefusion_preview_bob(void)
 +{
 +   int y;
-+   const size_t bytes = (size_t)bitmap.pitch;
 +   for (y = 0; y + 1 < vheight && y + 1 < bitmap.height; y += 2)
-+   {
-+      uint8 *row = bitmap.data + (size_t)(y + odd_frame) * bitmap.pitch;
-+      uint8 *other = bitmap.data + (size_t)(y + (odd_frame ^ 1)) * bitmap.pitch;
-+      memcpy(other, row, bytes);
-+   }
++      kegarefusion_preview_copy_row(y + odd_frame, y + (odd_frame ^ 1));
 +}
 +
 +/* Commands: 0=query mode, 1=begin scope, 2=end scope,
@@ -100,10 +107,8 @@
 +         if (height > bitmap.height / 2) height = bitmap.height / 2;
 +         for (y = height - 1; y >= 0; y--)
 +         {
-+            uint8 *row = bitmap.data + (size_t)y * bitmap.pitch;
-+            uint8 *first = bitmap.data + (size_t)y * 2 * bitmap.pitch;
-+            memmove(first, row, bitmap.pitch);
-+            memcpy(first + bitmap.pitch, first, bitmap.pitch);
++            kegarefusion_preview_copy_row(y, y * 2);
++            kegarefusion_preview_copy_row(y * 2, y * 2 + 1);
 +         }
 +      }
 +      kegarefusion_rewind_preview_active = 0;
@@ -126,7 +131,7 @@
  void retro_run(void)
  {
     kegarefusion_input_polled = 0;
-@@ -4763,8 +4844,17 @@
+@@ -4763,8 +4849,17 @@
     kega_sprite_hint_frame_ready = !do_skip && kega_sprite_hint_active;
     kega_recording_frame_ready = !do_skip && kega_recording_bitmap != NULL;
     if (!do_skip)
