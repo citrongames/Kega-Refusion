@@ -60,6 +60,20 @@ python3 tools/package-linux.py \
 
 The packager checks the glibc symbol versions required by the executables, both cores, plugins and bundled libraries. It rejects an archive above the requested limit. Omit `--max-glibc` for a local build targeting your own system. The launcher uses the bundled Qt, SDL and TLS libraries with the host’s glibc, GCC runtime (Debian 12 ships GCC 12), Wayland libraries and OpenGL drivers. Keeping the system Wayland client avoids loading an older copy into a newer Mesa driver.
 
+In a Wayland session, the portable application registers a hidden per-user desktop entry with the ID
+`io.github.citrongames.KegaRefusion` before opening its first window. This gives
+KDE/Wayland the KR icon with Qt 6.4, which does not send window icons through
+`xdg-toplevel-icon`. It writes its embedded icon and desktop metadata under
+`$XDG_DATA_HOME` (normally `~/.local/share`) only when missing or changed, updates
+its launch path after the portable folder moves, and preserves unrelated launchers.
+No application-menu entry or installer is added. A user can expose the managed
+entry by setting its `NoDisplay=false`; that preference is retained.
+
+Use `run.sh` for the portable build so the bundled libraries and Qt plugins are
+selected. Direct execution in a Wayland session also registers the desktop identity,
+provided the ELF can load its required libraries. Menu/taskbar launchers created from the
+managed entry use the sibling `run.sh`, so helper-driven updates keep working.
+
 ## 3. Cross-build Windows from WSL/Linux
 
 Install the POSIX MinGW toolchain in addition to the host dependencies:

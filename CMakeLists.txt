@@ -124,6 +124,9 @@ add_executable(KegaRefusion WIN32
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(KegaRefusion PRIVATE src/ui/LinuxDesktopEntry.cpp src/ui/LinuxDesktopEntry.h)
+endif()
 add_dependencies(KegaRefusion KegaRefusionUpdater)
 target_compile_definitions(KegaRefusion PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
 target_link_libraries(KegaRefusion PRIVATE update_archive core_host input_backend video_renderer localization Qt6::Widgets Qt6::Multimedia Qt6::Network OpenSSL::Crypto)

@@ -683,8 +683,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 MainWindow::~MainWindow() {
     if (volumeSaveTimer_ && volumeSaveTimer_->isActive()) flushVolumePreference();
     if (netplay_) netplay_->leaveSession();
-    // The direct audio producer must stop before QObject destroys AudioOutput.
+    inputTimer_->stop();
     session_.shutdown();
+    // Qt Multimedia can dispatch queued UI callbacks while releasing the sink.
+    // Stop it after joining the producer, while the window and its children are intact.
+    audio_->shutdown();
     netplay_->finishTemporarySessions();
 }
 

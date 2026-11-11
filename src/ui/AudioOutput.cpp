@@ -33,8 +33,13 @@ AudioOutput::AudioOutput(QObject* parent) : QObject(parent) {
 }
 
 AudioOutput::~AudioOutput() {
+    shutdown();
+}
+
+void AudioOutput::shutdown() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (closing_) return;
         closing_ = true;
         queue_.clear();
     }
@@ -215,12 +220,12 @@ void AudioOutput::releaseSink() {
     sampleRate_ = 0;
     prefilling_ = true;
     wroteSamples_ = false;
-    if (!sink_) return;
-    disconnect(sink_, nullptr, this, nullptr);
+    auto* sink = std::exchange(sink_, nullptr);
+    if (!sink) return;
+    disconnect(sink, nullptr, this, nullptr);
     // stop() drains synchronously on some backends; reset() discards promptly.
-    sink_->reset();
-    delete sink_;
-    sink_ = nullptr;
+    sink->reset();
+    delete sink;
 }
 
 void AudioOutput::fail(const QString& message) {

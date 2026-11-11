@@ -21,6 +21,7 @@ class AudioOutput final : public QObject {
 public:
     explicit AudioOutput(QObject* parent = nullptr);
     ~AudioOutput() override;
+    void shutdown();
 
     // Producer entry points are thread-safe. Connect the emulation thread
     // directly: PCM is bounded here, never queued as one GUI event per chunk.

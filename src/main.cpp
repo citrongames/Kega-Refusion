@@ -1,6 +1,9 @@
 #include "i18n/Localization.h"
 #include "core/EmulationSession.h"
 #include "ui/MainWindow.h"
+#ifdef Q_OS_LINUX
+#include "ui/LinuxDesktopEntry.h"
+#endif
 #include "update/UpdateInstaller.h"
 
 #include <QApplication>
@@ -70,6 +73,9 @@ int main(int argc, char* argv[]) {
     // Platform-native pickers own their title bars and can re-enable maximize.
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
+#ifdef Q_OS_LINUX
+    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.citrongames.KegaRefusion"));
+#endif
     // Select before achievements or any other SSL client initializes a backend.
     // Direct netplay uses PSK ciphers supplied by the bundled OpenSSL backend.
     if(QSslSocket::availableBackends().contains(QStringLiteral("openssl")))
@@ -147,6 +153,11 @@ int main(int argc, char* argv[]) {
                                   .arg(dataPath));
         return 2;
     }
+
+#ifdef Q_OS_LINUX
+    if (QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
+        installLinuxDesktopEntry(appDirectory);
+#endif
 
     const bool smokeTest = parser.isSet(smokeOption);
     if (parser.isSet(screenshotOption) && !smokeTest) {
