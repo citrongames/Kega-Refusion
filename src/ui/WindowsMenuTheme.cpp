@@ -4,6 +4,7 @@
 
 #include <QOperatingSystemVersion>
 #include <uxtheme.h>
+#include <commctrl.h>
 
 #include <algorithm>
 #include <string>
@@ -102,6 +103,29 @@ bool menuBarRect(HWND window, HMENU menu, RECT& rectangle) {
 bool fill(HDC dc, const RECT& rectangle, COLORREF color) {
     SetDCBrushColor(dc, color);
     return FillRect(dc, &rectangle, static_cast<HBRUSH>(GetStockObject(DC_BRUSH))) != 0;
+}
+
+// USER32 paints the native separator after the themed menu callbacks. Finish
+// the single nonclient scanline after the normal window procedure has returned.
+LRESULT CALLBACK finishMenuPaint(HWND window, UINT msg, WPARAM wParam, LPARAM lParam,
+                                 UINT_PTR id, DWORD_PTR) {
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(window, finishMenuPaint, id);
+    const auto result = DefSubclassProc(window, msg, wParam, lParam);
+    const bool printing = msg == WM_PRINT && (lParam & PRF_NONCLIENT);
+    if (!printing && msg != WM_NCPAINT && !(msg == WM_NCACTIVATE && lParam != -1))
+        return result;
+    RECT band{};
+    if (!menuBarRect(window, GetMenu(window), band)) return result;
+    band.top = band.bottom - 1;
+    HDC dc = printing ? reinterpret_cast<HDC>(wParam) : GetWindowDC(window);
+    if (dc) {
+        {
+            const SavedDc saved(dc);
+            if (saved) fill(dc, band, background);
+        }
+        if (!printing) ReleaseDC(window, dc);
+    }
+    return result;
 }
 
 bool drawBackground(const MSG& message) {
@@ -227,6 +251,24 @@ const PopupThemeApi& popupApi() {
 }
 }
 
+void WindowsMenuTheme::refreshMenuBar(HWND hwnd, bool dark) {
+    const HMENU menu = GetMenu(hwnd);
+    if (!menu) return;
+    // A borderless window can use the classic menu background instead of UAH.
+    // Set the root brush only; popup menus keep their native theme.
+    struct BackgroundBrush {
+        HBRUSH handle = CreateSolidBrush(background);
+        ~BackgroundBrush() { if (handle) DeleteObject(handle); }
+    };
+    static const BackgroundBrush brush;
+    MENUINFO info{};
+    info.cbSize = sizeof(info);
+    info.fMask = MIM_BACKGROUND;
+    info.hbrBack = dark ? brush.handle : nullptr;
+    SetMenuInfo(menu, &info);
+    DrawMenuBar(hwnd);
+}
+
 bool WindowsMenuTheme::systemPrefersDark() {
     const auto& api = popupApi();
     if (!IsThemeActive() || !api.allowWindow || (!api.setMode && !api.setLegacyMode)) return false;
@@ -243,6 +285,8 @@ bool WindowsMenuTheme::systemPrefersDark() {
 }
 
 void WindowsMenuTheme::applyPopupTheme(HWND hwnd, bool dark) {
+    if (dark) SetWindowSubclass(hwnd, finishMenuPaint, 1, 0);
+    else RemoveWindowSubclass(hwnd, finishMenuPaint, 1);
     const auto& api = popupApi();
     if (!api.allowWindow || (!api.setMode && !api.setLegacyMode)) return;
     if (api.setMode) api.setMode(dark ? PopupThemeApi::AppMode::AllowDark : PopupThemeApi::AppMode::Default);

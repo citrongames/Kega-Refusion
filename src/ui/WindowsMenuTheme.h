@@ -8,6 +8,7 @@
 namespace WindowsMenuTheme {
 
 bool systemPrefersDark();
+void refreshMenuBar(HWND hwnd, bool dark);
 void applyPopupTheme(HWND hwnd, bool dark);
 
 // Call only for dark mode with high contrast disabled. Handles just the native

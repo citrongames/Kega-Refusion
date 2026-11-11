@@ -3261,8 +3261,11 @@ void MainWindow::setMainMenuVisible(bool visible) {
     if (auto* native = menuBar()->platformMenuBar()) {
         fullscreenMenuShown_ = isFullScreen() && visible;
         // QWidget visibility only describes the unused Qt menu widget on Windows.
-        if (visible != isMainMenuVisible())
+        if (visible != isMainMenuVisible()) {
             native->handleReparent(visible ? windowHandle() : nullptr);
+            if (visible)
+                WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_);
+        }
         return;
     }
 #endif
@@ -3283,7 +3286,7 @@ void MainWindow::refreshWindowsMenuTheme(bool newWindow) {
     if (!newWindow && darkNativeMenu_ == dark) return;
     darkNativeMenu_ = dark;
     WindowsMenuTheme::applyPopupTheme(hwnd, dark);
-    if (GetMenu(hwnd)) DrawMenuBar(hwnd);
+    WindowsMenuTheme::refreshMenuBar(hwnd, dark);
 }
 
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
