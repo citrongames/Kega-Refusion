@@ -77,6 +77,7 @@
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #include <dwmapi.h>
+#include "WindowsMenuTheme.h"
 #include <QPlatformSurfaceEvent>
 #include <QWindow>
 #include <qpa/qplatformmenu.h>
@@ -339,6 +340,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     debugAudioGains_.fill(100);
     buildMenus();
+#ifdef Q_OS_WIN
+    if (menuBar()->isNativeMenuBar()) refreshWindowsMenuTheme(true);
+#endif
     refreshCommandShortcuts();
     connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
     updateService_ = new UpdateService(this);
@@ -3272,8 +3276,22 @@ void MainWindow::pauseForMenu() {
 }
 
 #ifdef Q_OS_WIN
+void MainWindow::refreshWindowsMenuTheme(bool newWindow) {
+    if (!windowHandle() || !windowHandle()->handle()) return;
+    const auto hwnd = reinterpret_cast<HWND>(windowHandle()->winId());
+    const bool dark = WindowsMenuTheme::systemPrefersDark();
+    if (!newWindow && darkNativeMenu_ == dark) return;
+    darkNativeMenu_ = dark;
+    WindowsMenuTheme::applyPopupTheme(hwnd, dark);
+    if (GetMenu(hwnd)) DrawMenuBar(hwnd);
+}
+
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
     const auto& msg = *static_cast<MSG*>(message);
+    if (darkNativeMenu_ && WindowsMenuTheme::drawMenuBar(msg, result)) return true;
+    if ((msg.message == WM_SETTINGCHANGE || msg.message == WM_THEMECHANGED ||
+         msg.message == WM_SYSCOLORCHANGE) && menuWidget() && menuBar()->isNativeMenuBar())
+        refreshWindowsMenuTheme(false);
     if ((msg.message == WM_ENTERMENULOOP || msg.message == WM_EXITMENULOOP) &&
         !msg.wParam && netplay_ && menuBar()->isNativeMenuBar()) {
         if (msg.message == WM_ENTERMENULOOP) {
@@ -3416,10 +3434,13 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         // an attached HMENU with its HWND, including every submenu.
         if (auto* native = menuBar()->platformMenuBar()) {
             const auto type = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
-            if (type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed)
+            if (type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
                 native->handleReparent(nullptr);
-            else if (!isFullScreen() || fullscreenMenuShown_)
-                native->handleReparent(windowHandle());
+            } else {
+                refreshWindowsMenuTheme(true);
+                if (!isFullScreen() || fullscreenMenuShown_)
+                    native->handleReparent(windowHandle());
+            }
         }
     }
     if (watched == this && (event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowUnblocked)) {
