@@ -607,6 +607,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(&session_, &EmulationSession::audioReset, audio_, &AudioOutput::clear, Qt::DirectConnection);
     connect(audio_, &AudioOutput::clockFeedback, &session_, &EmulationSession::updateAudioClock, Qt::DirectConnection);
     connect(&session_, &EmulationSession::gameLoaded, this, [this](const QString& path, double, const QString& contentName, ConsoleProfile profile) {
+        view_->resetShaderHistory();
         setLoadingUi(false);
         currentRom_ = path;
         activeInputProfile_ = profile;

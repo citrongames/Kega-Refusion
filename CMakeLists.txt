@@ -53,7 +53,7 @@ target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE thi
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
 target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive kega_ggpo kega_libco Qt6::Network kega_video_deps)
 add_library(video_renderer STATIC
-    src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h
+    src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPreset.cpp src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h
     src/ui/WaylandMouseCapture.cpp src/ui/WaylandMouseCapture.h)
 target_include_directories(video_renderer PUBLIC src)
 target_link_libraries(video_renderer PUBLIC Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets localization)

@@ -365,3 +365,11 @@ Added a 0–100% master-volume slider to Settings / Sound with a numeric percent
 ## Portable Linux build (2026-11-11)
 
 Built the Linux application, updater, both core modules and pinned dependencies from a fresh GitHub checkout with an empty dependency cache, using Debian 12 x86-64, Qt 6.4.2, glibc 2.36, GCC 12, CMake 3.25.1 and Python 3.11.2. The package passed the glibc 2.36 symbol check. Verified all 168 manifest entries after extraction. The packaged launcher reported version 0.22.0 through both the X11 and Wayland platform plugins on WSLg. Mesa EGL/GLX and the OpenSSL and xdg-shell plugins resolved their symbols with the bundled libraries. Steam Deck requirements were checked against Valve’s package metadata only.
+
+## RetroArch GLSL presets (2026-11-11)
+
+On Mesa llvmpipe, 595 of 608 presets in the supplied GLSL collection loaded and drew one frame with a 32×32 source and 64×64 viewport. The preceding renderer drew 201. Pixel checks separately cover LUT orientation, float precision, sRGB conversion, mipmaps, prior passes, history and feedback.
+
+The 13 remaining failures come from three individual presets and two shared sources. `simple_dither.glslp` specifies `shaders = 1_`, `MMJ_Cel_Shader_3dfx.glslp` references missing passes, and `gb-dot-matrix-inverted.glslp` references a missing palette. Eight border presets use an invalid vector assignment in `box-center.glsl`. Two xSal presets use fragment types defined only in the vertex stage.
+
+At 320×224 input and 1280×720 output, median software-rendering times across three trials were 3.661 → 3.696 ms/frame for bilinear, 11.572 → 12.058 for crt-geom and 2.381 → 2.486 for aa-shader-4.0. CRT Royale, NTSC S-Video and HQ4x also rendered multiple frames at that size. These measurements cover the software OpenGL driver.

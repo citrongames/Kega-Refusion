@@ -49,12 +49,15 @@ void parserTests(const QString& directory) {
     write(bad, "shaders=99\n");
     require(!ShaderPreset::load(bad, preset, error), "unbounded pass count was accepted");
     write(bad, "#reference other.glslp\n");
-    require(!ShaderPreset::load(bad, preset, error), "unsupported preset reference was accepted");
+    require(!ShaderPreset::load(bad, preset, error), "missing preset reference was accepted");
     write(directory + QStringLiteral("/a.glsl"), shader("void main() { gl_FragColor=texture2D(Texture,tc); }"));
     write(bad, "shaders=1\nshader0=a.glsl\ntextures=lookup\nlookup=a.png\n");
-    require(!ShaderPreset::load(bad, preset, error) && error.contains("Unsupported"), "unsupported LUT was silently ignored");
-    write(bad, "shaders=1\nshader0=a.glsl\nfloat_framebuffer0=true\n");
-    require(!ShaderPreset::load(bad, preset, error), "unsupported float framebuffer was accepted");
+    require(ShaderPreset::load(bad, preset, error) && preset.textures.size() == 1 &&
+            preset.textures[0].id == QStringLiteral("lookup"), "LUT declaration was lost");
+    write(bad, "shaders=1\nshader0=a.glsl\nfloat_framebuffer0=true\nsrgb_framebuffer0=true\nalias0=SOURCE\n");
+    require(ShaderPreset::load(bad, preset, error) && preset.passes[0].floating &&
+            preset.passes[0].srgb && preset.passes[0].alias == QStringLiteral("SOURCE"),
+            "float/sRGB/alias pass options were lost");
     write(bad, "shaders=1\nshader0=a.glsl\nscale0=nan\n");
     require(!ShaderPreset::load(bad, preset, error), "nonfinite framebuffer scale was accepted");
     write(directory + QStringLiteral("/loop.glsl"), "#include \"loop.glsl\"\n");
@@ -66,12 +69,12 @@ void parserTests(const QString& directory) {
 }
 
 QImage render(ShaderPipeline& pipeline, const QImage& image, QSize size, QRect viewport = {},
-              const QImage& ownership = {}) {
+              const QImage& ownership = {}, quint64 frameCount = 17) {
     if (viewport.isNull()) viewport = QRect(QPoint(), size);
     QOpenGLFramebufferObject target(size);
     require(target.isValid(), "test output FBO unavailable");
     QString error;
-    require(pipeline.render(image, target.handle(), size, viewport, 17, 1, error, ownership), qPrintable(error));
+    require(pipeline.render(image, target.handle(), size, viewport, frameCount, 1, error, ownership), qPrintable(error));
     return target.toImage();
 }
 void memoryBudgetTests(const QString& directory) {
@@ -274,12 +277,151 @@ void gpuTests(const QString& directory) {
     memoryBudgetTests(directory);
     write(directory + QStringLiteral("/lut.glsl"), shader("uniform sampler2D LUT; void main() { gl_FragColor=texture2D(LUT,tc); }"));
     require(ShaderPreset::load(directory + QStringLiteral("/lut.glsl"), preset, error), qPrintable(error));
+    ShaderPipeline legacySampler;
+    require(legacySampler.initialize(preset, error), qPrintable(error));
+    require(render(legacySampler, layers, layers.size()).convertToFormat(layers.format()) == layers,
+            "undeclared legacy sampler did not sample the current frame");
+    write(directory + QStringLiteral("/cube.glsl"), shader(
+        "uniform samplerCube Cube; void main() { gl_FragColor=textureCube(Cube,vec3(0.0,0.0,1.0)); }"));
+    require(ShaderPreset::load(directory + QStringLiteral("/cube.glsl"), preset, error), qPrintable(error));
     ShaderPipeline unsupported;
-    require(!unsupported.initialize(preset, error) && error.contains("sampler"), "unsupported custom sampler silently sampled the frame");
+    require(!unsupported.initialize(preset, error) && error.contains("sampler"),
+            "unsupported sampler type was accepted");
     write(directory + QStringLiteral("/broken.glsl"), shader("void main() { deliberately invalid GLSL; }"));
     require(ShaderPreset::load(directory + QStringLiteral("/broken.glsl"), preset, error), qPrintable(error));
     ShaderPipeline invalid;
     require(!invalid.initialize(preset, error) && !error.isEmpty(), "GLSL compiler failure was hidden");
+}
+
+
+void advancedGpuTests(const QString& directory) {
+    QString error;
+    ShaderPreset preset;
+    const auto load = [&](const QString& file) {
+        require(ShaderPreset::load(file, preset, error), qPrintable(error));
+    };
+    const auto close = [](const QColor& color, int r, int g, int b, const char* message) {
+        require(qAbs(color.red() - r) <= 3 && qAbs(color.green() - g) <= 3 &&
+                qAbs(color.blue() - b) <= 3, message);
+    };
+    QImage source(2, 2, QImage::Format_RGB32);
+    source.fill(QColor(0, 0, 0));
+
+    // External PNG rows must reach GLSL unchanged: v=0 is its first file row.
+    QImage lut(2, 2, QImage::Format_RGBA8888);
+    lut.setPixelColor(0, 0, QColor(230, 10, 20));
+    lut.setPixelColor(1, 0, QColor(10, 230, 20));
+    lut.setPixelColor(0, 1, QColor(20, 30, 230));
+    lut.setPixelColor(1, 1, QColor(220, 210, 10));
+    require(lut.save(directory + QStringLiteral("/lookup.png")), "cannot write LUT fixture");
+    const QString lutShader = directory + QStringLiteral("/lookup.glsl");
+    const QString lutPreset = directory + QStringLiteral("/lookup.glslp");
+    write(lutPreset, "shaders=1\nshader0=lookup.glsl\ntextures=TEST_LUT\nTEST_LUT=lookup.png\nTEST_LUT_linear=false\n");
+    write(lutShader, shader("uniform sampler2D TEST_LUT; void main() { gl_FragColor=texture2D(TEST_LUT,vec2(0.25,0.25)); }"));
+    load(lutPreset);
+    ShaderPipeline topRow;
+    require(topRow.initialize(preset, error), qPrintable(error));
+    close(render(topRow, source, source.size()).pixelColor(0, 0), 230, 10, 20,
+          "LUT v=0 did not sample the PNG top row");
+    write(lutShader, shader("uniform sampler2D TEST_LUT; void main() { gl_FragColor=texture2D(TEST_LUT,vec2(0.25,0.75)); }"));
+    load(lutPreset);
+    ShaderPipeline bottomRow;
+    require(bottomRow.initialize(preset, error), qPrintable(error));
+    close(render(bottomRow, source, source.size()).pixelColor(0, 0), 20, 30, 230,
+          "LUT v=1 did not sample the PNG bottom row");
+
+    // Values above one must survive the intermediate floating point pass.
+    write(directory + QStringLiteral("/wide.glsl"), shader("void main() { gl_FragColor=vec4(1.5,0.25,0.0,1.0); }"));
+    write(directory + QStringLiteral("/scale-wide.glsl"), shader("void main() { vec4 c=texture2D(Texture,tc); gl_FragColor=vec4(c.r*0.5,c.g,0.0,1.0); }"));
+    const QString widePreset = directory + QStringLiteral("/wide.glslp");
+    write(widePreset, "shaders=2\nshader0=wide.glsl\nfloat_framebuffer0=true\nshader1=scale-wide.glsl\n");
+    load(widePreset);
+    ShaderPipeline wide;
+    require(wide.initialize(preset, error), qPrintable(error));
+    close(render(wide, source, source.size()).pixelColor(0, 0), 191, 64, 0,
+          "floating point pass clipped a value above one");
+
+    // Original frame and pass aliases must bind distinct textures.
+    write(directory + QStringLiteral("/cross0.glsl"), shader(
+        "void main() { gl_FragColor=vec4(0.2,0.4,0.6,1.0); }"));
+    write(directory + QStringLiteral("/cross1.glsl"), shader(
+        "uniform sampler2D OrigTexture; uniform sampler2D Pass1Texture; uniform sampler2D BASETexture;"
+        " void main() { gl_FragColor=vec4(texture2D(OrigTexture,tc).r,"
+        " texture2D(Pass1Texture,tc).g,texture2D(BASETexture,tc).b,1.0); }"));
+    const QString crossPreset = directory + QStringLiteral("/cross.glslp");
+    write(crossPreset, "shaders=2\nshader0=cross0.glsl\nalias0=BASE\nshader1=cross1.glsl\n");
+    load(crossPreset);
+    ShaderPipeline cross;
+    require(cross.initialize(preset, error), qPrintable(error));
+    source.fill(QColor(100, 40, 200));
+    close(render(cross, source, source.size()).pixelColor(0, 0), 100, 102, 153,
+          "OrigTexture, Pass1Texture or alias bound the wrong pass");
+
+    // A mipmapped 8x8 texture averaged to one pixel is darker than a centre tap.
+    QImage sparse(8, 8, QImage::Format_RGB32);
+    sparse.fill(Qt::black);
+    for (int y = 3; y <= 4; ++y)
+        for (int x = 3; x <= 4; ++x) sparse.setPixelColor(x, y, Qt::white);
+    write(directory + QStringLiteral("/copy.glsl"), shader(
+        "void main() { gl_FragColor=texture2D(Texture,tc); }"));
+    write(directory + QStringLiteral("/sample.glsl"), shader(
+        "void main() { gl_FragColor=texture2D(Texture,tc); }"));
+    const QString mipPreset = directory + QStringLiteral("/mipmap.glslp");
+    write(mipPreset, "shaders=2\nshader0=copy.glsl\nscale_type0=source\nscale0=1\n"
+                     "shader1=sample.glsl\nscale_type1=absolute\nscale1=1\n"
+                     "filter_linear1=true\nmipmap_input1=true\n");
+    load(mipPreset);
+    ShaderPipeline mipmap;
+    require(mipmap.initialize(preset, error), qPrintable(error));
+    const int averaged = render(mipmap, sparse, QSize(1, 1)).pixelColor(0, 0).red();
+    require(averaged >= 12 && averaged <= 20, "mipmap_input did not sample a downscaled mip level");
+
+    // Low linear values distinguish sRGB storage from ordinary 8-bit storage.
+    write(directory + QStringLiteral("/low.glsl"), shader("void main() { gl_FragColor=vec4(0.005,0.0,0.0,1.0); }"));
+    write(directory + QStringLiteral("/amplify.glsl"), shader("void main() { float r=texture2D(Texture,tc).r; gl_FragColor=vec4(r*80.0,0.0,0.0,1.0); }"));
+    const QString srgbPreset = directory + QStringLiteral("/srgb.glslp");
+    write(srgbPreset, "shaders=2\nshader0=low.glsl\nsrgb_framebuffer0=true\nshader1=amplify.glsl\n");
+    load(srgbPreset);
+    ShaderPipeline srgb;
+    require(srgb.initialize(preset, error), qPrintable(error));
+    const int low = render(srgb, source, source.size()).pixelColor(0, 0).red();
+    require(low >= 90 && low <= 112, "sRGB intermediate failed linear encode/decode");
+
+    // PrevTexture captures the prior source frame, once per frame count.
+    write(directory + QStringLiteral("/previous.glsl"), shader(
+        "uniform sampler2D PrevTexture; void main() { gl_FragColor=vec4(0.5*texture2D(Texture,tc).rgb+0.5*texture2D(PrevTexture,tc).rgb,1.0); }"));
+    load(directory + QStringLiteral("/previous.glsl"));
+    ShaderPipeline history;
+    require(history.initialize(preset, error), qPrintable(error));
+    source.fill(QColor(200, 0, 0));
+    close(render(history, source, source.size(), {}, {}, 1).pixelColor(0, 0), 100, 0, 0,
+          "unwritten previous frame was not black");
+    source.fill(QColor(0, 0, 200));
+    const QColor historyFrame = render(history, source, source.size(), {}, {}, 2).pixelColor(0, 0);
+    close(historyFrame, 100, 0, 100, "PrevTexture did not contain the previous source");
+    require(render(history, source, source.size(), {}, {}, 2).pixelColor(0, 0) == historyFrame,
+            "repaint of the same frame advanced history");
+    source.fill(QColor(0, 200, 0));
+    close(render(history, source, source.size(), {}, {}, 3).pixelColor(0, 0), 0, 100, 100,
+          "previous frame advanced by more than one frame");
+    history.resetFrameHistory();
+    close(render(history, source, source.size(), {}, {}, 4).pixelColor(0, 0), 0, 100, 0,
+          "reset did not clear previous frame history");
+
+    // FeedbackTexture is the previous output of the named pass.
+    write(directory + QStringLiteral("/feedback.glsl"), shader(
+        "uniform sampler2D FeedbackTexture; void main() { gl_FragColor=vec4(0.5*texture2D(Texture,tc).rgb+0.5*texture2D(FeedbackTexture,tc).rgb,1.0); }"));
+    const QString feedbackPreset = directory + QStringLiteral("/feedback.glslp");
+    write(feedbackPreset, "shaders=1\nshader0=feedback.glsl\nfeedback_pass=0\n");
+    load(feedbackPreset);
+    ShaderPipeline feedback;
+    require(feedback.initialize(preset, error), qPrintable(error));
+    source.fill(QColor(200, 0, 0));
+    close(render(feedback, source, source.size(), {}, {}, 1).pixelColor(0, 0), 100, 0, 0,
+          "unwritten feedback was not black");
+    source.fill(QColor(0, 0, 200));
+    close(render(feedback, source, source.size(), {}, {}, 2).pixelColor(0, 0), 50, 0, 100,
+          "feedback pass did not retain previous pass output");
 }
 
 void settle() {
@@ -466,6 +608,11 @@ int main(int argc, char** argv) {
             return 0;
         }
         gpuTests(directory.path());
+        advancedGpuTests(directory.path());
+        if (app.arguments().contains(QStringLiteral("--gpu-only"))) {
+            std::puts("Offscreen GLSL GPU tests passed");
+            return 0;
+        }
         context.doneCurrent();
         widgetTests(directory.path());
         std::puts("Native GameView, unfiltered OSD, integer scaling and GLSL parser, GPU multipass, alpha, orientation, borders and native dither blending tests passed");

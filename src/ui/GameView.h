@@ -35,6 +35,7 @@ public:
     bool setShaderParameter(const QString& id, float value);
     void setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {});
     void clearGame();
+    void resetShaderHistory();
     void setLoading(bool loading, const QString& fileName = {});
     QImage captureImage();
     QImage captureGameImage();

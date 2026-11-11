@@ -1,62 +1,63 @@
 #include "ShaderPipeline.h"
 
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
+#include <QImageReader>
 #include <QMatrix4x4>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLShaderProgram>
 #include <QRegularExpression>
 #include <QSet>
-#include <QVector2D>
-#include <QtMath>
+#include <algorithm>
 #include <array>
-#include <cmath>
+
+// Internal, immutable binding plan produced once after linking each GLSL program.
+struct ShaderPipeline::Program {
+    struct Frame {
+        enum class Kind { Original, Pass, Previous, Feedback };
+        Kind kind = Kind::Original;
+        int index = 0;
+        int sampler = -1;
+        int inputSize = -1;
+        int textureSize = -1;
+        int texCoord = -1;
+    };
+    struct Lut {
+        int index = 0;
+        int sampler = -1;
+    };
+    struct Parameter {
+        int index = 0;
+        int location = -1;
+    };
+
+    std::unique_ptr<QOpenGLShaderProgram> shader;
+    int passIndex = -1;
+    int requiredHistory = 0;
+    int texture = -1;
+    int inputSize = -1;
+    int textureSize = -1;
+    int outputSize = -1;
+    int finalViewportSize = -1;
+    int frameCount = -1;
+    int frameDirection = -1;
+    int mvp = -1;
+    int spriteOwnership = -1;
+    int originalAspect = -1;
+    int originalAspectRotated = -1;
+    int vertexCoord = -1;
+    int texCoord = -1;
+    int color = -1;
+    int colorUpper = -1;
+    int lutTexCoord = -1;
+    std::vector<Frame> frames;
+    std::vector<Lut> luts;
+    std::vector<Parameter> parameters;
+    std::vector<int> defaultSamplers; // Legacy sampler2D names sample unit zero.
+};
 
 namespace {
-constexpr qsizetype sourceLimit = 512 * 1024;
-constexpr int passLimit = 8;
 constexpr qint64 videoMemoryLimit = 128 * 1024 * 1024;
 bool fail(QString& error, const QString& message) { error = message; return false; }
-
-QString relativePath(const QString& parent, QString path) {
-    path.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    if (path.startsWith(QLatin1Char(':')) || QDir::isAbsolutePath(path)) return path;
-    return QDir::cleanPath(QFileInfo(parent).path() + QLatin1Char('/') + path);
-}
-
-bool readSource(const QString& path, QByteArray& result, QString& error, int depth = 0) {
-    if (depth > 12) return fail(error, QStringLiteral("Too many shader #include levels."));
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return fail(error, QStringLiteral("Cannot read shader: %1").arg(path));
-    if (file.size() > sourceLimit)
-        return fail(error, QStringLiteral("Shader exceeds the 512 KiB limit: %1").arg(path));
-    QByteArray source = file.readAll();
-    if (source.startsWith("\xef\xbb\xbf")) source.remove(0, 3);
-    const QRegularExpression include(QStringLiteral("^\\s*#include\\s+[\"<]([^\">]+)[\">]\\s*$"));
-    for (const QByteArray& line : source.split('\n')) {
-        const auto match = include.match(QString::fromUtf8(line));
-        if (match.hasMatch()) {
-            QByteArray nested;
-            if (!readSource(relativePath(path, match.captured(1)), nested, error, depth + 1))
-                return false;
-            result += nested;
-        } else {
-            result += line + '\n';
-        }
-        if (result.size() > sourceLimit)
-            return fail(error, QStringLiteral("Expanded shader exceeds the 512 KiB limit."));
-    }
-    return true;
-}
-
-bool boolean(const QString& value, bool& result) {
-    if (value == QStringLiteral("true") || value == QStringLiteral("1")) { result = true; return true; }
-    if (value == QStringLiteral("false") || value == QStringLiteral("0")) { result = false; return true; }
-    return false;
-}
 
 const QByteArray stockSource = R"(
 #ifdef VERTEX
@@ -71,217 +72,213 @@ varying vec2 tex_coord;
 void main() { gl_FragColor = vec4(texture2D(Texture, tex_coord).rgb, 1.0); }
 #endif
 )";
-} // namespace
-
-bool ShaderPreset::load(const QString& path, ShaderPreset& result, QString& error) {
-    error.clear();
-    ShaderPreset preset;
-    preset.path = path;
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    QMap<QString, QString> values;
-    QSet<QString> consumed;
-    if (suffix == QStringLiteral("glslp")) {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly) || file.size() > sourceLimit)
-            return fail(error, QStringLiteral("Cannot read GLSL preset: %1").arg(path));
-        const QString text = QString::fromUtf8(file.readAll());
-        const QRegularExpression assignment(QStringLiteral("^\\s*([A-Za-z_][A-Za-z_0-9]*)\\s*=\\s*(?:\"([^\"]*)\"|([^#]*?))\\s*(?:#.*)?$"));
-        for (const QString& line : text.split(QLatin1Char('\n'))) {
-            if (line.trimmed().isEmpty()) continue;
-            if (line.trimmed().startsWith(QStringLiteral("#reference")) ||
-                line.trimmed().startsWith(QStringLiteral("#include")))
-                return fail(error, QStringLiteral("Preset references/includes are not supported. Load a complete .glslp preset."));
-            if (line.trimmed().startsWith(QLatin1Char('#'))) continue;
-            const auto match = assignment.match(line);
-            if (!match.hasMatch())
-                return fail(error, QStringLiteral("Invalid preset line: %1").arg(line.left(100)));
-            values.insert(match.captured(1), match.captured(2).isNull()
-                                            ? match.captured(3).trimmed() : match.captured(2));
-        }
-    } else if (suffix != QStringLiteral("glsl")) {
-        return fail(error, QStringLiteral("Only GLSL .glsl and .glslp files are supported. Slang and Cg require a different renderer."));
+qint64 textureBytes(QSize size, int bytesPerPixel, bool mipmap) {
+    qint64 bytes = qint64(size.width()) * size.height() * bytesPerPixel;
+    while (mipmap && (size.width() > 1 || size.height() > 1)) {
+        size = QSize(qMax(1, size.width() / 2), qMax(1, size.height() / 2));
+        bytes += qint64(size.width()) * size.height() * bytesPerPixel;
     }
-    int count = 1;
-    if (suffix == QStringLiteral("glslp")) {
-        bool okay = false;
-        count = values.value(QStringLiteral("shaders")).toInt(&okay);
-        if (!okay || count < 1 || count > passLimit)
-            return fail(error, QStringLiteral("The GLSL preset must contain 1–8 shader passes."));
-        consumed.insert(QStringLiteral("shaders"));
-    }
-    for (int i = 0; i < count; ++i) {
-        ShaderPass pass;
-        const QString index = QString::number(i);
-        const QString shaderKey = QStringLiteral("shader") + index;
-        pass.path = suffix == QStringLiteral("glsl") ? path : relativePath(path, values.value(shaderKey));
-        consumed.insert(shaderKey);
-        if (QFileInfo(pass.path).suffix().compare(QStringLiteral("glsl"), Qt::CaseInsensitive) != 0)
-            return fail(error, QStringLiteral("Pass %1 must name a .glsl shader.").arg(i + 1));
-        if (!readSource(pass.path, pass.source, error)) return false;
-        // Temporal history, LUTs and cross-pass samplers cannot silently become Texture.
-        const QRegularExpression advanced(QStringLiteral("\\b(?:Prev[0-9]*Texture|PREV[0-9]*|OrigTexture|Pass[0-9]+Texture|PassPrev[0-9]+Texture)\\b"));
-        if (advanced.match(QString::fromUtf8(pass.source)).hasMatch())
-            return fail(error, QStringLiteral("Pass %1 uses history/original/cross-pass inputs, which this GLSL renderer does not support.").arg(i + 1));
-        auto take = [&](const QString& prefix) {
-            const QString key = prefix + index;
-            consumed.insert(key);
-            return values.value(key);
-        };
-        const QString filter = take(QStringLiteral("filter_linear"));
-        if (!filter.isEmpty() && !boolean(filter, pass.linear))
-            return fail(error, QStringLiteral("Invalid filter_linear%1.").arg(i));
-        for (const QString& feature : {QStringLiteral("float_framebuffer"), QStringLiteral("srgb_framebuffer"),
-                                      QStringLiteral("mipmap_input")}) {
-            const QString value = take(feature);
-            bool enabled = false;
-            if (!value.isEmpty() && (!boolean(value, enabled) || enabled))
-                return fail(error, QStringLiteral("%1%2 is not supported.").arg(feature, index));
-        }
-        const QString alias = take(QStringLiteral("alias"));
-        if (!alias.isEmpty())
-            return fail(error, QStringLiteral("Shader pass aliases are not supported."));
-        const QString wrap = take(QStringLiteral("wrap_mode"));
-        if (wrap == QStringLiteral("repeat")) pass.wrap = GL_REPEAT;
-        else if (wrap == QStringLiteral("mirrored_repeat")) pass.wrap = GL_MIRRORED_REPEAT;
-        else if (wrap == QStringLiteral("clamp_to_border")) pass.wrap = GL_CLAMP_TO_BORDER;
-        else if (!wrap.isEmpty() && wrap != QStringLiteral("clamp_to_edge"))
-            return fail(error, QStringLiteral("Unsupported texture wrap mode: %1").arg(wrap));
-        const QString mod = take(QStringLiteral("frame_count_mod"));
-        if (!mod.isEmpty()) {
-            bool okay = false;
-            pass.frameCountMod = mod.toUInt(&okay);
-            if (!okay || !pass.frameCountMod)
-                return fail(error, QStringLiteral("Invalid frame_count_mod%1.").arg(i));
-        }
-        const QString commonType = take(QStringLiteral("scale_type"));
-        const QString commonScale = take(QStringLiteral("scale"));
-        const QString xType = take(QStringLiteral("scale_type_x"));
-        const QString yType = take(QStringLiteral("scale_type_y"));
-        const QString xScale = take(QStringLiteral("scale_x"));
-        const QString yScale = take(QStringLiteral("scale_y"));
-        const bool scaled = !commonType.isEmpty() || !commonScale.isEmpty() ||
-                            !xType.isEmpty() || !yType.isEmpty() || !xScale.isEmpty() || !yScale.isEmpty();
-        auto scale = [&](QString type, QString value, ShaderPass::Scale& mode, double& factor) {
-            if (type.isEmpty()) type = (i == count - 1 && !scaled)
-                                       ? QStringLiteral("viewport") : QStringLiteral("source");
-            if (type == QStringLiteral("source")) mode = ShaderPass::Scale::Source;
-            else if (type == QStringLiteral("viewport")) mode = ShaderPass::Scale::Viewport;
-            else if (type == QStringLiteral("absolute")) mode = ShaderPass::Scale::Absolute;
-            else return false;
-            if (!value.isEmpty()) {
-                bool okay = false;
-                factor = value.toDouble(&okay);
-                if (!okay || !std::isfinite(factor) || factor <= 0 || factor > 16384) return false;
-            }
-            return true;
-        };
-        if (!scale(commonType.isEmpty() ? xType : commonType,
-                   commonScale.isEmpty() ? xScale : commonScale, pass.scaleX, pass.factorX) ||
-            !scale(commonType.isEmpty() ? yType : commonType,
-                   commonScale.isEmpty() ? yScale : commonScale, pass.scaleY, pass.factorY))
-            return fail(error, QStringLiteral("Invalid scaling in shader pass %1.").arg(i + 1));
-        const QRegularExpression param(QStringLiteral(
-            "^\\s*#pragma\\s+parameter\\s+(\\w+)\\s+\"([^\"]+)\"\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)(?:\\s+([-+0-9.eE]+))?"),
-            QRegularExpression::MultilineOption);
-        auto matches = param.globalMatch(QString::fromUtf8(pass.source));
-        while (matches.hasNext()) {
-            const auto match = matches.next();
-            const QString id = match.captured(1);
-            bool duplicate = false;
-            for (const auto& existing : preset.parameters) duplicate |= existing.id == id;
-            if (duplicate) continue;
-            ShaderParameter p;
-            p.id = id; p.label = match.captured(2);
-            bool okay = false;
-            p.minimum = match.captured(4).toFloat(&okay);
-            if (!okay || !qIsFinite(p.minimum)) return fail(error, QStringLiteral("Invalid shader parameter range."));
-            p.maximum = match.captured(5).toFloat(&okay);
-            if (!okay || !qIsFinite(p.maximum) || p.maximum < p.minimum) return fail(error, QStringLiteral("Invalid shader parameter range."));
-            p.step = match.captured(6).isEmpty() ? 0.01f : match.captured(6).toFloat(&okay);
-            if (!okay || !qIsFinite(p.step) || p.step <= 0) return fail(error, QStringLiteral("Invalid shader parameter step."));
-            p.value = values.value(id, match.captured(3)).toFloat(&okay);
-            if (!okay || !qIsFinite(p.value)) return fail(error, QStringLiteral("Invalid shader parameter: %1").arg(id));
-            p.value = qBound(p.minimum, p.value, p.maximum);
-            consumed.insert(id);
-            preset.parameters.append(p);
-        }
-        preset.passes.append(pass);
-    }
-    consumed.insert(QStringLiteral("parameters"));
-    for (auto it = values.cbegin(); it != values.cend(); ++it)
-        if (!consumed.contains(it.key()))
-            return fail(error, QStringLiteral("Unsupported GLSL preset option: %1").arg(it.key()));
-    result = std::move(preset);
-    return true;
+    return bytes;
 }
+unsigned passFormat(const ShaderPass& pass) {
+    if (pass.floating) return GL_RGBA32F;
+    return pass.srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+}
+} // namespace
 
 ShaderPipeline::ShaderPipeline() : vertices_(QOpenGLBuffer::VertexBuffer) {}
 ShaderPipeline::~ShaderPipeline() {
     if (texture_) glDeleteTextures(1, &texture_);
+    if (!historyTextures_.empty()) glDeleteTextures(int(historyTextures_.size()), historyTextures_.data());
+    if (!lutTextures_.empty()) glDeleteTextures(int(lutTextures_.size()), lutTextures_.data());
 }
 
-bool ShaderPipeline::compile(const QByteArray& source, std::unique_ptr<QOpenGLShaderProgram>& program,
-                             QString& error) {
+bool ShaderPipeline::compile(const QByteArray& source, std::unique_ptr<Program>& program,
+                             QString& error, int passIndex) {
     QString code = QString::fromUtf8(source);
     const QRegularExpression version(QStringLiteral("^\\s*#version[^\\n]*"), QRegularExpression::MultilineOption);
     const auto match = version.match(code);
-    const QByteArray directive = match.hasMatch() ? match.captured().trimmed().toUtf8() : QByteArray("#version 120");
+    const auto format = QOpenGLContext::currentContext()->format();
+    const int glVersion = format.majorVersion() * 100 + format.minorVersion() * 10;
+    std::vector<QByteArray> directives;
+    if (match.hasMatch()) {
+        directives.push_back(match.captured().trimmed().toUtf8());
+    } else if (glVersion >= 300) {
+        // RetroArch glcore starts at 130; newer compatibility GLSL accepts
+        // shaders that use texture() or 420pack constructs without a #version.
+        directives.push_back("#version 130");
+        if (glVersion >= 420) directives.push_back("#version 420 compatibility");
+        directives.push_back("#version 120");
+    } else {
+        directives.push_back("#version 120");
+        directives.push_back("#version 110");
+    }
     if (match.hasMatch()) code.remove(match.capturedStart(), match.capturedLength());
     code.remove(QRegularExpression(QStringLiteral("^\\s*#pragma\\s+parameter[^\\n]*"),
                                    QRegularExpression::MultilineOption));
-    auto next = std::make_unique<QOpenGLShaderProgram>();
+    QByteArray definitions = "#define PARAMETER_UNIFORM\n#define _HAS_ORIGINALASPECT_UNIFORMS\n";
+    for (const auto& pass : preset_.passes)
+        if (!pass.alias.isEmpty()) definitions += "#define " + pass.alias.toUtf8() + "_ALIAS\n";
+
+    auto next = std::make_unique<Program>();
+    next->passIndex = passIndex;
     const QByteArray body = code.toUtf8();
-    if (!next->addShaderFromSourceCode(QOpenGLShader::Vertex,
-            directive + "\n#define VERTEX\n#define PARAMETER_UNIFORM\n#line 1\n" + body) ||
-        !next->addShaderFromSourceCode(QOpenGLShader::Fragment,
-            directive + "\n#define FRAGMENT\n#define PARAMETER_UNIFORM\n#line 1\n" + body) ||
-        !next->link())
-        return fail(error, next->log().left(3000));
-    int uniforms = 0;
-    glGetProgramiv(next->programId(), GL_ACTIVE_UNIFORMS, &uniforms);
+    QString compileLog;
+    for (const QByteArray& directive : directives) {
+        auto shader = std::make_unique<QOpenGLShaderProgram>();
+        if (shader->addShaderFromSourceCode(QOpenGLShader::Vertex,
+                directive + "\n#define VERTEX\n" + definitions + "#line 1\n" + body) &&
+            shader->addShaderFromSourceCode(QOpenGLShader::Fragment,
+                directive + "\n#define FRAGMENT\n" + definitions + "#line 1\n" + body) &&
+            shader->link()) {
+            next->shader = std::move(shader);
+            break;
+        }
+        compileLog = shader->log();
+    }
+    if (!next->shader) return fail(error, compileLog.left(3000));
+
+    auto& shader = *next->shader;
+    auto uniform = [&](const QByteArray& name) {
+        int location = shader.uniformLocation(name.constData());
+        if (location < 0) location = shader.uniformLocation((QByteArray("ruby") + name).constData());
+        return location;
+    };
+    auto attribute = [&](const QByteArray& name) {
+        int location = shader.attributeLocation(name.constData());
+        if (location < 0) location = shader.attributeLocation((QByteArray("ruby") + name).constData());
+        return location;
+    };
+    QSet<int> knownSamplers;
+    next->texture = uniform("Texture");
+    if (next->texture >= 0) knownSamplers.insert(next->texture);
+    next->inputSize = uniform("InputSize");
+    next->textureSize = uniform("TextureSize");
+    next->outputSize = uniform("OutputSize");
+    next->finalViewportSize = uniform("FinalViewportSize");
+    next->frameCount = uniform("FrameCount");
+    next->frameDirection = uniform("FrameDirection");
+    next->mvp = uniform("MVPMatrix");
+    next->spriteOwnership = uniform("HasSpriteOwnership");
+    next->originalAspect = uniform("OriginalAspect");
+    next->originalAspectRotated = uniform("OriginalAspectRotated");
+    next->vertexCoord = attribute("VertexCoord");
+    next->texCoord = attribute("TexCoord");
+    next->color = attribute("Color");
+    next->colorUpper = attribute("COLOR");
+    next->lutTexCoord = attribute("LUTTexCoord");
+
+    auto addFrame = [&](Program::Frame::Kind kind, int index, const QByteArray& prefix) {
+        Program::Frame frame;
+        frame.kind = kind;
+        frame.index = index;
+        frame.sampler = uniform(prefix + "Texture");
+        frame.inputSize = uniform(prefix + "InputSize");
+        frame.textureSize = uniform(prefix + "TextureSize");
+        frame.texCoord = attribute(prefix + "TexCoord");
+        if (frame.sampler >= 0) knownSamplers.insert(frame.sampler);
+        if (frame.sampler >= 0 || frame.inputSize >= 0 ||
+            frame.textureSize >= 0 || frame.texCoord >= 0) {
+            if (kind == Program::Frame::Kind::Previous)
+                next->requiredHistory = qMax(next->requiredHistory, index + 1);
+            next->frames.push_back(frame);
+        }
+    };
+    if (passIndex >= 0) {
+        // A pass's alias, PassN and PassPrevN all name earlier pass outputs.
+        addFrame(Program::Frame::Kind::Original, 0, "Orig");
+        addFrame(Program::Frame::Kind::Original, 0,
+                 "PassPrev" + QByteArray::number(passIndex + 1));
+        addFrame(Program::Frame::Kind::Feedback, 0, "Feedback");
+        for (int i = 0; i < passIndex; ++i) {
+            addFrame(Program::Frame::Kind::Pass, i, "Pass" + QByteArray::number(i + 1));
+            addFrame(Program::Frame::Kind::Pass, i,
+                     "PassPrev" + QByteArray::number(passIndex - i));
+            if (!preset_.passes[i].alias.isEmpty())
+                addFrame(Program::Frame::Kind::Pass, i, preset_.passes[i].alias.toUtf8());
+        }
+        for (int i = 0; i < 32; ++i)
+            addFrame(Program::Frame::Kind::Previous, i,
+                     i ? "Prev" + QByteArray::number(i) : QByteArray("Prev"));
+        for (int i = 0; i < preset_.textures.size(); ++i) {
+            const int location = uniform(preset_.textures[i].id.toUtf8());
+            if (location >= 0) {
+                knownSamplers.insert(location);
+                next->luts.push_back({i, location});
+            }
+        }
+        for (int i = 0; i < preset_.parameters.size(); ++i) {
+            const int location = uniform(preset_.parameters[i].id.toUtf8());
+            if (location >= 0) next->parameters.push_back({i, location});
+        }
+    }
+    int uniforms = 0, longest = 0;
+    glGetProgramiv(shader.programId(), GL_ACTIVE_UNIFORMS, &uniforms);
+    glGetProgramiv(shader.programId(), GL_ACTIVE_UNIFORM_MAX_LENGTH, &longest);
+    std::vector<char> name(size_t(qMax(1, longest)));
     for (int i = 0; i < uniforms; ++i) {
-        char name[512] = {};
         int length = 0, size = 0;
         unsigned type = 0;
-        glGetActiveUniform(next->programId(), unsigned(i), int(sizeof(name)), &length, &size, &type, name);
-        // GLSL sampler type ranges, including shadow/array/integer samplers.
+        glGetActiveUniform(shader.programId(), unsigned(i), int(name.size()),
+                           &length, &size, &type, name.data());
         const bool sampler = (type >= 0x8b5d && type <= 0x8b64) ||
                              (type >= 0x8dc0 && type <= 0x8dc5) ||
                              (type >= 0x8dc9 && type <= 0x8dd8) ||
                              (type >= 0x9108 && type <= 0x910d) ||
-                             type == 0x900c || type == 0x900d || type == 0x900e || type == 0x900f;
-        if (sampler && (QByteArray(name) != "Texture" || size != 1 || type != GL_SAMPLER_2D))
-            return fail(error, QStringLiteral("Unsupported GLSL sampler %1. Only the current pass Texture (sampler2D) is supported.")
-                                   .arg(QString::fromLatin1(name, length)));
+                             (type >= 0x900c && type <= 0x900f);
+        if (!sampler) continue;
+        const int location = shader.uniformLocation(name.data());
+        if (type != GL_SAMPLER_2D || size != 1)
+            return fail(error, QStringLiteral("Unsupported GLSL sampler type or array: %1.")
+                                   .arg(QString::fromLatin1(name.data(), length)));
+        if (!knownSamplers.contains(location) && location >= 0)
+            next->defaultSamplers.push_back(location);
     }
+    int maxUnits = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxUnits);
+    int usedUnits = 1 + int(next->luts.size());
+    for (const auto& frame : next->frames) usedUnits += frame.sampler >= 0;
+    if (usedUnits > maxUnits)
+        return fail(error, QStringLiteral("Shader needs %1 texture units, but this GPU supports %2.")
+                               .arg(usedUnits).arg(maxUnits));
     program = std::move(next);
     return true;
 }
 
 bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
     initializeOpenGLFunctions();
-    if (preset.passes.size() > passLimit)
-        return fail(error, QStringLiteral("The GLSL preset must contain at most 8 shader passes."));
+    if (preset.passes.isEmpty() || preset.passes.size() > ShaderPreset::maxPasses ||
+        preset.feedbackPass < -1 || preset.feedbackPass >= preset.passes.size())
+        return fail(error, QStringLiteral("Invalid GLSL pass count or feedback pass."));
     preset_ = preset;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexture_);
+    auto* context = QOpenGLContext::currentContext();
+    canSrgb_ = context->format().majorVersion() >= 3 || context->hasExtension("GL_EXT_framebuffer_sRGB")
+        || context->hasExtension("GL_ARB_framebuffer_sRGB");
+    int history = 0;
     for (const ShaderPass& pass : preset.passes) {
-        std::unique_ptr<QOpenGLShaderProgram> program;
-        if (!compile(pass.source, program, error)) {
+        if (pass.srgb && !pass.floating && !canSrgb_)
+            return fail(error, QStringLiteral("This GPU does not support sRGB framebuffer writes."));
+        std::unique_ptr<Program> program;
+        if (!compile(pass.source, program, error, int(programs_.size()))) {
             error = QStringLiteral("%1\n%2").arg(pass.path, error);
             return false;
         }
+        history = qMax(history, program->requiredHistory);
         programs_.push_back(std::move(program));
         buffers_.push_back(nullptr);
     }
-    if (!compile(stockSource, stock_, error)) return false;
-    // Each vertex contains position and texture coordinate; RGBA and alpha survive every FBO pass.
+    if (!compile(stockSource, stock_, error, -1) || !loadTextures(error)) return false;
     constexpr float quad[] = {0,0, 0,0, 1,0, 1,0, 0,1, 0,1, 1,1, 1,1};
     if (!vertices_.create() || !vertices_.bind())
         return fail(error, QStringLiteral("Cannot create shader vertex buffer."));
     vertices_.allocate(quad, int(sizeof(quad)));
     vertices_.release();
     glGenTextures(1, &texture_);
-    if (!texture_) return fail(error, QStringLiteral("Cannot allocate the video input texture."));
-    return true;
+    historyTextures_.resize(history);
+    historySizes_.resize(history);
+    if (history) glGenTextures(history, historyTextures_.data());
+    return texture_ || fail(error, QStringLiteral("Cannot allocate the video input texture."));
 }
 
 bool ShaderPipeline::setParameter(const QString& id, float value) {
@@ -294,74 +291,162 @@ bool ShaderPipeline::setParameter(const QString& id, float value) {
     return false;
 }
 
-void ShaderPipeline::draw(QOpenGLShaderProgram& program, unsigned texture, const QSize& input,
-                          const QSize& output, quint64 count, int direction, bool linear, unsigned wrap,
-                          int hasSpriteOwnership) {
-    program.bind();
+void ShaderPipeline::draw(Program& program, unsigned texture, const QSize& input,
+                          const QSize& output, quint64 count, int direction, bool linear,
+                          unsigned wrap, int hasSpriteOwnership, bool mipmap) {
+    auto& shader = *program.shader;
+    shader.bind();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    mipmap ? (linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST)
+                           : (linear ? GL_LINEAR : GL_NEAREST));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, int(wrap));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, int(wrap));
-    program.setUniformValue("Texture", 0);
-    program.setUniformValue("InputSize", QVector2D(input.width(), input.height()));
-    program.setUniformValue("TextureSize", QVector2D(input.width(), input.height()));
-    program.setUniformValue("OutputSize", QVector2D(output.width(), output.height()));
-    program.setUniformValue("FrameCount", int(count & 0x7fffffff));
-    program.setUniformValue("FrameDirection", direction);
-    QMatrix4x4 matrix;
-    matrix.ortho(0, 1, 0, 1, -1, 1);
-    program.setUniformValue("MVPMatrix", matrix);
-    for (const auto& parameter : preset_.parameters)
-        program.setUniformValue(parameter.id.toUtf8().constData(), parameter.value);
-    if (hasSpriteOwnership >= 0)
-        program.setUniformValue("HasSpriteOwnership", hasSpriteOwnership);
-    vertices_.bind();
-    for (const auto& attribute : {std::pair<const char*,int>{"VertexCoord",0}, {"TexCoord",2}}) {
-        const int location = program.attributeLocation(attribute.first);
-        if (location >= 0) {
-            program.enableAttributeArray(location);
-            program.setAttributeBuffer(location, GL_FLOAT, attribute.second * int(sizeof(float)), 2, 4 * int(sizeof(float)));
+    if (program.texture >= 0) glUniform1i(program.texture, 0);
+    for (int location : program.defaultSamplers) glUniform1i(location, 0);
+    if (program.inputSize >= 0) glUniform2f(program.inputSize, float(input.width()), float(input.height()));
+    if (program.textureSize >= 0) glUniform2f(program.textureSize, float(input.width()), float(input.height()));
+    if (program.outputSize >= 0) glUniform2f(program.outputSize, float(output.width()), float(output.height()));
+    if (program.finalViewportSize >= 0)
+        glUniform2f(program.finalViewportSize, float(finalViewportSize_.width()), float(finalViewportSize_.height()));
+    if (program.frameCount >= 0) glUniform1i(program.frameCount, int(count & 0x7fffffff));
+    if (program.frameDirection >= 0) glUniform1i(program.frameDirection, direction);
+    if (program.spriteOwnership >= 0 && hasSpriteOwnership >= 0)
+        glUniform1i(program.spriteOwnership, hasSpriteOwnership);
+    if (program.originalAspect >= 0 || program.originalAspectRotated >= 0) {
+        const float aspect = originalAspect_;
+        if (program.originalAspect >= 0) glUniform1f(program.originalAspect, aspect);
+        if (program.originalAspectRotated >= 0) glUniform1f(program.originalAspectRotated, aspect);
+    }
+    if (program.mvp >= 0) {
+        QMatrix4x4 matrix;
+        if (program.passIndex < 0) matrix.ortho(0, 1, 1, 0, -1, 1);
+        else matrix.ortho(0, 1, 0, 1, -1, 1);
+        glUniformMatrix4fv(program.mvp, 1, GL_FALSE, matrix.constData());
+    }
+    for (const auto& parameter : program.parameters)
+        glUniform1f(parameter.location, preset_.parameters[parameter.index].value);
+
+    // LUT filtering/wrapping is established when the LUT is uploaded.
+    int unit = 1;
+    for (const auto& lut : program.luts) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, lutTextures_[size_t(lut.index)]);
+        glUniform1i(lut.sampler, unit++);
+    }
+    for (const auto& frame : program.frames) {
+        unsigned frameTexture = 0;
+        QSize frameSize;
+        switch (frame.kind) {
+        case Program::Frame::Kind::Original:
+            frameTexture = texture_;
+            frameSize = textureSize_;
+            break;
+        case Program::Frame::Kind::Pass:
+            if (size_t(frame.index) < buffers_.size() && buffers_[size_t(frame.index)]) {
+                frameTexture = buffers_[size_t(frame.index)]->texture();
+                frameSize = buffers_[size_t(frame.index)]->size();
+            }
+            break;
+        case Program::Frame::Kind::Previous:
+            if (size_t(frame.index) < historyTextures_.size() &&
+                size_t(frame.index) < historySizes_.size()) {
+                frameTexture = historyTextures_[size_t(frame.index)];
+                frameSize = historySizes_[size_t(frame.index)];
+            }
+            break;
+        case Program::Frame::Kind::Feedback:
+            frameTexture = feedbackTexture_;
+            frameSize = feedbackSize_;
+            break;
+        }
+        if (frame.inputSize >= 0)
+            glUniform2f(frame.inputSize, float(frameSize.width()), float(frameSize.height()));
+        if (frame.textureSize >= 0)
+            glUniform2f(frame.textureSize, float(frameSize.width()), float(frameSize.height()));
+        if (frame.sampler >= 0) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, frameTexture);
+            glUniform1i(frame.sampler, unit++);
         }
     }
-    const int color = program.attributeLocation("COLOR");
-    if (color >= 0) program.setAttributeValue(color, 1.f, 1.f, 1.f, 1.f);
+    glActiveTexture(GL_TEXTURE0);
+
+    vertices_.bind();
+    auto bindCoord = [&](int location, int offset) {
+        if (location < 0) return;
+        shader.enableAttributeArray(location);
+        shader.setAttributeBuffer(location, GL_FLOAT, offset * int(sizeof(float)),
+                                  2, 4 * int(sizeof(float)));
+    };
+    bindCoord(program.vertexCoord, 0);
+    bindCoord(program.texCoord, 2);
+    bindCoord(program.lutTexCoord, 2);
+    for (const auto& frame : program.frames) bindCoord(frame.texCoord, 2);
+    if (program.color >= 0) shader.setAttributeValue(program.color, 1.f, 1.f, 1.f, 1.f);
+    if (program.colorUpper >= 0) shader.setAttributeValue(program.colorUpper, 1.f, 1.f, 1.f, 1.f);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    for (const char* name : {"VertexCoord", "TexCoord"}) {
-        const int location = program.attributeLocation(name);
-        if (location >= 0) program.disableAttributeArray(location);
-    }
+    if (program.vertexCoord >= 0) shader.disableAttributeArray(program.vertexCoord);
+    if (program.texCoord >= 0) shader.disableAttributeArray(program.texCoord);
+    if (program.lutTexCoord >= 0) shader.disableAttributeArray(program.lutTexCoord);
+    for (const auto& frame : program.frames)
+        if (frame.texCoord >= 0) shader.disableAttributeArray(frame.texCoord);
     vertices_.release();
-    program.release();
+    shader.release();
 }
 
 bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSize& surface,
                             const QRect& viewport, quint64 frameCount, int direction, QString& error,
-                            const QImage& spriteOwnership) {
+                            const QImage& spriteOwnership, double originalAspect) {
     if (frame.isNull() || viewport.isEmpty()) return true;
     for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
-    int maxTexture = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexture);
-    if (frame.width() > maxTexture || frame.height() > maxTexture)
+    if (frame.width() > maxTexture_ || frame.height() > maxTexture_)
         return fail(error, QStringLiteral("The video source exceeds the GPU texture size limit."));
-    // Preflight the entire chain before any texture/FBO allocation. Per-pass
-    // limits alone allowed eight 128 MiB targets to accumulate in one preset.
-    std::array<QSize, passLimit> outputs;
+    finalViewportSize_ = viewport.size();
+    originalAspect_ = originalAspect > 0 ? float(originalAspect) : float(frame.width()) / frame.height();
+    const bool reset = resetHistory_ || frameCount < lastFrame_;
+    const bool advance = !reset && frameCount != lastFrame_;
+    glActiveTexture(GL_TEXTURE0);
+    if (reset) {
+        // A yet-unwritten temporal input samples black, including immediately after changing games.
+        const unsigned black = 0;
+        for (size_t i = 0; i < historyTextures_.size(); ++i) {
+            glBindTexture(GL_TEXTURE_2D, historyTextures_[i]);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &black);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+            historySizes_[i] = QSize(1, 1);
+        }
+        feedbackBuffer_.reset();
+    } else if (advance && !historyTextures_.empty()) {
+        // Rotate ownership: last frame becomes Prev, the oldest texture receives the new upload.
+        std::rotate(historyTextures_.rbegin(), historyTextures_.rbegin() + 1, historyTextures_.rend());
+        std::rotate(historySizes_.rbegin(), historySizes_.rbegin() + 1, historySizes_.rend());
+        std::swap(texture_, historyTextures_.front());
+        std::swap(textureSize_, historySizes_.front());
+    }
+    const bool inputMips = preset_.passes.front().mipmap;
+    std::array<QSize, ShaderPreset::maxPasses> outputs;
     QSize input = frame.size();
-    qint64 videoBytes = qint64(input.width()) * input.height() * 4;
+    qint64 videoBytes = lutBytes_ + textureBytes(input, 4, inputMips);
+    for (QSize size : historySizes_) videoBytes += textureBytes(size, 4, inputMips);
     for (qsizetype i = 0; i < preset_.passes.size(); ++i) {
         const auto& pass = preset_.passes[i];
         auto dimension = [&](ShaderPass::Scale mode, double factor, int in, int out) {
             const double result = factor * (mode == ShaderPass::Scale::Absolute ? 1 :
                                            mode == ShaderPass::Scale::Viewport ? out : in);
-            return result > maxTexture ? 0 : qMax(1, qRound(result));
+            return result > maxTexture_ ? 0 : qMax(1, qRound(result));
         };
         const QSize output(dimension(pass.scaleX, pass.factorX, input.width(), viewport.width()),
                            dimension(pass.scaleY, pass.factorY, input.height(), viewport.height()));
         if (output.isEmpty())
             return fail(error, QStringLiteral("Shader pass %1 exceeds the GPU texture size limit.").arg(i + 1));
-        videoBytes += qint64(output.width()) * output.height() * 4;
+        const bool mipmap = i + 1 < preset_.passes.size() && preset_.passes[i + 1].mipmap;
+        const qint64 targetBytes = textureBytes(output, pass.floating ? 16 : 4, mipmap);
+        videoBytes += targetBytes * (i == preset_.feedbackPass ? 2 : 1);
         if (videoBytes > videoMemoryLimit)
             return fail(error, QStringLiteral("The video source and shader passes exceed the 128 MiB video memory budget."));
         outputs[size_t(i)] = output;
@@ -385,35 +470,26 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     const bool usesSpriteOwnership = preset_.usesSpriteOwnership();
     const bool hasSpriteOwnership = usesSpriteOwnership && spriteOwnership.size() == frame.size()
         && spriteOwnership.format() == QImage::Format_Grayscale8;
-    // QImage starts at the top; FBOs and every GLSL pass use OpenGL's bottom-left origin.
-    // The core supplies RGB32. On little-endian hosts its bytes are BGRA, so only
-    // flip the rows and let OpenGL handle channel order during the texture upload.
+    // Like RetroArch, keep the top row at v=0 for source images, LUTs and intermediate
+    // targets. Only the final display quad is flipped. RGB32 usually uploads without a copy.
 #if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
     const bool uploadBgra = frame.format() == QImage::Format_RGB32;
 #else
     const bool uploadBgra = false;
 #endif
-#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-    QImage pixels = uploadBgra ? frame.flipped(Qt::Vertical)
-                               : frame.convertToFormat(QImage::Format_RGBA8888).flipped(Qt::Vertical);
-#else
-    QImage pixels = uploadBgra ? frame.mirrored()
-                               : frame.convertToFormat(QImage::Format_RGBA8888).mirrored();
-#endif
+    QImage pixels = uploadBgra ? frame : frame.convertToFormat(QImage::Format_RGBA8888);
     const unsigned uploadFormat = uploadBgra ? GL_BGRA : GL_RGBA;
     if (hasSpriteOwnership) {
-        // This upload already owns its flipped pixels. Pack only its spare
-        // alpha byte: clean source frames, captures and external shaders retain
-        // their normal pixels. Row pointers avoid per-pixel Qt API calls.
         auto* rgba = pixels.bits();
         const qsizetype stride = pixels.bytesPerLine();
-        const int width = pixels.width(), height = pixels.height();
-        for (int y = 0; y < height; ++y) {
-            auto* out = rgba + y*stride + 3;
-            const auto* hint = spriteOwnership.constScanLine(height-1-y);
-            for (int x = 0; x < width; ++x) out[x*4] = hint[x] ? 255 : 0;
+        for (int y = 0; y < frame.height(); ++y) {
+            auto* out = rgba + y * stride + 3;
+            const auto* hint = spriteOwnership.constScanLine(y);
+            for (int x = 0; x < frame.width(); ++x) out[x*4] = hint[x] ? 255 : 0;
         }
     }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, int(pixels.bytesPerLine() / 4));
+    if (inputMips) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1000);
     if (textureSize_ != frame.size()) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, frame.width(), frame.height(), 0,
                      uploadFormat, GL_UNSIGNED_BYTE, pixels.constBits());
@@ -422,25 +498,55 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width(), frame.height(),
                         uploadFormat, GL_UNSIGNED_BYTE, pixels.constBits());
     }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    if (inputMips) glGenerateMipmap(GL_TEXTURE_2D);
+    const auto allocate = [](const ShaderPass& pass, QSize size) {
+        QOpenGLFramebufferObjectFormat format;
+        format.setInternalTextureFormat(passFormat(pass));
+        return std::make_unique<QOpenGLFramebufferObject>(size, format);
+    };
+    if (preset_.feedbackPass >= 0) {
+        const size_t index = size_t(preset_.feedbackPass);
+        feedbackSize_ = outputs[index];
+        if (!feedbackBuffer_ || feedbackBuffer_->size() != feedbackSize_) {
+            feedbackBuffer_.reset();
+            feedbackBuffer_ = allocate(preset_.passes[preset_.feedbackPass], feedbackSize_);
+            if (!feedbackBuffer_->isValid() || !feedbackBuffer_->bind())
+                return fail(error, QStringLiteral("Cannot allocate shader feedback buffer."));
+            glClearColor(0, 0, 0, 0);
+            glClear(GL_COLOR_BUFFER_BIT);
+        } else if (advance && buffers_[index]) {
+            feedbackBuffer_.swap(buffers_[index]);
+        }
+        feedbackTexture_ = feedbackBuffer_->texture();
+    }
     unsigned source = texture_;
     input = frame.size();
+    glClearColor(0, 0, 0, 0);
     for (qsizetype i = 0; i < preset_.passes.size(); ++i) {
         const auto& pass = preset_.passes[i];
         const QSize output = outputs[size_t(i)];
         auto& buffer = buffers_[size_t(i)];
-        if (!buffer || buffer->size() != output) {
-            QOpenGLFramebufferObjectFormat format;
-            format.setInternalTextureFormat(GL_RGBA8);
-            buffer = std::make_unique<QOpenGLFramebufferObject>(output, format);
+        if (!buffer) {
+            buffer = allocate(pass, output);
             if (!buffer->isValid())
-                return fail(error, QStringLiteral("Cannot allocate framebuffer for shader pass %1.").arg(i + 1));
+                return fail(error, QStringLiteral("GPU cannot create the requested framebuffer for pass %1.").arg(i + 1));
         }
         buffer->bind();
+        // Passes may discard fragments or draw a smaller quad. Never expose a previous frame there.
+        glClear(GL_COLOR_BUFFER_BIT);
+        if (pass.srgb && !pass.floating) glEnable(GL_FRAMEBUFFER_SRGB);
         glViewport(0, 0, output.width(), output.height());
         draw(*programs_[size_t(i)], source, input, output,
              pass.frameCountMod ? frameCount % pass.frameCountMod : frameCount, direction, pass.linear, pass.wrap,
-             usesSpriteOwnership && i == 0 ? int(hasSpriteOwnership) : -1);
+             usesSpriteOwnership && i == 0 ? int(hasSpriteOwnership) : -1, pass.mipmap);
+        if (pass.srgb && !pass.floating) glDisable(GL_FRAMEBUFFER_SRGB);
         source = buffer->texture();
+        if (i + 1 < preset_.passes.size() && preset_.passes[i + 1].mipmap) {
+            glBindTexture(GL_TEXTURE_2D, source);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1000);
+            glGenerateMipmap(GL_TEXTURE_2D);
+        }
         input = output;
     }
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
@@ -452,5 +558,41 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     const unsigned glError = glGetError();
     if (glError != GL_NO_ERROR)
         return fail(error, QStringLiteral("OpenGL shader rendering failed (0x%1).").arg(glError, 0, 16));
+    lastFrame_ = frameCount;
+    resetHistory_ = false;
+    return true;
+}
+
+bool ShaderPipeline::loadTextures(QString& error) {
+    lutTextures_.resize(preset_.textures.size());
+    if (!lutTextures_.empty()) glGenTextures(int(lutTextures_.size()), lutTextures_.data());
+    for (qsizetype i = 0; i < preset_.textures.size(); ++i) {
+        const auto& lut = preset_.textures[i];
+        QImageReader reader(lut.path);
+        const QSize size = reader.size();
+        if (size.isEmpty() || size.width() > maxTexture_ || size.height() > maxTexture_)
+            return fail(error, QStringLiteral("Invalid or oversized shader texture: %1").arg(lut.path));
+        lutBytes_ += textureBytes(size, 4, lut.mipmap);
+        if (lutBytes_ > videoMemoryLimit)
+            return fail(error, QStringLiteral("Shader textures exceed the 128 MiB video memory budget."));
+        const QImage pixels = reader.read().convertToFormat(QImage::Format_RGBA8888);
+        if (pixels.size() != size)
+            return fail(error, QStringLiteral("Cannot decode shader texture %1: %2").arg(lut.path, reader.errorString()));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, lutTextures_[size_t(i)]);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size.width(), size.height(), 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, pixels.constBits());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, int(lut.wrap));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, int(lut.wrap));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, lut.linear ? GL_LINEAR : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, lut.mipmap
+            ? (lut.linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST)
+            : (lut.linear ? GL_LINEAR : GL_NEAREST));
+        if (lut.mipmap) glGenerateMipmap(GL_TEXTURE_2D);
+        if (glGetError() != GL_NO_ERROR)
+            return fail(error, QStringLiteral("Cannot upload shader texture: %1").arg(lut.path));
+    }
     return true;
 }

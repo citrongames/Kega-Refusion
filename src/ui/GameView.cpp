@@ -125,6 +125,9 @@ public:
         if (okay) update();
         return okay;
     }
+    void resetFrameHistory() {
+        if (pipeline_) pipeline_->resetFrameHistory();
+    }
     void parameter(const QString& id, float value) {
         if (pipeline_) pipeline_->setParameter(id, value);
         update();
@@ -175,7 +178,7 @@ protected:
         QString error;
         if (!pipeline_->render(owner_->frame_, defaultFramebufferObject(),
                                QSize(qRound(width() * dpr), qRound(height() * dpr)),
-                               target, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_)) {
+                               target, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_, owner_->aspectRatio_)) {
             failed(error);
         }
         painter.endNativePainting();
@@ -285,6 +288,11 @@ void GameView::clearGame() {
     setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
     setFrame({}, 4.0 / 3.0);
     frameCount_ = 0;
+    resetShaderHistory();
+}
+
+void GameView::resetShaderHistory() {
+    if (shaderView_) shaderView_->resetFrameHistory();
 }
 
 void GameView::setLoading(bool loading, const QString& fileName) {

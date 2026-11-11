@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QImage>
-#include <QMap>
 #include <QOpenGLBuffer>
 #include <QOpenGLFunctions>
 #include <QSize>
@@ -11,9 +10,8 @@
 #include <vector>
 
 class QOpenGLFramebufferObject;
-class QOpenGLShaderProgram;
 
-// Deliberately implements the serial GLSL subset, not the Slang/Cg runtime.
+// RetroArch desktop GLSL presets and their per-pass inputs.
 struct ShaderParameter {
     QString id;
     QString label;
@@ -25,16 +23,27 @@ struct ShaderPass {
     QString path;
     QByteArray source;
     bool linear = false;
+    bool floating = false, srgb = false, mipmap = false;
+    QString alias;
     Scale scaleX = Scale::Source, scaleY = Scale::Source;
     double factorX = 1, factorY = 1;
     unsigned wrap = 0x812f; // GL_CLAMP_TO_EDGE
     unsigned frameCountMod = 0;
 };
 
+struct ShaderLut {
+    QString id, path;
+    bool linear = true, mipmap = false;
+    unsigned wrap = 0x812d; // GL_CLAMP_TO_BORDER
+};
+
 struct ShaderPreset {
+    static constexpr int maxPasses = 32;
     QString path;
     QVector<ShaderPass> passes;
     QVector<ShaderParameter> parameters;
+    QVector<ShaderLut> textures;
+    int feedbackPass = -1;
     static bool load(const QString& path, ShaderPreset& result, QString& error);
     bool usesSpriteOwnership() const {
         return path == QLatin1String(":/shaders/refusion-dither.glslp") && passes.size() == 1
@@ -50,21 +59,34 @@ public:
     bool initialize(const ShaderPreset& preset, QString& error);
     bool render(const QImage& frame, unsigned framebuffer, const QSize& surface,
                 const QRect& viewport, quint64 frameCount, int frameDirection, QString& error,
-                const QImage& spriteOwnership = {});
+                const QImage& spriteOwnership = {}, double originalAspect = 0);
+    void resetFrameHistory() { resetHistory_ = true; }
     bool setParameter(const QString& id, float value);
     QVector<ShaderParameter> parameters() const { return preset_.parameters; }
 
 private:
-    bool compile(const QByteArray& source, std::unique_ptr<QOpenGLShaderProgram>& program,
-                 QString& error);
-    void draw(QOpenGLShaderProgram& program, unsigned texture, const QSize& input,
+    struct Program;
+    bool loadTextures(QString& error);
+    bool compile(const QByteArray& source, std::unique_ptr<Program>& program,
+                 QString& error, int passIndex);
+    void draw(Program& program, unsigned texture, const QSize& input,
               const QSize& output, quint64 count, int direction, bool linear, unsigned wrap,
-              int hasSpriteOwnership = -1);
+              int hasSpriteOwnership = -1, bool mipmap = false);
     ShaderPreset preset_;
-    std::vector<std::unique_ptr<QOpenGLShaderProgram>> programs_;
-    std::unique_ptr<QOpenGLShaderProgram> stock_;
+    std::vector<std::unique_ptr<Program>> programs_;
+    std::unique_ptr<Program> stock_;
     std::vector<std::unique_ptr<QOpenGLFramebufferObject>> buffers_;
+    std::unique_ptr<QOpenGLFramebufferObject> feedbackBuffer_;
+    unsigned feedbackTexture_ = 0;
+    QSize feedbackSize_;
+    std::vector<unsigned> lutTextures_, historyTextures_;
+    std::vector<QSize> historySizes_;
+    qint64 lutBytes_ = 0;
+    int maxTexture_ = 0;
+    bool canSrgb_ = false, resetHistory_ = true;
+    quint64 lastFrame_ = 0;
     QOpenGLBuffer vertices_;
     unsigned texture_ = 0;
-    QSize textureSize_;
+    QSize textureSize_, finalViewportSize_;
+    float originalAspect_ = 1.f;
 };
