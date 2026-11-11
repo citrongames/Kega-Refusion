@@ -11,6 +11,13 @@
 - After context compression continue the last unfinished task from confirmed state, files and verification results. Status questions do not cancel the task.
 
 
+## In-game OSD borders
+
+- Use a thin gray border for messages that expire on a timer, including quick save/load confirmations, errors and the mouse-capture hint. The slot picker also uses a gray outer border, with turquoise highlighting the selected slot.
+- Use a thin turquoise border while a status is active, such as pause, fast-forward, rewind, mute, recording, playback, loading or waiting for a peer. The FPS counters and game timer use this border while displayed.
+- Use a thicker turquoise border for achievement cards, including game recognition, unlocks and mastery. An error fetching achievements uses the ordinary gray message.
+- Keep controller diagrams and crosshairs free of an enclosing OSD panel.
+
 ## Resource discipline
 
 - Loading must acknowledge user actions immediately and keep the UI responsive. Never delay game start, frames or controls for optional network services such as achievements; report readiness/failure asynchronously, once, without a modal interruption.
