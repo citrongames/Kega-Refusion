@@ -281,6 +281,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     }
     session_.setRegion(region_);
     session_.setBlarggFilter(blarggFilter_);
+    gameGearLcdEnabled_ = !blarggFilter_ && settings_.value(QStringLiteral("view/gameGearLcd"), false).toBool();
+    session_.setGameGearLcd(gameGearLcdEnabled_);
     session_.setSmsFmEnabled(smsFmEnabled_);
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
@@ -378,6 +380,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     connect(&session_, &EmulationSession::masterSystemChanged,
             smsFmAction_, &QAction::setVisible);
+    connect(&session_, &EmulationSession::gameGearChanged, this, [this](bool active) {
+        gameGearLcdAction_->setVisible(active);
+        updateShaderActions();
+    });
     for (QAction* action : menuBar()->actions()) {
         QMenu* menu = action->menu();
         if (!menu) continue;
@@ -1054,12 +1060,21 @@ void MainWindow::buildMenus() {
                 return;
             }
             settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
+            setGameGearLcdEnabled(false);
             blarggFilter_ = filter;
             settings_.setValue(QStringLiteral("view/blarggFilter"), filter);
             session_.setBlarggFilter(filter);
             updateShaderActions();
         });
     }
+    gameGearLcdAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("LCD-шлейф")));
+    gameGearLcdAction_->setObjectName(QStringLiteral("gameGearLcd"));
+    gameGearLcdAction_->setCheckable(true);
+    gameGearLcdAction_->setVisible(false);
+    connect(gameGearLcdAction_, &QAction::triggered, this, [this](bool enabled) {
+        setGameGearLcdEnabled(enabled);
+        updateShaderActions();
+    });
     shaderMenu->addSeparator();
     shaderDitherAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Сглаживание дизеринга")));
     shaderDitherAction_->setObjectName(QStringLiteral("shaderDither"));
@@ -1069,7 +1084,12 @@ void MainWindow::buildMenus() {
         action->setCheckable(true); shaderGroup->addAction(action);
     }
     shaderCustomAction_->setEnabled(false);
-    connect(shaderOffAction_, &QAction::triggered, this, [this] { applyShaderPreset({}); });
+    connect(shaderOffAction_, &QAction::triggered, this, [this] {
+        if (applyShaderPreset({}) && gameGearLcdAction_->isVisible()) {
+            setGameGearLcdEnabled(false);
+            updateShaderActions();
+        }
+    });
     connect(shaderDitherAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp")); });
     shaderMenu->addSeparator();
     QAction* shaderLoad = shaderMenu->addAction(Localization::text(QStringLiteral("Загрузить GLSL-пресет…")));
@@ -1454,12 +1474,31 @@ bool MainWindow::applyShaderPreset(const QString& path) {
     return true;
 }
 
+void MainWindow::setGameGearLcdEnabled(bool enabled) {
+    if (gameGearLcdEnabled_ == enabled) return;
+    if (enabled && blarggFilter_) {
+        blarggFilter_ = 0;
+        settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
+    }
+    gameGearLcdEnabled_ = enabled;
+    settings_.setValue(QStringLiteral("view/gameGearLcd"), enabled);
+    session_.setGameGearLcd(enabled);
+}
+
 void MainWindow::updateShaderActions() {
     if (!shaderOffAction_) return;
     const QString path = view_->shaderPreset();
+    gameGearLcdAction_->setChecked(gameGearLcdEnabled_);
     if (blarggFilter_ >= 2 && blarggFilter_ <= 4)
         blarggActions_[blarggFilter_]->setChecked(true);
-    else if (path.isEmpty()) shaderOffAction_->setChecked(true);
+    else if (path.isEmpty()) {
+        if (gameGearLcdEnabled_ && gameGearLcdAction_->isVisible()) {
+            if (auto* selected = shaderOffAction_->actionGroup()->checkedAction())
+                selected->setChecked(false);
+        } else {
+            shaderOffAction_->setChecked(true);
+        }
+    }
     else if (path == QLatin1String(":/shaders/refusion-dither.glslp"))
         shaderDitherAction_->setChecked(true);
     else shaderCustomAction_->setChecked(true);

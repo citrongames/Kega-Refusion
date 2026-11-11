@@ -190,6 +190,7 @@ void EmulationSession::setDebugAudioGain(unsigned channel, unsigned percent) {
 }
 void EmulationSession::setDebugBackdrop(quint32 rgb) { enqueue({Type::DebugBackdrop,{},int(rgb & 0xffffff)}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
+void EmulationSession::setGameGearLcd(bool enabled) { enqueue({Type::GameGearLcd,{},enabled ? 1 : 0}); }
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
 void EmulationSession::setPerGameCdBackup(bool enabled) { enqueue({Type::PerGameCdBackup,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
@@ -649,7 +650,7 @@ void EmulationSession::run() {
     };
     clearHistory();
     bool paused = false, effectivePaused = false, rewindLatched = false, rewinding = false;
-    bool masterSystem = false;
+    bool masterSystem = false, gameGear = false;
     LibretroHost::DebugCapabilities debugAvailable;
     const auto updateDebugControls = [&] {
         const auto available = host.debugCapabilities();
@@ -1689,6 +1690,9 @@ void EmulationSession::run() {
                 } else emit errorOccurred(error);
                 break;
             }
+            case Type::GameGearLcd:
+                if (!host.setGameGearLcd(command.value!=0,error)) emit errorOccurred(error);
+                break;
             case Type::Filter:
                 // Blargg changes presentation, not native execution. Replayed
                 // local frames use the current filter; stored previews retain geometry.
@@ -1772,6 +1776,8 @@ void EmulationSession::run() {
             case Type::MovieResume: case Type::MovieFork: case Type::MovieStop: case Type::MovieTakeOver: {
                 const bool sms=host.isMasterSystem();
                 if(sms!=masterSystem){masterSystem=sms;emit masterSystemChanged(sms);}
+                const bool gg=host.isGameGear();
+                if(gg!=gameGear){gameGear=gg;emit gameGearChanged(gg);}
                 updateDebugControls();
                 break;
             }

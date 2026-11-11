@@ -135,6 +135,21 @@ void main() { gl_FragColor = texture2D(Texture, vTexCoord); }
         require(view->shaderParameters().size() == defaults.parameters.size() &&
                 view->shaderParameters()[0].value == defaults.parameters[0].value,
                 "retired shader parameters leaked into the new shader");
+        QAction* lcd = child<QAction>(window, "gameGearLcd");
+        require(!lcd->isVisible(), "LCD ghosting is visible without a Game Gear game");
+        session.gameGearChanged(true);
+        lcd->trigger();
+        require(lcd->isVisible() && lcd->isChecked() && dither->isChecked(),
+                "Game Gear LCD ghosting did not combine with GLSL");
+        rgb->trigger();
+        require(!lcd->isChecked(), "Blargg did not disable LCD ghosting");
+        lcd->trigger();
+        require(lcd->isChecked() && !rgb->isChecked() && !off->isChecked(),
+                "LCD ghosting did not replace Blargg");
+        off->trigger();
+        require(off->isChecked() && !lcd->isChecked(), "Off did not clear LCD ghosting");
+        session.gameGearChanged(false);
+        require(!lcd->isVisible(), "LCD ghosting stayed visible after leaving Game Gear");
         rgb->trigger();
         require(rgb->isChecked() && !dither->isChecked() && view->shaderPreset().isEmpty(),
                 "Blargg did not clear the built-in shader");

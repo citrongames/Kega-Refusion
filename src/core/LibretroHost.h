@@ -43,7 +43,9 @@ public:
     const QImage& frameForLinkRole(int role) const;
     double aspectRatioForLinkRole(int role) const;
     void runFrame(bool renderVideo = true, bool captureAudio = true);
-    // True when the previous checkpoint and input can reproduce this output mode.
+    // Woven output needs two consecutive input frames from T-2; other modes need T-1.
+    // The scope preserves transient fields through canonical restore and bypasses
+    // recursive LCD ghosting. A warmup frame may render without publication.
     bool rewindPreviewNeedsPair() const;
     void beginRewindPreview();
     void endRewindPreview();
@@ -55,6 +57,8 @@ public:
     bool hardReset(QString& error, bool applyPending = true);
     void setSmsFmEnabled(bool enabled) { smsFmEnabled_ = enabled; }
     bool isMasterSystem() const;
+    bool isGameGear() const;
+    bool gameGearLcdEnabled() const;
     bool smsPauseStateSupported() const;
     struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
     DebugCapabilities debugCapabilities() const;
@@ -67,6 +71,7 @@ public:
     // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
     bool setRegion(int region, QString& error, bool* changed = nullptr);
     bool setBlarggFilter(int filter, QString& error, bool* changed = nullptr);
+    bool setGameGearLcd(bool enabled, QString& error, bool* changed = nullptr);
     bool setFastCdLoading(bool enabled, QString& error, bool* changed = nullptr);
     bool setRemoveSpriteLimit(bool enabled, QString& error, bool* changed = nullptr);
     // Applies to the core's ROM copy at load/power cycle, never to source bytes.
@@ -210,6 +215,7 @@ private:
     bool refreshDiscFiles(QString& error);
     void setDiscIdentity();
     bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error, bool* changed = nullptr);
+    bool applyGameGearLcd(QString& error, bool* changed = nullptr);
     bool saveStateFile(const QString& path, QString& error, bool keepPrevious);
     QString statePath(int slot) const;
     QString saveReadPath(const QString& directory, const QString& suffix) const;
@@ -253,6 +259,7 @@ private:
     bool contentInfoActive_ = false;
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     QByteArray localBlarggFilter_ = "disabled";
+    bool localGameGearLcd_ = false;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     bool smsFmEnabled_ = true;

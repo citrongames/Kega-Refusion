@@ -82,6 +82,7 @@ private:
     bool applyShaderPreset(const QString& path);
     void editShaderParameters();
     void updateShaderActions();
+    void setGameGearLcdEnabled(bool enabled);
     void releaseInput();
     void updateMovieActions();
     void updateVideoActions();
@@ -189,6 +190,8 @@ private:
     QAction* resetAction_ = nullptr;
     QAction* hardResetAction_ = nullptr;
     std::array<QAction*, 5> blarggActions_{};
+    bool gameGearLcdEnabled_ = false;
+    QAction* gameGearLcdAction_ = nullptr;
     QAction* shaderOffAction_ = nullptr;
     QAction* shaderDitherAction_ = nullptr;
     QAction* shaderCustomAction_ = nullptr;

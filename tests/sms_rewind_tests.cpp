@@ -135,6 +135,65 @@ void replay(const QString& core, const QString& suffix, ControllerType type, boo
 }
 
 
+void lcdFilters(const QString& core) {
+    QTemporaryDir temp;check(temp.isValid(),"LCD fixture directory");
+    const auto gg=temp.filePath("original-lcd.gg"),sms=temp.filePath("original-lcd.sms");
+    auto ggRom=fixture(true,false);
+    const auto display=ggRom.indexOf(QByteArray::fromHex("3e40d3bf3e81d3bf"));
+    check(display>=0,"LCD fixture display register");ggRom[display+1]=0;
+    writeFile(gg,ggRom);writeFile(sms,fixture(false,false));
+    LibretroHost host(core,temp.filePath("data"));QString error;
+    const auto require=[&](bool value){if(!value)throw std::runtime_error(error.toStdString());};
+    require(host.setGameGearLcd(true,error));require(host.load(gg,error));
+    check(host.isGameGear()&&host.gameGearLcdEnabled(),"real GG did not apply local LCD preference");
+    QLibrary inspect(core);using Query=unsigned(*)(unsigned);
+    const auto query=reinterpret_cast<Query>(inspect.resolve("retro_kegarefusion_rewind_video"));
+    check(query!=nullptr,"LCD native query missing");
+    for(int frame=0;frame<12;++frame)host.runFrame();
+    check(query(0)&2u,"GG LCD option did not reach native render configuration");
+    const auto position=host.runClock().frames;
+    const auto identity=host.movieCoreIdentity(),compatibility=host.networkCompatibility();
+    const auto state=host.captureMovieState(false);host.runFrame();const auto lcd=host.frame();
+    require(host.restoreMovieState(state,error,true));require(host.setGameGearLcd(false,error));
+    check(host.runClock().frames==position,"LCD toggle reset the machine clock");
+    host.runFrame();check(!(query(0)&2u),"LCD disable did not reach native core");
+    check(host.frame()!=lcd,"GG LCD rendering did not change moving backdrop pixels");
+    require(host.setGameGearLcd(true,error));require(host.setBlarggFilter(2,error));host.runFrame();
+    check(!host.gameGearLcdEnabled()&&!(query(0)&2u),"Blargg did not disable LCD");
+    require(host.setGameGearLcd(true,error));host.runFrame();
+    check(host.movieConfiguration().value("options").toObject().value("genesis_plus_gx_blargg_ntsc_filter").toString()=="disabled",
+          "LCD did not disable Blargg");
+    check(host.movieCoreIdentity()==identity&&host.networkCompatibility()==compatibility,"local LCD changed deterministic core compatibility");
+    auto configuration=host.movieConfiguration();auto options=configuration.value("options").toObject();
+    options.insert("genesis_plus_gx_lcd_filter","disabled");configuration.insert("options",options);
+    require(host.prepareMovie(configuration,error));host.runFrame();
+    check(host.gameGearLcdEnabled()&&(query(0)&2u),"recording replaced local LCD preference");
+    require(host.restoreMovieConfiguration(error));
+    configuration=host.movieConfiguration();configuration.insert("networkCompatibility",QString::fromLatin1(compatibility.toHex()));
+    options=configuration.value("options").toObject();options.insert("genesis_plus_gx_lcd_filter","disabled");configuration.insert("options",options);
+    require(host.prepareNetwork(configuration,error));host.runFrame();
+    check(host.gameGearLcdEnabled()&&(query(0)&2u),"network host replaced local LCD preference");
+    require(host.restoreMovieConfiguration(error));
+    require(host.hardReset(error));host.runFrame();check(host.gameGearLcdEnabled()&&(query(0)&2u),"power reset lost GG LCD preference");
+    // The GG extension must not override an explicitly selected MD-MS machine.
+    configuration=host.movieConfiguration();options=configuration.value("options").toObject();
+    options.insert("genesis_plus_gx_system_hw","mega drive / genesis");configuration.insert("options",options);
+    require(host.prepareMovie(configuration,error));host.runFrame();
+    check(!host.isGameGear()&&!host.gameGearLcdEnabled()&&!(query(0)&2u),"GG extension enabled LCD on actual MD-MS hardware");
+    require(host.restoreMovieConfiguration(error));host.unload();
+    check(!host.isGameGear()&&!host.gameGearLcdEnabled(),"closed game retained effective GG LCD state");
+    require(host.load(sms,error));host.runFrame();
+    check(!host.isGameGear()&&!host.gameGearLcdEnabled()&&!(query(0)&2u),"LCD leaked into the next SMS cartridge");
+    // A .sms fixture running in GG-MS is genuinely a Game Gear too.
+    configuration=host.movieConfiguration();options=configuration.value("options").toObject();
+    options.insert("genesis_plus_gx_system_hw","game gear");configuration.insert("options",options);
+    require(host.prepareMovie(configuration,error));host.runFrame();
+    check(host.isGameGear()&&host.gameGearLcdEnabled()&&(query(0)&2u),"actual GG-MS did not enable LCD for an SMS filename");
+    require(host.restoreMovieConfiguration(error));require(host.load(gg,error));host.runFrame();
+    check(host.gameGearLcdEnabled()&&(query(0)&2u),"returning to GG lost local LCD preference");
+    std::puts("PASS: GG/GG-MS LCD rendering, local movie/net preference, Blargg exclusion, power/close and hardware-gated game changes");
+}
+
 void compatibleBuild(const QString& core,const QString& directory,bool writer) {
     check(QDir().mkpath(directory),"cross-build compatibility directory");
     const QString path=directory+"/original-compatible.sms";
@@ -203,8 +262,10 @@ void legacy(const QString& core) {
 int main(int argc,char** argv) {
     QCoreApplication app(argc,argv);
     try {
-        check(argc==2||argc==3||argc==4,"usage: sms_rewind_tests CORE [--baseline | --write-legacy DIR | --read-legacy DIR]");
-        const QString core=QString::fromLocal8Bit(argv[1]);const bool baseline=argc==3;
+        check(argc==2||argc==3||argc==4,"usage: sms_rewind_tests CORE [--baseline | --lcd-only | --write-legacy DIR | --read-legacy DIR]");
+        const QString core=QString::fromLocal8Bit(argv[1]);
+        if(argc==3&&QString::fromLocal8Bit(argv[2])=="--lcd-only") {lcdFilters(core);return 0;}
+        const bool baseline=argc==3;
         check(!baseline||QString::fromLocal8Bit(argv[2])=="--baseline","unknown SMS rewind test mode");
         if(argc==4) {
             const QString mode=QString::fromLocal8Bit(argv[2]);
@@ -219,7 +280,7 @@ int main(int argc,char** argv) {
         replay(core,"sms",ControllerType::Pad,baseline,"mega drive / genesis",0x81);
         replay(core,"sms",ControllerType::Pad,baseline,"game gear",0x41);
         replay(core,"sms",ControllerType::Pad,baseline,{},0,3);
-        if(!baseline)legacy(core);
+        if(!baseline) {legacy(core);lcdFilters(core);}
         return 0;
     } catch(const std::exception& failure) {std::fprintf(stderr,"FAIL: %s\n",failure.what());return 1;}
 }

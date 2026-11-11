@@ -374,6 +374,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         unload(); return false;
     }
     loaded_ = true;
+    if (!applyGameGearLcd(error)) { unload(); return false; }
     snapshot32xBios();
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
@@ -574,6 +575,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
+    if (!applyGameGearLcd(error)) { unload(); return false; }
     snapshot32xBios();
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
@@ -619,6 +621,7 @@ void LibretroHost::unload() {
     }
     papriumMusic_.clear();
     loaded_ = false;
+    { QString ignored; applyGameGearLcd(ignored); }
     active32xBiosFingerprints_ = {};
     contentNeeds32x_ = false;
     if (!linkParent_) CoreFileSystem::clearVirtualFiles();
@@ -657,6 +660,9 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
         else if (role.startsWith(QLatin1String("32X_")))
             CoreFileSystem::hideFile(virtualPath);
     }
+    // The next cartridge has not been detected yet. Never carry GG output
+    // processing into another system; the local preference is applied after load.
+    if (!setCoreOption("genesis_plus_gx_lcd_filter", "disabled", error)) return false;
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
@@ -776,6 +782,14 @@ void LibretroHost::setDebugBackdrop(quint32 rgb) {
 bool LibretroHost::smsPauseStateSupported() const {
     return loaded_ && api_->sms_pause_state_version && api_->sms_pause_state_version() >= 1;
 }
+bool LibretroHost::isGameGear() const {
+    if (!loaded_ || !api_->system_hw) return false;
+    const auto hardware=api_->system_hw();
+    return hardware==0x40 || hardware==0x41;
+}
+bool LibretroHost::gameGearLcdEnabled() const {
+    return isGameGear() && localGameGearLcd_;
+}
 bool LibretroHost::isMasterSystem() const {
     if(!loaded_)return false;
     if(api_->system_hw) {
@@ -842,6 +856,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     loaded_ = true;
+    if (!applyGameGearLcd(error)) { unload(); return false; }
     snapshot32xBios();
     runClock_ = {};
     setDebugBackdrop(debugBackdrop_);
@@ -1047,6 +1062,23 @@ bool LibretroHost::setFastCdLoading(bool enabled, QString& error, bool* changed)
     // BIOS handshake delay while omitting simulated mechanical seek time.
     return setCoreOption("genesis_plus_gx_cd_latency", enabled ? "disabled" : "enabled", error, changed);
 }
+bool LibretroHost::applyGameGearLcd(QString& error, bool* changed) {
+    return setCoreOption("genesis_plus_gx_lcd_filter", gameGearLcdEnabled() ? "enabled" : "disabled", error, changed);
+}
+bool LibretroHost::setGameGearLcd(bool enabled, QString& error, bool* changed) {
+    if (changed) *changed=false;
+    if (enabled) {
+        bool filterChanged=false;
+        if (!setBlarggFilter(0,error,&filterChanged)) return false;
+        if (changed) *changed=filterChanged;
+    }
+    const bool previous=localGameGearLcd_;
+    localGameGearLcd_=enabled;
+    bool lcdChanged=false;
+    if (!applyGameGearLcd(error,&lcdChanged)) { localGameGearLcd_=previous; return false; }
+    if (changed) *changed|=lcdChanged;
+    return true;
+}
 bool LibretroHost::setBlarggFilter(int filter, QString& error, bool* changed) {
     if (changed) *changed = false;
     static const std::array<QByteArray,5> values{"disabled", "monochrome", "composite", "svideo", "rgb"};
@@ -1055,8 +1087,14 @@ bool LibretroHost::setBlarggFilter(int filter, QString& error, bool* changed) {
     }
     if (!setCoreOption("genesis_plus_gx_blargg_ntsc_filter", values[size_t(filter)], error, changed)) return false;
     localBlarggFilter_ = values[size_t(filter)];
+    if (filter) {
+        bool lcdChanged=false;
+        if (!setGameGearLcd(false,error,&lcdChanged)) return false;
+        if (changed) *changed|=lcdChanged;
+    }
     return true;
 }
+
 ConsoleProfile LibretroHost::controllerProfile() const {
     switch (achievementConsoleId()) {
     case RC_CONSOLE_MASTER_SYSTEM: return ConsoleProfile::MasterSystem;
@@ -2158,6 +2196,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     // Output processing is a local preference, independent of the recorded
     // hardware and of the remote host's display settings.
     newOptions["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
+    newOptions["genesis_plus_gx_lcd_filter"] = gameGearLcdEnabled() ? "enabled" : "disabled";
     if (changedOptions) {
         if (!movieCompatibilityWarning_.isEmpty()) movieCompatibilityWarning_ += QLatin1Char('\n');
         movieCompatibilityWarning_ += Localization::text(QStringLiteral(
@@ -2329,6 +2368,8 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     }
     preMovieVariables_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     preMovieOptionOverrides_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
+    preMovieVariables_["genesis_plus_gx_lcd_filter"] = gameGearLcdEnabled() ? "enabled" : "disabled";
+    preMovieOptionOverrides_["genesis_plus_gx_lcd_filter"] = preMovieVariables_["genesis_plus_gx_lcd_filter"];
     const bool optionChanged = variables_ != preMovieVariables_;
     variables_ = std::move(preMovieVariables_);
     optionOverrides_ = std::move(preMovieOptionOverrides_);
