@@ -3148,7 +3148,8 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::Polish || event->type() == QEvent::Show) {
         auto* window = qobject_cast<QWidget*>(watched);
-        if (window && window != this && (window->windowType() == Qt::Dialog ||
+        if (window && window != this && !qobject_cast<QFileDialog*>(window) &&
+                (window->windowType() == Qt::Dialog ||
                 window->windowType() == Qt::Window || window->windowType() == Qt::Tool ||
                 window->windowType() == Qt::Sheet)) {
             if (event->type() == QEvent::Polish) {

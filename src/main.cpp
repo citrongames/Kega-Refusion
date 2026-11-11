@@ -58,6 +58,13 @@ void configurePluginPaths() {
         // A deployed package is self-contained. System Qt multimedia plugins
         // can depend on a different/full FFmpeg and must not be mixed into it.
         QCoreApplication::setLibraryPaths({bundled});
+#ifdef Q_OS_LINUX
+        // Use the portal from this Qt kit; the desktop supplies the actual picker.
+        // Host platform-theme plugins may use an incompatible Qt ABI.
+        if (QFileInfo::exists(QDir(bundled).filePath(
+                QStringLiteral("platformthemes/libqxdgdesktopportal.so"))))
+            qputenv("QT_QPA_PLATFORMTHEME", "xdgdesktopportal");
+#endif
         return;
     }
     const QString installed = QLibraryInfo::path(QLibraryInfo::PluginsPath);
@@ -70,8 +77,6 @@ void configurePluginPaths() {
 
 int main(int argc, char* argv[]) {
     configurePluginPaths(); // The platform plugin loads in QApplication's constructor.
-    // Platform-native pickers own their title bars and can re-enable maximize.
-    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication app(argc, argv);
 #ifdef Q_OS_LINUX
     QGuiApplication::setDesktopFileName(QStringLiteral("io.github.citrongames.KegaRefusion"));

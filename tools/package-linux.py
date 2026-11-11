@@ -19,6 +19,7 @@ from package_notices import copy_core32x_notices
 PLUGIN_FILES = (
     "platforms/libqxcb.so",
     "platforms/libqoffscreen.so",
+    "platformthemes/libqxdgdesktopportal.so",
     "xcbglintegrations/libqxcb-glx-integration.so",
     "xcbglintegrations/libqxcb-egl-integration.so",
     "wayland-graphics-integration-client/libqt-plugin-wayland-egl.so",

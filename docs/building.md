@@ -22,7 +22,7 @@ sudo apt update
 sudo apt install build-essential cmake ninja-build git python3 pkg-config \
   rsync perl nasm ca-certificates qt6-base-dev qt6-base-dev-tools \
   qt6-multimedia-dev libqt6opengl6-dev libsdl2-dev libssl-dev \
-  libwayland-dev wayland-protocols qt6-wayland libqt6svg6 qt6-translations-l10n
+  libwayland-dev wayland-protocols qt6-wayland libqt6svg6 qt6-translations-l10n qt6-xdgdesktopportal-platformtheme
 ```
 
 Qt Core, Gui, Widgets, Network, Multimedia, OpenGL and OpenGLWidgets are required. The minimum is Qt 6.4. Qt 6.5 and later expose the native Wayland display through public headers. On Qt 6.4, install the matching QPA headers for Wayland mouse capture:
