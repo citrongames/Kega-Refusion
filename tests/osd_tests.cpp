@@ -92,20 +92,26 @@ void testReadinessWaiting() {
 void testFpsOverlays() {
     GameView view;
     prepare(view);
-    view.setOsdEnabled(false);
     const auto baseline = render(view);
     const auto clean = view.captureGameImage();
+    view.setOsdEnabled(false);
     view.setPerformanceMetricsEnabled(true);
     view.setGameFpsEnabled(true);
     view.setPerformanceMetrics(59.9, 100.0, 29.95, true);
-    const auto bounds = changedBounds(baseline, render(view));
+    require(render(view) == baseline, "FPS counters ignored the global OSD switch");
+    view.setOsdEnabled(true);
+    const auto counters = render(view);
+    const auto bounds = changedBounds(baseline, counters);
     require(!bounds.isEmpty() && bounds.left() > view.width()/2 && bounds.bottom() < view.height()/2,
-            "FPS should be visible top-right while action OSD is disabled");
+            "FPS counters should occupy the upper-right corner");
     require(view.captureGameImage() == clean, "FPS leaked into clean screenshot");
+    view.setOsdEnabled(false);
+    require(render(view) == baseline, "disabling OSD did not hide active FPS counters");
+    view.setOsdEnabled(true);
+    require(render(view) == counters, "global OSD toggle lost selected FPS counters or metrics");
     view.setPerformanceMetricsEnabled(false);
     view.setGameFpsEnabled(false);
     require(render(view) == baseline, "FPS did not disappear after disabling both counters");
-    view.setOsdEnabled(true);
     view.setRunTimerMode(GameView::RunTimerMode::Time);
     view.setRunTimer(60,1000000);
     const auto timer = changedBounds(baseline, render(view));
@@ -116,6 +122,11 @@ void testFpsOverlays() {
     const auto stacked = changedBounds(baseline, render(view));
     require(stacked.bottom() >= bounds.bottom() + timer.height() && stacked.right() == timer.right(),
             "Game time should stack below both FPS counters");
+    view.setOsdEnabled(false);
+    view.setOsdEnabled(true);
+    view.setRunTimer(60,1000000); // The session refreshes time when OSD returns.
+    require(changedBounds(baseline, render(view)) == stacked,
+            "global OSD toggle lost the selected game timer mode");
 }
 
 void testGameBorders() {
@@ -408,8 +419,9 @@ void testFilteredSquarePixels() {
 }
 
 void testUpperLeftBounds() {
-    // Exercise all three OSD font sizes without depending on platform glyph metrics.
-    for (const QSize& size : std::array<QSize, 3>{{{400, 280}, {920, 620}, {1920, 1080}}}) {
+    // Include heights above 1080 without depending on platform glyph metrics.
+    for (const QSize& size : std::array<QSize, 4>{{{400, 280}, {920, 620},
+                                                 {1920, 1080}, {2560, 1440}}}) {
         GameView view;
         prepare(view, size);
         const QImage baseline = render(view);
@@ -418,9 +430,9 @@ void testUpperLeftBounds() {
         view.showOsd(QStringLiteral("Saved: slot 3"));
         const QImage actual = render(view);
         const QRect bounds = changedBounds(baseline, actual);
-        const int margin = qBound(6, size.width() / 65, 16);
         require(!bounds.isEmpty(), "active OSD did not render");
-        require(bounds.left() == margin && bounds.top() == margin,
+        require(bounds.left() > 0 && bounds.left() == bounds.top() &&
+                    bounds.left() < size.height() / 20,
                 "OSD does not begin at the upper-left margin");
         require(bounds.right() < size.width() / 2 && bounds.bottom() < size.height() / 2,
                 "short status/action OSD escaped the upper-left area");
@@ -521,10 +533,10 @@ void testStateSlots() {
         view.showStateSlots(0, 0);
         const QImage empty = render(view);
         const QRect panel = changedBounds(baseline, empty);
-        const int margin = qBound(6, size.width() / 65, 16);
-        require(panel.top() == margin && panel.left() == margin,
+        require(panel.left() > 0 && panel.top() == panel.left() &&
+                    panel.left() < size.height() / 20,
                 "slot OSD did not begin at upper-left margin");
-        require(panel.right() < size.width() - margin && panel.bottom() < size.height() / 2,
+        require(panel.right() < size.width() - panel.left() && panel.bottom() < size.height() / 2,
                 "slot OSD did not fit the compact upper-left area");
         require(empty.copy(0, size.height() / 2, size.width(), size.height() / 2) ==
                     baseline.copy(0, size.height() / 2, size.width(), size.height() / 2),
@@ -536,13 +548,14 @@ void testStateSlots() {
             view.showStateSlots(slot, 0);
             const QImage selected = render(view);
             const QRect highlight = colorBounds(selected, QColor(126, 224, 233));
-            require(highlight.width() >= 12 && highlight.height() >= 12,
+            require(highlight.width() >= 6 && highlight.height() >= 6,
                     "selected slot has no visible cell outline");
             require(panel.contains(highlight), "selected cell escaped the slot panel");
             if (slot) {
                 require(highlight.left() > previousSelection.right() &&
                             highlight.top() == previousSelection.top() &&
-                            highlight.size() == previousSelection.size(),
+                            qAbs(highlight.width() - previousSelection.width()) <= 1 &&
+                            qAbs(highlight.height() - previousSelection.height()) <= 1,
                         "slot selection did not advance through ten distinct cells");
             }
             previousSelection = highlight;
@@ -553,8 +566,8 @@ void testStateSlots() {
             view.showStateSlots((slot + 1) % 10, 1U << slot);
             const QImage occupied = render(view);
             const QRect changed = changedBounds(unoccupied, occupied);
-            require(changed.width() >= 10 && changed.height() >= 10 &&
-                        highlight.contains(changed),
+            require(changed.width() >= 5 && changed.height() >= 5 &&
+                        highlight.adjusted(-1, -1, 1, 1).contains(changed),
                     "occupied and empty slots do not have distinct cell fills");
             require(!colorBounds(occupied, QColor(72, 84, 96)).isEmpty(),
                     "occupied slot fill was not rendered");
@@ -629,6 +642,20 @@ void testGlobalToggle() {
     require(render(view) == baseline, "status activated while disabled became visible");
     view.setOsdEnabled(true);
     require(render(view) != baseline, "status activated while disabled was not restored");
+    view.setPausedStatus(false);
+    view.setLightgunEnabled(0, true, 1);
+    view.setLightgunEnabled(1, true, 2);
+    view.setLightgunAim(0, QPointF(0.3, 0.5));
+    view.setLightgunAim(1, QPointF(0.7, 0.5));
+    const QImage crosshairs = render(view);
+    view.setOsdEnabled(false);
+    require(render(view) == crosshairs && crosshairs != baseline,
+            "global OSD switch changed independent crosshairs");
+    view.setCrosshairVisible(0, false);
+    require(render(view) != baseline && render(view) != crosshairs,
+            "first crosshair switch affected both players");
+    view.setCrosshairVisible(1, false);
+    require(render(view) == baseline, "second crosshair switch left a visible reticle");
 }
 
 void testNoticeExpiry() {
@@ -776,12 +803,11 @@ void testAchievementPopup(bool positionsOnly = false) {
             "first achievement was not started or badge was not requested");
     const QImage first = render(view);
     const QRect card = changedBounds(clean, first);
-    require(card.left() == qBound(6, view.width() / 65, 16) &&
-                card.top() == qBound(6, view.width() / 65, 16) &&
-                card.width() >= 300 && card.height() >= 85 &&
+    require(card.left() > 0 && card.top() == card.left() &&
+                card.width() >= 300 && card.height() >= 70 &&
                 card.right() < view.width() * 2 / 3,
             "achievement card is not a readable upper-left rectangle");
-    const int margin = qBound(6, view.width() / 65, 16);
+    const int margin = card.left();
     for (int position = 0; position < 6; ++position) {
         view.setAchievementPosition(position);
         const QRect placed = changedBounds(clean, render(view));
@@ -790,7 +816,10 @@ void testAchievementPopup(bool positionsOnly = false) {
                                 : view.width() - margin - card.width();
         const int expectedY = position < 3 ? margin
             : view.height() - margin - card.height();
-        require(placed == QRect(expectedX, expectedY, card.width(), card.height()),
+        // Logical coordinates can land between raster pixels at fractional scale.
+        require(qAbs(placed.x() - expectedX) <= 2 && qAbs(placed.y() - expectedY) <= 2 &&
+                    qAbs(placed.width() - card.width()) <= 1 &&
+                    qAbs(placed.height() - card.height()) <= 1,
                 "achievement card missed its selected edge or corner");
     }
     view.setAchievementPosition(-1);
@@ -834,6 +863,12 @@ void testAchievementPopup(bool positionsOnly = false) {
     view.setOsdEnabled(true);
     view.showAchievementNotice(QStringLiteral("Сброс"), QStringLiteral("Сброс"), {}, {});
     view.setLoading(true, QStringLiteral("fixture"));
+    const QImage loading = render(view);
+    require(loading != clean, "loading feedback did not render");
+    view.setOsdEnabled(false);
+    require(render(view) == clean, "loading feedback ignored the global OSD switch");
+    view.setOsdEnabled(true);
+    require(render(view) == loading, "active loading feedback was not restored with OSD");
     view.setLoading(false);
     require(render(view) == clean, "loading a new game retained an achievement card");
 
@@ -867,10 +902,14 @@ void testInputDisplayOverlay() {
     const QRect bounds = changedBounds(baseline, shown);
     require(!bounds.isEmpty() && bounds.left() < view.width() / 4 &&
                 bounds.top() > view.height() / 2 && bounds.right() < view.width() / 2 &&
-                bounds.width() >= 150 && bounds.width() <= 238 &&
-                bounds.height() >= 34 && bounds.height() <= 60,
+                bounds.width() >= 100 && bounds.width() <= view.width() / 2 &&
+                bounds.height() >= 20 && bounds.height() <= view.height() / 6,
             "connected controller row is not compact at bottom-left");
     require(render(view) == shown, "cached input display changed without input");
+    view.setOsdEnabled(false);
+    require(render(view) == baseline, "input display ignored the global OSD switch");
+    view.setOsdEnabled(true);
+    require(render(view) == shown, "global OSD toggle lost the selected input display");
     require(view.captureGameImage() == clean, "input display leaked into clean capture");
     state.players[1].x = 1234; // Aim movement does not redraw the control schematic.
     view.setInputDisplay(state);
@@ -891,6 +930,43 @@ void testInputDisplayOverlay() {
     require(render(view) == baseline, "disabled input display left overlay pixels");
 }
 
+void testOverlayScaling() {
+    const auto verify = [](auto show) {
+        QWidget window;
+        window.resize(1280, 720);
+        GameView view(&window);
+        prepare(view, window.size());
+        show(view);
+        const auto bounds = [&view] {
+            return changedBounds(view.captureGameImage(), render(view));
+        };
+        const QRect reference = bounds();
+        require(!reference.isEmpty(), "scaled overlay did not render");
+        // Opening the menu changes only the viewport, keeping the window height.
+        view.resize(window.width(), window.height() - 28);
+        require(bounds().size() == reference.size(),
+                "menu-height viewport change resized an overlay");
+        window.resize(2560, 1440);
+        view.resize(window.size());
+        const QRect enlarged = bounds();
+        require(qAbs(enlarged.width() - 2 * reference.width()) <= 3 &&
+                    qAbs(enlarged.height() - 2 * reference.height()) <= 3,
+                "overlay size did not double between 720p and 1440p");
+    };
+    verify([](GameView& view) { view.setPausedStatus(true); });
+    verify([](GameView& view) {
+        InputDisplayState input;
+        input.players[0].device = InputDisplayDevice::MegaDrive6;
+        input.players[1].device = InputDisplayDevice::LightPhaser;
+        view.setInputDisplay(input);
+        view.setInputDisplayEnabled(true);
+    });
+    verify([](GameView& view) {
+        view.showAchievementNotice(QStringLiteral("Achievement unlocked"),
+                                   QStringLiteral("First stage"), {}, {});
+    });
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -907,7 +983,7 @@ int main(int argc, char** argv) {
         }
         if (app.arguments().contains(QStringLiteral("--fps-only"))) {
             testFpsOverlays();
-            std::puts("FPS overlay independence and clean capture passed"); return 0;
+            std::puts("FPS global visibility, retained selection and clean capture passed"); return 0;
         }
         if (app.arguments().contains(QStringLiteral("--input-display-only"))) {
             testInputDisplayOverlay();
@@ -956,6 +1032,7 @@ int main(int argc, char** argv) {
         }
         testFpsOverlays();
         testInputDisplayOverlay();
+        testOverlayScaling();
         testReadinessWaiting();
         testGameBorders();
         testAnalogPointerEvents();

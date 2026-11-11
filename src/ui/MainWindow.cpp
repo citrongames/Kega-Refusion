@@ -1122,38 +1122,39 @@ void MainWindow::buildMenus() {
     fpsAction_->setObjectName(QStringLiteral("emulationFpsAction"));
     fpsAction_->setCheckable(true);
     fpsAction_->setChecked(settings_.value(QStringLiteral("view/emulationFps"), false).toBool());
-    connect(fpsAction_, &QAction::toggled, this, [this](bool enabled) {
-        settings_.setValue(QStringLiteral("view/emulationFps"), enabled);
+    auto bindOverlay = [this](QAction* action, const QString& key, auto apply) {
+        const auto refresh = [this, action, apply] {
+            apply(osdAction_->isChecked() && action->isChecked());
+        };
+        connect(action, &QAction::toggled, this, [this, key, refresh](bool enabled) {
+            settings_.setValue(key, enabled);
+            refresh();
+        });
+        connect(osdAction_, &QAction::toggled, this, refresh);
+        refresh();
+    };
+    bindOverlay(fpsAction_, QStringLiteral("view/emulationFps"), [this](bool enabled) {
         session_.setPerformanceMetricsEnabled(enabled);
         view_->setPerformanceMetricsEnabled(enabled);
     });
-    session_.setPerformanceMetricsEnabled(fpsAction_->isChecked());
-    view_->setPerformanceMetricsEnabled(fpsAction_->isChecked());
     gameFpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS игры (оценка по опросу управления)")));
     gameFpsAction_->setObjectName(QStringLiteral("gameFpsAction"));
     gameFpsAction_->setCheckable(true);
     gameFpsAction_->setChecked(settings_.value(QStringLiteral("view/gameFps"), false).toBool());
-    connect(gameFpsAction_, &QAction::toggled, this, [this](bool enabled) {
-        settings_.setValue(QStringLiteral("view/gameFps"), enabled);
+    bindOverlay(gameFpsAction_, QStringLiteral("view/gameFps"), [this](bool enabled) {
         session_.setGameFpsEnabled(enabled);
         view_->setGameFpsEnabled(enabled);
     });
-    session_.setGameFpsEnabled(gameFpsAction_->isChecked());
-    view_->setGameFpsEnabled(gameFpsAction_->isChecked());
     QAction* inputDisplayAction = viewMenu->addAction(
         Localization::text(QStringLiteral("Показывать нажатия на геймпадах")));
     inputDisplayAction->setObjectName(QStringLiteral("inputDisplayAction"));
     inputDisplayAction->setCheckable(true);
     inputDisplayAction->setChecked(settings_.value(QStringLiteral("view/inputDisplay"), false).toBool());
-    connect(inputDisplayAction, &QAction::toggled, this, [this](bool enabled) {
-        settings_.setValue(QStringLiteral("view/inputDisplay"), enabled);
+    bindOverlay(inputDisplayAction, QStringLiteral("view/inputDisplay"), [this](bool enabled) {
         session_.setInputDisplayEnabled(enabled);
         view_->setInputDisplayEnabled(enabled);
-        view_->setInputDisplay(session_.inputDisplay());
+        if (enabled) view_->setInputDisplay(session_.inputDisplay());
     });
-    session_.setInputDisplayEnabled(inputDisplayAction->isChecked());
-    view_->setInputDisplayEnabled(inputDisplayAction->isChecked());
-    view_->setInputDisplay(session_.inputDisplay());
     QMenu* runTimerMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Время игры")));
     runTimerMenu->setObjectName(QStringLiteral("runTimerMenu"));
     auto* runTimerGroup = new QActionGroup(this);
@@ -1836,19 +1837,6 @@ void MainWindow::editSettings(int initialPage) {
     startupUpdates->setObjectName(QStringLiteral("checkUpdatesOnStartup"));
     startupUpdates->setChecked(checkUpdatesOnStartup);
     general->addRow(startupUpdates);
-    auto* emulationFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS эмуляции")), &dialog);
-    emulationFps->setObjectName(QStringLiteral("emulationFps"));
-    emulationFps->setChecked(fpsAction_->isChecked());
-    general->addRow(emulationFps);
-    auto* gameFps = new QCheckBox(Localization::text(QStringLiteral("Показывать FPS игры — оценку по опросу управления")), &dialog);
-    gameFps->setObjectName(QStringLiteral("gameFps"));
-    gameFps->setChecked(gameFpsAction_->isChecked());
-    general->addRow(gameFps);
-    auto* fpsHelp = new QLabel(Localization::text(QStringLiteral(
-        "Число без префикса — FPS эмуляции, с ~ — оценка FPS игры. Оценка учитывает кадры, в которых игра читает управление; "
-        "частота игровой логики может отличаться. Оценка приведена к нормальной скорости игры. Счётчики включаются независимо от OSD.")), &dialog);
-    fpsHelp->setWordWrap(true);
-    general->addRow(fpsHelp);
     const bool jpeg = settings_.value(QStringLiteral("screenshot/format"), QStringLiteral("png"))
                           .toString() == QLatin1String("jpeg");
     auto* screenshotFormat = new QComboBox(&dialog);
@@ -2466,8 +2454,6 @@ void MainWindow::editSettings(int initialPage) {
         if (cursorDelay->value() != cursorIdleSeconds)
             settings_.setValue(QStringLiteral("view/cursorIdleSeconds"), cursorDelay->value());
         view_->setCursorIdleTimeout(hideCursor->isChecked() ? cursorDelay->value() : 0);
-        fpsAction_->setChecked(emulationFps->isChecked());
-        gameFpsAction_->setChecked(gameFps->isChecked());
         if (language->currentData().toString() != selectedLanguage)
             settings_.setValue(QStringLiteral("ui/language"), language->currentData());
         if (cdAttachment->isEnabled() && x32Attachment->isEnabled() &&

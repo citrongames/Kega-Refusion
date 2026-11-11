@@ -261,16 +261,14 @@ inline InputDisplayState visualState(InputDisplayState state) {
     return state;
 }
 
-inline RowGeometry geometry(const InputDisplayState& state, const QRect& bounds, qreal gameWidth) {
+inline RowGeometry geometry(const InputDisplayState& state, const QRect& bounds) {
     unsigned count = 0;
     for (const auto& slot : state.players)
         if (slot.device != InputDisplayDevice::None) ++count;
     if (!count) return {};
-    const qreal margin = qBound<qreal>(4, bounds.width() / 100.0, 10);
+    constexpr qreal margin = 8;
     const qreal width = count * detail::unitWidth + (count - 1) * detail::gap;
-    // FCEUX draws one pad 34 pixels wide in a 256-pixel game frame.
-    const qreal padWidth = qBound(1.5 * detail::unitWidth, gameWidth * 34 / 256, 2.0 * detail::unitWidth);
-    const qreal scale = qMin(padWidth / detail::unitWidth, (bounds.width() - 2 * margin) / width);
+    const qreal scale = qMin(2.0, (bounds.width() - 2 * margin) / width);
     if (scale <= 0) return {};
     return {{bounds.left() + margin,
              bounds.bottom() + 1 - margin - detail::unitHeight * scale},
@@ -294,7 +292,7 @@ inline void paintRow(QPainter& painter, const InputDisplayState& state, qreal sc
 }
 
 inline void paint(QPainter& painter, const InputDisplayState& state, const QRect& bounds) {
-    const RowGeometry row = geometry(state, bounds, bounds.width());
+    const RowGeometry row = geometry(state, bounds);
     if (row.scale <= 0) return;
     painter.save();
     painter.translate(row.topLeft);

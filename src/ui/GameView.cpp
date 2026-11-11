@@ -19,6 +19,7 @@
 #include <QResizeEvent>
 #include <QScopedValueRollback>
 #include <QShowEvent>
+#include <QScreen>
 #include <QSurfaceFormat>
 #include <memory>
 #include <QtMath>
@@ -163,10 +164,7 @@ protected:
         if (owner_->frame_.isNull() || !pipeline_) {
             QPainter painter(this);
             owner_->paintRaster(painter);
-            owner_->paintInputDisplay(painter);
-            owner_->paintOsd(painter);
-            owner_->paintCrosshairs(painter);
-            owner_->paintLoading(painter);
+            owner_->paintOverlays(painter);
             return;
         }
         const qreal dpr = devicePixelRatioF();
@@ -186,10 +184,7 @@ protected:
             failed(error);
         }
         painter.endNativePainting();
-        owner_->paintInputDisplay(painter);
-        owner_->paintOsd(painter); // Native-resolution OSD is never filtered.
-        owner_->paintCrosshairs(painter);
-        owner_->paintLoading(painter);
+        owner_->paintOverlays(painter);
     }
 private:
     void failed(const QString& error) {
@@ -321,7 +316,7 @@ void GameView::setLoading(bool loading, const QString& fileName) {
     loadingFileName_ = name;
     resetIdleCursor();
     repaintView();
-    if (loading && isVisible()) {
+    if (loading && osdEnabled_ && isVisible()) {
         // One immediate presentation also precedes a synchronous archive scan.
         // Do not process input/events recursively or start an animation timer.
         if (shaderView_ && shaderView_->isVisible()) shaderView_->repaint();
@@ -411,15 +406,15 @@ void GameView::setAchievementPosition(int position) {
     if (!achievementQueue_.isEmpty()) repaintView();
 }
 
-QRect GameView::achievementPopupRect() const {
+QRect GameView::achievementPopupRect(const QSize& canvas) const {
     if (achievementQueue_.isEmpty() || achievementCardSize_.isEmpty()) return {};
-    const int margin = qBound(6, width() / 65, 16);
+    const int margin = 12;
     const int column = achievementPosition_ % 3;
     const int x = column == 0 ? margin
-        : column == 1 ? (width() - achievementCardSize_.width()) / 2
-                      : width() - margin - achievementCardSize_.width();
+        : column == 1 ? (canvas.width() - achievementCardSize_.width()) / 2
+                      : canvas.width() - margin - achievementCardSize_.width();
     const int y = achievementPosition_ < 3 ? margin
-        : height() - margin - achievementCardSize_.height();
+        : canvas.height() - margin - achievementCardSize_.height();
     return QRect(QPoint(x, y), achievementCardSize_);
 }
 
@@ -437,20 +432,19 @@ void GameView::rebuildAchievementPixmap() {
     achievementCardSize_ = {};
     if (achievementQueue_.isEmpty() || width() <= 0 || height() <= 0) return;
 
-    const int margin = qBound(6, width() / 65, 16);
-    const int cardWidth = qMin(width() - 2 * margin, qBound(300, int(width() * 0.48), 520));
-    const int pad = qBound(9, height() / 62, 16);
-    const int badgeSize = qBound(52, height() / 8, 86);
-    const int gap = qBound(9, height() / 68, 14);
-    const int textWidth = qMax(40, cardWidth - 2 * pad - badgeSize - gap);
+    const qreal scale = osdScale();
+    const int cardWidth = qMin(qFloor(width() / scale) - 24, 460);
+    if (cardWidth <= 0) return;
+    const int pad = 12, badgeSize = 84, gap = 10;
+    const int textWidth = qMax(1, cardWidth - 2 * pad - badgeSize - gap);
     QFont headingFont = font();
-    headingFont.setPixelSize(qBound(10, height() / 45, 16));
+    headingFont.setPixelSize(15);
     headingFont.setWeight(QFont::DemiBold);
     QFont titleFont = font();
-    titleFont.setPixelSize(qBound(15, height() / 35, 23));
+    titleFont.setPixelSize(20);
     titleFont.setWeight(QFont::Bold);
     QFont detailFont = font();
-    detailFont.setPixelSize(qBound(11, height() / 55, 16));
+    detailFont.setPixelSize(13);
     const QFontMetrics headingMetrics(headingFont);
     const QFontMetrics titleMetrics(titleFont);
     const QFontMetrics detailMetrics(detailFont);
@@ -465,7 +459,7 @@ void GameView::rebuildAchievementPixmap() {
     const int cardHeight = qMax(badgeSize, textHeight) + 2 * pad;
     achievementCardSize_ = QSize(cardWidth, cardHeight);
 
-    const qreal dpr = devicePixelRatioF();
+    const qreal dpr = devicePixelRatioF() * scale;
     achievementPixmap_ = QPixmap(qMax(1, qCeil(cardWidth * dpr)),
                                   qMax(1, qCeil(cardHeight * dpr)));
     achievementPixmap_.setDevicePixelRatio(dpr);
@@ -529,7 +523,7 @@ void GameView::setInputDisplay(const InputDisplayState& state) {
     const bool visibleChange = !(InputDisplayPainter::visualState(inputDisplay_) ==
                                  InputDisplayPainter::visualState(state));
     inputDisplay_ = state;
-    if (inputDisplayEnabled_ && visibleChange) repaintView();
+    if (osdEnabled_ && inputDisplayEnabled_ && visibleChange) repaintView();
 }
 
 void GameView::setInputDisplayEnabled(bool enabled) {
@@ -582,26 +576,26 @@ void GameView::rebuildPerformanceMetrics() {
 void GameView::setMutedStatus(bool muted) {
     if (muted_ == muted) return;
     muted_ = muted;
-    repaintView();
+    if (osdEnabled_) repaintView();
 }
 
 void GameView::setPausedStatus(bool paused) {
     if (paused_ == paused) return;
     paused_ = paused;
-    repaintView();
+    if (osdEnabled_) repaintView();
 }
 
 void GameView::setFastForwardStatus(bool enabled) {
     if (fastForward_ == enabled) return;
     fastForward_ = enabled;
-    repaintView();
+    if (osdEnabled_) repaintView();
 }
 
 void GameView::setFastForwardFactor(int factor) {
     factor = qMax(0, factor);
     if (fastForwardFactor_ == factor) return;
     fastForwardFactor_ = factor;
-    if (fastForward_) repaintView();
+    if (osdEnabled_ && fastForward_) repaintView();
 }
 
 void GameView::setConnectionWaiting(bool waiting) {
@@ -619,7 +613,7 @@ void GameView::setReadinessWaiting(bool waiting) {
 void GameView::setRewindStatus(bool enabled) {
     if (rewinding_ == enabled) return;
     rewinding_ = enabled;
-    repaintView();
+    if (osdEnabled_) repaintView();
 }
 
 void GameView::setMovieCounterAsTime(bool enabled) {
@@ -707,13 +701,45 @@ void GameView::expireOsd() {
         osdTimer_.stop();
 }
 
-void GameView::paintInputDisplay(QPainter& painter) {
-    if (!inputDisplayEnabled_ || capturingGame_ || capturingReticles_ ||
-        frame_.isNull() || loading_) return;
+qreal GameView::osdScale() const {
+    // Opening the menu changes the viewport height. Keep HUD sizes tied to
+    // the whole window (or monitor in fullscreen), including on HiDPI screens.
+    const QWidget* top = window();
+    const int referenceHeight = top->isFullScreen() && top->screen()
+        ? top->screen()->geometry().height() : top->height();
+    return qMax(0.5, referenceHeight / 720.0);
+}
+
+void GameView::paintOverlays(QPainter& painter) {
+    if (osdEnabled_ && !capturingGame_) {
+        const bool status = !notices_.isEmpty() || stateSlots_.expiresAt ||
+            paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
+            movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||
+            (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty());
+        const bool metrics = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
+        const bool input = inputDisplayEnabled_ && !frame_.isNull() && !loading_ && !capturingReticles_;
+        if (status || metrics || input || !achievementPixmap_.isNull() || loading_) {
+            const qreal scale = osdScale();
+            const QSize canvas(qRound(width() / scale), qRound(height() / scale));
+            painter.save();
+            painter.scale(scale, scale);
+            if (input) paintInputDisplay(painter, canvas);
+            if (status || metrics) paintOsd(painter, canvas);
+            // Achievement notifications cover the usual indicators until they expire.
+            if (!achievementPixmap_.isNull())
+                painter.drawPixmap(achievementPopupRect(canvas).topLeft(), achievementPixmap_);
+            if (loading_) paintLoading(painter, canvas);
+            painter.restore();
+        }
+    }
+    paintCrosshairs(painter);
+}
+
+void GameView::paintInputDisplay(QPainter& painter, const QSize& canvas) {
     const InputDisplayState visual = InputDisplayPainter::visualState(inputDisplay_);
-    const auto row = InputDisplayPainter::geometry(visual, rect(), gameRect().width());
+    const auto row = InputDisplayPainter::geometry(visual, QRect(QPoint(), canvas));
     if (row.scale <= 0) return;
-    const qreal dpr = painter.device()->devicePixelRatioF();
+    const qreal dpr = painter.device()->devicePixelRatioF() * painter.worldTransform().m11();
     const QSize pixels(qMax(1, qCeil(row.size.width() * dpr)),
                        qMax(1, qCeil(row.size.height() * dpr)));
     if (!inputDisplayRasterValid_ || !(inputDisplayRasterState_ == visual) ||
@@ -735,36 +761,24 @@ void GameView::paintInputDisplay(QPainter& painter) {
     painter.drawPixmap(row.topLeft, inputDisplayPixmap_);
 }
 
-void GameView::paintOsd(QPainter& painter) {
-    if (capturingGame_) return;
-    const QRect achievementRect = osdEnabled_ ? achievementPopupRect() : QRect();
-    const bool ordinaryOsd = osdEnabled_ && (!notices_.isEmpty() || stateSlots_.expiresAt ||
-        paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
-        movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||
-        (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty()));
-    const bool metricsOsd = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
-    if (!ordinaryOsd && !metricsOsd) {
-        if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
-            painter.drawPixmap(achievementRect.topLeft(), achievementPixmap_);
-        return;
-    }
-    const int margin = qBound(6, width() / 65, 16);
+void GameView::paintOsd(QPainter& painter, const QSize& canvas) {
+    const int margin = 12;
     QFont osd(osdFamily_);
-    osd.setPixelSize(height() >= 1080 ? 24 : height() >= 520 ? 16 : 8);
+    osd.setPixelSize(16);
     osd.setStyleStrategy(QFont::NoAntialias);
     painter.setFont(osd);
     painter.setRenderHint(QPainter::TextAntialiasing, false);
     const QFontMetrics fm(osd);
-    const int pad = qBound(5, height() / 95, 9);
+    const int pad = 7;
     const int lineHeight = fm.height() + 2;
-    const int maxTextWidth = qMax(60, width() - 2 * margin - 2 * pad);
+    const int maxTextWidth = qMax(60, canvas.width() - 2 * margin - 2 * pad);
     auto drawPanel = [&](const QStringList& lines, int y, bool accent, Qt::AlignmentFlag align = Qt::AlignLeft) {
         int textWidth = 0;
         for (const QString& line : lines)
             textWidth = qMax(textWidth, fm.horizontalAdvance(line));
-        const int panelWidth = qMin(width() - 2 * margin, textWidth + 2 * pad);
+        const int panelWidth = qMin(canvas.width() - 2 * margin, textWidth + 2 * pad);
         const int panelHeight = lines.size() * lineHeight + 2 * pad;
-        const int x = align == Qt::AlignRight ? width() - margin - panelWidth : margin;
+        const int x = align == Qt::AlignRight ? canvas.width() - margin - panelWidth : margin;
         const QRect box(x, y, panelWidth, panelHeight);
         painter.fillRect(box, QColor(0, 0, 0, 218));
         painter.setPen(accent ? QColor(126, 224, 233) : QColor(129, 142, 159));
@@ -781,9 +795,8 @@ void GameView::paintOsd(QPainter& painter) {
     };
 
     int rightY = margin;
-    if (metricsOsd)
+    if (!frame_.isNull() && !metricsLines_.isEmpty())
         rightY += drawPanel(metricsLines_, rightY, true, Qt::AlignRight) + 4;
-    if (!osdEnabled_) return;
     if (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty())
         drawPanel({runTimerText_}, rightY, true, Qt::AlignRight);
 
@@ -791,7 +804,7 @@ void GameView::paintOsd(QPainter& painter) {
     if (videoRecording_) {
         const QString label = Localization::text(QStringLiteral("ЗАПИСЬ ВИДЕО"));
         const int dotSize = qMax(7, fm.height() / 2);
-        const int panelWidth = qMin(width() - 2 * margin,
+        const int panelWidth = qMin(canvas.width() - 2 * margin,
                                     fm.horizontalAdvance(label) + dotSize + 3 * pad);
         const int panelHeight = lineHeight + 2 * pad;
         const QRect box(margin, y, panelWidth, panelHeight);
@@ -842,7 +855,7 @@ void GameView::paintOsd(QPainter& painter) {
         // Keep the row inside narrow windows even when their height requests a large font.
         QFont slotFont(osd);
         const int gap = qMax(2, pad / 2);
-        const int available = width() - 2 * margin - 2 * pad;
+        const int available = canvas.width() - 2 * margin - 2 * pad;
         int cellWidth = 0;
         for (;;) {
             const QFontMetrics metrics(slotFont);
@@ -850,6 +863,8 @@ void GameView::paintOsd(QPainter& painter) {
             if (10 * cellWidth + 9 * gap <= available || slotFont.pixelSize() <= 8) break;
             slotFont.setPixelSize(qMax(8, slotFont.pixelSize() - 8));
         }
+        // A tall, narrow window may also need less horizontal padding per cell.
+        cellWidth = qMin(cellWidth, (available - 9 * gap) / 10);
         const QFontMetrics slotFm(slotFont);
         const int cellHeight = slotFm.height() + 2 * pad;
         const int labelHeight = slotFm.height() + 2;
@@ -860,7 +875,7 @@ void GameView::paintOsd(QPainter& painter) {
                                            ? Localization::text(QStringLiteral("ЗАНЯТ")) : Localization::text(QStringLiteral("ПУСТ")));
         const int panelWidth = qMax(rowWidth, slotFm.horizontalAdvance(label)) + 2 * pad;
         const int panelHeight = labelHeight + cellHeight + 3 * pad;
-        if (y + panelHeight <= height() - margin) {
+        if (cellWidth > 0 && y + panelHeight <= canvas.height() - margin) {
             painter.save();
             painter.setFont(slotFont);
             const QRect panel(margin, y, panelWidth, panelHeight);
@@ -875,8 +890,11 @@ void GameView::paintOsd(QPainter& painter) {
                 const QRect cell(margin + pad + slot * (cellWidth + gap), rowY,
                                  cellWidth, cellHeight);
                 painter.fillRect(cell, occupied ? QColor(72, 84, 96) : QColor(0, 0, 0));
-                painter.setPen(slot == stateSlots_.selected ? QColor(126, 224, 233)
-                                                           : QColor(129, 142, 159));
+                QPen outline(slot == stateSlots_.selected ? QColor(126, 224, 233)
+                                                          : QColor(129, 142, 159));
+                // Keep a full device pixel of contrast even in a small window.
+                outline.setCosmetic(painter.deviceTransform().m11() < 1.0);
+                painter.setPen(outline);
                 painter.drawRect(cell.adjusted(0, 0, -1, -1));
                 painter.setPen(occupied ? QColor(244, 249, 250) : QColor(129, 142, 159));
                 painter.drawText(cell, Qt::AlignCenter, QString::number(slot));
@@ -898,21 +916,18 @@ void GameView::paintOsd(QPainter& painter) {
             lines = wrapOsd(notice.text, fm, maxTextWidth, 2);
         }
         const int panelHeight = lines.size() * lineHeight + 2 * pad;
-        if (y + panelHeight > height() - margin) break;
+        if (y + panelHeight > canvas.height() - margin) break;
         y += drawPanel(lines, y, false) + 4;
     }
-    // Achievement cards intentionally cover ordinary OSD until their timeout.
-    if (!achievementRect.isEmpty() && !achievementPixmap_.isNull())
-        painter.drawPixmap(achievementRect.topLeft(), achievementPixmap_);
+
 }
 
-void GameView::paintLoading(QPainter& painter) {
-    if (!loading_ || capturingGame_) return;
+void GameView::paintLoading(QPainter& painter, const QSize& canvas) {
     painter.save();
-    painter.fillRect(rect(), QColor(0, 0, 0, 148));
-    const int panelWidth = qMin(560, width() - 40);
+    painter.fillRect(QRect(QPoint(), canvas), QColor(0, 0, 0, 148));
+    const int panelWidth = qMin(560, canvas.width() - 40);
     const int panelHeight = loadingFileName_.isEmpty() ? 76 : 108;
-    const QRect panel((width() - panelWidth) / 2, (height() - panelHeight) / 2,
+    const QRect panel((canvas.width() - panelWidth) / 2, (canvas.height() - panelHeight) / 2,
                       panelWidth, panelHeight);
     painter.fillRect(panel, QColor(17, 20, 27, 242));
     painter.setPen(QColor(126, 224, 233));
@@ -1400,10 +1415,7 @@ void GameView::paintEvent(QPaintEvent*) {
         return;
     }
     paintRaster(painter);
-    paintInputDisplay(painter);
-    paintOsd(painter);
-    paintCrosshairs(painter);
-    paintLoading(painter);
+    paintOverlays(painter);
 }
 
 void GameView::repaintView() {

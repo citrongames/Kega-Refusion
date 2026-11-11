@@ -171,11 +171,13 @@ private:
     void expireOsd();
     void startAchievementPopup();
     void rebuildAchievementPixmap();
-    QRect achievementPopupRect() const;
-    void paintOsd(QPainter& painter);
-    void paintInputDisplay(QPainter& painter);
+    qreal osdScale() const;
+    void paintOverlays(QPainter& painter);
+    QRect achievementPopupRect(const QSize& canvas) const;
+    void paintOsd(QPainter& painter, const QSize& canvas);
+    void paintInputDisplay(QPainter& painter, const QSize& canvas);
     void rebuildPerformanceMetrics();
-    void paintLoading(QPainter& painter);
+    void paintLoading(QPainter& painter, const QSize& canvas);
 
     QImage frame_;
     double aspectRatio_ = 4.0 / 3.0;
