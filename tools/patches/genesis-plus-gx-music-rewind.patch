@@ -1,0 +1,52 @@
+--- a/core/state.h
++++ b/core/state.h
+@@ -53,6 +53,8 @@
+   bufferptr+= size;
+ 
+ /* Function prototypes */
++/* True only during the reset that precedes native state restoration. */
++extern int state_reset_for_load;
+ extern int state_load(unsigned char *state);
+ extern int state_save(unsigned char *state);
+ 
+--- a/core/state.c
++++ b/core/state.c
+@@ -38,6 +38,7 @@
+ 
+ #include "shared.h"
+ 
++int state_reset_for_load = 0;
+ int8 fast_savestates = false;
+ int8 reset_do_not_clear_buffers = false;
+ 
+@@ -71,7 +72,9 @@
+ 
+   /* reset system */
+   reset_do_not_clear_buffers = fast_savestates;
++  state_reset_for_load = 1;
+   system_reset();
++  state_reset_for_load = 0;
+   reset_do_not_clear_buffers = false;
+ 
+   /* enable VDP access for TMSS systems */
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -1541,12 +1541,16 @@
+   }
+ 
+   /* YX5200 hardware */
+-  if (cart.special & HW_YX5200)
++  /* Native context load restores track and sample position. Keep the active
++   * decoder and MP3 index available for a seek within the same track. */
++  if ((cart.special & HW_YX5200) && !state_reset_for_load)
+   {
+     yx5200_reset();
+   }
+ 
+-  if (cart.special & HW_PUNCHIUM)
++  /* The cartridge context loader restores its RAM, mappings and derived
++   * object data. A real console reset still performs normal initialization. */
++  if ((cart.special & HW_PUNCHIUM) && !state_reset_for_load)
+   {
+     punchium_reset();
+   }

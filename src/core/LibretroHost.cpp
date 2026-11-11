@@ -207,9 +207,12 @@ bool LibretroHost::initialize(QString& error) {
         library_.resolve("retro_kegarefusion_preserve_header_checksum"));
     api_->manage_bram = reinterpret_cast<decltype(api_->manage_bram)>(library_.resolve("kegarefusion_manage_bram"));
     api_->get_bram = reinterpret_cast<decltype(api_->get_bram)>(library_.resolve("kegarefusion_get_bram"));
+    api_->get_bram_raw = reinterpret_cast<decltype(api_->get_bram_raw)>(library_.resolve("retro_kegarefusion_get_bram_raw"));
     api_->state_abi = reinterpret_cast<decltype(api_->state_abi)>(library_.resolve("kegarefusion_state_abi"));
     api_->recording_abi = reinterpret_cast<decltype(api_->recording_abi)>(library_.resolve("retro_kegarefusion_recording_abi"));
     api_->network_state_abi = reinterpret_cast<decltype(api_->network_state_abi)>(library_.resolve("retro_kegarefusion_network_state_abi"));
+    api_->sms_pause_state_version = reinterpret_cast<decltype(api_->sms_pause_state_version)>(
+        library_.resolve("retro_kegarefusion_sms_pause_state_version"));
     refreshRecordingIdentity();
     api_->set_paprium_music = reinterpret_cast<decltype(api_->set_paprium_music)>(library_.resolve("retro_kegarefusion_set_paprium_music"));
     api_->paprium_active = reinterpret_cast<decltype(api_->paprium_active)>(library_.resolve("retro_kegarefusion_paprium_active"));
@@ -693,18 +696,30 @@ void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     videoEnabled_ = audioEnabled_ = true;
 }
 bool LibretroHost::rewindReplaySafe() const {
-    // The SMS Pause latch is outside native states. CD/Paprium/YX5200 can seek
-    // external streams during a frame. Interlace retains the opposite field in
-    // an unserialized raster; the session also checks its preceding checkpoint.
-    return loaded_ && !linkPeer_ && api_->system_hw && mdControllerHardware(api_->system_hw()) &&
-        !hasCdHardware() && !(api_->paprium_active && api_->paprium_active()) &&
-        !recordingAbi_.contains("-kaiserwave-") &&
-        frame().width() > 1 && frame().height() > 1 && frame().height() <= 288;
+    if (!loaded_ || !api_->system_hw || frame_.width() <= 1 || frame_.height() <= 1) return false;
+    const auto system = api_->system_hw();
+    if (!mdControllerHardware(system) && system != 0x82) { // Pico also uses the 16-bit VDP.
+        const bool eightBit = smsControllerHardware(system) || (system >= 0x01 && system <= 0x03) ||
+                              system == 0x40 || system == 0x41;
+        if (!eightBit || !smsPauseStateSupported()) return false;
+        if (system == 0x40 || system == 0x41) {
+            const auto lcd = variables_.find("genesis_plus_gx_lcd_filter");
+            if (lcd != variables_.end() && lcd->second == "enabled") return false;
+        }
+    }
+    // Woven video retains the previous field outside the native machine state.
+    return frame_.height() <= 288 && (!linkPeer_ || linkPeer_->rewindReplaySafe());
 }
-void LibretroHost::runRewindPreviewFrame() {
-    rewindPreview_ = true;
-    runFrame(true,false);
-    rewindPreview_ = false;
+void LibretroHost::runRewindPreviewFrame(bool renderVideo) {
+    struct PreviewScope {
+        bool& flag; bool previous;
+        explicit PreviewScope(bool& value):flag(value),previous(value) {flag=true;}
+        ~PreviewScope() {flag=previous;}
+    } scope(rewindPreview_);
+    if(linkPeer_) {
+        PreviewScope peerScope(linkPeer_->rewindPreview_);
+        runFrame(renderVideo,false);
+    } else runFrame(renderVideo,false);
 }
 void LibretroHost::reset() {
     runClock_ = {};
@@ -743,6 +758,9 @@ void LibretroHost::setDebugBackdrop(quint32 rgb) {
     debugBackdrop_ = rgb & 0xffffff;
     if (initialized_ && api_->debug_backdrop) api_->debug_backdrop(debugBackdrop_);
     if (linkPeer_) { Activation scope(linkPeer_.get()); linkPeer_->setDebugBackdrop(rgb); }
+}
+bool LibretroHost::smsPauseStateSupported() const {
+    return loaded_ && api_->sms_pause_state_version && api_->sms_pause_state_version() >= 1;
 }
 bool LibretroHost::isMasterSystem() const {
     if(!loaded_)return false;
@@ -1446,42 +1464,68 @@ unsigned LibretroHost::occupiedStateSlots() const {
     return mask;
 }
 QByteArray LibretroHost::captureRewindState() const {
-    const auto ram = saveMemorySizes_[0], rtc = saveMemorySizes_[1];
-    if (ram > size_t(maxStateSize) || rtc > size_t(maxStateSize)) return {};
-    constexpr qsizetype header = 20;
-    const qsizetype suffix = qsizetype(ram + rtc);
-    QByteArray result = serializeCore(true, header, suffix);
+    if (!loaded_) return {};
+    std::array<const void*,4> memory{
+        api_->get_memory_data(RETRO_MEMORY_SAVE_RAM),api_->get_memory_data(RETRO_MEMORY_RTC),nullptr,nullptr};
+    std::array<size_t,4> sizes{saveMemorySizes_[0],saveMemorySizes_[1],0,0};
+    const auto getBram = api_->get_bram_raw ? api_->get_bram_raw : api_->get_bram;
+    const bool cd = hasCdHardware();
+    if (cd && getBram) for (unsigned i = 0; i < 2; ++i) {
+        const char* ignoredPath = nullptr;
+        if (!getBram(i,&memory[i+2],&sizes[i+2],&ignoredPath)) {
+            memory[i+2] = nullptr; sizes[i+2] = 0;
+        }
+    }
+    if (cd && api_->get_bram_raw && !sizes[2]) return {};
+    qsizetype suffix = 0;
+    for (unsigned i = 0; i < sizes.size(); ++i) {
+        if (sizes[i] > size_t(maxStateSize) || (sizes[i] && !memory[i]) ||
+            sizes[i] > size_t(maxStateSize-suffix)) return {};
+        suffix += qsizetype(sizes[i]);
+    }
+    const bool bram = sizes[2] || sizes[3];
+    const qsizetype header = bram ? 28 : 20;
+    QByteArray result = serializeCore(true,header,suffix);
     if (result.isEmpty()) return {};
-    const qsizetype coreBytes = result.size() - header - suffix;
+    const qsizetype coreBytes = result.size()-header-suffix;
     char* bytes = result.data();
-    std::memcpy(bytes, "KRREW001", 8);
-    qToBigEndian(quint32(coreBytes), bytes + 8);
-    qToBigEndian(quint32(ram), bytes + 12);
-    qToBigEndian(quint32(rtc), bytes + 16);
-    char* target = bytes + header + coreBytes;
-    for (unsigned i = 0; i < 2; ++i) {
-        const auto size = saveMemorySizes_[i];
-        if (!size) continue;
-        const void* data = api_->get_memory_data(i ? RETRO_MEMORY_RTC : RETRO_MEMORY_SAVE_RAM);
-        if (!data) return {};
-        std::memcpy(target, data, size);
-        target += size;
+    std::memcpy(bytes,bram ? "KRREW002" : "KRREW001",8);
+    qToBigEndian(quint32(coreBytes),bytes+8);
+    for (unsigned i = 0; i < (bram ? 4u : 2u); ++i)
+        qToBigEndian(quint32(sizes[i]),bytes+12+4*i);
+    char* target = bytes+header+coreBytes;
+    for (unsigned i = 0; i < sizes.size(); ++i) if (sizes[i]) {
+        std::memcpy(target,memory[i],sizes[i]); target += sizes[i];
     }
     return result;
 }
 bool LibretroHost::restoreRewindState(const QByteArray& state) {
-    if (!loaded_ || state.size() < 20 || state.size() > maxStateSize || state.left(8) != "KRREW001") return false;
-    const auto coreSize = qFromBigEndian<quint32>(state.constData() + 8);
-    const auto ramSize = qFromBigEndian<quint32>(state.constData() + 12);
-    const auto rtcSize = qFromBigEndian<quint32>(state.constData() + 16);
-    if (ramSize != saveMemorySizes_[0] || rtcSize != saveMemorySizes_[1] ||
-        quint64(coreSize) + ramSize + rtcSize + 20 != quint64(state.size())) return false;
-    void* ram = api_->get_memory_data(RETRO_MEMORY_SAVE_RAM);
-    void* rtc = api_->get_memory_data(RETRO_MEMORY_RTC);
-    if ((ramSize && !ram) || (rtcSize && !rtc)) return false;
-    if (!restoreCore(state.constData()+20,coreSize)) return false;
-    if (ramSize) std::memcpy(ram, state.constData() + 20 + coreSize, ramSize);
-    if (rtcSize) std::memcpy(rtc, state.constData() + 20 + coreSize + ramSize, rtcSize);
+    if (!loaded_ || state.size() < 20 || state.size() > maxStateSize) return false;
+    const bool bram = state.startsWith("KRREW002");
+    const qsizetype header = bram ? 28 : 20;
+    if ((!bram && !state.startsWith("KRREW001")) || state.size() < header) return false;
+    const auto coreSize = qFromBigEndian<quint32>(state.constData()+8);
+    std::array<quint32,4> sizes{};
+    quint64 total = quint64(header)+coreSize;
+    for (unsigned i = 0; i < (bram ? 4u : 2u); ++i) {
+        sizes[i] = qFromBigEndian<quint32>(state.constData()+12+4*i); total += sizes[i];
+    }
+    if (sizes[0] != saveMemorySizes_[0] || sizes[1] != saveMemorySizes_[1] || total != quint64(state.size())) return false;
+    std::array<void*,4> memory{
+        api_->get_memory_data(RETRO_MEMORY_SAVE_RAM),api_->get_memory_data(RETRO_MEMORY_RTC),nullptr,nullptr};
+    const auto getBram = api_->get_bram_raw ? api_->get_bram_raw : api_->get_bram;
+    if (bram) for (unsigned i = 0; i < 2; ++i) {
+        const void* data = nullptr; size_t size = 0; const char* ignoredPath = nullptr;
+        if (getBram) getBram(i,&data,&size,&ignoredPath);
+        if (size != sizes[i+2] || (size && !data)) return false;
+        memory[i+2] = const_cast<void*>(data);
+    }
+    for (unsigned i = 0; i < sizes.size(); ++i) if (sizes[i] && !memory[i]) return false;
+    if (!restoreCore(state.constData()+header,coreSize)) return false;
+    const char* source = state.constData()+header+coreSize;
+    for (unsigned i = 0; i < sizes.size(); ++i) if (sizes[i]) {
+        std::memcpy(memory[i],source,sizes[i]); source += sizes[i];
+    }
     audio_.clear();
     return true;
 }
@@ -1498,9 +1542,10 @@ QByteArray LibretroHost::captureMoviePayload(bool checksum, bool includeClock) c
     if ((sizes[1] && !memory[0]) || (sizes[2] && !memory[1])) return {};
     quint32 bramMask = 0;
     for (unsigned index = 0; index < 2; ++index) {
-        if (!api_->get_bram) break;
+        const auto getBram = api_->get_bram_raw ? api_->get_bram_raw : api_->get_bram;
+        if (!getBram) break;
         const void* data = nullptr; size_t size = 0; const char* path = nullptr;
-        if (!api_->get_bram(index,&data,&size,&path)) continue;
+        if (!getBram(index,&data,&size,&path)) continue;
         if (!data || !size || size > 1024 * 1024) return {};
         memory[index+2] = data; sizes[index+3] = size; bramMask |= 1u << index;
     }
@@ -1535,7 +1580,9 @@ QByteArray LibretroHost::networkCompatibility() const {
     if (!loaded_ || !api_->network_state_abi) return {};
     const char* contract = api_->network_state_abi();
     if (!contract || !*contract) return {};
-    return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) + (linkPeer_ ? QByteArrayLiteral(":md-link-v1") : QByteArray()));
+    return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) +
+        (linkPeer_ ? QByteArrayLiteral(":md-link-v1") : QByteArray()) +
+        (api_->get_bram_raw ? QByteArrayLiteral(":rewind-native-v1") : QByteArray()));
 }
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
     const auto identity = networkCompatibility();
@@ -1587,7 +1634,8 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     }
     for (unsigned index = 0; index < 2; ++index) {
         const void* data = nullptr; size_t size = 0; const char* path = nullptr;
-        const bool present = api_->get_bram && api_->get_bram(index,&data,&size,&path);
+        const auto getBram = api_->get_bram_raw ? api_->get_bram_raw : api_->get_bram;
+        const bool present = getBram && getBram(index,&data,&size,&path);
         if (present != bool(bramMask & (1u << index)) ||
             (present && (!data || size != sizes[index+3]))) {
             error = Localization::text(QStringLiteral("BRAM записи несовместима с текущим ядром.")); return false;
@@ -1609,7 +1657,8 @@ bool LibretroHost::restoreMovieState(const QByteArray& state, QString& error, bo
     bool memoryValid = (!sizes[1] || memory[0]) && (!sizes[2] || memory[1]);
     for (unsigned index = 0; index < 2; ++index) {
         const void* data = nullptr; size_t size = 0; const char* path = nullptr;
-        const bool present = api_->get_bram && api_->get_bram(index,&data,&size,&path);
+        const auto getBram = api_->get_bram_raw ? api_->get_bram_raw : api_->get_bram;
+        const bool present = getBram && getBram(index,&data,&size,&path);
         memoryValid &= present == bool(bramMask & (1u << index)) &&
             (!present || (data && size == sizes[index+3]));
         memory[index+2] = const_cast<void*>(data);
@@ -2650,6 +2699,8 @@ int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsig
     if (owner < 0 || !active_->controllerConnected_[owner])
         return baseDevice == RETRO_DEVICE_LIGHTGUN && id == RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN;
     auto mask = active_->buttons_[owner];
+    if (port == 0 && active_->contentExtension_ == "sms")
+        mask |= (active_->buttons_[0] | active_->buttons_[1]) & (1u << RETRO_DEVICE_ID_JOYPAD_START);
     if (baseDevice == RETRO_DEVICE_LIGHTGUN) {
         if (unsigned(owner) >= active_->gunAim_.size()) return 0;
         const auto& aim = active_->gunAim_[owner];
@@ -2680,8 +2731,6 @@ int16_t LibretroHost::inputState(unsigned port, unsigned device, unsigned, unsig
     if (baseDevice == RETRO_DEVICE_ANALOG && unsigned(owner)<active_->gunAim_.size())
         return id==RETRO_DEVICE_ID_ANALOG_X?active_->gunAim_[owner].x:0;
     if (baseDevice != RETRO_DEVICE_JOYPAD) return 0;
-    if (port == 0 && active_->contentExtension_ == "sms")
-        mask |= (active_->buttons_[0] | active_->buttons_[1]) & (1u << RETRO_DEVICE_ID_JOYPAD_START);
     if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return int16_t(mask);
     return id < 16 && (mask & (1u << id)) ? 1 : 0;
 }

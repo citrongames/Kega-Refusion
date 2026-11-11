@@ -1,0 +1,84 @@
+--- a/core/system.c
++++ b/core/system.c
+@@ -439,8 +439,19 @@
+   sound_init();
+ }
+ 
++unsigned int system_sms_pause_state(void)
++{
++  return pause_b;
++}
++
++void system_sms_pause_restore(unsigned int value)
++{
++  pause_b = value & 1;
++}
++
+ void system_reset(void)
+ {
++  pause_b = 0;
+   gen_reset(1);
+   io_reset();
+   render_reset();
+--- a/core/system.h
++++ b/core/system.h
+@@ -119,6 +119,8 @@
+ extern void audio_set_equalizer(void);
+ extern void system_init(void);
+ extern void system_reset(void);
++extern unsigned int system_sms_pause_state(void);
++extern void system_sms_pause_restore(unsigned int value);
+ extern void system_frame_gen(int do_skip);
+ extern void system_frame_scd(int do_skip);
+ extern void system_frame_sms(int do_skip);
+--- a/core/input_hw/input.c
++++ b/core/input_hw/input.c
+@@ -540,6 +540,12 @@
+   memset(p,0,KR_INPUT_STATE_SIZE);memcpy(p,"KRINP001",8);
+   gamepad_kr_save(p+8);teamplayer_kr_save(p+72);mouse_kr_save(p+76);
+   paddle_kr_save(p+84);lightgun_kr_save(p+88);
++  /* Keep the existing trailer size/version and every peripheral offset. Older
++   * readers ignore the reserved bytes; old states default to released Pause. */
++  if ((system_hw & SYSTEM_PBC) != SYSTEM_MD)
++  {
++    memcpy(p+90,"KRSMS001",8);p[98]=(uint8)system_sms_pause_state();
++  }
+   h=input_kr_hash(p);for(i=0;i<4;++i)p[KR_INPUT_STATE_SIZE-4+i]=(uint8)(h>>(i*8));
+ }
+ void input_kr_load(const uint8 *p)
+@@ -547,4 +553,6 @@
+   if(memcmp(p,"KRINP001",8))return;
+   gamepad_kr_load(p+8);teamplayer_kr_load(p+72);mouse_kr_load(p+76);
+   paddle_kr_load(p+84);lightgun_kr_load(p+88);
+-}
++  if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && !memcmp(p+90,"KRSMS001",8))
++    system_sms_pause_restore(p[98]);
++}
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3825,6 +3825,12 @@
+ 
+ /* Compatible rebuilds and optimizations keep this ABI unchanged.
+  * Bump only for incompatible state layout or deterministic execution changes. */
++/* Capability probe for frontends reconstructing 8-bit frames from states. */
++RETRO_API unsigned retro_kegarefusion_sms_pause_state_version(void)
++{
++   return 1;
++}
++
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+@@ -3856,6 +3862,12 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   /* Pause/NMI snapshots now round-trip on SMS/SG/PBC. Native GG has no
++    * Pause NMI; keep its existing deterministic contract and all MD/CD IDs. */
++   if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && system_hw != SYSTEM_GG)
++      return sms_cart_codies_active() ?
++         "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1-sms-pause-v1" :
++         "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-pause-v1";
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+       return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1";
+    if (md_cart_large_ssf_active() || (md_cart_32x_ssf && strstr(rominfo.consoletype, "SEGA SSF")))

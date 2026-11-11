@@ -19,11 +19,13 @@ struct LibretroHost::Api {
     bool (*link_audio_load)(const void*,size_t) = nullptr;
     void (*manage_bram)(bool) = nullptr;
     bool (*get_bram)(unsigned, const void**, size_t*, const char**) = nullptr;
+    bool (*get_bram_raw)(unsigned, const void**, size_t*, const char**) = nullptr;
     const char* (*state_abi)() = nullptr;
     const char* (*recording_abi)() = nullptr;
     const char* (*network_state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
     unsigned (*system_hw)() = nullptr;
+    unsigned (*sms_pause_state_version)() = nullptr;
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
     void (*debug_backdrop)(uint32_t) = nullptr;
     bool (*multitap)(unsigned, unsigned, unsigned) = nullptr;

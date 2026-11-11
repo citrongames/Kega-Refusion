@@ -223,7 +223,12 @@ QByteArray LibretroHost::captureLinkedState() const {
     QByteArray out("KRLINK01",8);out.reserve(total);
     for(auto n:size)append32(out,n);
     append32(out,api_->link_latch());append32(out,linkPeer_->api_->link_latch());
-    out.resize(total);qsizetype off=PairHeader;
+    out.resize(total);
+    // Native serializers leave reserved bytes untouched. Initialize both core
+    // payloads exactly as ordinary serializeCore() does, so paired rewind deltas
+    // never retain allocator contents or change when the machine has not.
+    std::memset(out.data()+PairHeader,0,size_t(total-PairHeader));
+    qsizetype off=PairHeader;
     for(unsigned i=0;i<8;++i) {
         const auto* h=(i==1||i==3||i>=6)?linkPeer_.get():this;Activation scope(const_cast<LibretroHost*>(h));
         if(i<2) {if(!h->api_->serialize(out.data()+off,size[i]))return {};}

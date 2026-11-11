@@ -945,15 +945,16 @@ void EmulationSession::run() {
             NetRollbackSession::RewindFrame frame;
             while(networkTimeline.takeConfirmedHistory(frame)) {
                 QImage image=frame.image;QByteArray geometry;
-                if(host.linkCableEnabled()) {
-                    // Only confirmed history checkpoints retain both console previews.
-                    if(frame.secondImage.isNull())continue;
+                if(host.linkCableEnabled() && !frame.replay) {
+                    if(frame.secondImage.isNull())return false;
                     image=combineLinkPreview(frame.image,frame.aspect,frame.secondImage,frame.secondAspect,geometry);
                     if(image.isNull())return false;
                 }
                 QByteArray packed(geometry.isEmpty()?"KRGGORW1":"KRGGORW2",8);
                 packed.reserve(8+geometry.size()+frame.state.size());packed+=geometry;packed+=frame.state;
-                if(!history.capture(packed,image,frame.aspect,&frame.input))return false;
+                if(frame.replay) {
+                    if(!history.captureForReplay(packed,frame.aspect,frame.controls,&frame.input))return false;
+                } else if(!history.capture(packed,image,frame.aspect,&frame.input))return false;
             }
             return true;
         }
@@ -992,7 +993,8 @@ void EmulationSession::run() {
         bool previewRestored = true;
         if (!replay.previousState.isEmpty()) {
             QByteArray coreState, ignoredProgress;
-            previewRestored = historyPayload(replay.previousState,coreState,ignoredProgress) &&
+            previewRestored = networkMode ? restoreHistory(replay.previousState,error) :
+                historyPayload(replay.previousState,coreState,ignoredProgress) &&
                 (movie.active() ? movie.restoreRewindCore(coreState,error) : host.restoreRewindState(coreState));
             if (previewRestored) {
                 // Rendering must use the actual recorded controls, including mouse
@@ -1001,12 +1003,20 @@ void EmulationSession::run() {
                 NetplayTimeline::apply(host,replay.controls);
                 host.runRewindPreviewFrame();
                 frame = host.frame(); aspect = host.aspectRatio();
+                if(networkMode && host.linkCableEnabled()) {
+                    frame=combineLinkPreview(host.frameForLinkRole(1),host.aspectRatioForLinkRole(1),
+                        host.frameForLinkRole(2),host.aspectRatioForLinkRole(2),networkRewindLinkPreview);
+                    aspect=host.aspectRatioForLinkRole(1);
+                }
                 previewRestored = !frame.isNull();
             }
         }
         // Restore canonical post-frame core, battery, clock, achievement progress
         // and movie position even if preview generation failed partway through.
+        const auto regeneratedGeometry = networkMode && !replay.previousState.isEmpty()
+            ? networkRewindLinkPreview : QByteArray();
         const bool restored = restoreHistory(state,error);
+        if(restored && !regeneratedGeometry.isEmpty())networkRewindLinkPreview=regeneratedGeometry;
         if (!restored || !previewRestored) {
             clearHistory(); historyHealthy = false;
             emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
@@ -1922,8 +1932,7 @@ void EmulationSession::run() {
         if (reverse != rewindLatched) {
             rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
             if (reverse) {
-                // Network history contains every second confirmed frame.
-                rewindStepMs = (networkMode ? 2000.0 : 1000.0) / host.fps();
+                rewindStepMs = 1000.0 / host.fps();
                 rewindTotalMs = rewindAvailableMs();
                 rewindLastProgressMs = rewindTotalMs;
                 rewindStartedNs = nowNs();

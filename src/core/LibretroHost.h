@@ -43,10 +43,9 @@ public:
     const QImage& frameForLinkRole(int role) const;
     double aspectRatioForLinkRole(int role) const;
     void runFrame(bool renderVideo = true, bool captureAudio = true);
-    // Progressive local MD/32X can redraw a saved moment from its predecessor.
-    // External media, unserialized input edges and retained fields keep pictures.
+    // True when the previous checkpoint and input can reproduce this output mode.
     bool rewindReplaySafe() const;
-    void runRewindPreviewFrame();
+    void runRewindPreviewFrame(bool renderVideo = true);
     bool frameInputPolled() const;
     bool supportsInputPollMetrics() const;
     void setExpansionDevices(bool cd, bool x32);
@@ -54,6 +53,7 @@ public:
     bool hardReset(QString& error, bool applyPending = true);
     void setSmsFmEnabled(bool enabled) { smsFmEnabled_ = enabled; }
     bool isMasterSystem() const;
+    bool smsPauseStateSupported() const;
     struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
     DebugCapabilities debugCapabilities() const;
     void setDebugMasks(quint32 video, quint64 audio);

@@ -1,0 +1,199 @@
+--- a/core/sound/blip_buf.c
++++ b/core/sound/blip_buf.c
+@@ -725,16 +725,18 @@
+ int blip_link_state_save(const blip_t *buf, unsigned char *out, unsigned size)
+ {
+ #ifndef BLIP_MONO
+-  unsigned c, i;
+-  if (!buf || !out || size != blip_link_state_size() || size != 168 ||
+-      buf->size < buf_extra || blip_samples_avail(buf) != 0) return 0;
++  unsigned c, i, count;
++  if (!buf || !out || blip_link_state_size() != 168) return 0;
++  count = blip_samples_avail(buf);
++  if (count > (unsigned)buf->size || size != 168 + count * 8) return 0;
++  count += buf_extra;
+   link_wire_put64(out, (uint64_t)buf->factor);
+   link_wire_put64(out + 8, (uint64_t)buf->offset);
+   for (c = 0; c < 2; c++)
+   {
+     link_wire_put32(out + 16 + c * 4, (uint32_t)buf->integrator[c]);
+-    for (i = 0; i < buf_extra; i++)
+-      link_wire_put32(out + 24 + (c * buf_extra + i) * 4, (uint32_t)buf->buffer[c][i]);
++    for (i = 0; i < count; i++)
++      link_wire_put32(out + 24 + (c * count + i) * 4, (uint32_t)buf->buffer[c][i]);
+   }
+   return 1;
+ #else
+@@ -745,9 +747,10 @@
+ int blip_link_state_valid(const blip_t *buf, const unsigned char *in, unsigned size)
+ {
+ #ifndef BLIP_MONO
+-  return buf && in && size == 168 && size == blip_link_state_size() &&
+-    buf->size >= buf_extra && link_wire_get64(in) == (uint64_t)buf->factor &&
+-    link_wire_get64(in + 8) < (uint64_t)time_unit;
++  return buf && in && size >= 168 && blip_link_state_size() == 168 &&
++    link_wire_get64(in) == (uint64_t)buf->factor &&
++    (link_wire_get64(in + 8) >> time_bits) <= (unsigned)buf->size &&
++    size == 168 + 8 * (link_wire_get64(in + 8) >> time_bits);
+ #else
+   return 0;
+ #endif
+@@ -759,12 +762,13 @@
+   unsigned c, i;
+   if (!blip_link_state_valid(buf, in, size)) return 0;
+   buf->offset = (fixed_t)link_wire_get64(in + 8);
++  unsigned count = buf_extra + blip_samples_avail(buf);
+   for (c = 0; c < 2; c++)
+   {
+     buf->integrator[c] = link_wire_get_i32(in + 16 + c * 4);
+     memset(buf->buffer[c], 0, (buf->size + buf_extra) * sizeof(buf_t));
+-    for (i = 0; i < buf_extra; i++)
+-      buf->buffer[c][i] = link_wire_get_i32(in + 24 + (c * buf_extra + i) * 4);
++    for (i = 0; i < count; i++)
++      buf->buffer[c][i] = link_wire_get_i32(in + 24 + (c * count + i) * 4);
+   }
+   return 1;
+ #else
+--- a/core/system.h
++++ b/core/system.h
+@@ -115,6 +115,8 @@
+ extern unsigned int audio_link_state_size(void);
+ extern int audio_link_state_save(uint8 *out, unsigned int size);
+ extern int audio_link_state_load(const uint8 *in, unsigned int size);
++extern void audio_rewind_save(uint8 *out, unsigned int capacity);
++extern void audio_rewind_load(const uint8 *in, unsigned int capacity);
+ extern int audio_update(int16 *buffer);
+ extern void audio_set_equalizer(void);
+ extern void system_init(void);
+--- a/core/system.c
++++ b/core/system.c
+@@ -283,6 +283,69 @@
+   return 1;
+ }
+ 
++/* Optional frame-boundary extension in unused native-state space. Keep only
++ * live impulse tails (and any whole samples waiting for the next mix). */
++enum { rewind_audio_header = 88, rewind_eq_bytes = 256 };
++void audio_rewind_save(uint8 *out, unsigned int capacity)
++{
++  unsigned int i, size, cursor = rewind_audio_header;
++  if (capacity < rewind_audio_header || blip_link_state_size() != 168) return;
++  memset(out, 0, rewind_audio_header);
++  if (!sound_link_state_save(out + 48, 16)) return;
++  for (i = 0; i < 4; i++)
++  {
++    if (!snd.blips[i]) continue;
++    size = 168 + 8 * blip_samples_avail(snd.blips[i]);
++    if (size > capacity - cursor || !blip_link_state_save(snd.blips[i], out + cursor, size)) return;
++    link_wire_put32(out + 64 + i * 4, size);
++    cursor += size;
++  }
++  if (config.filter & 2)
++  {
++    double *fields[32];
++    if (capacity - cursor < rewind_eq_bytes) return;
++    audio_link_eq_fields(fields);
++    for (i = 0; i < 32; i++) link_wire_put_double(out + cursor + i * 8, *fields[i]);
++  }
++  link_wire_put32(out + 80, (uint32_t)(int32_t)llp);
++  link_wire_put32(out + 84, (uint32_t)(int32_t)rrp);
++  audio_link_header(out);
++  memcpy(out, "KRAUD001", 8);
++}
++
++void audio_rewind_load(const uint8 *in, unsigned int capacity)
++{
++  uint8 header[48];
++  unsigned int i, sizes[4], cursor = rewind_audio_header;
++  if (capacity < rewind_audio_header || memcmp(in, "KRAUD001", 8)) return;
++  audio_link_header(header);
++  if (memcmp(header + 8, in + 8, 40) || !sound_link_state_valid(in + 48, 16)) return;
++  for (i = 0; i < 4; i++)
++  {
++    sizes[i] = link_wire_get32(in + 64 + i * 4);
++    if (!!sizes[i] != !!snd.blips[i] || sizes[i] > capacity - cursor) return;
++    if (sizes[i] && !blip_link_state_valid(snd.blips[i], in + cursor, sizes[i])) return;
++    cursor += sizes[i];
++  }
++  if (config.filter & 2)
++  {
++    double *fields[32];
++    if (capacity - cursor < rewind_eq_bytes) return;
++    for (i = 0; i < 32; i++) if (!isfinite(link_wire_get_double(in + cursor + i * 8))) return;
++    audio_link_eq_fields(fields);
++    for (i = 0; i < 32; i++) *fields[i] = link_wire_get_double(in + cursor + i * 8);
++  }
++  cursor = rewind_audio_header;
++  for (i = 0; i < 4; i++)
++  {
++    if (sizes[i]) blip_link_state_load(snd.blips[i], in + cursor, sizes[i]);
++    cursor += sizes[i];
++  }
++  sound_link_state_load(in + 48, 16);
++  llp = (int16)link_wire_get_i32(in + 80);
++  rrp = (int16)link_wire_get_i32(in + 84);
++}
++
+ void audio_shutdown(void)
+ {
+   int i;
+--- a/core/state.c
++++ b/core/state.c
+@@ -41,6 +41,15 @@
+ int state_reset_for_load = 0;
+ int8 fast_savestates = false;
+ int8 reset_do_not_clear_buffers = false;
++
++#ifdef KEGAREFUSION_32X
++#include "kega32x/gpx/bridge.h"
++#endif
++void state_restore_audio(const unsigned char *state, int used)
++{
++  const int end = STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE;
++  if (used > 0 && used < end) audio_rewind_load(state + used, end - used);
++}
+ 
+ int state_load(unsigned char *state)
+ {
+@@ -202,6 +211,10 @@
+     md_cart_large_ssf_state_load(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE);
+ 
+   input_kr_load(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE);
++#ifdef KEGAREFUSION_32X
++  if (!kegarefusion_32x_attached)
++#endif
++    state_restore_audio(state, bufferptr);
+ 
+   return bufferptr;
+ }
+@@ -310,6 +323,8 @@
+       !md_cart_large_ssf_state_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE)) return 0;
+ 
+   input_kr_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE);
++  if (bufferptr > 0 && bufferptr < STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE)
++    audio_rewind_save(state + bufferptr, STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE - bufferptr);
+ 
+   /* return total size */
+   return bufferptr;
+--- a/core/state.h
++++ b/core/state.h
+@@ -55,6 +55,7 @@
+ /* Function prototypes */
+ /* True only during the reset that precedes native state restoration. */
+ extern int state_reset_for_load;
++extern void state_restore_audio(const unsigned char *state, int used);
+ extern int state_load(unsigned char *state);
+ extern int state_save(unsigned char *state);
+ 
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3695,6 +3695,9 @@
+       kegarefusion_32x_state_begin_load();
+       loaded = state_load((uint8_t *)data);
+       if (!kegarefusion_32x_state_end_load(loaded != 0)) return false;
++      /* PWM restoration emits its held level for legacy states with an empty
++       * resampler. Install the captured mixed audio tail after that pulse. */
++      state_restore_audio((const unsigned char *)data, loaded);
+ #ifdef HAVE_OVERCLOCK
+       update_overclock();
+ #endif

@@ -1,5 +1,8 @@
 #include "core/LibretroHost.h"
 #include "core/SegaCdBios.h"
+#include "core/Sega32xBios.h"
+#include "core/RewindBuffer.h"
+#include "net/NetplayTimeline.h"
 #include "core/CoreFileSystem.h"
 #include <QCryptographicHash>
 
@@ -12,6 +15,8 @@
 
 #include <cstdio>
 #include <stdexcept>
+#include <vector>
+#include <array>
 
 namespace {
 
@@ -70,6 +75,57 @@ void requireBrmPath(const QString& corePath, const QString& expected) {
             "CD BRAM save path changed with the mounted disc");
 }
 
+void testBackupRewind(LibretroHost& host, const QString& corePath) {
+    QLibrary library(corePath);
+    using Getter = bool (*)(unsigned, const void**, size_t*, const char**);
+    const auto get = reinterpret_cast<Getter>(library.resolve("retro_kegarefusion_get_bram_raw"));
+    const auto formatted = reinterpret_cast<Getter>(library.resolve("kegarefusion_get_bram"));
+    require(get && formatted, "raw CD backup RAM extension missing");
+    std::array<char*,2> memory{};
+    std::array<QByteArray,2> original, changed, diskBefore;
+    std::array<QString,2> paths;
+    std::array<bool,2> existed{};
+    for (unsigned i = 0; i < 2; ++i) {
+        const void* data = nullptr; size_t size = 0; const char* path = nullptr;
+        require(get(i,&data,&size,&path) && data && size >= 8192 && size <= 1024*1024 && path,
+                "internal or external CD backup RAM unavailable");
+        memory[i] = const_cast<char*>(static_cast<const char*>(data));
+        original[i] = QByteArray(memory[i],qsizetype(size)); paths[i] = QString::fromUtf8(path);
+        existed[i] = QFile::exists(paths[i]);
+        if (existed[i]) { QFile file(paths[i]); require(file.open(QIODevice::ReadOnly), "backup RAM disk reference unavailable"); diskBefore[i] = file.readAll(); }
+    }
+    const auto state = host.captureRewindState(), movie = host.captureMovieState(false);
+    require(state.startsWith("KRREW002") && !movie.isEmpty(), "CD backup regions absent from rewind");
+    for (unsigned i = 0; i < 2; ++i) {
+        memory[i][0] ^= char(0x31+i); memory[i][original[i].size()-1] ^= char(1);
+        changed[i] = QByteArray(memory[i],original[i].size());
+        const void* data = nullptr; size_t size = 0; const char* path = nullptr;
+        require(!formatted(i,&data,&size,&path), "fixture did not invalidate the backup format marker");
+    }
+    const auto partialFormat = host.captureRewindState(), partialMovie = host.captureMovieState(false);
+    require(!partialFormat.isEmpty() && !partialMovie.isEmpty(), "partially formatted CD backup RAM could not be captured");
+    for (unsigned i = 0; i < 2; ++i) memory[i][0] ^= char(0x76);
+    require(host.restoreRewindState(partialFormat), "partially formatted CD backup rewind restore failed");
+    for (unsigned i = 0; i < 2; ++i)
+        require(QByteArray(memory[i],changed[i].size()) == changed[i], "rewind lost partially formatted CD backup RAM bytes");
+    require(host.restoreRewindState(state), "CD backup rewind restore failed");
+    for (unsigned i = 0; i < 2; ++i)
+        require(QByteArray(memory[i],original[i].size()) == original[i], "rewind did not restore internal/external CD backup RAM");
+    QString error;
+    require(host.restoreMovieState(partialMovie,error,true) && host.restoreMovieState(movie,error,true),
+            "movie/network rewind could not recover CD backup RAM formatting");
+    for (unsigned i = 0; i < 2; ++i) {
+        require(QByteArray(memory[i],original[i].size()) == original[i], "movie rewind lost CD backup RAM");
+        require(QFile::exists(paths[i]) == existed[i], "CD preview wrote a backup RAM file");
+        if (existed[i]) { QFile file(paths[i]); require(file.open(QIODevice::ReadOnly) && file.readAll() == diskBefore[i], "CD preview changed backup RAM on disk"); }
+    }
+    const auto unchanged = host.captureRewindState();
+    require(!host.restoreRewindState(unchanged.chopped(1)) && host.captureRewindState() == unchanged,
+            "invalid CD backup envelope mutated the current state");
+    std::printf("CD backup rewind: internal %lld + external %lld bytes and partial format restored; no file writes\n",
+        static_cast<long long>(original[0].size()),static_cast<long long>(original[1].size()));
+}
+
 void testCd(const QString& corePath, const QString& biosSourcePath) {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create temporary test directory");
@@ -114,6 +170,7 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
         receivedAudio |= !host.audio().isEmpty();
     }
     require(receivedAudio, "CD BIOS produced no audio samples");
+    testBackupRewind(host,corePath);
     require(host.saveState(0, error), "CD state save failed");
     const QByteArray rewind = host.captureRewindState();
     require(!rewind.isEmpty(), "CD rewind capture failed");
@@ -185,6 +242,134 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
             "unused CD BRAM created a save");
 }
 
+MovieInput rewindControls(int frame) {
+    MovieInput controls;
+    const bool start = (frame >= 240 && frame < 246) || (frame >= 900 && frame < 906) ||
+        (frame >= 1800 && frame % 300 < 6);
+    controls.buttons[0] = (start ? 1U << RETRO_DEVICE_ID_JOYPAD_START : 0) |
+        (frame >= 1800 && frame % 37 < 12 ? 1U << RETRO_DEVICE_ID_JOYPAD_RIGHT : 0) |
+        (frame >= 1800 && frame % 53 < 5 ? 1U << RETRO_DEVICE_ID_JOYPAD_Y : 0);
+    return controls;
+}
+
+// The production reverse path redraws a target from its predecessor and recorded
+// controls, then restores the canonical target before allowing forward play.
+// Exercise actual CDDA/PCM/media decoders rather than treating a successful load
+// as proof that their next frame is unchanged.
+void exerciseRewindWindow(LibretroHost& host, int firstFrame) {
+    constexpr int frames = 64;
+    struct Reference {
+        QByteArray state, audio;
+        QImage image;
+        double aspect;
+        InputDisplayState display;
+        MovieInput controls;
+        bool replaySafe = false;
+    };
+    std::vector<Reference> reference;
+    RewindBuffer pixels, replay;
+    pixels.configure(true); replay.configure(true);
+    int replayCaptures = 0, pictureCaptures = 0;
+    auto remember = [&](const MovieInput& controls, bool retain) {
+        const auto display = host.inputDisplay();
+        reference.push_back({host.captureRewindState(),host.audio(),host.frame(),host.aspectRatio(),display,controls,host.rewindReplaySafe()});
+        require(!reference.back().state.isEmpty() && !host.frame().isNull(), "CD rewind reference capture failed");
+        if (!retain) return;
+        require(pixels.capture(reference.back().state,host.frame(),host.aspectRatio(),&display), "CD picture history capture failed");
+        const bool canReplay = reference.size() > 1 && reference.back().replaySafe &&
+            reference[reference.size()-2].replaySafe;
+        require(canReplay
+            ? replay.captureForReplay(reference.back().state,host.aspectRatio(),controls,&display)
+            : replay.capture(reference.back().state,host.frame(),host.aspectRatio(),&display),
+            "CD state/input history capture failed");
+        canReplay ? ++replayCaptures : ++pictureCaptures;
+    };
+    remember(rewindControls(firstFrame-1),true);
+    for (int frame = 0; frame <= frames; ++frame) {
+        const auto controls = rewindControls(firstFrame+frame);
+        NetplayTimeline::apply(host,controls); host.runFrame();
+        remember(controls,frame < frames);
+    }
+    const auto pixelBytes = pixels.bytesUsed(), replayBytes = replay.bytesUsed();
+    require(replayCaptures > 0 && replayBytes < pixelBytes, "CD production rewind did not use compact state/input history");
+    int audible = 0;
+    for (const auto& expected : reference)
+        for (char sample : expected.audio) if (sample) { ++audible; break; }
+    for (int i = frames-1; i > 0; --i) {
+        QByteArray target;
+        QImage image;
+        double aspect = 0;
+        InputDisplayState display;
+        RewindBuffer::ReplayFrame preview;
+        require(replay.stepBack(target,image,aspect,1,&display,&preview), "CD state/input rewind step failed");
+        require(target == reference[size_t(i)].state, "CD rewind target changed");
+        require((preview.previousState.isEmpty() || preview.controls == reference[size_t(i)].controls) &&
+                display == reference[size_t(i)].display, "CD rewind controls/display changed");
+        // Compare the canonical target and ordinary forward continuation with
+        // the existing picture path, then repeat after a redraw preview.
+        require(host.restoreRewindState(target), "CD picture control restore failed");
+        const auto normalizedTarget = host.captureRewindState();
+        require(normalizedTarget == reference[size_t(i)].state, "CD native target did not round-trip exactly");
+        std::vector<Reference> continuation;
+        for (int next = 0; next < 4; ++next) {
+            const auto controls = rewindControls(firstFrame+i+next);
+            NetplayTimeline::apply(host,controls); host.runFrame();
+            continuation.push_back({host.captureRewindState(),host.audio(),host.frame(),host.aspectRatio(),host.inputDisplay(),controls});
+        }
+        require(continuation.front().audio == reference[size_t(i+1)].audio &&
+                continuation.front().image == reference[size_t(i+1)].image &&
+                continuation.front().state == reference[size_t(i+1)].state,
+                "CD picture restore changed the ordinary forward video/state/PCM continuation");
+        if (!preview.previousState.isEmpty()) {
+            require(host.restoreRewindState(preview.previousState), "CD preview predecessor restore failed");
+            NetplayTimeline::apply(host,preview.controls); host.runRewindPreviewFrame();
+            image = host.frame();
+            require(host.audio().isEmpty(), "CD preview published audio");
+        }
+        if (image != reference[size_t(i)].image)
+            throw std::runtime_error(QStringLiteral("CD rewind picture mismatch at %1").arg(firstFrame+i-1).toStdString());
+        require(host.restoreRewindState(target), "CD canonical target restore failed");
+        require(host.captureRewindState() == normalizedTarget, "CD canonical target changed after preview");
+        host.restoreFramePreview(reference[size_t(i)].image,reference[size_t(i)].aspect);
+        for (const auto& next : continuation) {
+            NetplayTimeline::apply(host,next.controls); host.runFrame();
+            if (host.audio() != next.audio)
+                throw std::runtime_error(QStringLiteral("CD replay changed picture-restore PCM at %1 (%2 vs %3 bytes)")
+                    .arg(firstFrame+i).arg(host.audio().size()).arg(next.audio.size()).toStdString());
+            if (host.frame() != next.image || host.captureRewindState() != next.state)
+                throw std::runtime_error(QStringLiteral("CD replay changed picture-restore video/native state at %1").arg(firstFrame+i).toStdString());
+        }
+    }
+    // Continue the original canonical timeline before the next sampling window.
+    require(host.restoreRewindState(reference.back().state), "CD final timeline restore failed");
+    host.restoreFramePreview(reference.back().image,reference.back().aspect);
+    std::printf("CD rewind window %d: %d replay/%d picture captures; exact previews + 4-frame video/state/PCM continuation passed; %d audible frames; picture/state-input %lld/%lld bytes\n",
+        firstFrame,replayCaptures,pictureCaptures,audible,static_cast<long long>(pixelBytes),static_cast<long long>(replayBytes));
+}
+
+void exerciseUserRewind(const QString& corePath, const QString& biosSource, const QString& path) {
+    QTemporaryDir temp;
+    require(temp.isValid(), "CD rewind temporary directory failed");
+    QString error;
+    SegaCdBios::importDirectory(biosSource,temp.path(),error);
+    Sega32xBios::importDirectory(biosSource,temp.path(),error);
+    LibretroHost host(corePath,temp.path());
+    require(host.load(path,error),qPrintable(error));
+    require(host.isCd(), "CD rewind source is not a Sega CD image");
+    testBackupRewind(host,corePath);
+    int frame = 0;
+    for (int checkpoint : {300,1800,3600}) {
+        while (frame < checkpoint) {
+            NetplayTimeline::apply(host,rewindControls(frame)); host.runFrame(); ++frame;
+        }
+        exerciseRewindWindow(host,frame);
+        frame += 65;
+    }
+    require(CoreFileSystem::lastError().isEmpty(), "CD rewind reported media decoding failure");
+    std::printf("CD rewind state/input passed: %s; MP3 PCM bytes %llu\n",qPrintable(path),
+        static_cast<unsigned long long>(CoreFileSystem::mp3PcmBytesRead()));
+}
+
 void exerciseUserDisc(const QString& corePath, const QString& biosSource, const QString& path, const QString& output) {
     QTemporaryDir temp;
     require(temp.isValid(), "temporary game data directory failed");
@@ -219,11 +404,15 @@ void exerciseUserDisc(const QString& corePath, const QString& biosSource, const 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     if (argc != 3 && argc != 5) {
-        std::fprintf(stderr, "usage: cd_tests CORE BIOS_SOURCE_DIRECTORY [USER_DISC SCREENSHOT_PREFIX]\n");
+        std::fprintf(stderr, "usage: cd_tests CORE BIOS_SOURCE_DIRECTORY [USER_DISC SCREENSHOT_PREFIX|--rewind]\n");
         return 2;
     }
     try {
         if (argc == 5) {
+            if (QString::fromLocal8Bit(argv[4]) == QLatin1String("--rewind")) {
+                exerciseUserRewind(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]),QString::fromLocal8Bit(argv[3]));
+                return 0;
+            }
             exerciseUserDisc(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]),
                              QString::fromLocal8Bit(argv[3]),QString::fromLocal8Bit(argv[4]));
             return 0;

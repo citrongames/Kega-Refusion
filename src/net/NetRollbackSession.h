@@ -29,12 +29,17 @@ public:
         QByteArray state; QImage image; double aspect=1;
         QImage secondImage; double secondAspect=1;
         InputDisplayState input;
+        MovieInput controls;
+        quint64 position=0;
+        bool replay=false;
     };
     void setHistoryEnabled(bool enabled);
     // Only final, locally earned frames reach the achievement runtime. Predicted
     // frames keep bounded memory snapshots, replaced when GGPO replays them.
     void setAchievementsEnabled(bool enabled);
     void processConfirmedAchievements(const std::function<void(const QByteArray&)>& consume);
+    // Contiguous post-frame checkpoints, with the final merged input that
+    // produced each picture. Never exports a speculative GGPO prediction.
     bool takeConfirmedHistory(RewindFrame& frame);
     // At most one snapshot per second, using GGPO's existing UDP quality replies.
     bool takeQuality(QJsonObject& quality,bool realtime);

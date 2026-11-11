@@ -1,0 +1,57 @@
+--- a/core/state.c
++++ b/core/state.c
+@@ -106,7 +106,9 @@
+   load_param(io_reg, sizeof(io_reg));
+   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+   {
+-    io_reg[0] = region_code | 0x20 | (config.bios & 1);
++    /* Match io_reset: bit 5 means that no CD unit is connected. Restoring
++       a CD state must not silently remove the unit from the version port. */
++    io_reg[0] = region_code | ((system_hw != SYSTEM_MCD) ? 0x20 : 0) | (config.bios & 1);
+   }
+   else
+   {
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -1088,8 +1088,8 @@
+    kegarefusion_bram_managed = enabled;
+ }
+ 
+-RETRO_API bool kegarefusion_get_bram(unsigned index, const void **data,
+-      size_t *size, const char **path)
++static bool kegarefusion_bram_region(unsigned index, const void **data,
++      size_t *size, const char **path, bool formatted)
+ {
+    const void *memory;
+    size_t bytes;
+@@ -1136,14 +1136,28 @@
+    }
+ 
+    /* Match bram_save: expose only correctly formatted backup RAM. */
+-   if ((bytes < 0x20) || memcmp((const uint8_t *)memory + bytes - 0x20,
+-            brm_format + 0x20, 0x20))
++   if (formatted && ((bytes < 0x20) || memcmp((const uint8_t *)memory + bytes - 0x20,
++            brm_format + 0x20, 0x20)))
+       return false;
+ 
+    *data = memory;
+    *size = bytes;
+    *path = filename;
+    return true;
++}
++
++RETRO_API bool kegarefusion_get_bram(unsigned index, const void **data,
++      size_t *size, const char **path)
++{
++   return kegarefusion_bram_region(index, data, size, path, true);
++}
++
++/* Rewind must retain bytes even while software is changing the format marker.
++   This accessor never participates in the formatted-only battery disk writer. */
++RETRO_API bool retro_kegarefusion_get_bram_raw(unsigned index, const void **data,
++      size_t *size, const char **path)
++{
++   return kegarefusion_bram_region(index, data, size, path, false);
+ }
+ 
+ RETRO_API const char *kegarefusion_state_abi(void)

@@ -1,0 +1,163 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -41,6 +41,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "link_state.h"
+ #include "md_ntsc.h"
+ #include "sms_ntsc.h"
+ #ifdef KEGAREFUSION_32X
+@@ -4934,6 +4935,101 @@
+   make_bp_lut();
+ }
+ 
++/* Sprite pipeline latches survive display blanking. Keep only live records,
++ * field/counter latches, and no stale sprite slots or decoded pattern cache. */
++void render_rewind_save(uint8 *out, unsigned int capacity)
++{
++  unsigned int list, i, cursor = 64;
++  unsigned int mode = (parse_satb == parse_satb_m5 || parse_satb == parse_satb_m5_im2) ? 5 :
++      (parse_satb == parse_satb_m4 ? 4 : 0);
++  if (capacity != KR_REWIND_RASTER_BYTES) return;
++  memset(out, 0, capacity);
++  if (object_count[0] > MAX_SPRITES_PER_LINE || object_count[1] > MAX_SPRITES_PER_LINE ||
++      64u + 16u * (object_count[0] + object_count[1]) > capacity) return;
++  link_wire_put32(out + 8, object_count[0]); link_wire_put32(out + 12, object_count[1]);
++  link_wire_put32(out + 16, spr_ovr);
++  link_wire_put32(out + 20, spr_col);
++  link_wire_put32(out + 24, v_counter);
++  link_wire_put32(out + 28, hvc_latch);
++  link_wire_put32(out + 32, odd_frame);
++  link_wire_put32(out + 36, interlaced);
++  link_wire_put32(out + 40, im2_flag);
++  link_wire_put32(out + 44, max_sprite_pixels);
++  link_wire_put32(out + 48, vscroll);
++  link_wire_put32(out + 52, vint_cycle);
++  link_wire_put32(out + 56, mode);
++  link_wire_put32(out + 60, (uint32_t)(int32_t)m68k.refresh_cycles);
++  for (list = 0; list < 2; list++) for (i = 0; i < object_count[list]; i++)
++  {
++    const object_info_t *object = &obj_info[list][i];
++    link_wire_put32(out + cursor, object->ypos); link_wire_put32(out + cursor + 4, object->xpos);
++    link_wire_put32(out + cursor + 8, object->attr); link_wire_put32(out + cursor + 12, mode == 4 ? 0 : object->size);
++    cursor += 16;
++  }
++  memcpy(out, "KRVDP001", 8);
++}
++
++void render_rewind_load(const uint8 *in, unsigned int capacity)
++{
++  unsigned int list, i, counts[2], cursor = 64;
++  unsigned int mode = (parse_satb == parse_satb_m5 || parse_satb == parse_satb_m5_im2) ? 5 :
++      (parse_satb == parse_satb_m4 ? 4 : 0);
++  if (capacity != KR_REWIND_RASTER_BYTES || memcmp(in, "KRVDP001", 8)) return;
++  counts[0] = link_wire_get32(in + 8); counts[1] = link_wire_get32(in + 12);
++  if (counts[0] > MAX_SPRITES_PER_LINE || counts[1] > MAX_SPRITES_PER_LINE ||
++      64u + 16u * (counts[0] + counts[1]) > capacity ||
++      link_wire_get32(in + 16) > 0xff ||
++      link_wire_get32(in + 20) > 0xffff ||
++      link_wire_get32(in + 24) >= lines_per_frame ||
++      link_wire_get32(in + 28) > 0x3ffff ||
++      link_wire_get32(in + 32) > 1 ||
++      link_wire_get32(in + 36) > 1 ||
++      link_wire_get32(in + 40) > 1 ||
++      (link_wire_get32(in + 44) != 128 && link_wire_get32(in + 44) != 256 && link_wire_get32(in + 44) != 320) ||
++      link_wire_get32(in + 48) > 0xff ||
++      (link_wire_get32(in + 52) != 770 && link_wire_get32(in + 52) != 788) ||
++      link_wire_get32(in + 56) != mode) return;
++  for (i = 64; i < 64u + 16u * (counts[0] + counts[1]); i += 16)
++  {
++    unsigned int ypos = link_wire_get32(in + i), xpos = link_wire_get32(in + i + 4);
++    unsigned int attr = link_wire_get32(in + i + 8), size = link_wire_get32(in + i + 12);
++    if (mode == 5)
++    {
++      /* name_lut is indexed by size<<4; the row is relative to a live sprite. */
++      if (size > 15 || xpos > 511 || attr > 0xffff ||
++          ypos >= ((link_wire_get32(in + 40) ? 16u : 8u) * ((size & 3) + 1))) return;
++    }
++    else if (xpos > 255 || attr > 255 || ypos > 15 || size > (mode == 4 ? 0u : 255u)) return;
++  }
++  object_count[0] = counts[0]; object_count[1] = counts[1];
++  spr_ovr = link_wire_get32(in + 16);
++  spr_col = link_wire_get32(in + 20);
++  v_counter = link_wire_get32(in + 24);
++  hvc_latch = link_wire_get32(in + 28);
++  odd_frame = link_wire_get32(in + 32);
++  interlaced = link_wire_get32(in + 36);
++  im2_flag = link_wire_get32(in + 40);
++  max_sprite_pixels = link_wire_get32(in + 44);
++  vscroll = link_wire_get32(in + 48);
++  vint_cycle = link_wire_get32(in + 52);
++  m68k.refresh_cycles = link_wire_get_i32(in + 60);
++  if (reg[1] & 4)
++  {
++    parse_satb = im2_flag ? parse_satb_m5_im2 : parse_satb_m5;
++    render_bg = im2_flag ? ((reg[11] & 4) ? render_bg_m5_im2_vs : render_bg_m5_im2) :
++        ((reg[11] & 4) ? (config.enhanced_vscroll ? render_bg_m5_vs_enhanced : render_bg_m5_vs) : render_bg_m5);
++    render_obj = im2_flag ? ((reg[12] & 8) ? render_obj_m5_im2_ste : render_obj_m5_im2) :
++        ((reg[12] & 8) ? render_obj_m5_ste : render_obj_m5);
++  }
++  for (list = 0; list < 2; list++) for (i = 0; i < counts[list]; i++)
++  {
++    object_info_t *object = &obj_info[list][i];
++    object->ypos = link_wire_get32(in + cursor); object->xpos = link_wire_get32(in + cursor + 4);
++    object->attr = link_wire_get32(in + cursor + 8); object->size = link_wire_get32(in + cursor + 12);
++    cursor += 16;
++  }
++}
++
+ void render_reset(void)
+ {
+   if (!reset_do_not_clear_buffers)
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -105,6 +105,9 @@
+ /* Function prototypes */
+ extern void render_init(void);
+ extern void render_reset(void);
++#define KR_REWIND_RASTER_BYTES 4096u
++extern void render_rewind_save(uint8 *out, unsigned int capacity);
++extern void render_rewind_load(const uint8 *in, unsigned int capacity);
+ extern void render_line(int line);
+ extern void blank_line(int line, int offset, int width);
+ extern void remap_line(int line);
+--- a/core/state.c
++++ b/core/state.c
+@@ -47,8 +47,12 @@
+ #endif
+ void state_restore_audio(const unsigned char *state, int used)
+ {
+-  const int end = STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE;
+-  if (used > 0 && used < end) audio_rewind_load(state + used, end - used);
++  const int end = STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE - KR_REWIND_RASTER_BYTES;
++  if (used > 0 && used < end)
++  {
++    audio_rewind_load(state + used, end - used);
++    render_rewind_load(state + end, KR_REWIND_RASTER_BYTES);
++  }
+ }
+ 
+ int state_load(unsigned char *state)
+@@ -312,6 +316,9 @@
+     bufferptr += sms_cart_context_save(&state[bufferptr]);
+   }
+ 
++  if (bufferptr <= 0 || bufferptr >= STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE - KR_REWIND_RASTER_BYTES)
++    return 0;
++
+   if (md_cart_aq93c_active || md_cart_sonic6_active)
+   {
+     if (bufferptr > STATE_SIZE - MD_CART_COMPAT_STATE_SIZE) return 0;
+@@ -323,8 +330,9 @@
+       !md_cart_large_ssf_state_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE)) return 0;
+ 
+   input_kr_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE);
+-  if (bufferptr > 0 && bufferptr < STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE)
+-    audio_rewind_save(state + bufferptr, STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE - bufferptr);
++  audio_rewind_save(state + bufferptr, STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE - KR_REWIND_RASTER_BYTES - bufferptr);
++  render_rewind_save(state + STATE_SIZE - MD_CART_COMPAT_STATE_SIZE - KR_INPUT_STATE_SIZE - KR_REWIND_RASTER_BYTES,
++      KR_REWIND_RASTER_BYTES);
+ 
+   /* return total size */
+   return bufferptr;

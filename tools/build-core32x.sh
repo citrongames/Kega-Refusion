@@ -61,8 +61,13 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-sprite-hint.patch"
   "$root/tools/patches/genesis-plus-gx-32x-bootstrap.patch"
   "$root/tools/patches/genesis-plus-gx-32x-acclaim-eeprom.patch"
-  "$root/tools/patches/genesis-plus-gx-bram-paths.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch .kegarefusion-umkt-tracks-applied.patch .kegarefusion-kaiserwave-applied.patch .kegarefusion-yx5200-stream-applied.patch .kegarefusion-sprite-hint-applied.patch .kegarefusion-32x-bootstrap-applied.patch .kegarefusion-32x-acclaim-eeprom-applied.patch .kegarefusion-bram-paths-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-bram-paths.patch"
+  "$root/tools/patches/genesis-plus-gx-sms-pause-state.patch"
+  "$root/tools/patches/genesis-plus-gx-music-rewind.patch"
+  "$root/tools/patches/genesis-plus-gx-cd-state-rewind.patch"
+  "$root/tools/patches/genesis-plus-gx-rewind-audio.patch"
+  "$root/tools/patches/genesis-plus-gx-rewind-raster.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch .kegarefusion-umkt-tracks-applied.patch .kegarefusion-kaiserwave-applied.patch .kegarefusion-yx5200-stream-applied.patch .kegarefusion-sprite-hint-applied.patch .kegarefusion-32x-bootstrap-applied.patch .kegarefusion-32x-acclaim-eeprom-applied.patch .kegarefusion-bram-paths-applied.patch .kegarefusion-sms-pause-state-applied.patch .kegarefusion-music-rewind-applied.patch .kegarefusion-cd-state-rewind-applied.patch .kegarefusion-rewind-audio-applied.patch .kegarefusion-rewind-raster-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -115,21 +120,12 @@ if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" == 1 ]]; then
   done
 fi
 
-# Keep the released core's battery-patch policy unchanged.
-patch="$battery_patch"
-if git -C "$checkout" apply --check "$patch" >/dev/null 2>&1; then
-  git -C "$checkout" apply "$patch"
-elif ! git -C "$checkout" apply --reverse --check "$patch" >/dev/null 2>&1; then
-  echo "Core battery patch does not match $checkout. No reset was performed." >&2
-  exit 1
-fi
-
 # BEGIN managed 32X patch update
 # Later patches may change lines introduced by earlier patches. Treat receipts
 # as an ordered stack: unchanged layers need no work, and an update unwinds only
 # the changed layer and those above it before replaying them in order.
-managed_patches=("$x32_patch")
-managed_receipts=("$checkout/.kegarefusion-32x-applied.patch")
+managed_patches=("$battery_patch" "$x32_patch")
+managed_receipts=("$checkout/.kegarefusion-battery-applied.patch" "$checkout/.kegarefusion-32x-applied.patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   for i in "${!normal_patches[@]}"; do
     managed_patches+=("${normal_patches[$i]}")
@@ -184,6 +180,14 @@ apply_managed_stack() {
     reversed+=("$i")
   done
   for ((i=first; i<count; ++i)); do
+    # Older prepared trees applied battery before the managed stack existed.
+    # Only recognize it after all later recorded layers have been unwound, and
+    # only when Git proves that exact patch is already present. It is preexisting
+    # state, so rollback must neither remove it nor try to reapply it.
+    if (( i == 0 )) && [[ ! -f "${managed_receipts[$i]}" ]] &&
+       git -C "$checkout" apply --reverse --check "${managed_patches[$i]}" >/dev/null 2>&1; then
+      continue
+    fi
     if ! git -C "$checkout" apply --check "${managed_patches[$i]}" ||
        ! git -C "$checkout" apply "${managed_patches[$i]}"; then
       echo "New managed layer ${managed_patches[$i]} does not apply; restoring previous revisions." >&2
