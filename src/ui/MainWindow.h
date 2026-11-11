@@ -23,7 +23,6 @@ class QDropEvent;
 class QMenu;
 class QProgressDialog;
 class QTimer;
-class QSlider;
 class AudioOutput;
 class AchievementNetwork;
 class EmulationSession;
@@ -44,10 +43,17 @@ public:
     ~MainWindow() override;
     void openRom(const QString& path);
     void setFullscreenMode(bool enabled);
+    bool isMainMenuVisible() const;
     void showOsdDemo();
     void checkForUpdates(bool interactive = true);
 
+signals:
+    void volumeChanged(int value);
+
 protected:
+#ifdef Q_OS_WIN
+    bool nativeEvent(const QByteArray& type, void* message, qintptr* result) override;
+#endif
     bool eventFilter(QObject* watched, QEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
@@ -59,6 +65,7 @@ private:
     void showUpdateDialog(bool activate = true);
     void refreshUpdateDialog();
     void setSmsFmEnabled(bool enabled);
+    void setVolume(int value);
     void flushVolumePreference();
     void updateDebugDialogs();
     void applyDebugMasks();
@@ -102,7 +109,9 @@ private:
     void updateRewind();
     void setPausedUi(bool paused);
     void setSlot(int slot);
+    void setMainMenuVisible(bool visible);
     void toggleFullscreenMenu();
+    void pauseForMenu();
     void handleInputCommand(int command, bool pressed, bool keyboard);
     QAction* commandAction(int command) const;
     void refreshCommandShortcuts();
@@ -206,7 +215,7 @@ private:
     QAction* gameFpsAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
-    QSlider* volumeSlider_ = nullptr;
+    int volume_ = 80;
     int savedVolume_ = 80;
     QAction* smsFmAction_ = nullptr;
     QStringList recentPaths_;

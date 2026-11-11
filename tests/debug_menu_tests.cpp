@@ -1040,20 +1040,61 @@ int main(int argc, char** argv) {
             window.activateWindow();
             QApplication::processEvents();
             require(window.isActiveWindow(), "main window did not regain focus for hotkey test");
-            auto* master = child<QSlider>(window, "masterVolumeSlider");
-            const int initialVolume = master->value();
+            auto* master = window.findChild<QSlider*>(QStringLiteral("masterVolumeSlider"));
+#ifdef Q_OS_WIN
+            require(!master, "Windows native sound menu still contains a volume widget");
+#else
+            require(master, "Linux sound menu lost its volume slider");
+#endif
+            const int initialVolume = qBound(0, QSettings(settingsPath, QSettings::IniFormat)
+                .value(QStringLiteral("audio/volume"), 80).toInt(), 100);
+            int currentVolume = initialVolume;
+            QObject volumeObserver;
+            QObject::connect(&window, &MainWindow::volumeChanged, &volumeObserver,
+                             [&](int value) { currentVolume = value; });
             press(window, Qt::Key_Equal, Qt::ShiftModifier);
-            require(master->value() == initialVolume + 5,
+            require(currentVolume == initialVolume + 5,
                     "plus hotkey did not raise master volume");
             press(window, Qt::Key_Minus, Qt::NoModifier, true);
-            require(master->value() == initialVolume,
-                    "global volume hotkeys did not change the shared slider");
+            require(currentVolume == initialVolume,
+                    "global volume hotkeys did not change master volume");
             press(window, Qt::Key_Plus, Qt::KeypadModifier);
-            require(master->value() == initialVolume + 5,
+            require(currentVolume == initialVolume + 5,
                     "keypad plus did not raise master volume");
             press(window, Qt::Key_Minus, Qt::KeypadModifier);
-            require(master->value() == initialVolume,
+            require(currentVolume == initialVolume,
                     "keypad minus did not lower master volume");
+            if (master) {
+                require(master->value() == currentVolume,
+                        "menu volume slider did not follow hotkeys");
+                master->setValue(initialVolume + 5);
+                require(currentVolume == initialVolume + 5,
+                        "menu slider did not update master volume");
+                master->setValue(initialVolume);
+            }
+            bool volumeInspected = false;
+            QString volumeFailure;
+            QTimer::singleShot(0, &window, [&] {
+                auto* dialog = window.findChild<QDialog*>(QStringLiteral("emulatorSettingsDialog"));
+                auto* slider = dialog ? dialog->findChild<QSlider*>(
+                    QStringLiteral("settingsMasterVolumeSlider")) : nullptr;
+                if (!slider || slider->minimum() != 0 || slider->maximum() != 100 ||
+                    slider->value() != currentVolume) {
+                    volumeFailure = QStringLiteral("settings volume slider did not share master volume");
+                } else {
+                    slider->setValue(initialVolume + 5);
+                    if (currentVolume != initialVolume + 5 ||
+                        (master && master->value() != currentVolume))
+                        volumeFailure = QStringLiteral("settings slider did not update master volume");
+                    slider->setValue(initialVolume);
+                }
+                volumeInspected = true;
+                if (dialog) dialog->reject();
+                else if (auto* active = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                    active->reject();
+            });
+            child<QAction>(window, "emulatorSettingsAction")->trigger();
+            require(volumeInspected && volumeFailure.isEmpty(), qPrintable(volumeFailure));
         }
 
         QSettings settings(settingsPath, QSettings::IniFormat);

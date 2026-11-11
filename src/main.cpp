@@ -76,6 +76,11 @@ void configurePluginPaths() {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef Q_OS_WIN
+    // Let Qt mirror the existing QActions into real Win32 menus, including later edits.
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+        qputenv("QT_QPA_PLATFORM", "windows:menus=native");
+#endif
     configurePluginPaths(); // The platform plugin loads in QApplication's constructor.
     QApplication app(argc, argv);
 #ifdef Q_OS_LINUX
@@ -244,13 +249,13 @@ int main(int argc, char* argv[]) {
         QTimer::singleShot(1100, &window, [&] {
             QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
             QCoreApplication::sendEvent(&window, &escape);
-            if (!window.isFullScreen() || !window.menuBar()->isVisible())
+            if (!window.isFullScreen() || !window.isMainMenuVisible())
                 smokeError = true;
         });
         QTimer::singleShot(2600, &window, [&] {
             QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
             QCoreApplication::sendEvent(&window, &escape);
-            if (!window.isFullScreen() || window.menuBar()->isVisible())
+            if (!window.isFullScreen() || window.isMainMenuVisible())
                 smokeError = true;
             QTimer::singleShot(100, &window, [&] {
                 if (window.centralWidget()->geometry().top() != 0) {
@@ -263,7 +268,7 @@ int main(int argc, char* argv[]) {
         QTimer::singleShot(3200, &window, [&] {
             QKeyEvent altEnter(QEvent::KeyPress, Qt::Key_Return, Qt::AltModifier);
             QCoreApplication::sendEvent(&window, &altEnter);
-            if (window.isFullScreen() || !window.menuBar()->isVisible())
+            if (window.isFullScreen() || !window.isMainMenuVisible())
                 smokeError = true;
         });
     }

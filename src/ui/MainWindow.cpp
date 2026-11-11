@@ -78,6 +78,7 @@
 #include <qt_windows.h>
 #include <dwmapi.h>
 #include <QWindow>
+#include <qpa/qplatformmenu.h>
 #include <qpa/qplatformwindow_p.h>
 #endif
 
@@ -391,13 +392,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateShaderActions();
     });
     for (QAction* action : menuBar()->actions()) {
+#ifdef Q_OS_WIN
+        // Native menus use the Windows menu loop and do not send QMenu::aboutToHide.
+        if (menuBar()->isNativeMenuBar()) break;
+#endif
         QMenu* menu = action->menu();
         if (!menu) continue;
-        connect(menu, &QMenu::aboutToShow, this, [this] {
-            menuPauseActive_ = true;
-            if (!netplay_->active() && !videoExporting_) session_.setBackgroundPaused(true);
-            releaseInput();
-        });
+        connect(menu, &QMenu::aboutToShow, this, &MainWindow::pauseForMenu);
         connect(menu, &QMenu::aboutToHide, this, [this] {
             // A neighboring top menu may open while this one is closing.
             QTimer::singleShot(0, this, [this] {
@@ -1209,31 +1210,30 @@ void MainWindow::buildMenus() {
     smsFmAction_->setToolTip(Localization::text(QStringLiteral(
         "Применяется при следующей загрузке игры или перезапуске питания.")));
     connect(smsFmAction_, &QAction::toggled, this, &MainWindow::setSmsFmEnabled);
-    QWidget* volumePanel = new QWidget(soundMenu);
-    QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
-    volumeLayout->setContentsMargins(12, 6, 12, 8);
-    volumeLayout->addWidget(new QLabel(Localization::text(QStringLiteral("Громкость")), volumePanel));
-    volumeSlider_ = new QSlider(Qt::Horizontal, volumePanel);
-    volumeSlider_->setObjectName(QStringLiteral("masterVolumeSlider"));
-    volumeSlider_->setRange(0, 100);
-    volumeSlider_->setMinimumWidth(160);
-    volumeSlider_->setValue(qBound(0, settings_.value(QStringLiteral("audio/volume"), 80).toInt(), 100));
-    savedVolume_ = volumeSlider_->value();
-    audio_->setVolume(savedVolume_);
-    volumeLayout->addWidget(volumeSlider_);
-    QWidgetAction* volumeAction = new QWidgetAction(soundMenu);
-    volumeAction->setDefaultWidget(volumePanel);
-    soundMenu->addAction(volumeAction);
+    volume_ = qBound(0, settings_.value(QStringLiteral("audio/volume"), 80).toInt(), 100);
+    savedVolume_ = volume_;
+    audio_->setVolume(volume_);
     volumeSaveTimer_ = new QTimer(this);
     volumeSaveTimer_->setSingleShot(true);
     volumeSaveTimer_->setInterval(400);
     connect(volumeSaveTimer_, &QTimer::timeout, this, &MainWindow::flushVolumePreference);
-    connect(volumeSlider_, &QSlider::valueChanged, this, [this](int value) {
-        audio_->setVolume(value);
-        view_->showOsd(Localization::text(QStringLiteral("Громкость: %1%"))
-                           .arg(value), 1200, QStringLiteral("volume"));
-        volumeSaveTimer_->start();
-    });
+#ifndef Q_OS_WIN
+    QWidget* volumePanel = new QWidget(soundMenu);
+    QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
+    volumeLayout->setContentsMargins(12, 6, 12, 8);
+    volumeLayout->addWidget(new QLabel(Localization::text(QStringLiteral("Громкость")), volumePanel));
+    auto* volumeSlider = new QSlider(Qt::Horizontal, volumePanel);
+    volumeSlider->setObjectName(QStringLiteral("masterVolumeSlider"));
+    volumeSlider->setRange(0, 100);
+    volumeSlider->setMinimumWidth(160);
+    volumeSlider->setValue(volume_);
+    volumeLayout->addWidget(volumeSlider);
+    QWidgetAction* volumeAction = new QWidgetAction(soundMenu);
+    volumeAction->setDefaultWidget(volumePanel);
+    soundMenu->addAction(volumeAction);
+    connect(volumeSlider, &QSlider::valueChanged, this, &MainWindow::setVolume);
+    connect(this, &MainWindow::volumeChanged, volumeSlider, &QSlider::setValue);
+#endif
     QMenu* onlineMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Сетевая игра")));
     onlineMenu->setObjectName(QStringLiteral("onlineMenu"));
     QAction* createSessionAction = onlineMenu->addAction(Localization::text(QStringLiteral("Создать сеанс…")));
@@ -1644,13 +1644,23 @@ void MainWindow::saveScreenshot() {
     failed(Localization::text(QStringLiteral("не удалось подобрать свободное имя файла")));
 }
 
+void MainWindow::setVolume(int value) {
+    value = qBound(0, value, 100);
+    if (value == volume_) return;
+    volume_ = value;
+    audio_->setVolume(value);
+    view_->showOsd(Localization::text(QStringLiteral("Громкость: %1%"))
+                       .arg(value), 1200, QStringLiteral("volume"));
+    emit volumeChanged(value);
+    volumeSaveTimer_->start();
+}
+
 void MainWindow::flushVolumePreference() {
-    if (!volumeSaveTimer_ || !volumeSlider_) return;
+    if (!volumeSaveTimer_) return;
     volumeSaveTimer_->stop();
-    const int value = volumeSlider_->value();
-    if (value == savedVolume_) return;
-    settings_.setValue(QStringLiteral("audio/volume"), value);
-    savedVolume_ = value;
+    if (volume_ == savedVolume_) return;
+    settings_.setValue(QStringLiteral("audio/volume"), volume_);
+    savedVolume_ = volume_;
 }
 
 void MainWindow::setLoadingUi(bool loading, const QString& fileName) {
@@ -2161,17 +2171,16 @@ void MainWindow::editSettings(int initialPage) {
         Localization::text(QStringLiteral("Устройство воспроизведения звука игры.")));
     auto* settingsVolume = new QSlider(Qt::Horizontal, &dialog);
     settingsVolume->setObjectName(QStringLiteral("settingsMasterVolumeSlider"));
-    settingsVolume->setRange(volumeSlider_->minimum(), volumeSlider_->maximum());
-    settingsVolume->setValue(volumeSlider_->value());
+    settingsVolume->setRange(0, 100);
+    settingsVolume->setValue(volume_);
     auto* volumeValue = new QLabel(QStringLiteral("%1%").arg(settingsVolume->value()), &dialog);
     volumeValue->setMinimumWidth(volumeValue->fontMetrics().horizontalAdvance(QStringLiteral("100%")));
     auto* settingsVolumeRow = new QHBoxLayout;
     settingsVolumeRow->addWidget(settingsVolume, 1);
     settingsVolumeRow->addWidget(volumeValue);
     sound->addRow(Localization::text(QStringLiteral("Громкость")), settingsVolumeRow);
-    // Share the menu's update/persistence path, including its coalesced writes.
-    connect(settingsVolume, &QSlider::valueChanged, volumeSlider_, &QSlider::setValue);
-    connect(volumeSlider_, &QSlider::valueChanged, settingsVolume, &QSlider::setValue);
+    connect(settingsVolume, &QSlider::valueChanged, this, &MainWindow::setVolume);
+    connect(this, &MainWindow::volumeChanged, settingsVolume, &QSlider::setValue);
     connect(settingsVolume, &QSlider::valueChanged, volumeValue, [volumeValue](int value) {
         volumeValue->setText(QStringLiteral("%1%").arg(value));
     });
@@ -3218,10 +3227,8 @@ void MainWindow::setFullscreenMode(bool enabled) {
     if (enabled) {
         windowedGeometry_ = saveGeometry();
         wasMaximizedBeforeFullscreen_ = isMaximized();
-        menuBar()->hide();
         showFullScreen();
     } else {
-        menuBar()->show();
         if (wasMaximizedBeforeFullscreen_) showMaximized();
         else showNormal();
     }
@@ -3232,20 +3239,61 @@ void MainWindow::setFullscreenMode(bool enabled) {
     view_->setFocus();
 }
 
+bool MainWindow::isMainMenuVisible() const {
 #ifdef Q_OS_WIN
+    if (menuBar()->isNativeMenuBar())
+        return GetMenu(reinterpret_cast<HWND>(internalWinId())) != nullptr;
+#endif
+    return menuBar()->isVisible();
+}
+
+void MainWindow::setMainMenuVisible(bool visible) {
+#ifdef Q_OS_WIN
+    if (auto* native = menuBar()->platformMenuBar()) {
+        // QWidget visibility only describes the unused Qt menu widget on Windows.
+        if (visible != isMainMenuVisible())
+            native->handleReparent(visible ? windowHandle() : nullptr);
+        return;
+    }
+#endif
+    menuBar()->setVisible(visible);
+}
+
+void MainWindow::pauseForMenu() {
+    menuPauseActive_ = true;
+    if (!netplay_->active() && !videoExporting_) session_.setBackgroundPaused(true);
+    releaseInput();
+}
+
+#ifdef Q_OS_WIN
+bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
+    const auto& msg = *static_cast<MSG*>(message);
+    if ((msg.message == WM_ENTERMENULOOP || msg.message == WM_EXITMENULOOP) &&
+        !msg.wParam && netplay_ && menuBar()->isNativeMenuBar()) {
+        if (msg.message == WM_ENTERMENULOOP) {
+            pauseForMenu();
+        } else {
+            menuPauseActive_ = false;
+            QTimer::singleShot(0, this, &MainWindow::updateInputEnabled);
+        }
+    }
+    return QMainWindow::nativeEvent(type, message, result);
+}
+
 void MainWindow::updateFullscreenComposition() {
     if (!windowHandle()) return;
     auto* native = windowHandle()->nativeInterface<QNativeInterface::Private::QWindowsWindow>();
     if (!native) return;
 
     // Win32 can present a monitor-sized OpenGL window above its own popups.
-    // Request composition only while the menu or another application window is shown.
+    // Only separate dialog/tool windows need this adjustment.
     bool needsFrame = false;
     if (isFullScreen()) {
-        needsFrame = menuBar()->isVisible() || modalWindowBlocked_;
+        needsFrame = modalWindowBlocked_;
         if (!needsFrame) {
             for (QWidget* widget : QApplication::topLevelWidgets()) {
-                if (widget != this && widget->isVisible() && widget->windowType() != Qt::ToolTip &&
+                if (widget != this && widget->isVisible() && !qobject_cast<QMenu*>(widget) &&
+                    widget->windowType() != Qt::ToolTip &&
                     widget->windowType() != Qt::Desktop) {
                     needsFrame = true;
                     break;
@@ -3269,11 +3317,7 @@ void MainWindow::updateFullscreenComposition() {
 
 void MainWindow::toggleFullscreenMenu() {
     if (!isFullScreen()) return;
-    const bool visible = !menuBar()->isVisible();
-    menuBar()->setVisible(visible);
-#ifdef Q_OS_WIN
-    updateFullscreenComposition();
-#endif
+    setMainMenuVisible(!isMainMenuVisible());
     view_->setFocus();
 }
 
@@ -3345,6 +3389,11 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
     case PreviousSlotCommand: setSlot(stateSlot_ + 9); break;
     case MenuCommand:
         if (isFullScreen()) toggleFullscreenMenu();
+#ifdef Q_OS_WIN
+        else if (menuBar()->isNativeMenuBar()) {
+            PostMessageW(reinterpret_cast<HWND>(internalWinId()), WM_SYSCOMMAND, SC_KEYMENU, 0);
+        }
+#endif
         else {
             menuBar()->setFocus();
             menuBar()->setActiveAction(menuBar()->actions().first());
@@ -3448,9 +3497,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     const bool volumeDown = key == Qt::Key_Minus && modifiers == Qt::NoModifier;
     if (volumeUp || volumeDown) {
         if (shortcutOverride) event->accept();
-        else if (pressed && volumeSlider_)
-            volumeSlider_->setValue(qBound(0, volumeSlider_->value() +
-                                            (volumeUp ? 5 : -5), 100));
+        else if (pressed) setVolume(volume_ + (volumeUp ? 5 : -5));
         return true;
     }
     int command = keyboardCommands_.value(chord, -1);
@@ -3545,8 +3592,8 @@ void MainWindow::changeEvent(QEvent* event) {
             const QSignalBlocker blocker(fullscreenAction_);
             fullscreenAction_->setChecked(isFullScreen());
         }
-        if (isFullScreen() && !(change->oldState() & Qt::WindowFullScreen)) menuBar()->hide();
-        else if (!isFullScreen()) menuBar()->show();
+        if (isFullScreen() && !(change->oldState() & Qt::WindowFullScreen)) setMainMenuVisible(false);
+        else if (!isFullScreen()) setMainMenuVisible(true);
 #ifdef Q_OS_WIN
         updateFullscreenComposition();
 #endif
