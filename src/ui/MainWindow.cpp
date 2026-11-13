@@ -292,6 +292,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     gameGearLcdEnabled_ = !blarggFilter_ && settings_.value(QStringLiteral("view/gameGearLcd"), false).toBool();
     session_.setGameGearLcd(gameGearLcdEnabled_);
     session_.setSmsFmEnabled(smsFmEnabled_);
+    session_.setNukedYm2612(settings_.value(QStringLiteral("audio/ym2612Core"),
+        QStringLiteral("mame")).toString() == QLatin1String("nuked"));
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
     session_.setPerGameCdBackup(settings_.value(QStringLiteral("emulation/perGameCdBackup"), true).toBool());
@@ -2246,6 +2248,16 @@ void MainWindow::editSettings(int initialPage) {
         audio_->setLatencyProfile(profile);
         settings_.setValue(QStringLiteral("audio/latencyProfile"), int(profile));
     });
+    auto* ym2612Core = new QComboBox(&dialog);
+    ym2612Core->setObjectName(QStringLiteral("ym2612Core"));
+    ym2612Core->addItem(QStringLiteral("MAME (YM2612)"), QStringLiteral("mame"));
+    ym2612Core->addItem(QStringLiteral("Nuked (YM2612)"), QStringLiteral("nuked"));
+    const QString selectedYm2612Core = settings_.value(QStringLiteral("audio/ym2612Core"),
+        QStringLiteral("mame")).toString();
+    ym2612Core->setCurrentIndex(selectedYm2612Core == QLatin1String("nuked") ? 1 : 0);
+    sound->addRow(Localization::text(QStringLiteral("FM-синтезатор (Mega Drive):")), ym2612Core);
+    ym2612Core->setToolTip(Localization::text(QStringLiteral(
+        "Применяется при следующей загрузке игры или перезапуске питания.")));
     auto* smsFmBox = new QCheckBox(Localization::text(QStringLiteral("FM-синтезатор (Master System)")), &dialog);
     smsFmBox->setObjectName(QStringLiteral("smsFmEnabled"));
     smsFmBox->setChecked(smsFmEnabled_);
@@ -2695,6 +2707,11 @@ void MainWindow::editSettings(int initialPage) {
             session_.setRewindSpeed(rewindAccelerate_, rewindFixedFactor_);
         }
         setSmsFmEnabled(smsFmBox->isChecked());
+        const QString ym2612Choice = ym2612Core->currentData().toString();
+        if (ym2612Choice != selectedYm2612Core) {
+            settings_.setValue(QStringLiteral("audio/ym2612Core"), ym2612Choice);
+            session_.setNukedYm2612(ym2612Choice == QLatin1String("nuked"));
+        }
         const QByteArray selectedOutputId = outputDevice->currentData().toByteArray();
         if (selectedOutputId != audio_->outputDeviceId()) {
             audio_->setOutputDeviceId(selectedOutputId);

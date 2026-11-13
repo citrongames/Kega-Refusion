@@ -58,6 +58,7 @@ public:
     void setExpansionDevices(bool cd, bool x32);
     void reset();
     bool hardReset(QString& error, bool applyPending = true);
+    void setNukedYm2612(bool enabled) { nukedYm2612_ = enabled; }
     void setSmsFmEnabled(bool enabled) { smsFmEnabled_ = enabled; }
     bool isMasterSystem() const;
     bool isGameGear() const;
@@ -267,6 +268,7 @@ private:
     bool localGameGearLcd_ = false;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
+    bool nukedYm2612_ = false;
     bool smsFmEnabled_ = true;
     bool attachCd_ = false, attach32x_ = false, contentNeeds32x_ = false;
     std::array<unsigned,MaxControllerPlayers> buttons_{};

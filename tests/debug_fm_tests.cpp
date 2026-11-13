@@ -101,15 +101,35 @@ double energy(LibretroHost& host, int count = 5) {
     return samples ? std::sqrt(total / samples) : 0;
 }
 
-void backend(LibretroHost& host, bool sms, bool nuked, QString& error) {
-    if (!nuked) return;
+void useNukedSms(LibretroHost& host, QString& error) {
     auto config = host.movieConfiguration();
     auto options = config.value(QStringLiteral("options")).toObject();
-    options.insert(sms ? QStringLiteral("genesis_plus_gx_ym2413_core")
-                       : QStringLiteral("genesis_plus_gx_ym2612"),
-                   sms ? QStringLiteral("nuked") : QStringLiteral("nuked (ym2612)"));
+    options.insert(QStringLiteral("genesis_plus_gx_ym2413_core"), QStringLiteral("nuked"));
     config.insert(QStringLiteral("options"), options);
     require(host.prepareMovie(config, error), qPrintable(error));
+}
+
+void checkSavedFm(LibretroHost& host, bool nuked, QString& error) {
+    const auto model = [](bool selected) {
+        return selected ? QStringLiteral("nuked (ym2612)") : QStringLiteral("mame (ym2612)");
+    };
+    const auto active = [&] {
+        return host.movieConfiguration().value("options").toObject().value("genesis_plus_gx_ym2612").toString();
+    };
+    require(host.saveState(0, error), qPrintable(error));
+    const auto sample = [&] {
+        for (int i = 0; i < 3; ++i) host.runFrame(); // Allow the output filter to settle.
+        return host.audio();
+    };
+    require(host.loadState(0, error), qPrintable(error));
+    const auto reference = sample();
+    host.setNukedYm2612(!nuked);
+    require(active() == model(nuked), "pending choice changed the running FM engine");
+    require(host.hardReset(error), qPrintable(error));
+    require(active() == model(!nuked), "power cycle did not select pending FM engine");
+    require(host.loadState(0, error), qPrintable(error));
+    require(active() == model(nuked), "cross-engine state did not restore its FM engine");
+    require(!reference.isEmpty() && sample() == reference, "restored FM samples differ across engines");
 }
 
 using Memory = void* (*)(unsigned);
@@ -153,16 +173,17 @@ void run(const QString& core, bool nuked) {
         const auto path = dir.filePath(QStringLiteral("fm%1.md").arg(channel));
         save(path, mdFmRom(channel));
         LibretroHost host(core, dir.filePath(QStringLiteral("md-data%1").arg(channel)));
+        host.setNukedYm2612(nuked);
         require(host.load(path, error), qPrintable(error));
-        backend(host, false, nuked, error);
         checkChannel(host, channel, 4 + channel, memory);
+        if (!channel) checkSavedFm(host, nuked, error);
     }
     for (unsigned channel = 0; channel < 9; ++channel) {
         const auto path = dir.filePath(QStringLiteral("fm%1.sms").arg(channel));
         save(path, smsFmRom(channel));
         LibretroHost host(core, dir.filePath(QStringLiteral("sms-data%1").arg(channel)));
         require(host.load(path, error), qPrintable(error));
-        backend(host, true, nuked, error);
+        if (nuked) useNukedSms(host, error);
         checkChannel(host, channel, 10 + channel, memory);
     }
     std::puts(nuked ? "PASS: Nuked MD/SMS FM channel masks" : "PASS: MAME MD/SMS FM channel masks");

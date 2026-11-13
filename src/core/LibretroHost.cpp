@@ -77,6 +77,8 @@ bool smsControllerHardware(unsigned system) {
 }
 const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
+constexpr char ym2612Key[] = "genesis_plus_gx_ym2612";
+const char* ym2612Model(bool nuked) { return nuked ? "nuked (ym2612)" : "mame (ym2612)"; }
 constexpr qsizetype runClockBytes = 24;
 constexpr char runClockMagic[] = "KRTIMER1";
 const QByteArray stateMagic("KRSTATE1", 8);
@@ -203,6 +205,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
     api_->input_polled = reinterpret_cast<decltype(api_->input_polled)>(library_.resolve("retro_kegarefusion_input_polled"));
     api_->rewind_video = reinterpret_cast<decltype(api_->rewind_video)>(library_.resolve("retro_kegarefusion_rewind_video"));
+    api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
     api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
@@ -698,6 +701,7 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     if (!setCoreOption("genesis_plus_gx_lcd_filter", "disabled", error)) return false;
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
+    if (!setCoreOption(ym2612Key, ym2612Model(nukedYm2612_), error)) return false;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
     if (!setCoreOption("genesis_plus_gx_add_on", attachCd_ ? "sega/mega cd" : "auto", error)) return false;
     if (variableValues_.count("genesis_plus_gx_32x_add_on"))
@@ -2078,8 +2082,10 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
     QJsonObject options;
     for (const auto& [key,value] : variables_)
         options.insert(QString::fromUtf8(key), QString::fromUtf8(value));
-    if(forPowerReset && !movieConfigurationActive_)
+    if (forPowerReset && !movieConfigurationActive_) {
+        options.insert(QString::fromLatin1(ym2612Key), QString::fromLatin1(ym2612Model(nukedYm2612_)));
         options.insert(QStringLiteral("genesis_plus_gx_ym2413"), smsFmEnabled_ ? QStringLiteral("enabled") : QStringLiteral("disabled"));
+    }
     QJsonArray controllers;
     for (size_t i = 0; i < controllerKinds_.size(); ++i)
         controllers.append(QJsonObject{{QStringLiteral("connected"), controllerConnected_[i]},
@@ -2396,10 +2402,12 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     // Ending/taking over a recording must not hot-switch the FM hardware.
     // Recovery and unload still restore the original complete configuration.
     if(keepRunningFm && loaded_) {
-        const auto fm=variables_.find("genesis_plus_gx_ym2413");
-        if(fm!=variables_.end()) {
-            preMovieVariables_[fm->first]=fm->second;
-            preMovieOptionOverrides_[fm->first]=fm->second;
+        for (const char* key : {ym2612Key, "genesis_plus_gx_ym2413"}) {
+            const auto fm = variables_.find(key);
+            if (fm != variables_.end()) {
+                preMovieVariables_[fm->first] = fm->second;
+                preMovieOptionOverrides_[fm->first] = fm->second;
+            }
         }
     }
     preMovieVariables_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
@@ -2522,6 +2530,16 @@ bool LibretroHost::loadStateFromFile(const QString& path, QString& error, StateL
         progress = payload.mid(16 + nativeSize, progressSize);
     }
     if (!unserialize(native)) { error = Localization::text(QStringLiteral("Ядро отклонило сохранение.")); return false; }
+    // A native MD state carries the FM engine that owns its register history.
+    // Keep the live option in step with it for netplay and later core option updates.
+    if (api_->ym2612_backend && api_->system_hw && (api_->system_hw() & 0x81u) == 0x80u) {
+        const int backend = api_->ym2612_backend();
+        const auto current = variables_.find(ym2612Key);
+        if (current != variables_.end() && (backend || current->second.startsWith("nuked"))) {
+            const QByteArray restored = backend == 2 ? "nuked (ym3438)" : ym2612Model(backend == 1);
+            if (current->second != restored && !setCoreOption(ym2612Key, restored, error)) return false;
+        }
+    }
     if (restoreAchievementProgress) restoreAchievementProgress(progress);
     if (failure) *failure = StateLoadError::None;
     audio_.clear();

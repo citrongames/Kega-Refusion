@@ -1,0 +1,40 @@
+--- a/core/sound/sound.c
++++ b/core/sound/sound.c
+@@ -680,6 +680,17 @@
+ #ifdef HAVE_YM3438_CORE
+     uint8 config_ym3438;
+     load_param(&config_ym3438, sizeof(config_ym3438));
++    if (config_ym3438 != config.ym3438)
++    {
++      /* The saved engine owns the following chip state and sample clock.
++       * Rebind it before decoding; sound_init does not clear Blip buffers,
++       * and the saved PSG state and audio tail are restored below/later. */
++      if (!config_ym3438) config.ym2612 = YM2612_DISCRETE;
++      config.ym3438 = config_ym3438;
++      if (config.ym3438)
++        OPN2_SetChipType(config.ym3438 == 1 ? ym3438_mode_ym2612 : ym3438_mode_readmode);
++      sound_init();
++    }
+     if (config_ym3438)
+     {
+       load_param(&ym3438, sizeof(ym3438));
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3778,6 +3778,17 @@
+ }
+ 
+ #ifdef KEGAREFUSION_32X
++/* Native states restore their FM engine; let the frontend reconcile its option
++ * after loading without resetting that newly restored chip on the next frame. */
++RETRO_API int retro_kegarefusion_ym2612_backend(void)
++{
++#ifdef HAVE_YM3438_CORE
++   return config.ym3438;
++#else
++   return 0;
++#endif
++}
++
+ RETRO_API void retro_kegarefusion_invalidate_code(void)
+ {
+    md_cart_sonic6_rebuild();

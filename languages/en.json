@@ -249,6 +249,7 @@
     "BIOS записи отличаются от установленных.": "Recorded BIOS files differ from the installed ones.",
     "BRAM записи несовместима с текущим ядром.": "Recorded BRAM is incompatible with the current core.",
     "CUE не содержит поддерживаемую первую дорожку данных Sega CD.": "CUE does not contain a supported first Sega CD data track.",
+    "FM-синтезатор (Mega Drive):": "FM synthesizer (Mega Drive):",
     "FM-синтезатор (Master System)": "FM synthesizer (Master System)",
     "FPS игры (оценка по опросу управления)": "Game FPS (estimated from input polling)",
     "FPS эмуляции": "Emulation FPS",

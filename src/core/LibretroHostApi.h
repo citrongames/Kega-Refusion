@@ -24,6 +24,7 @@ struct LibretroHost::Api {
     const char* (*recording_abi)() = nullptr;
     const char* (*network_state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
+    int (*ym2612_backend)() = nullptr;
     unsigned (*system_hw)() = nullptr;
     unsigned (*sms_pause_state_version)() = nullptr;
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
