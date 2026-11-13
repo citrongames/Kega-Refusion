@@ -108,13 +108,14 @@ public:
         if (bitmap_) DeleteObject(bitmap_);
         if (dc_) DeleteDC(dc_);
     }
-    bool color(HTHEME theme, int part, int state, COLORREF base, COLORREF& result,
-               bool edge = false) {
-        if (!dc_ || !previous_ || !IsThemePartDefined(theme, part, state)
+    bool color(HTHEME theme, int part, int state, COLORREF base, COLORREF& result) {
+        // Normal menu items can inherit a theme part. DrawThemeBackground
+        // resolves it even when IsThemePartDefined reports no explicit state.
+        if (!dc_ || !previous_
                 || !fill(dc_, rectangle_, base)
                 || FAILED(DrawThemeBackground(theme, dc_, part, state, &rectangle_, nullptr)))
             return false;
-        result = GetPixel(dc_, edge ? 0 : rectangle_.right / 2, rectangle_.bottom / 2);
+        result = GetPixel(dc_, rectangle_.right / 2, rectangle_.bottom / 2);
         return result != CLR_INVALID;
     }
 private:
@@ -185,7 +186,7 @@ public:
         if (setBrush(menu, brush_)) brushedMenu_ = menu;
     }
 private:
-    std::array<HTHEME, 2> themes_{};
+    HTHEME theme_ = nullptr;
     std::array<HFONT, 2> fonts_{};
     HMENU brushedMenu_ = nullptr;
     HBRUSH brush_ = nullptr;
@@ -219,10 +220,8 @@ private:
         ownsBrush_ = owned;
     }
     void closeThemeAndFonts() {
-        for (auto& theme : themes_) {
-            if (theme) CloseThemeData(theme);
-            theme = nullptr;
-        }
+        if (theme_) CloseThemeData(theme_);
+        theme_ = nullptr;
         for (auto& font : fonts_) {
             if (font) DeleteObject(font);
             font = nullptr;
@@ -262,13 +261,10 @@ private:
         const auto hot = nativeColor(palette.color(QPalette::Button));
         const auto hotText = nativeColor(palette.color(QPalette::ButtonText));
         visuals[MBI_HOT - 1] = readable(hot, hotText) ? MenuVisual{hot, hotText} : visuals[MBI_NORMAL - 1];
-        const auto pushed = nativeColor(palette.color(QPalette::Highlight));
-        const auto pushedText = nativeColor(palette.color(QPalette::HighlightedText));
-        if (readable(pushed, pushedText)) visuals[MBI_PUSHED - 1] = {pushed, pushedText};
+        visuals[MBI_PUSHED - 1] = visuals[MBI_HOT - 1];
         inactiveText = nativeColor(palette.color(QPalette::Inactive, QPalette::WindowText));
         if (!readable(base, inactiveText)) inactiveText = text;
-        selectedBorder = readable(base, pushed, true) ? pushed : text;
-        frameSelected = visuals[MBI_HOT - 1].background == visuals[MBI_PUSHED - 1].background;
+        frameSelected = false;
     }
     bool readVisual(ThemeSampler& sampler, HTHEME theme, int part, int state,
                     COLORREF base, bool expectDark, bool disabled, MenuVisual& visual) {
@@ -294,7 +290,7 @@ private:
             CloseThemeData(theme);
             return;
         }
-        themes_[0] = theme;
+        theme_ = theme;
         visuals = native;
         background = base;
         inactiveText = native[MBI_NORMAL - 1].text;
@@ -319,30 +315,14 @@ private:
             }
             if (!readVisual(sampler, theme, MENU_POPUPITEM, MPI_DISABLEDHOT,
                             normal.background, true, true, disabledHot)) disabledHot = disabled;
-            if (!themes_[0]) {
-                themes_[0] = theme;
-                background = normal.background;
-                inactiveText = normal.text;
-                visuals = {normal, hot, hot, disabled, disabledHot, disabledHot};
-                frameSelected = true;
-                // Use the active Windows popup border when a pressed-state
-                // fill is unavailable; no application-defined color is needed.
-                COLORREF border{};
-                if (sampler.color(theme, MENU_POPUPBORDERS, 0, background, border, true)
-                        && readable(background, border, true)) selectedBorder = border;
-                continue;
-            }
-            // Dark menu bar parts are often light. Two real dark popup styles
-            // provide OS-owned hover/pressed fills without reusing those parts.
-            if (hot.background != visuals[MBI_HOT - 1].background
-                    && luminance(hot.background) > luminance(visuals[MBI_HOT - 1].background)) {
-                themes_[1] = theme;
-                visuals[MBI_PUSHED - 1] = hot;
-                visuals[MBI_DISABLEDPUSHED - 1] = disabledHot;
-                frameSelected = false;
-                break;
-            }
-            CloseThemeData(theme);
+            theme_ = theme;
+            background = normal.background;
+            inactiveText = normal.text;
+            // The dark popup theme has one highlight for an active item.
+            // Keep it while the heading's dropdown is open.
+            visuals = {normal, hot, hot, disabled, disabledHot, disabledHot};
+            frameSelected = false;
+            break;
         }
     }
 };
@@ -504,7 +484,8 @@ bool paintHeading(HWND window, HDC dc, HMENU menu, UINT position, RECT itemRect,
             ? (selected ? MBI_DISABLEDPUSHED : hot ? MBI_DISABLEDHOT : MBI_DISABLED)
             : (selected ? MBI_PUSHED : hot ? MBI_HOT : MBI_NORMAL);
     const auto& visual = resources.visuals[themeState - 1];
-    if (!fill(dc, itemRect, visual.background)) return false;
+    // Paint translucent theme parts once over the menu base.
+    if (!fill(dc, itemRect, visual.theme ? resources.background : visual.background)) return false;
     if (visual.theme)
         DrawThemeBackground(visual.theme, dc, visual.part, visual.state, &itemRect, nullptr);
     if (selected && resources.frameSelected) {
