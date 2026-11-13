@@ -1117,11 +1117,9 @@ void MainWindow::buildMenus() {
     connect(shaderLoad, &QAction::triggered, this, [this] {
         releaseInput();
         const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Загрузить GLSL-пресет")),
-            settings_.value(QStringLiteral("files/shaderDirectory"),
-                QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("shaders"))).toString(),
+            DataFolders::path(dataPath_, QStringLiteral("shaders")),
             Localization::text(QStringLiteral("GLSL-пресеты (*.glslp);;GLSL-шейдеры (*.glsl)")));
-        if (!path.isEmpty() && applyShaderPreset(path))
-            settings_.setValue(QStringLiteral("files/shaderDirectory"), QFileInfo(path).absolutePath());
+        if (!path.isEmpty()) applyShaderPreset(path);
         view_->setFocus();
     });
     shaderParametersAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Параметры…")));
@@ -2423,6 +2421,7 @@ void MainWindow::editSettings(int initialPage) {
         {QStringLiteral("movies"), Localization::text(QStringLiteral("Записи ввода"))},
         {QStringLiteral("saves"), Localization::text(QStringLiteral("Память игр"))},
         {QStringLiteral("screenshots"), Localization::text(QStringLiteral("Скриншоты"))},
+        {QStringLiteral("shaders"), Localization::text(QStringLiteral("Шейдеры"))},
         {QStringLiteral("states"), Localization::text(QStringLiteral("Быстрые сохранения"))},
         {QStringLiteral("videos"), Localization::text(QStringLiteral("Видео"))}};
     QMap<QString, QLineEdit*> folderEdits;
@@ -2450,7 +2449,8 @@ void MainWindow::editSettings(int initialPage) {
         edit->setObjectName(QStringLiteral("folderPath_%1").arg(category));
         edit->setAccessibleName(folderLabels.value(category));
         edit->setMinimumWidth(80);
-        edit->setPlaceholderText(category);
+        const QString defaultSetting = QDir::toNativeSeparators(DataFolders::defaultSetting(dataPath_, category));
+        edit->setPlaceholderText(defaultSetting);
         edit->setToolTip(QDir::toNativeSeparators(currentPath));
         row->addWidget(edit, 1);
         auto* browse = new QPushButton(field);
@@ -2485,8 +2485,8 @@ void MainWindow::editSettings(int initialPage) {
             folderSaveError->clear();
             folderSaveError->hide();
         });
-        connect(reset, &QPushButton::clicked, &dialog, [edit, category] {
-            edit->setText(category);
+        connect(reset, &QPushButton::clicked, &dialog, [edit, defaultSetting] {
+            edit->setText(defaultSetting);
         });
         connect(browse, &QPushButton::clicked, &dialog,
                 [this, &dialog, edit, defaultPath, label = folderLabels.value(category)] {
@@ -2553,7 +2553,8 @@ void MainWindow::editSettings(int initialPage) {
         QMap<QString, QString> changedFolders;
         for (auto it = folderEdits.cbegin(); it != folderEdits.cend(); ++it) {
             const QString value = QDir::fromNativeSeparators(it.value()->text().trimmed());
-            const QString effective = QDir::cleanPath(value.isEmpty() ? it.key() : value);
+            const QString effective = QDir::cleanPath(value.isEmpty()
+                ? DataFolders::defaultSetting(dataPath_, it.key()) : value);
             if (effective != initialFolders.value(it.key())) changedFolders.insert(it.key(), value);
             folderErrors.value(it.key())->clear();
             folderErrors.value(it.key())->hide();

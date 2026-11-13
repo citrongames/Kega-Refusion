@@ -74,6 +74,13 @@ void portableFolders() {
             "relative destination did not move with data");
     require(DataFolders::path(moved.path(), "bios") == moved.filePath("bios"),
             "default BIOS directory did not move with data");
+    const QString shaders = QStringLiteral("shaders");
+    const QString bundled = QDir(QCoreApplication::applicationDirPath()).filePath(shaders);
+    require(DataFolders::path(moved.path(), shaders) == bundled, "bundled shader directory lost");
+    require(DataFolders::save(moved.path(), {{shaders, "graphics/presets"}}, error), qPrintable(error));
+    require(QDir(moved.filePath("graphics/presets")).exists() &&
+            DataFolders::path(moved.path(), shaders) == moved.filePath("graphics/presets"),
+            "custom shader directory was not created or applied");
     const QString fixed = original.filePath("external");
     require(DataFolders::save(moved.path(), {{category, fixed}}, error), qPrintable(error));
     require(DataFolders::path(moved.path(), category) == fixed, "absolute destination moved");

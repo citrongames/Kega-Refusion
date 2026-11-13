@@ -1,6 +1,7 @@
 #include "DataFolders.h"
 #include "i18n/Localization.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QMutex>
@@ -28,9 +29,18 @@ QString settingsFile(const QString& root) {
 
 Folders readFolders(QSettings& settings) {
     Folders values;
+    const QString root = QFileInfo(settings.fileName()).absolutePath();
     for (const auto& name : DataFolders::categories()) {
         const QString local = settings.value(platformGroup + name).toString();
-        values.insert(name, local.isEmpty() ? settings.value(relativeGroup + name, name).toString() : local);
+        QString value = local.isEmpty() ? settings.value(relativeGroup + name).toString() : local;
+        if (value.isEmpty() && name == QLatin1String("shaders")) {
+            const QString previous = settings.value(QStringLiteral("files/shaderDirectory")).toString();
+            if (QDir::isAbsolutePath(previous) && QFileInfo(previous).isDir() &&
+                QFileInfo(previous) != QFileInfo(DataFolders::defaultPath(root, name)))
+                value = previous;
+        }
+        values.insert(name, value.isEmpty()
+            ? DataFolders::defaultSetting(root, name) : value);
     }
     return values;
 }
@@ -90,12 +100,20 @@ bool validPath(const QString& value) {
 
 QStringList DataFolders::categories() {
     return {QStringLiteral("bios"), QStringLiteral("cheats"), QStringLiteral("movies"),
-            QStringLiteral("saves"), QStringLiteral("screenshots"), QStringLiteral("states"),
+            QStringLiteral("saves"), QStringLiteral("screenshots"), QStringLiteral("shaders"), QStringLiteral("states"),
             QStringLiteral("videos")};
 }
 
+QString DataFolders::defaultSetting(const QString& dataRoot, const QString& category) {
+    if (category == QLatin1String("shaders")) {
+        const QString bundled = QDir(QCoreApplication::applicationDirPath()).filePath(category);
+        return QDir(dataRoot).relativeFilePath(bundled);
+    }
+    return category;
+}
+
 QString DataFolders::defaultPath(const QString& dataRoot, const QString& category) {
-    return resolve(dataRoot, category);
+    return resolve(dataRoot, defaultSetting(dataRoot, category));
 }
 
 QString DataFolders::configuredPath(const QString& dataRoot, const QString& category) {
@@ -123,7 +141,7 @@ bool DataFolders::save(const QString& dataRoot, const Folders& changes,
     for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
         const QString& key = it.key();
         const QString input = QDir::fromNativeSeparators(it.value().trimmed());
-        const QString value = input.isEmpty() ? key : QDir::cleanPath(input);
+        const QString value = input.isEmpty() ? defaultSetting(root, key) : QDir::cleanPath(input);
         const QString folder = resolve(root, value);
         const auto fail = [&](const QString& message, const QString& argument) {
             error = Localization::text(message).arg(QDir::toNativeSeparators(argument));
@@ -137,7 +155,8 @@ bool DataFolders::save(const QString& dataRoot, const Folders& changes,
         if (!QDir().mkpath(folder))
             return fail(QStringLiteral("Не удалось создать папку: %1"), folder);
         const QFileInfo info(folder);
-        if (!info.isReadable() || (key != QLatin1String("bios") && !info.isWritable()))
+        const bool readOnlyAllowed = key == QLatin1String("bios") || key == QLatin1String("shaders");
+        if (!info.isReadable() || (!readOnlyAllowed && !info.isWritable()))
             return fail(QStringLiteral("Нет доступа к папке: %1"), folder);
         validated.insert(key, value);
     }
@@ -147,12 +166,15 @@ bool DataFolders::save(const QString& dataRoot, const Folders& changes,
     for (auto it = validated.cbegin(); it != validated.cend(); ++it) {
         const QString localKey = platformGroup + it.key();
         const QString sharedKey = relativeGroup + it.key();
-        if (QDir::isAbsolutePath(it.value())) {
+        if (it.key() == QLatin1String("shaders")) settings.remove(QStringLiteral("files/shaderDirectory"));
+        if (it.value() == defaultSetting(root, it.key())) {
+            settings.remove(localKey);
+            settings.remove(sharedKey);
+        } else if (QDir::isAbsolutePath(it.value())) {
             settings.setValue(localKey, it.value());
         } else {
             settings.remove(localKey);
-            if (it.value() == it.key()) settings.remove(sharedKey);
-            else settings.setValue(sharedKey, it.value());
+            settings.setValue(sharedKey, it.value());
         }
     }
     settings.sync();

@@ -5,6 +5,7 @@
 
 namespace DataFolders {
 QStringList categories();
+QString defaultSetting(const QString& dataRoot, const QString& category);
 QString defaultPath(const QString& dataRoot, const QString& category);
 QString configuredPath(const QString& dataRoot, const QString& category);
 QString path(const QString& dataRoot, const QString& category);
