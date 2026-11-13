@@ -99,18 +99,36 @@ inline void md6(QPainter& p, const InputDisplaySlot& s) {
 
 inline void md3(QPainter& p, const InputDisplaySlot& s) {
     QPainterPath shape;
-    shape.moveTo(7, 6); shape.cubicTo(17, 1, 42, 1, 51, 6);
-    shape.cubicTo(59, 11, 58, 24, 51, 27);
-    shape.cubicTo(44, 30, 38, 25, 29, 25);
-    shape.cubicTo(19, 25, 14, 30, 7, 27);
-    shape.cubicTo(0, 24, -1, 12, 7, 6);
+    shape.moveTo(1.6, 13.5);
+    shape.cubicTo(2.8, 6.4, 15.8, 1, 29, 1);
+    shape.cubicTo(42.2, 1, 55.2, 6.4, 56.4, 13.5);
+    shape.cubicTo(57.4, 18.2, 54.3, 24.7, 50.5, 27.6);
+    shape.cubicTo(47, 30.1, 43, 29, 41.1, 25.7);
+    shape.cubicTo(38.8, 21.6, 35.4, 20.5, 29, 20.5);
+    shape.cubicTo(22.6, 20.5, 19.2, 21.6, 16.9, 25.7);
+    shape.cubicTo(15, 29, 11, 30.1, 7.5, 27.6);
+    shape.cubicTo(3.7, 24.7, 0.6, 18.2, 1.6, 13.5);
     shape.closeSubpath();
     body(p, shape);
-    dpad(p, s, 13, 16);
-    button(p, 37, 17, 3.3, down(s, 1));
-    button(p, 45, 17, 3.3, down(s, 0));
-    button(p, 53, 17, 3.3, down(s, 8));
-    miniButton(p, QRectF(25, 10, 7, 3.2), down(s, 3));
+
+    p.save();
+    p.translate(14, 14.5);
+    p.setPen(QPen(idle(), 0.7));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(), 7.7, 7.7);
+    p.scale(0.79, 0.79);
+    dpad(p, s, 0, 0);
+    p.restore();
+
+    p.save();
+    p.translate(41, 8);
+    p.rotate(-26);
+    miniButton(p, QRectF(-2.9, -1, 5.8, 2), down(s, 3)); // Start
+    p.restore();
+
+    button(p, 38.5, 18.1, 2.8, down(s, 1)); // A
+    button(p, 44.5, 15.3, 2.8, down(s, 0)); // B
+    button(p, 50.4, 13.1, 2.8, down(s, 8)); // C
 }
 
 inline void sms(QPainter& p, const InputDisplaySlot& s) {
