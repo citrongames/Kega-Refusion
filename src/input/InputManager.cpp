@@ -135,10 +135,6 @@ QString settingsPrefix(ConsoleProfile profile, int player) {
     return QStringLiteral("input/%1/player%2/").arg(profileId(profile)).arg(player + 1);
 }
 bool gameplayTarget(int target) { return target >= 0 && target < 16; }
-bool activeGameplayTarget(ConsoleProfile profile, const PlayerMapping& mapping, int target, ControllerType type) {
-    const auto range = gameTargetRange(profile, mapping.sixButton, type);
-    return std::find(range.begin(), range.end(), target) != range.end();
-}
 bool validPlayer(int player) { return player >= 0 && player < playerCount; }
 ControllerAdapter allowedAdapter(ConsoleProfile profile, ControllerAdapter adapter) {
     if (!validControllerAdapter(int(adapter))) return ControllerAdapter::None;
@@ -309,7 +305,7 @@ struct InputManager::Impl {
     }
     std::vector<std::unique_ptr<Device>> devices;
     QSet<int> keys;
-    std::array<std::array<bool, targetCount>, playerCount> axisHeld{};
+    std::array<std::array<std::array<bool, 2>, targetCount>, playerCount> axisHeld{};
     ConsoleProfile profile = ConsoleProfile::MegaDrive;
     bool sdlReady = false;
     bool initialScan = true;
@@ -327,6 +323,7 @@ struct InputManager::Impl {
     bool legacyGunMoved = false;
     bool legacyGunMovedToChain = false;
     QMap<int,int> commandKeys;
+    QMap<int,int> commandKeysSecondary;
     std::array<bool, targetCount - 16> commands{};
     std::array<bool, targetCount - 16> commandBlocked{};
     bool capture = false;
@@ -377,6 +374,14 @@ struct InputManager::Impl {
                 }
                 const QString keyKey = prefix + QStringLiteral("key/%1").arg(target);
                 if (gameplayTarget(target) && settings.contains(keyKey)) m.keyboard[target] = storedKeyboardKey(settings.value(keyKey).toInt());
+                const QString secondPad = prefix + QStringLiteral("padSecondary/%1").arg(target);
+                if (settings.contains(secondPad)) {
+                    m.padSecondary[target] = parseBinding(settings.value(secondPad).toString());
+                    if (m.padSecondary[target].kind == PadBinding::Automatic) m.padSecondary[target] = automatic(target);
+                }
+                const QString secondKey = prefix + QStringLiteral("keySecondary/%1").arg(target);
+                if (gameplayTarget(target) && settings.contains(secondKey))
+                    m.keyboardSecondary[target] = storedKeyboardKey(settings.value(secondKey).toInt());
             }
             for (ControllerType type : {ControllerType::LightPhaser, ControllerType::Menacer,
                                         ControllerType::Justifier, ControllerType::Mouse,
@@ -387,6 +392,11 @@ struct InputManager::Impl {
                     if (settings.contains(key)) {
                         const int button = settings.value(key).toInt();
                         if (validMouseButton(button)) m.mouse[int(type)][target] = button;
+                    }
+                    const QString secondKey = prefix + QStringLiteral("mouseSecondary/%1/%2").arg(int(type)).arg(target);
+                    if (settings.contains(secondKey)) {
+                        const int button = settings.value(secondKey).toInt();
+                        if (validMouseButton(button)) m.mouseSecondary[int(type)][target] = button;
                     }
                 }
             }
@@ -413,7 +423,8 @@ struct InputManager::Impl {
                 mdPortB.deadzonePercent == defaultB.deadzonePercent &&
                 mdPortB.analogSensitivity == defaultB.analogSensitivity &&
                 mdPortB.pad == defaultB.pad && mdPortB.keyboard == defaultB.keyboard &&
-                mdPortB.mouse == defaultB.mouse;
+                mdPortB.padSecondary.isEmpty() && mdPortB.keyboardSecondary.isEmpty() &&
+                mdPortB.mouseSecondary.isEmpty() && mdPortB.mouse == defaultB.mouse;
             if (portBIsDefault) { mdPortB = mdPortA; legacyGunMoved = true; }
             else if (mdPortA.controllerType == ControllerType::Justifier &&
                      mdPortB.controllerType == ControllerType::Justifier) {
@@ -428,7 +439,8 @@ struct InputManager::Impl {
                     chained.deadzonePercent == defaultChained.deadzonePercent &&
                     chained.analogSensitivity == defaultChained.analogSensitivity &&
                     chained.pad == defaultChained.pad && chained.keyboard == defaultChained.keyboard &&
-                    chained.mouse == defaultChained.mouse) {
+                    chained.padSecondary.isEmpty() && chained.keyboardSecondary.isEmpty() &&
+                    chained.mouseSecondary.isEmpty() && chained.mouse == defaultChained.mouse) {
                     chained = mdPortA;
                     legacyGunMovedToChain = true;
                 }
@@ -447,6 +459,8 @@ struct InputManager::Impl {
             const QString key = QStringLiteral("input/commands/key/%1").arg(command);
             commandKeys[command] = normalizedCommandKey(settings.value(
                 key, InputManager::defaultCommandKey(command)).toInt());
+            commandKeysSecondary[command] = normalizedCommandKey(settings.value(
+                QStringLiteral("input/commands/keySecondary/%1").arg(command), 0).toInt());
         }
         sanitizeCommandKeys();
         SDL_SetMainReady(); // Qt owns main(), including in SDL's Windows builds.
@@ -466,22 +480,29 @@ struct InputManager::Impl {
     bool gameplayUsesKey(int key) const {
         for (const auto& profileMappings : mappings)
             for (const auto& mapping : profileMappings)
-                for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
-                    if (gameplayTarget(it.key()) && it.value() == key) return true;
+                for (int slot = 0; slot < 2; ++slot) {
+                    const auto& bindings = slot == 1 ? mapping.keyboardSecondary : mapping.keyboard;
+                    for (auto it = bindings.cbegin(); it != bindings.cend(); ++it)
+                        if (gameplayTarget(it.key()) && it.value() == key) return true;
+                }
         return false;
     }
     bool sanitizeCommandKeys() {
         bool changed = false;
         QSet<int> used;
         for (int command = PauseCommand; command < targetCount; ++command) {
-            const int requested = normalizedCommandKey(commandKeys.value(command));
-            const bool gameplayConflict = (requested & commandModifierMask) == 0 &&
-                gameplayUsesKey(requested);
-            const int accepted = requested && !reservedCommandChord(requested) &&
-                !gameplayConflict && !used.contains(requested) ? requested : 0;
-            if (commandKeys.value(command) != accepted) changed = true;
-            commandKeys[command] = accepted;
-            if (accepted) used.insert(accepted);
+            int accepted[2]{};
+            for (int slot = 0; slot < 2; ++slot) {
+                const int requested = normalizedCommandKey((slot == 1 ? commandKeysSecondary : commandKeys).value(command));
+                const bool gameplayConflict = (requested & commandModifierMask) == 0 && gameplayUsesKey(requested);
+                accepted[slot] = requested && !reservedCommandChord(requested) &&
+                    !gameplayConflict && !used.contains(requested) ? requested : 0;
+                if (accepted[slot]) used.insert(accepted[slot]);
+            }
+            if (!accepted[0]) std::swap(accepted[0], accepted[1]);
+            if (commandKeys.value(command) != accepted[0] || commandKeysSecondary.value(command) != accepted[1]) changed = true;
+            commandKeys[command] = accepted[0];
+            commandKeysSecondary[command] = accepted[1];
         }
         return changed;
     }
@@ -491,6 +512,10 @@ struct InputManager::Impl {
             const int value = commandKeys.value(command);
             if (value == InputManager::defaultCommandKey(command)) settings.remove(key);
             else settings.setValue(key, value);
+            const QString secondaryKey = QStringLiteral("input/commands/keySecondary/%1").arg(command);
+            const int secondary = commandKeysSecondary.value(command);
+            if (!secondary) settings.remove(secondaryKey);
+            else settings.setValue(secondaryKey, secondary);
         }
     }
     Device* findById(int id) const {
@@ -719,12 +744,14 @@ struct InputManager::Impl {
         const auto& m = effective(player);
         unsigned result = 0;
         for (int target : gameTargetRange(profile, m.sixButton, inputSourceType(player))) {
-            const auto configured = m.pad.value(target);
-            bool& held = axisHeld[player][target];
-            const bool pressed = configured.kind == PadBinding::Automatic ?
-                automaticActive(device, target, m.deadzonePercent, held) :
-                active(device, configured, m.deadzonePercent, held);
-            if (pressed) result |= (1u << target);
+            for (int slot = 0; slot < 2; ++slot) {
+                const auto configured = m.padBinding(target, slot);
+                bool& held = axisHeld[player][target][slot];
+                const bool pressed = configured.kind == PadBinding::Automatic ?
+                    automaticActive(device, target, m.deadzonePercent, held) :
+                    active(device, configured, m.deadzonePercent, held);
+                if (pressed) result |= (1u << target);
+            }
         }
         return result;
     }
@@ -739,8 +766,9 @@ struct InputManager::Impl {
                 emit owner->previewChanged(player, pad);
             }
             unsigned mask = pad;
-            for (auto it = m.keyboard.cbegin(); it != m.keyboard.cend(); ++it)
-                if (activeGameplayTarget(profile, m, it.key(), inputSourceType(player)) && keys.contains(it.value())) mask |= (1u << it.key());
+            for (int target : gameTargetRange(profile, m.sixButton, inputSourceType(player)))
+                if (keys.contains(m.keyboardBinding(target, 0)) || keys.contains(m.keyboardBinding(target, 1)))
+                    mask |= (1u << target);
             if ((!enabled && !backgroundGamepadActive) || capture || !inputSourceConnected(player)) mask = 0;
             if (masks[player] != mask) {
                 masks[player] = mask;
@@ -748,9 +776,9 @@ struct InputManager::Impl {
             }
             if (enabled && !capture && assigned[player]) {
                 for (int command = 16; command < targetCount; ++command) {
-                    const PadBinding b = m.pad.value(command);
-                    nextCommands[command - 16] |= active(assigned[player], b, m.deadzonePercent,
-                                                         axisHeld[player][command]);
+                    for (int slot = 0; slot < 2; ++slot)
+                        nextCommands[command - 16] |= active(assigned[player], m.padBinding(command, slot),
+                            m.deadzonePercent, axisHeld[player][command][slot]);
                 }
             }
         }
@@ -869,11 +897,22 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
     m.controllerType = slotControllerType(profile, player, m.controllerType);
     if (player == 2 && profile != ConsoleProfile::MegaDrive) m.connected = false;
     if (m.aimSource != AimSource::LeftStick) m.aimSource = AimSource::Mouse;
-    for (auto it = m.keyboard.begin(); it != m.keyboard.end(); ++it)
-        it.value() = storedKeyboardKey(it.value());
-    for (auto type = m.mouse.begin(); type != m.mouse.end(); ++type)
-        for (auto button = type.value().begin(); button != type.value().end(); ++button)
-            if (!validMouseButton(button.value())) button.value() = 0;
+    for (int slot = 0; slot < 2; ++slot) {
+        auto& keyboard = slot == 1 ? m.keyboardSecondary : m.keyboard;
+        for (auto it = keyboard.begin(); it != keyboard.end(); ++it)
+            it.value() = storedKeyboardKey(it.value());
+        auto& mouse = slot == 1 ? m.mouseSecondary : m.mouse;
+        for (auto type = mouse.begin(); type != mouse.end(); ++type)
+            for (auto button = type.value().begin(); button != type.value().end(); ++button)
+                if (!validMouseButton(button.value())) button.value() = 0;
+    }
+    for (int target = 0; target < targetCount; ++target) {
+        if (m.keyboard.value(target) == m.keyboardSecondary.value(target)) m.keyboardSecondary.remove(target);
+        if (m.pad.value(target) == m.padSecondary.value(target)) m.padSecondary.remove(target);
+        for (auto type = m.mouseSecondary.begin(); type != m.mouseSecondary.end(); ++type)
+            if (m.mouse.value(type.key()).value(target) == type.value().value(target)) type.value().remove(target);
+    }
+    d->axisHeld[player] = {};
     const auto defaults = defaultMapping(profile, player);
     const auto& previous = d->mappings[profileIndex(profile)][player];
     if (d->movieControllersActive && profile == d->movieProfile) {
@@ -922,6 +961,12 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
         const QString keyKey = prefix + QStringLiteral("key/%1").arg(target);
         if (!gameplayTarget(target) || m.keyboard.value(target, 0) == defaults.keyboard.value(target, 0)) settings.remove(keyKey);
         else settings.setValue(keyKey, m.keyboard.value(target, 0));
+        const QString secondPad = prefix + QStringLiteral("padSecondary/%1").arg(target);
+        if (m.padSecondary.value(target).kind == PadBinding::None) settings.remove(secondPad);
+        else settings.setValue(secondPad, bindingText(m.padSecondary.value(target)));
+        const QString secondKey = prefix + QStringLiteral("keySecondary/%1").arg(target);
+        if (!gameplayTarget(target) || !m.keyboardSecondary.value(target)) settings.remove(secondKey);
+        else settings.setValue(secondKey, m.keyboardSecondary.value(target));
     }
     for (ControllerType type : {ControllerType::LightPhaser, ControllerType::Menacer,
                                 ControllerType::Justifier, ControllerType::Mouse,
@@ -932,6 +977,10 @@ void InputManager::setMapping(ConsoleProfile profile, int player, const PlayerMa
             const int button = m.mouse.value(int(type)).value(target, 0);
             if (button == defaults.mouse.value(int(type)).value(target, 0)) settings.remove(key);
             else settings.setValue(key, button);
+            const QString secondKey = prefix + QStringLiteral("mouseSecondary/%1/%2").arg(int(type)).arg(target);
+            const int secondaryButton = m.mouseSecondary.value(int(type)).value(target, 0);
+            if (!secondaryButton) settings.remove(secondKey);
+            else settings.setValue(secondKey, secondaryButton);
         }
     }
     const bool commandKeysChanged = d->sanitizeCommandKeys();
@@ -1347,12 +1396,12 @@ unsigned InputManager::mouseButtonMask(unsigned player, unsigned qtButtons) cons
     const auto& mapping = d->effective(int(player));
     if (!d->inputSourceConnected(int(player)) || d->inputSourceType(int(player)) == ControllerType::Pad ||
         mapping.aimSource != AimSource::Mouse) return 0;
-    const auto bindings = mapping.mouse.constFind(int(mapping.controllerType));
-    if (bindings == mapping.mouse.cend()) return 0;
     unsigned mask = 0;
     for (int target : gameTargetRange(d->profile, mapping.sixButton, mapping.controllerType)) {
-        const int button = bindings->value(target, 0);
-        if (button && (qtButtons & unsigned(button))) mask |= 1u << target;
+        for (int slot = 0; slot < 2; ++slot) {
+            const int button = mapping.mouseBinding(mapping.controllerType, target, slot);
+            if (button && (qtButtons & unsigned(button))) mask |= 1u << target;
+        }
     }
     return mask;
 }
@@ -1385,7 +1434,7 @@ void InputManager::setBackgroundGamepadActive(bool active) {
 void InputManager::setNetworkInputSourceEnabled(bool enabled) {
     if (d->networkInputSourceEnabled == enabled) return;
     d->networkInputSourceEnabled = enabled;
-    d->axisHeld[0].fill(false);
+    d->axisHeld[0] = {};
     d->aimTimer.invalidate();
     d->paddlePositionValid.fill(false);
     d->recompute();
@@ -1484,15 +1533,25 @@ int InputManager::defaultCommandKey(int command) {
     default: return 0;
     }
 }
-int InputManager::commandKey(int command) const {
-    return command >= PauseCommand && command < targetCount ? d->commandKeys.value(command) : 0;
+int InputManager::commandKey(int command, int slot) const {
+    if (command < PauseCommand || command >= targetCount || slot < 0 || slot > 1) return 0;
+    return (slot == 1 ? d->commandKeysSecondary : d->commandKeys).value(command);
 }
 void InputManager::setCommandKeys(const QMap<int,int>& keys) {
-    const QMap<int,int> previous = d->commandKeys;
-    for (int command = PauseCommand; command < targetCount; ++command)
-        d->commandKeys[command] = normalizedCommandKey(keys.value(command, defaultCommandKey(command)));
+    QMap<int,QVector<int>> bindings;
+    for (auto it = keys.cbegin(); it != keys.cend(); ++it) bindings[it.key()] = {it.value()};
+    setCommandKeyBindings(bindings);
+}
+void InputManager::setCommandKeyBindings(const QMap<int,QVector<int>>& keys) {
+    const auto previous = d->commandKeys;
+    const auto previousSecondary = d->commandKeysSecondary;
+    for (int command = PauseCommand; command < targetCount; ++command) {
+        const auto bindings = keys.value(command, {defaultCommandKey(command)});
+        d->commandKeys[command] = normalizedCommandKey(bindings.value(0));
+        d->commandKeysSecondary[command] = normalizedCommandKey(bindings.value(1));
+    }
     d->sanitizeCommandKeys();
-    if (d->commandKeys == previous) return;
+    if (d->commandKeys == previous && d->commandKeysSecondary == previousSecondary) return;
     QSettings settings(d->settingsPath, QSettings::IniFormat);
     d->writeCommandKeys(settings);
     settings.sync();
@@ -1506,9 +1565,8 @@ bool InputManager::hasGameplayKey(int key) const {
     if (!key || reservedKeyboardKey(key)) return false;
     for (int player = 0; player < playerCount; ++player) {
         const auto& mapping = d->effective(player);
-        for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it)
-            if (activeGameplayTarget(d->profile, mapping, it.key(), d->inputSourceType(player)) &&
-                it.value() == key) return true;
+        for (int target : gameTargetRange(d->profile, mapping.sixButton, d->inputSourceType(player)))
+            if (mapping.keyboardBinding(target, 0) == key || mapping.keyboardBinding(target, 1) == key) return true;
     }
     return false;
 }

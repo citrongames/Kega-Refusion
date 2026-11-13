@@ -41,7 +41,7 @@ For Kaiser Wave cartridges such as *Death & Lead* and *The Secret of the Four Wi
 
 Settings and saves live in `data/`. Keep this folder when updating; use `--data /path/to/folder` to choose another location. Save names follow the game filename, so identically named games share their save location.
 
-In **Emulator settings → Controls → Commands**, double-click a binding cell with the left mouse button to assign its input. Middle-click the cell to clear it. Keyboard commands can use modifier combinations. Assigning a shortcut clears any conflicting binding.
+In **Emulator settings → Controls**, double-click a keyboard or gamepad cell to add a binding. Each cell keeps the two most recent distinct bindings. Middle-click to clear both. **Assign all** replaces both bindings with one for each action you assign. Skipping an action keeps its bindings. A conflicting input moves to the new action. Keyboard commands accept modifier combinations, and menus show the first shortcut.
 
 | Default shortcut | Action |
 |---|---|

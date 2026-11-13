@@ -1091,6 +1091,11 @@
     "BIOS Sega CD и дополнительные оригинальные BIOS 32X.": "Sega CD BIOS and optional original 32X BIOS files.",
     "32X использует оригинальный BIOS для каждой установленной части (68000, Master SH2, Slave SH2), а для отсутствующих частей — встроенный. Для CD32X также требуется BIOS Sega CD соответствующего региона.": "32X uses an original BIOS for each installed component (68000, Master SH2, Slave SH2), with a built-in fallback for each missing component. CD32X also requires a Sega CD BIOS for the matching region.",
     "Оригинальный": "Original",
-    "Встроенный": "Built-in"
+    "Встроенный": "Built-in",
+    "Назначить всё": "Assign all",
+    "Двойной щелчок — добавить назначение; третье заменяет самое старое. Средняя кнопка мыши — очистить оба назначения.": "Double-click to add a binding; a third replaces the oldest. Middle-click to clear both bindings.",
+    "Назначить по одному значению в выбранной колонке. Пропущенные действия сохраняют назначения.": "Assign one binding per action in the selected column. Skipped actions keep their bindings.",
+    "Назначение мыши %1": "Mouse binding %1",
+    "Назначение «%1»: выберите кнопку мыши в списке. Esc — отмена.": "Assigning “%1”: choose a mouse button from the list. Esc cancels."
   }
 }

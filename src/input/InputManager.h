@@ -36,8 +36,17 @@ struct PlayerMapping {
     bool showCrosshair = true;
     QString deviceKey = QStringLiteral("auto"); // auto, none, or persistent device key
     QMap<int,PadBinding> pad;
-    QMap<int,int> keyboard; // target -> US physical key position expressed as a Qt key, with KeypadModifier for the numeric keypad
+    QMap<int,PadBinding> padSecondary; // Optional second alternative, independent of slot 0.
+    QMap<int,int> keyboard; // target -> physical Qt key; KeypadModifier preserves keypad position
+    QMap<int,int> keyboardSecondary;
     QMap<int,QMap<int,int>> mouse; // controller type -> target -> Qt::MouseButton (0 = unbound)
+    QMap<int,QMap<int,int>> mouseSecondary;
+    int keyboardBinding(int target, int slot) const { return (slot == 1 ? keyboardSecondary : keyboard).value(target, 0); }
+    void setKeyboardBinding(int target, int slot, int key) { (slot == 1 ? keyboardSecondary : keyboard)[target] = key; }
+    PadBinding padBinding(int target, int slot) const { return (slot == 1 ? padSecondary : pad).value(target); }
+    void setPadBinding(int target, int slot, const PadBinding& binding) { (slot == 1 ? padSecondary : pad)[target] = binding; }
+    int mouseBinding(ControllerType type, int target, int slot) const { return (slot == 1 ? mouseSecondary : mouse).value(int(type)).value(target, 0); }
+    void setMouseBinding(ControllerType type, int target, int slot, int button) { (slot == 1 ? mouseSecondary : mouse)[int(type)][target] = button; }
     int deadzonePercent = 25;
     int analogSensitivity = 100; // MD Mouse stick speed, percent (25..400).
 };
@@ -87,7 +96,8 @@ public:
                            KeyboardScanCodes codes = KeyboardScanCodes::Native,
                            Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     static int keyboardChord(const QKeyEvent& event); // Physical key with Ctrl/Shift/Alt/Meta modifiers.
-    int commandKey(int command) const; // 0 means unbound.
+    int commandKey(int command, int slot = 0) const; // 0 means unbound; slots 0 and 1 are alternatives.
+    void setCommandKeyBindings(const QMap<int,QVector<int>>& keys); // Complete map; omitted commands use defaults.
     void setCommandKeys(const QMap<int,int>& keys); // Complete map; omitted commands use defaults.
     static int defaultCommandKey(int command);
     static bool reservedKeyboardKey(int key);

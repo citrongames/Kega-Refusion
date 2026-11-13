@@ -3441,13 +3441,15 @@ QAction* MainWindow::commandAction(int command) const {
 void MainWindow::refreshCommandShortcuts() {
     keyboardCommands_.clear();
     for (int command = PauseCommand; command <= ScreenshotCommand; ++command) {
-        const int chord = input_->commandKey(command);
-        if (chord) keyboardCommands_.insert(chord, command);
+        const int primary = input_->commandKey(command);
+        const int secondary = input_->commandKey(command, 1);
+        if (primary) keyboardCommands_.insert(primary, command);
+        if (secondary) keyboardCommands_.insert(secondary, command);
         if (auto* action = commandAction(command)) {
             // Show the shortcut in menus. Only the physical-key handler dispatches
             // it, so another layout cannot also trigger a logical QAction shortcut.
             QString label = action->text().section(QLatin1Char('\t'), 0, 0);
-            if (chord) label += QLatin1Char('\t') + QKeySequence(chord).toString(QKeySequence::NativeText);
+            if (primary) label += QLatin1Char('\t') + QKeySequence(primary).toString(QKeySequence::NativeText);
             action->setText(label);
         }
     }
@@ -3458,7 +3460,7 @@ int MainWindow::keyboardCommand(int chord, int key, Qt::KeyboardModifiers modifi
     // Preserve right Alt (AltGr) and keypad Enter for the traditional fullscreen
     // shortcut. An explicitly assigned chord always takes precedence.
     key &= ~int(Qt::KeypadModifier);
-    if (command < 0 && input_->commandKey(FullscreenCommand) == InputManager::defaultCommandKey(FullscreenCommand) &&
+    if (command < 0 && keyboardCommands_.value(InputManager::defaultCommandKey(FullscreenCommand), -1) == FullscreenCommand &&
         (key == Qt::Key_Return || key == Qt::Key_Enter) &&
         (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
         !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier)))
@@ -3596,10 +3598,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         }
         constexpr int modifiersMask = Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier;
         for (auto it = heldCommandChords_.begin(); it != heldCommandChords_.end();) {
-            if ((it.value() & ~modifiersMask) == (chord & ~modifiersMask) || (it.value() & releasedModifier)) {
-                const int command = it.key();
+            const int heldChord = it.key();
+            if ((heldChord & ~modifiersMask) == (chord & ~modifiersMask) || (heldChord & releasedModifier)) {
+                const int command = it.value();
                 it = heldCommandChords_.erase(it);
-                handleInputCommand(command, false, true);
+                if (!heldCommandChords_.key(command, 0)) handleInputCommand(command, false, true);
             } else ++it;
         }
     }
@@ -3618,8 +3621,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         if ((!action || action->isEnabled()) && (!needsGameFocus || (!videoExporting_ && view_->hasFocus()))) {
             if (shortcutOverride) event->accept();
             else if (!keyEvent->isAutoRepeat()) {
-                if (needsGameFocus || command == FrameAdvanceCommand || command == FrameBackCommand)
-                    heldCommandChords_.insert(command, chord);
+                if (needsGameFocus || command == FrameAdvanceCommand || command == FrameBackCommand) {
+                    const bool alreadyHeld = heldCommandChords_.key(command, 0) != 0;
+                    heldCommandChords_.insert(chord, command);
+                    if (alreadyHeld) return true;
+                }
                 handleInputCommand(command, true, true);
             }
             return true;

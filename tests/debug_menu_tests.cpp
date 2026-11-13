@@ -371,11 +371,14 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
     inspect(ConsoleProfile::MegaDrive, 0, -1, -1);
     open(smsPath, 1, ConsoleProfile::MasterSystem);
     {
-        QMap<int, int> keys;
-        for (int command = PauseCommand; command <= ScreenshotCommand; ++command)
-            keys[command] = input->commandKey(command);
-        keys[FastForwardCommand] = int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_K;
-        input->setCommandKeys(keys);
+        const int primary = int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_K;
+        const int alternate = Qt::Key_F12;
+        input->setCommandKeyBindings({{FastForwardCommand, {primary, alternate}}});
+        const QString primaryText = QKeySequence(primary).toString(QKeySequence::NativeText);
+        const auto actions = window.findChildren<QAction*>();
+        require(std::any_of(actions.cbegin(), actions.cend(), [&](const QAction* action) {
+            return action->text().section(QLatin1Char('\t'), 1) == primaryText;
+        }), "menu did not show the primary shortcut alone");
         auto* view = window.findChild<GameView*>();
         require(view, "running game view is missing");
         window.activateWindow();
@@ -415,6 +418,14 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
                 "held command stayed active after its primary key was released");
         release(Qt::Key_Shift, Qt::ControlModifier);
         release(Qt::Key_Control, Qt::NoModifier);
+
+        press(*view, alternate);
+        require(view->fastForwardActive(), "secondary shortcut did not start fast forward");
+        press(*view, Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+        release(alternate, Qt::ControlModifier | Qt::ShiftModifier);
+        require(view->fastForwardActive(), "releasing one shortcut stopped the other");
+        release(Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+        require(!view->fastForwardActive(), "releasing both shortcuts left fast forward active");
     }
     for (int key : {Qt::Key_F5, Qt::Key_F8}) {
         bool correctPicker = false;
@@ -583,8 +594,22 @@ void testControlsLayout(MainWindow& window) {
             check(newKey->text() == previous && gameTable->item(second, 2)->text() == oldPad,
                   QStringLiteral("keyboard-only capture accepted gamepad input"));
             sendKey(Qt::Key_X);
-            check(oldKey->text() == QStringLiteral("—") && newKey->text() == QStringLiteral("X"),
-                  QStringLiteral("new keyboard binding did not clear the previous target"));
+            check(oldKey->text() == QStringLiteral("—") &&
+                  newKey->text() == (previous == QStringLiteral("—") ? QStringLiteral("X") : previous + QStringLiteral(" / X")),
+                  QStringLiteral("new keyboard binding did not preserve its alternative or clear the previous target"));
+            for (int key : {Qt::Key_Q, Qt::Key_E}) {
+                clickCell(gameTable, second, 1, Qt::LeftButton, true);
+                sendKey(key);
+            }
+            check(newKey->text() == QStringLiteral("Q / E"),
+                  QStringLiteral("third keyboard binding did not evict the oldest alternative"));
+            clickCell(gameTable, second, 1, Qt::LeftButton, true);
+            sendKey(Qt::Key_Q);
+            check(newKey->text() == QStringLiteral("Q / E"),
+                  QStringLiteral("duplicate keyboard binding changed alternative order"));
+            clickCell(gameTable, second, 1, Qt::MiddleButton);
+            clickCell(gameTable, second, 1, Qt::LeftButton, true);
+            sendKey(Qt::Key_X);
         }
 
         tabs->setCurrentIndex(tabs->count() - 1);
@@ -633,6 +658,14 @@ void testControlsLayout(MainWindow& window) {
                   !input->capturing(),
                   QStringLiteral("middle click did not clear command gamepad binding"));
 
+            clickCell(commandTable, pauseRow, 1, Qt::LeftButton, true);
+            sendKey(Qt::Key_Q);
+            for (int button : {10, 11}) {
+                clickCell(commandTable, pauseRow, 2, Qt::LeftButton, true);
+                pad.button(button, true); input->poll();
+                pad.button(button, false); input->poll();
+            }
+            const QString padBeforeKeyboardSequence = commandTable->item(pauseRow, 2)->text();
             clickCell(commandTable, pauseRow, 1, Qt::LeftButton);
             child<QPushButton>(*controls, "assignSequence")->click();
             check(waitingColor(pauseRow, 1) && !waitingColor(pauseRow, 2),
@@ -645,6 +678,9 @@ void testControlsLayout(MainWindow& window) {
             QApplication::processEvents();
             check(!waitingColor(pauseRow, 1) && waitingColor(fastRow, 1),
                   QStringLiteral("keyboard sequence did not advance to its next row"));
+            check(pauseKey->text() == QStringLiteral("P") &&
+                  commandTable->item(pauseRow, 2)->text() == padBeforeKeyboardSequence,
+                  QStringLiteral("keyboard sequence did not replace only the accepted source alternatives"));
             controls->cancelCapture();
 
             clickCell(commandTable, pauseRow, 2, Qt::LeftButton);
@@ -659,6 +695,9 @@ void testControlsLayout(MainWindow& window) {
             QApplication::processEvents();
             check(!waitingColor(pauseRow, 2) && waitingColor(fastRow, 2),
                   QStringLiteral("gamepad sequence did not advance to its next row"));
+            check(commandTable->item(pauseRow, 2)->text() == InputManager::bindingName(PadBinding{PadBinding::Button, 11, 0}) &&
+                  pauseKey->text() == QStringLiteral("P"),
+                  QStringLiteral("gamepad sequence did not replace only the accepted source alternatives"));
             controls->cancelCapture();
             clickCell(commandTable, pauseRow, 2, Qt::MiddleButton);
 
@@ -667,12 +706,12 @@ void testControlsLayout(MainWindow& window) {
                 sendKey(key, modifiers);
             };
             captureCommand(pauseRow, Qt::Key_X, Qt::NoModifier);
-            check(pauseKey->text() == QStringLiteral("X") &&
+            check(pauseKey->text() == QStringLiteral("P / X") &&
                   gameTable->item(second, 1)->text() == QStringLiteral("—"),
                   QStringLiteral("command keyboard assignment did not take gameplay X"));
             captureCommand(fastRow, Qt::Key_X, Qt::NoModifier);
-            check(pauseKey->text() == QStringLiteral("—") &&
-                  commandTable->item(fastRow, 1)->text() == QStringLiteral("X"),
+            check(pauseKey->text() == QStringLiteral("P") &&
+                  commandTable->item(fastRow, 1)->text() == QStringLiteral("Tab / X"),
                   QStringLiteral("new command keyboard assignment did not clear previous hotkey"));
 
             tabs->setCurrentIndex(0);
@@ -680,8 +719,8 @@ void testControlsLayout(MainWindow& window) {
             clickCell(gameTable, second, 1, Qt::LeftButton, true);
             sendKey(Qt::Key_X);
             check(gameTable->item(second, 1)->text() == QStringLiteral("X") &&
-                  commandTable->item(fastRow, 1)->text() == QStringLiteral("—"),
-                  QStringLiteral("gameplay keyboard assignment did not clear command hotkey"));
+                  commandTable->item(fastRow, 1)->text() == QStringLiteral("Tab"),
+                  QStringLiteral("gameplay keyboard assignment did not preserve the other command hotkey"));
             clickCell(gameTable, second, 1, Qt::MiddleButton);
             check(gameTable->item(second, 1)->text() == QStringLiteral("—"),
                   QStringLiteral("middle click did not clear gameplay keyboard binding"));
@@ -699,9 +738,10 @@ void testControlsLayout(MainWindow& window) {
                   QStringLiteral("Alt+Enter command chord was not captured"));
             captureCommand(hardResetRow, Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
             check(commandTable->item(hardResetRow, 1)->text() ==
-                  QKeySequence(int(Qt::ControlModifier) | int(Qt::ShiftModifier) |
+                  QKeySequence(int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_R).toString(QKeySequence::NativeText) +
+                  QStringLiteral(" / ") + QKeySequence(int(Qt::ControlModifier) | int(Qt::ShiftModifier) |
                                Qt::Key_K).toString(QKeySequence::NativeText),
-                  QStringLiteral("Ctrl+Shift+key command chord was not captured"));
+                  QStringLiteral("Ctrl+Shift+key command chord did not preserve its alternative"));
             clickCell(commandTable, hardResetRow, 1, Qt::MiddleButton);
             check(commandTable->item(hardResetRow, 1)->text() == QStringLiteral("—"),
                   QStringLiteral("middle click did not clear command keyboard binding"));
@@ -744,13 +784,14 @@ void testControlsLayout(MainWindow& window) {
                   QStringLiteral("gamepad-only gameplay capture accepted a keyboard key"));
             pad.button(10, true); input->poll();
             pad.button(10, false); input->poll();
-            check(gameTable->item(first, 2)->text() == QStringLiteral("—") &&
-                  gameTable->item(second, 2)->text() != QStringLiteral("—"),
-                  QStringLiteral("gameplay gamepad source or latest-wins binding failed"));
+            const QString movedPad = InputManager::bindingName(PadBinding{PadBinding::Button, 10, 0});
+            check(!gameTable->item(first, 2)->text().contains(movedPad) &&
+                  gameTable->item(second, 2)->text().contains(movedPad),
+                  QStringLiteral("gameplay gamepad source or latest-wins alternative failed"));
             diagram->targetDoubleClicked(0);
             sendKey(Qt::Key_J);
-            check(gameTable->item(first, 1)->text() == QStringLiteral("J"),
-                  QStringLiteral("generic diagram capture rejected keyboard input"));
+            check(gameTable->item(first, 1)->text() == QStringLiteral("G / J"),
+                  QStringLiteral("generic diagram capture did not add the keyboard alternative"));
             diagram->targetDoubleClicked(1);
             check(input->capturing(), QStringLiteral("diagram double-click did not arm gamepad capture"));
             pad.button(10, true); input->poll();
@@ -764,9 +805,9 @@ void testControlsLayout(MainWindow& window) {
             clickCell(commandTable, 0, 0, Qt::LeftButton, true);
             pad.button(10, true); input->poll();
             pad.button(10, false); input->poll();
-            check(commandTable->item(0, 2)->text() != QStringLiteral("—") &&
-                  gameTable->item(second, 2)->text() == QStringLiteral("—"),
-                  QStringLiteral("generic command name capture did not take gameplay pad control"));
+            check(commandTable->item(0, 2)->text().contains(movedPad) &&
+                  !gameTable->item(second, 2)->text().contains(movedPad),
+                  QStringLiteral("generic command name capture did not take gameplay pad alternative"));
             clickCell(commandTable, 0, 2, Qt::MiddleButton);
             check(commandTable->item(0, 2)->text() == QStringLiteral("—"),
                   QStringLiteral("middle click did not clear command gamepad binding"));
@@ -774,24 +815,63 @@ void testControlsLayout(MainWindow& window) {
             QApplication::processEvents();
         }
 
+        if (first >= 0) {
+            clickCell(gameTable, first, 2, Qt::MiddleButton);
+            for (int button : {9, 10, 11}) {
+                clickCell(gameTable, first, 2, Qt::LeftButton, true);
+                pad.button(button, true); input->poll();
+                pad.button(button, false); input->poll();
+            }
+            const QString expectedPad = InputManager::bindingName(PadBinding{PadBinding::Button, 10, 0}) +
+                QStringLiteral(" / ") + InputManager::bindingName(PadBinding{PadBinding::Button, 11, 0});
+            check(gameTable->item(first, 2)->text() == expectedPad,
+                  QStringLiteral("third gamepad binding did not evict the oldest alternative"));
+            clickCell(gameTable, first, 2, Qt::LeftButton, true);
+            pad.button(10, true); input->poll(); pad.button(10, false); input->poll();
+            check(gameTable->item(first, 2)->text() == expectedPad,
+                  QStringLiteral("duplicate gamepad binding changed alternative order"));
+            clickCell(gameTable, first, 2, Qt::MiddleButton);
+            check(gameTable->item(first, 2)->text() == QStringLiteral("—"),
+                  QStringLiteral("middle click did not clear both gamepad alternatives"));
+        }
         choose(type, int(ControllerType::Mouse), QStringLiteral("MD Mouse"));
         outerFits(QStringLiteral("MD Mouse"));
-        if (first >= 0 && second >= 0) {
-            auto* previous = qobject_cast<QComboBox*>(gameTable->cellWidget(first, 3));
-            auto* moved = qobject_cast<QComboBox*>(gameTable->cellWidget(second, 3));
-            if (previous && moved) {
-                moved->setCurrentIndex(moved->findData(int(Qt::RightButton)));
-                check(previous->currentData().toInt() == 0,
-                      QStringLiteral("new mouse binding did not clear the previous target"));
-                const QPoint point = moved->rect().center();
-                QMouseEvent down(QEvent::MouseButtonPress, point, moved->mapToGlobal(point),
+        const int mouseFirst = rowFor(gameTable, 0), mouseSecond = rowFor(gameTable, 1);
+        if (mouseFirst >= 0 && mouseSecond >= 0) {
+            auto* previousCell = gameTable->cellWidget(mouseFirst, 3);
+            auto* movedCell = gameTable->cellWidget(mouseSecond, 3);
+            const auto previous = previousCell ? previousCell->findChildren<QComboBox*>() : QList<QComboBox*>{};
+            const auto moved = movedCell ? movedCell->findChildren<QComboBox*>() : QList<QComboBox*>{};
+            check(previous.size() == 2 && moved.size() == 2, QStringLiteral("mouse alternatives are missing"));
+            if (previous.size() == 2 && moved.size() == 2) {
+                const auto chooseMouse = [](QComboBox* box, int button) {
+                    const int index = box->findData(button);
+                    box->setCurrentIndex(index);
+                    box->activated(index);
+                };
+                chooseMouse(previous[1], int(Qt::XButton1));
+                chooseMouse(moved[0], int(Qt::RightButton));
+                check(previous[0]->currentData().toInt() == int(Qt::XButton1) &&
+                      previous[1]->currentData().toInt() == 0,
+                      QStringLiteral("new mouse binding did not preserve and promote the other alternative"));
+                chooseMouse(moved[1], int(Qt::XButton2));
+                chooseMouse(moved[1], int(Qt::LeftButton));
+                check(moved[0]->currentData().toInt() == int(Qt::XButton2) &&
+                      moved[1]->currentData().toInt() == int(Qt::LeftButton),
+                      QStringLiteral("third mouse binding did not evict the oldest alternative"));
+                chooseMouse(moved[0], int(Qt::XButton2));
+                check(moved[0]->currentData().toInt() == int(Qt::XButton2) &&
+                      moved[1]->currentData().toInt() == int(Qt::LeftButton),
+                      QStringLiteral("duplicate mouse binding changed alternative order"));
+                const QPoint point = moved[1]->rect().center();
+                QMouseEvent down(QEvent::MouseButtonPress, point, moved[1]->mapToGlobal(point),
                                  Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
-                QApplication::sendEvent(moved, &down);
-                QMouseEvent up(QEvent::MouseButtonRelease, point, moved->mapToGlobal(point),
+                QApplication::sendEvent(moved[1], &down);
+                QMouseEvent up(QEvent::MouseButtonRelease, point, moved[1]->mapToGlobal(point),
                                Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
-                QApplication::sendEvent(moved, &up);
-                check(moved->currentData().toInt() == 0,
-                      QStringLiteral("middle click did not clear mouse binding"));
+                QApplication::sendEvent(moved[1], &up);
+                check(moved[0]->currentData().toInt() == 0 && moved[1]->currentData().toInt() == 0,
+                      QStringLiteral("middle click did not clear both mouse alternatives"));
             }
         }
         tabs->setCurrentIndex(1);

@@ -68,6 +68,8 @@ private:
     void selectTarget(int target);
     void refreshPadCell(int target);
     void refreshKeyboardCell(int target);
+    void refreshMouseCell(int target);
+    void onMouseChanged(int target, int slot, int button);
     void updateActionButtons();
     void setFeedback(const QString& message, bool warning = false);
     void selectFailure(int profile, int player, bool commandTab = false);
@@ -120,7 +122,7 @@ private:
     QPushButton* clearKeyButton_ = nullptr;
     QPushButton* clearButton_ = nullptr;
     QMap<int, PlayerMapping> drafts_;
-    QMap<int, int> commandKeyDrafts_;
+    QMap<int, QVector<int>> commandKeyDrafts_;
     bool dirtyCommandKeys_ = false;
     QMap<int, ControllerAdapter> adapterDrafts_;
     QMap<int, bool> ordinaryConnectionDrafts_;

@@ -646,6 +646,117 @@ void testCommandKeyboardSettings() {
                 reloaded.commandKey(FullscreenCommand) == keys[FullscreenCommand],
             "global command keyboard chords did not survive restart");
 }
+void testAlternativeBindings() {
+    QTemporaryDir temp;
+    require(temp.isValid(), "alternative input settings directory");
+    const QString path = temp.filePath("settings.ini");
+    {
+        QSettings legacy(path, QSettings::IniFormat);
+        legacy.setValue("input/md/player1/key/0", Qt::Key_X);
+        legacy.setValue("input/md/player1/pad/0", "b:0");
+        legacy.sync();
+    }
+    InputManager manager(path);
+    auto mapping = manager.mapping(ConsoleProfile::MegaDrive, 0);
+    require(mapping.keyboardBinding(0, 0) == Qt::Key_X &&
+            mapping.keyboardBinding(0, 1) == 0 &&
+            mapping.padBinding(0, 0) == PadBinding{PadBinding::Button, 0, 0} &&
+            mapping.padBinding(0, 1).kind == PadBinding::None,
+            "legacy binding did not remain in the first alternative");
+    VirtualPad pad(SDL_JOYSTICK_TYPE_UNKNOWN);
+    manager.poll();
+    mapping.deviceKey = keyForId(manager.devices(), pad.id);
+    mapping.keyboard.clear(); mapping.keyboardSecondary.clear();
+    mapping.pad.clear(); mapping.padSecondary.clear();
+    mapping.setKeyboardBinding(0, 0, Qt::Key_X);
+    mapping.setKeyboardBinding(0, 1, Qt::Key_V);
+    mapping.setPadBinding(0, 0, {PadBinding::Button, 0, 0});
+    mapping.setPadBinding(0, 1, {PadBinding::Button, 1, 0});
+    mapping.setPadBinding(4, 0, {PadBinding::Axis, 0, -1});
+    mapping.setPadBinding(4, 1, {PadBinding::Axis, 1, -1});
+    mapping.setPadBinding(FastForwardCommand, 0, {PadBinding::Button, 2, 0});
+    mapping.setPadBinding(FastForwardCommand, 1, {PadBinding::Button, 3, 0});
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    unsigned mask = 0;
+    int presses = 0, releases = 0;
+    QObject::connect(&manager, &InputManager::maskChanged, &manager,
+                     [&](unsigned player, unsigned value) { if (player == 0) mask = value; });
+    QObject::connect(&manager, &InputManager::commandChanged, &manager,
+                     [&](int command, bool pressed) {
+                         if (command == FastForwardCommand) pressed ? ++presses : ++releases;
+                     });
+    manager.poll();
+    require(manager.keyEvent(Qt::Key_X, true) && manager.keyEvent(Qt::Key_V, true) && mask == 1u &&
+            manager.keyEvent(Qt::Key_X, false) && mask == 1u &&
+            manager.keyEvent(Qt::Key_V, false) && mask == 0,
+            "keyboard alternatives did not OR or released before both keys were up");
+    require(manager.hasGameplayKey(Qt::Key_V), "secondary gameplay key was not recognized");
+    manager.keyEvent(Qt::Key_V, true);
+    manager.releaseKeyboard();
+    require(mask == 0, "releaseKeyboard left the secondary gameplay alternative held");
+
+    pad.button(0, true); manager.poll();
+    require(mask == 1u, "first pad alternative did not activate");
+    pad.button(1, true); pad.button(0, false); manager.poll();
+    require(mask == 1u, "releasing the first pad alternative cleared the held second alternative");
+    pad.button(1, false); manager.poll();
+    require(mask == 0, "pad alternatives remained held after both released");
+    pad.axis(0, -20000); pad.axis(1, -20000); manager.poll();
+    require(mask == (1u << 4), "axis alternatives did not activate");
+    pad.axis(0, 0); pad.axis(1, -7000); manager.poll();
+    require(mask == (1u << 4), "second axis alternative lost its independent hysteresis");
+    pad.axis(0, -7000); pad.axis(1, 0); manager.poll();
+    require(mask == 0, "first axis alternative inherited the second axis hold state");
+    pad.axis(0, 0); manager.poll();
+
+    pad.button(2, true); manager.poll();
+    pad.button(3, true); manager.poll();
+    pad.button(2, false); manager.poll();
+    require(presses == 1 && releases == 0,
+            "command alternatives repeated an edge or released while the second was held");
+    pad.button(3, false); manager.poll();
+    require(presses == 1 && releases == 1, "command alternatives did not emit the final release");
+    pad.button(3, true); manager.poll();
+    pad.button(3, false); manager.poll();
+    require(presses == 2 && releases == 2, "secondary command alternative did not rearm");
+
+    const int pauseFirst = int(Qt::ControlModifier) | Qt::Key_H;
+    const int pauseSecond = int(Qt::AltModifier) | Qt::Key_H;
+    QMap<int, QVector<int>> commands;
+    commands[PauseCommand] = {pauseFirst, pauseSecond};
+    commands[FastForwardCommand] = {int(Qt::ControlModifier) | Qt::Key_J, pauseSecond};
+    commands[ResetCommand] = {0, Qt::Key_V};
+    manager.setCommandKeyBindings(commands);
+    require(manager.commandKey(PauseCommand, 0) == pauseFirst &&
+            manager.commandKey(PauseCommand, 1) == pauseSecond &&
+            manager.commandKey(FastForwardCommand, 1) == 0 &&
+            manager.commandKey(ResetCommand, 1) == 0,
+            "command alternatives did not reject cross-slot or gameplay key conflicts");
+
+    mapping.controllerType = ControllerType::Mouse;
+    mapping.mouse.clear(); mapping.mouseSecondary.clear();
+    mapping.setMouseBinding(ControllerType::Mouse, 1, 0, Qt::LeftButton);
+    mapping.setMouseBinding(ControllerType::Mouse, 1, 1, Qt::RightButton);
+    manager.setMapping(ConsoleProfile::MegaDrive, 0, mapping);
+    require(manager.mouseButtonMask(0, unsigned(Qt::LeftButton)) == 2u &&
+            manager.mouseButtonMask(0, unsigned(Qt::LeftButton | Qt::RightButton)) == 2u &&
+            manager.mouseButtonMask(0, unsigned(Qt::RightButton)) == 2u &&
+            manager.mouseButtonMask(0, 0) == 0,
+            "mouse alternatives did not OR through independent button release");
+    InputManager reloaded(path);
+    const auto saved = reloaded.mapping(ConsoleProfile::MegaDrive, 0);
+    require(saved.keyboard.value(0) == Qt::Key_X && saved.keyboardBinding(0, 1) == Qt::Key_V &&
+            saved.pad.value(0) == PadBinding{PadBinding::Button, 0, 0} &&
+            saved.padBinding(0, 1) == PadBinding{PadBinding::Button, 1, 0} &&
+            saved.padBinding(FastForwardCommand, 1) == PadBinding{PadBinding::Button, 3, 0} &&
+            saved.mouseBinding(ControllerType::Mouse, 1, 0) == Qt::LeftButton &&
+            saved.mouseBinding(ControllerType::Mouse, 1, 1) == Qt::RightButton &&
+            reloaded.commandKey(PauseCommand, 0) == pauseFirst &&
+            reloaded.commandKey(PauseCommand, 1) == pauseSecond &&
+            reloaded.commandKey(FastForwardCommand, 1) == 0,
+            "primary and secondary bindings or sanitized command keys did not survive reload");
+}
+
 void testLegacyKeyboardSettings() {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create legacy settings directory");
@@ -1401,6 +1512,11 @@ int main(int argc, char** argv) {
             std::puts("snapshot held-key test passed");
             return 0;
         }
+        if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--alternatives")) {
+            testAlternativeBindings();
+            std::puts("alternative keyboard, pad, command, mouse and persistence tests passed");
+            return 0;
+        }
         testConnectedPorts();
         if (argc==2 && QString::fromLocal8Bit(argv[1])==QLatin1String("--connections")) {
             std::puts("input port defaults, migration, persistence and keyboard separation passed");return 0;
@@ -1412,6 +1528,7 @@ int main(int argc, char** argv) {
         testHardResetCommand();
         testMovableRewindKey();
         testCommandKeyboardSettings();
+        testAlternativeBindings();
         testLegacyKeyboardSettings();
         testUnknownRawJoystick();
         testBackgroundGamepad();

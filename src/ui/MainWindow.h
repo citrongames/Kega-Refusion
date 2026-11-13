@@ -125,7 +125,7 @@ private:
     void refreshCommandShortcuts();
     int keyboardCommand(int chord, int key, Qt::KeyboardModifiers modifiers) const;
     QHash<int, int> keyboardCommands_; // chord -> command
-    QHash<int, int> heldCommandChords_; // held command -> physical chord at key-down
+    QHash<int, int> heldCommandChords_; // physical chord at key-down -> held command
 
     EmulationSession& session_;
     QSettings settings_;

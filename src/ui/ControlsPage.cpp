@@ -64,8 +64,28 @@ bool reservedKey(int key) {
     return InputManager::reservedKeyboardKey(key);
 }
 
-QString keyboardName(int key) {
-    return key ? QKeySequence(key).toString(QKeySequence::NativeText) : QStringLiteral("—");
+QString keyboardName(int first, int second = 0) {
+    QStringList names;
+    for (int key : {first, second})
+        if (key) names.append(QKeySequence(key).toString(QKeySequence::NativeText));
+    return names.isEmpty() ? QStringLiteral("—") : names.join(QStringLiteral(" / "));
+}
+
+QVector<int> updatedKeys(int first, int second, int key, bool replace) {
+    if (!key) return {0, 0};
+    if (replace) return {key, 0};
+    if (first == key || second == key) return {first, second};
+    if (!first) return {key, 0};
+    return !second ? QVector<int>{first, key} : QVector<int>{second, key};
+}
+
+QVector<PadBinding> updatedPads(const PadBinding& first, const PadBinding& second,
+                              const PadBinding& binding, bool replace) {
+    if (replace) return {binding, PadBinding{}};
+    if (first == binding || second == binding) return {first, second};
+    if (first.kind == PadBinding::None) return {binding, PadBinding{}};
+    return second.kind == PadBinding::None ? QVector<PadBinding>{first, binding}
+                                           : QVector<PadBinding>{second, binding};
 }
 
 QTableWidgetItem* cell(const QString& text, int target = -1) {
@@ -107,9 +127,13 @@ public:
 };
 
 QString padName(const PlayerMapping& mapping, int target) {
-    const auto it = mapping.pad.constFind(target);
-    return it == mapping.pad.cend() || it->kind == PadBinding::None
-        ? QStringLiteral("—") : InputManager::bindingName(*it);
+    QStringList names;
+    for (int slot = 0; slot < 2; ++slot) {
+        const PadBinding binding = mapping.padBinding(target, slot);
+        if (binding.kind != PadBinding::None)
+            names.append(InputManager::bindingName(binding));
+    }
+    return names.isEmpty() ? QStringLiteral("—") : names.join(QStringLiteral(" / "));
 }
 }
 
@@ -118,7 +142,7 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     setFocusPolicy(Qt::StrongFocus);
     qApp->installEventFilter(this);
     for (int command : commands)
-        commandKeyDrafts_.insert(command, input_.commandKey(command));
+        commandKeyDrafts_.insert(command, {input_.commandKey(command), input_.commandKey(command, 1)});
 
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(6, 4, 6, 4);
@@ -293,8 +317,14 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
     auto* actionRow = new QHBoxLayout;
     assignButton_ = new QPushButton(Localization::text(QStringLiteral("Назначить")), this);
     assignButton_->setObjectName(QStringLiteral("assignBinding"));
-    sequenceButton_ = new QPushButton(Localization::text(QStringLiteral("Назначить по порядку")), this);
+    sequenceButton_ = new QPushButton(Localization::text(QStringLiteral("Назначить всё")), this);
     sequenceButton_->setObjectName(QStringLiteral("assignSequence"));
+    const QString bindingHint = Localization::text(QStringLiteral(
+        "Двойной щелчок — добавить назначение; третье заменяет самое старое. Средняя кнопка мыши — очистить оба назначения."));
+    gameTable_->setToolTip(bindingHint);
+    commandTable_->setToolTip(bindingHint);
+    sequenceButton_->setToolTip(Localization::text(QStringLiteral(
+        "Назначить по одному значению в выбранной колонке. Пропущенные действия сохраняют назначения.")));
     skipButton_ = new QPushButton(Localization::text(QStringLiteral("Пропустить")), this);
     clearKeyButton_ = new QPushButton(Localization::text(QStringLiteral("Очистить клавишу")), this);
     clearButton_ = new QPushButton(Localization::text(QStringLiteral("Очистить геймпад")), this);
@@ -461,14 +491,15 @@ ControlsPage::ControlsPage(InputManager& input, QWidget* parent)
         stopCapture();
         if (commandTabSelected()) {
             for (int command : commands)
-                commandKeyDrafts_[command] = InputManager::defaultCommandKey(command);
+                commandKeyDrafts_[command] = {InputManager::defaultCommandKey(command), 0};
             dirtyCommandKeys_ = true;
             for (int command : commands)
-                clearGameKeyConflicts(commandKeyDrafts_.value(command));
+                clearGameKeyConflicts(commandKeyDrafts_.value(command).value(0));
             auto& mapping = draft();
             const auto defaults = InputManager::defaultMapping(selectedProfile(), selectedPlayer());
             for (int command : commands)
-                mapping.pad[command] = defaults.pad.value(command);
+                for (int slot = 0; slot < 2; ++slot)
+                    mapping.setPadBinding(command, slot, defaults.padBinding(command, slot));
             dirty_.insert(draftKey());
             refreshContents();
             setFeedback(Localization::text(QStringLiteral("Клавиши команд и кнопки геймпада этого порта сброшены к исходным.")));
@@ -836,45 +867,34 @@ void ControlsPage::fillGameTable() {
         gameTable_->setRowHeight(row, 30);
         gameTable_->setItem(row, 0,
             cell(InputManager::targetName(selectedProfile(), target, mapping.controllerType), target));
-        gameTable_->setItem(row, 1, cell(keyboardName(mapping.keyboard.value(target))));
+        gameTable_->setItem(row, 1, cell(keyboardName(mapping.keyboardBinding(target, 0), mapping.keyboardBinding(target, 1))));
         gameTable_->setItem(row, 2, cell(padName(mapping, target)));
+        gameTable_->item(row, 1)->setToolTip(gameTable_->item(row, 1)->text());
+        gameTable_->item(row, 2)->setToolTip(gameTable_->item(row, 2)->text());
         if (isLightgun(mapping.controllerType) || isAnalogController(mapping.controllerType)) {
-            auto* mouseBox = new QComboBox(gameTable_);
-            mouseBox->addItem(QStringLiteral("—"), 0);
-            mouseBox->addItem(Localization::text(QStringLiteral("Левая")), int(Qt::LeftButton));
-            mouseBox->addItem(Localization::text(QStringLiteral("Правая")), int(Qt::RightButton));
-            mouseBox->addItem(Localization::text(QStringLiteral("Средняя")), int(Qt::MiddleButton));
-            mouseBox->addItem(Localization::text(QStringLiteral("Боковая 1")), int(Qt::XButton1));
-            mouseBox->addItem(Localization::text(QStringLiteral("Боковая 2")), int(Qt::XButton2));
-            const int type = int(mapping.controllerType);
-            mouseBox->setCurrentIndex(mouseBox->findData(mapping.mouse.value(type).value(target, 0)));
-            gameTable_->setCellWidget(row, 3, mouseBox);
-            connect(mouseBox, qOverload<int>(&QComboBox::currentIndexChanged), this,
-                    [this, target, type, mouseBox] {
-                        if (refreshing_) return;
-                        auto& buttons = draft().mouse[type];
-                        const int button = mouseBox->currentData().toInt();
-                        if (button) {
-                            const auto targets = activeGameTargets();
-                            for (auto it = buttons.begin(); it != buttons.end(); ++it) {
-                                if (it.key() == target || !targets.contains(it.key()) || it.value() != button)
-                                    continue;
-                                it.value() = 0;
-                                for (int row = 0; row < gameTable_->rowCount(); ++row) {
-                                    const auto* item = gameTable_->item(row, 0);
-                                    if (!item || item->data(Qt::UserRole).toInt() != it.key()) continue;
-                                    auto* previous = qobject_cast<QComboBox*>(gameTable_->cellWidget(row, 3));
-                                    if (previous) {
-                                        const QSignalBlocker blocker(previous);
-                                        previous->setCurrentIndex(previous->findData(0));
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        buttons[target] = button;
-                        dirty_.insert(draftKey());
-                    });
+            gameTable_->setRowHeight(row, 52);
+            auto* mouseCell = new QWidget(gameTable_);
+            auto* layout = new QVBoxLayout(mouseCell);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(0);
+            for (int slot = 0; slot < 2; ++slot) {
+                auto* mouseBox = new QComboBox(mouseCell);
+                mouseBox->setObjectName(QStringLiteral("mouseBinding%1").arg(slot));
+                mouseBox->setToolTip(Localization::text(QStringLiteral("Назначение мыши %1")).arg(slot + 1));
+                mouseBox->addItem(QStringLiteral("—"), 0);
+                mouseBox->addItem(Localization::text(QStringLiteral("Левая")), int(Qt::LeftButton));
+                mouseBox->addItem(Localization::text(QStringLiteral("Правая")), int(Qt::RightButton));
+                mouseBox->addItem(Localization::text(QStringLiteral("Средняя")), int(Qt::MiddleButton));
+                mouseBox->addItem(Localization::text(QStringLiteral("Боковая 1")), int(Qt::XButton1));
+                mouseBox->addItem(Localization::text(QStringLiteral("Боковая 2")), int(Qt::XButton2));
+                mouseBox->setCurrentIndex(mouseBox->findData(mapping.mouseBinding(mapping.controllerType, target, slot)));
+                layout->addWidget(mouseBox);
+                connect(mouseBox, qOverload<int>(&QComboBox::activated), this,
+                        [this, target, slot, mouseBox] {
+                            onMouseChanged(target, slot, mouseBox->currentData().toInt());
+                        });
+            }
+            gameTable_->setCellWidget(row, mouseColumn, mouseCell);
         }
     }
 }
@@ -887,8 +907,10 @@ void ControlsPage::fillCommandTable() {
         const int target = commands[row];
         commandTable_->setRowHeight(row, 30);
         commandTable_->setItem(row, 0, cell(commandName(target), target));
-        commandTable_->setItem(row, 1, cell(keyboardName(commandKeyDrafts_.value(target))));
+        commandTable_->setItem(row, 1, cell(keyboardName(commandKeyDrafts_.value(target).value(0), commandKeyDrafts_.value(target).value(1))));
         commandTable_->setItem(row, 2, cell(padName(mapping, target)));
+        commandTable_->item(row, 1)->setToolTip(commandTable_->item(row, 1)->text());
+        commandTable_->item(row, 2)->setToolTip(commandTable_->item(row, 2)->text());
     }
 }
 
@@ -914,6 +936,7 @@ void ControlsPage::refreshPadCell(int target) {
         const auto* item = table->item(row, 0);
         if (item && item->data(Qt::UserRole).toInt() == target) {
             table->item(row, 2)->setText(padName(draft(), target));
+            table->item(row, 2)->setToolTip(table->item(row, 2)->text());
             return;
         }
     }
@@ -924,10 +947,71 @@ void ControlsPage::refreshKeyboardCell(int target) {
     for (int row = 0; row < table->rowCount(); ++row) {
         const auto* item = table->item(row, 0);
         if (!item || item->data(Qt::UserRole).toInt() != target) continue;
-        const int key = target < 16 ? draft().keyboard.value(target)
-                                    : commandKeyDrafts_.value(target);
-        table->item(row, 1)->setText(keyboardName(key));
+        const int first = target < 16 ? draft().keyboardBinding(target, 0)
+                                     : commandKeyDrafts_.value(target).value(0);
+        const int second = target < 16 ? draft().keyboardBinding(target, 1)
+                                      : commandKeyDrafts_.value(target).value(1);
+        table->item(row, keyboardColumn)->setText(keyboardName(first, second));
+        table->item(row, keyboardColumn)->setToolTip(keyboardName(first, second));
         return;
+    }
+}
+
+void ControlsPage::refreshMouseCell(int target) {
+    for (int row = 0; row < gameTable_->rowCount(); ++row) {
+        if (gameTable_->item(row, 0)->data(Qt::UserRole).toInt() != target) continue;
+        auto* widget = gameTable_->cellWidget(row, mouseColumn);
+        if (!widget) return;
+        const auto boxes = widget->findChildren<QComboBox*>();
+        for (int slot = 0; slot < boxes.size(); ++slot) {
+            const QSignalBlocker blocker(boxes[slot]);
+            boxes[slot]->setCurrentIndex(boxes[slot]->findData(
+                draft().mouseBinding(displayMapping().controllerType, target, slot)));
+        }
+        return;
+    }
+}
+
+void ControlsPage::onMouseChanged(int target, int slot, int button) {
+    if (refreshing_) return;
+    const ControllerType type = displayMapping().controllerType;
+    const bool sequence = !sequence_.isEmpty() && captureColumn_ == mouseColumn && captureTarget_ == target;
+    if (!sequence && button && (draft().mouseBinding(type, target, 0) == button ||
+                                draft().mouseBinding(type, target, 1) == button)) {
+        refreshMouseCell(target);
+        return;
+    }
+    if (button) {
+        for (int other : activeGameTargets()) {
+            if (other == target) continue;
+            int first = draft().mouseBinding(type, other, 0);
+            int second = draft().mouseBinding(type, other, 1);
+            if (first != button && second != button) continue;
+            if (first == button) first = 0;
+            if (second == button) second = 0;
+            if (!first) { first = second; second = 0; }
+            draft().setMouseBinding(type, other, 0, first);
+            draft().setMouseBinding(type, other, 1, second);
+            refreshMouseCell(other);
+        }
+    }
+    int first = draft().mouseBinding(type, target, 0);
+    int second = draft().mouseBinding(type, target, 1);
+    if (button || sequence) {
+        const auto buttons = updatedKeys(first, second, button, sequence);
+        first = buttons[0]; second = buttons[1];
+    } else {
+        if (slot == 0) first = 0;
+        else second = 0;
+        if (!first) { first = second; second = 0; }
+    }
+    draft().setMouseBinding(type, target, 0, first);
+    draft().setMouseBinding(type, target, 1, second);
+    dirty_.insert(draftKey());
+    refreshMouseCell(target);
+    if (sequence) {
+        setCaptureTarget(-1);
+        QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
     }
 }
 
@@ -972,24 +1056,28 @@ void ControlsPage::clearGameKeyConflicts(int key, int profileFilter,
         for (int player = 0; player < int(MaxControllerPlayers); ++player) {
             const int mappingKey = profile * int(MaxControllerPlayers) + player;
             const PlayerMapping mapping = drafts_.contains(mappingKey)
-                ? drafts_.value(mappingKey)
-                : input_.mapping(ConsoleProfile(profile), player);
+                ? drafts_.value(mappingKey) : input_.mapping(ConsoleProfile(profile), player);
             if (profileFilter >= 0 && player != exceptPlayer) {
                 const bool listed = playerBox_->findData(player) >= 0;
                 const bool active = mapping.connected ||
                     (selectedJCartPlayer(player) && !dirty_.contains(mappingKey));
                 if (!listed || !active) continue;
             }
-            for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
-                if (it.value() != key ||
-                    (profile == profileFilter && player == exceptPlayer &&
-                     it.key() == exceptTarget))
-                    continue;
+            QSet<int> targets;
+            for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) targets.insert(it.key());
+            for (auto it = mapping.keyboardSecondary.cbegin(); it != mapping.keyboardSecondary.cend(); ++it) targets.insert(it.key());
+            for (int target : targets) {
+                if (profile == profileFilter && player == exceptPlayer && target == exceptTarget) continue;
+                int first = mapping.keyboardBinding(target, 0), second = mapping.keyboardBinding(target, 1);
+                if (first != key && second != key) continue;
+                if (first == key) first = 0;
+                if (second == key) second = 0;
+                if (!first) { first = second; second = 0; }
                 if (!drafts_.contains(mappingKey)) drafts_.insert(mappingKey, mapping);
-                drafts_[mappingKey].keyboard[it.key()] = 0;
+                drafts_[mappingKey].setKeyboardBinding(target, 0, first);
+                drafts_[mappingKey].setKeyboardBinding(target, 1, second);
                 dirty_.insert(mappingKey);
-                if (profile == int(selectedProfile()) && player == selectedPlayer())
-                    refreshKeyboardCell(it.key());
+                if (profile == int(selectedProfile()) && player == selectedPlayer()) refreshKeyboardCell(target);
             }
         }
     }
@@ -998,8 +1086,13 @@ void ControlsPage::clearGameKeyConflicts(int key, int profileFilter,
 void ControlsPage::clearCommandKeyConflicts(int key, int exceptTarget) {
     if (!key) return;
     for (int command : commands) {
-        if (command == exceptTarget || commandKeyDrafts_.value(command) != key) continue;
-        commandKeyDrafts_[command] = 0;
+        if (command == exceptTarget) continue;
+        auto keys = commandKeyDrafts_.value(command);
+        if (!keys.contains(key)) continue;
+        keys.removeAll(key);
+        keys.removeAll(0);
+        while (keys.size() < 2) keys.append(0);
+        commandKeyDrafts_[command] = keys;
         dirtyCommandKeys_ = true;
         refreshKeyboardCell(command);
     }
@@ -1019,19 +1112,29 @@ bool ControlsPage::onKeyboardChanged(int target, const QKeySequence& sequence) {
         setFeedback(error, true);
         return false;
     }
+    const bool duplicate = target >= 16 ? commandKeyDrafts_.value(target).contains(key)
+        : draft().keyboardBinding(target, 0) == key || draft().keyboardBinding(target, 1) == key;
+    if (key && sequence_.isEmpty() && duplicate) {
+        setFeedback(Localization::text(QStringLiteral("Клавиша назначена.")));
+        return true;
+    }
     if (target >= 16) {
         if (key) {
             clearCommandKeyConflicts(key, target);
             clearGameKeyConflicts(key);
         }
-        commandKeyDrafts_[target] = key;
+        commandKeyDrafts_[target] = updatedKeys(commandKeyDrafts_.value(target).value(0),
+                                              commandKeyDrafts_.value(target).value(1), key, !sequence_.isEmpty());
         dirtyCommandKeys_ = true;
     } else {
         if (key) {
             clearGameKeyConflicts(key, int(selectedProfile()), selectedPlayer(), target);
             clearCommandKeyConflicts(key);
         }
-        draft().keyboard[target] = key;
+        const auto keys = updatedKeys(draft().keyboardBinding(target, 0), draft().keyboardBinding(target, 1),
+                                      key, !sequence_.isEmpty());
+        draft().setKeyboardBinding(target, 0, keys[0]);
+        draft().setKeyboardBinding(target, 1, keys[1]);
         dirty_.insert(draftKey());
     }
     refreshKeyboardCell(target);
@@ -1047,9 +1150,16 @@ void ControlsPage::clearBinding(int target, int column) {
     if (column == keyboardColumn) {
         onKeyboardChanged(target, QKeySequence());
     } else if (column == gamepadColumn) {
-        draft().pad[target] = PadBinding{};
+        draft().setPadBinding(target, 0, PadBinding{});
+        draft().setPadBinding(target, 1, PadBinding{});
         dirty_.insert(draftKey());
         refreshPadCell(target);
+        setFeedback(Localization::text(QStringLiteral("Назначение кнопки очищено.")));
+    } else if (column == mouseColumn) {
+        const ControllerType type = displayMapping().controllerType;
+        for (int slot = 0; slot < 2; ++slot) draft().setMouseBinding(type, target, slot, 0);
+        dirty_.insert(draftKey());
+        refreshMouseCell(target);
         setFeedback(Localization::text(QStringLiteral("Назначение кнопки очищено.")));
     }
 }
@@ -1064,6 +1174,10 @@ void ControlsPage::setCaptureTarget(int target, int column) {
                 if (!sourceColumn || sourceColumn == col)
                     table->item(row, col)->setData(waitingForBindingRole, waiting);
             }
+            if (sourceColumn == mouseColumn && id < 16) {
+                if (auto* widget = table->cellWidget(row, mouseColumn))
+                    widget->setStyleSheet(waiting ? QStringLiteral("QComboBox { background: #a92d31; color: white; font-weight: bold; }") : QString());
+            }
             break;
         }
     };
@@ -1075,6 +1189,24 @@ void ControlsPage::setCaptureTarget(int target, int column) {
 
 void ControlsPage::beginCaptureFor(int target, int column) {
     if (target < 16 && !activeGameTargets().contains(target)) return;
+    if (column == mouseColumn) {
+        setCaptureTarget(target, column);
+        selectTarget(target);
+        setFeedback(Localization::text(QStringLiteral("Назначение «%1»: выберите кнопку мыши в списке. Esc — отмена."))
+            .arg(InputManager::targetName(selectedProfile(), target, displayMapping().controllerType)));
+        for (int row = 0; row < gameTable_->rowCount(); ++row) {
+            if (gameTable_->item(row, 0)->data(Qt::UserRole).toInt() != target) continue;
+            gameTable_->setCurrentCell(row, mouseColumn);
+            gameTable_->scrollToItem(gameTable_->item(row, 0));
+            if (auto* widget = gameTable_->cellWidget(row, mouseColumn)) {
+                const auto boxes = widget->findChildren<QComboBox*>();
+                if (!boxes.isEmpty()) boxes.first()->setFocus(Qt::OtherFocusReason);
+            }
+            break;
+        }
+        updateActionButtons();
+        return;
+    }
     QString deviceKey;
     bool padPresent = false;
     if (column != keyboardColumn) {
@@ -1088,7 +1220,7 @@ void ControlsPage::beginCaptureFor(int target, int column) {
         return;
     }
     // Outside a binding column (button name or diagram), accept either device.
-    const int source = !padPresent ? keyboardColumn : (column == gamepadColumn ? gamepadColumn : 0);
+    const int source = column == keyboardColumn || !padPresent ? keyboardColumn : (column == gamepadColumn ? gamepadColumn : 0);
     setCaptureTarget(target, source);
     selectTarget(target);
     setFocus(Qt::OtherFocusReason);
@@ -1158,10 +1290,19 @@ void ControlsPage::stopCapture() {
 }
 
 void ControlsPage::onCaptured(const PadBinding& binding) {
-    if (captureTarget_ < 0 || captureColumn_ == keyboardColumn) return;
+    if (captureTarget_ < 0 || captureColumn_ == keyboardColumn || captureColumn_ == mouseColumn) return;
     const int target = captureTarget_;
     setCaptureTarget(-1);
     const QString deviceKey = captureDeviceKey();
+    const bool duplicate = input_.capturedBindingConflicts(selectedProfile(), deviceKey, target,
+                                                         draft().padBinding(target, 0), binding) ||
+        input_.capturedBindingConflicts(selectedProfile(), deviceKey, target,
+                                       draft().padBinding(target, 1), binding);
+    if (sequence_.isEmpty() && duplicate) {
+        setFeedback(Localization::text(QStringLiteral("Назначено: %1")).arg(InputManager::bindingName(binding)));
+        updateActionButtons();
+        return;
+    }
     const auto deviceKeys = resolvedDeviceKeys();
     const int profile = int(selectedProfile());
     for (int player = 0; player < int(MaxControllerPlayers); ++player) {
@@ -1172,25 +1313,38 @@ void ControlsPage::onCaptured(const PadBinding& binding) {
         const ControllerType type = selectedAdapter() == ControllerAdapter::None &&
             !selectedJCartPlayer(player) ? mapping.controllerType : ControllerType::Pad;
         const auto gameTargets = InputManager::gameTargets(selectedProfile(), mapping.sixButton, type);
-        for (auto it = mapping.pad.cbegin(); it != mapping.pad.cend(); ++it) {
-            if (player == selectedPlayer() && it.key() == target) continue;
-            if (it.key() < 16 && !gameTargets.contains(it.key())) continue;
-            if (player != selectedPlayer() && target < 16 && it.key() < 16) continue;
-            if (!input_.capturedBindingConflicts(selectedProfile(), deviceKey,
-                                                 it.key(), it.value(), binding))
-                continue;
+        QSet<int> targets;
+        for (auto it = mapping.pad.cbegin(); it != mapping.pad.cend(); ++it) targets.insert(it.key());
+        for (auto it = mapping.padSecondary.cbegin(); it != mapping.padSecondary.cend(); ++it) targets.insert(it.key());
+        for (int other : targets) {
+            if (player == selectedPlayer() && other == target) continue;
+            if (other < 16 && !gameTargets.contains(other)) continue;
+            if (player != selectedPlayer() && target < 16 && other < 16) continue;
+            PadBinding first = mapping.padBinding(other, 0), second = mapping.padBinding(other, 1);
+            bool removed = false;
+            for (PadBinding* configured : {&first, &second}) {
+                if (input_.capturedBindingConflicts(selectedProfile(), deviceKey, other, *configured, binding)) {
+                    *configured = PadBinding{};
+                    removed = true;
+                }
+            }
+            if (!removed) continue;
+            if (first.kind == PadBinding::None) { first = second; second = PadBinding{}; }
             if (!drafts_.contains(mappingKey)) drafts_.insert(mappingKey, mapping);
-            drafts_[mappingKey].pad[it.key()] = PadBinding{};
+            drafts_[mappingKey].setPadBinding(other, 0, first);
+            drafts_[mappingKey].setPadBinding(other, 1, second);
             dirty_.insert(mappingKey);
-            if (player == selectedPlayer()) refreshPadCell(it.key());
+            if (player == selectedPlayer()) refreshPadCell(other);
         }
     }
-    draft().pad[target] = binding;
+    const auto bindings = updatedPads(draft().padBinding(target, 0), draft().padBinding(target, 1),
+                                      binding, !sequence_.isEmpty());
+    draft().setPadBinding(target, 0, bindings[0]);
+    draft().setPadBinding(target, 1, bindings[1]);
     dirty_.insert(draftKey());
     refreshPadCell(target);
     if (sequence_.isEmpty()) {
-        setFeedback(Localization::text(QStringLiteral("Назначено: %1")).arg(
-            InputManager::bindingName(binding)));
+        setFeedback(Localization::text(QStringLiteral("Назначено: %1")).arg(InputManager::bindingName(binding)));
         updateActionButtons();
     } else {
         QTimer::singleShot(0, this, &ControlsPage::advanceSequence);
@@ -1214,23 +1368,21 @@ void ControlsPage::onCaptureCancelled() {
 bool ControlsPage::validateDrafts() {
     QSet<int> commandKeys;
     for (int command : commands) {
-        const int key = commandKeyDrafts_.value(command);
-        if (!key) continue;
-        if (reservedKey(key) || commandKeys.contains(key)) {
-            selectFailure(int(selectedProfile()), selectedPlayer(), true);
-            setFeedback(Localization::text(QStringLiteral(
-                "Проверьте клавиши команд: есть повтор или зарезервированное сочетание.")), true);
-            return false;
-        }
-        commandKeys.insert(key);
-        for (int profile = 0; profile < 4; ++profile) {
-            for (int player = 0; player < int(MaxControllerPlayers); ++player) {
-                const int mappingKey = profile * int(MaxControllerPlayers) + player;
-                const PlayerMapping mapping = drafts_.contains(mappingKey)
-                    ? drafts_.value(mappingKey)
-                    : input_.mapping(ConsoleProfile(profile), player);
-                for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
-                    if (it.value() != key) continue;
+        for (int key : commandKeyDrafts_.value(command)) {
+            if (!key) continue;
+            if (reservedKey(key) || commandKeys.contains(key)) {
+                selectFailure(int(selectedProfile()), selectedPlayer(), true);
+                setFeedback(Localization::text(QStringLiteral(
+                    "Проверьте клавиши команд: есть повтор или зарезервированное сочетание.")), true);
+                return false;
+            }
+            commandKeys.insert(key);
+            for (int profile = 0; profile < 4; ++profile) {
+                for (int player = 0; player < int(MaxControllerPlayers); ++player) {
+                    const int mappingKey = profile * int(MaxControllerPlayers) + player;
+                    const PlayerMapping mapping = drafts_.contains(mappingKey)
+                        ? drafts_.value(mappingKey) : input_.mapping(ConsoleProfile(profile), player);
+                    if (!mapping.keyboard.values().contains(key) && !mapping.keyboardSecondary.values().contains(key)) continue;
                     selectFailure(profile, player, true);
                     setFeedback(Localization::text(QStringLiteral(
                         "Клавиша команды также назначена кнопке игры.")), true);
@@ -1313,44 +1465,48 @@ bool ControlsPage::validateDrafts() {
             ? mapping.controllerType : ControllerType::Pad;
         const auto targets = InputManager::gameTargets(system, mapping.sixButton, type);
         QSet<int> keyboard;
-        for (auto it = mapping.keyboard.cbegin(); it != mapping.keyboard.cend(); ++it) {
-            const int assigned = it.value();
-            if (!targets.contains(it.key()) || !assigned) continue;
-            if (reservedKey(assigned) || keyboard.contains(assigned)) {
-                selectFailure(profile, player);
-                setFeedback(Localization::text(QStringLiteral("Проверьте клавиши: есть повтор или "
-                                           "зарезервированная клавиша.")), true);
-                return false;
+        QVector<int> allTargets = targets;
+        allTargets += commands;
+        for (int target : targets) {
+            for (int slot = 0; slot < 2; ++slot) {
+                const int assigned = mapping.keyboardBinding(target, slot);
+                if (!assigned) continue;
+                if (reservedKey(assigned) || keyboard.contains(assigned)) {
+                    selectFailure(profile, player);
+                    setFeedback(Localization::text(QStringLiteral("Проверьте клавиши: есть повтор или "
+                                               "зарезервированная клавиша.")), true);
+                    return false;
+                }
+                keyboard.insert(assigned);
             }
-            keyboard.insert(assigned);
         }
         QVector<PadBinding> pad;
-        for (auto it = mapping.pad.cbegin(); it != mapping.pad.cend(); ++it) {
-            if (it.key() < 16 && !targets.contains(it.key())) continue;
-            const PadBinding& assigned = it.value();
-            if (assigned.kind == PadBinding::None ||
-                assigned.kind == PadBinding::Automatic) continue;
-            for (const PadBinding& previous : pad) {
-                if (assigned == previous) {
-                    selectFailure(profile, player, it.key() >= 16);
+        for (int target : allTargets) {
+            for (int slot = 0; slot < 2; ++slot) {
+                const PadBinding assigned = mapping.padBinding(target, slot);
+                if (assigned.kind == PadBinding::None || assigned.kind == PadBinding::Automatic) continue;
+                if (pad.contains(assigned)) {
+                    selectFailure(profile, player, target >= 16);
                     setFeedback(Localization::text(QStringLiteral("Проверьте геймпад: один элемент "
                                                "назначен двум действиям.")), true);
                     return false;
                 }
+                pad.append(assigned);
             }
-            pad.append(assigned);
         }
         if (type != ControllerType::Pad) {
             QSet<int> mouseButtons;
             for (int target : targets) {
-                const int button = mapping.mouse.value(int(type)).value(target, 0);
-                if (!button) continue;
-                if (mouseButtons.contains(button)) {
-                    selectFailure(profile, player);
-                    setFeedback(Localization::text(QStringLiteral("Проверьте мышь: одна кнопка назначена двум действиям.")), true);
-                    return false;
+                for (int slot = 0; slot < 2; ++slot) {
+                    const int button = mapping.mouseBinding(type, target, slot);
+                    if (!button) continue;
+                    if (mouseButtons.contains(button)) {
+                        selectFailure(profile, player);
+                        setFeedback(Localization::text(QStringLiteral("Проверьте мышь: одна кнопка назначена двум действиям.")), true);
+                        return false;
+                    }
+                    mouseButtons.insert(button);
                 }
-                mouseButtons.insert(button);
             }
         }
     }
@@ -1393,10 +1549,10 @@ bool ControlsPage::apply() {
                           key % int(MaxControllerPlayers), drafts_[key]);
     dirty_.clear();
     if (dirtyCommandKeys_) {
-        input_.setCommandKeys(commandKeyDrafts_);
+        input_.setCommandKeyBindings(commandKeyDrafts_);
         dirtyCommandKeys_ = false;
         for (int command : commands)
-            commandKeyDrafts_[command] = input_.commandKey(command);
+            commandKeyDrafts_[command] = {input_.commandKey(command), input_.commandKey(command, 1)};
         fillCommandTable();
     }
     input_.setBackgroundGamepadEnabled(backgroundGamepadBox_->isChecked());
@@ -1410,27 +1566,23 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         const bool press = event->type() == QEvent::MouseButtonPress;
         const bool clear = press && mouse->button() == Qt::MiddleButton;
         const bool assign = !press && mouse->button() == Qt::LeftButton;
-        const bool select = press && captureTarget_ >= 0 && mouse->button() == Qt::LeftButton;
+        const bool select = press && mouse->button() == Qt::LeftButton;
         if ((assign || clear || select) && isVisible()) {
             auto* table = commandTabSelected() ? commandTable_ : gameTable_;
             auto* widget = qobject_cast<QWidget*>(watched);
-            if (table && widget && (widget == table->viewport() ||
-                (clear && widget->parentWidget() == table->viewport()))) {
+            if (table && widget && (widget == table->viewport() || table->viewport()->isAncestorOf(widget))) {
                 const auto pos = widget->mapTo(table->viewport(), mouse->position().toPoint());
                 const auto index = table->indexAt(pos);
                 if (index.isValid()) {
                     const int row = index.row(), column = index.column();
                     const int target = table->item(row, 0)->data(Qt::UserRole).toInt();
                     if (select) {
-                        if (target != captureTarget_ || column != captureColumn_) stopCapture();
-                        return false; // Let the view select the cell normally.
+                        if (captureTarget_ >= 0 && (target != captureTarget_ || column != captureColumn_)) stopCapture();
+                        table->setCurrentCell(row, column);
+                        return false; // Let the view or embedded mouse list handle the click.
                     }
                     table->setCurrentCell(row, column);
-                    if (clear && column == mouseColumn) {
-                        stopCapture();
-                        if (auto* box = qobject_cast<QComboBox*>(table->cellWidget(row, column)))
-                            box->setCurrentIndex(0);
-                    } else if (clear && column != 0) {
+                    if (clear && column != 0) {
                         clearBinding(target, column);
                     } else if (assign && column != mouseColumn) {
                         stopCapture();
@@ -1480,7 +1632,7 @@ bool ControlsPage::eventFilter(QObject* watched, QEvent* event) {
         setFeedback(Localization::text(QStringLiteral("Назначение отменено.")));
         return true;
     }
-    if (captureColumn_ == gamepadColumn) return true;
+    if (captureColumn_ == gamepadColumn || captureColumn_ == mouseColumn) return true;
     if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt ||
         key == Qt::Key_AltGr || key == Qt::Key_Meta || key == Qt::Key_unknown)
         return true;
