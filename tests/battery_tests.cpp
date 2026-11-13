@@ -13,6 +13,7 @@
 #include <QTemporaryDir>
 #include <QtEndian>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -327,16 +328,151 @@ void cdIntegration(const QString& core, const QString& bios) {
     require(QByteArray(bramMemory(selectedGroup),8192)==selectedBytes,
             "configured per-game CD BRAM did not survive power cycle");
 }
+// These sequential consoles use the actual network envelope without a socket.
+void networkCartridgeIntegration(const QString& core, bool linked) {
+    QTemporaryDir temp; require(temp.isValid(),"temporary directory failed"); QString error;
+    const auto path=temp.filePath("network.md"); write(path,makeSaveRamRom());
+    QLibrary lib(core);
+    const auto memory=reinterpret_cast<void*(*)(unsigned)>(lib.resolve("retro_get_memory_data"));
+    const auto info=QFileInfo(core);
+    QLibrary peer(info.dir().filePath(info.completeBaseName()+"_linkpeer."+info.suffix()));
+    const auto peerMemory=linked
+        ? reinterpret_cast<void*(*)(unsigned)>(peer.resolve("retro_get_memory_data")) : nullptr;
+    require(memory && (!linked || peerMemory),"network SRAM memory APIs missing");
+    auto bytes=[&](bool second=false) {
+        auto* data=static_cast<char*>((second?peerMemory:memory)(RETRO_MEMORY_SAVE_RAM));
+        require(data,"network SRAM unavailable"); return data;
+    };
+    const auto hostData=temp.filePath("host");
+    const auto hostSave=hostData+"/saves/network.srm";
+    QByteArray live(65536,char(0xff)); live[0]=0x73; live[0x8123]=0x5d;
+    auto peerLive=live; peerLive[0]=0x26;
+    QByteArray snapshot; QJsonObject configuration;
+    {
+        LibretroHost host(core,hostData);
+        require(host.setLinkCableEnabled(linked,error) && host.load(path,error),qPrintable(error));
+        host.runFrame(); require(host.flushSaveRam(error),qPrintable(error));
+        const auto disk=read(hostSave);
+        std::memcpy(bytes(),live.constData(),size_t(live.size()));
+        if(linked) std::memcpy(bytes(true),peerLive.constData(),size_t(peerLive.size()));
+        configuration=host.movieConfiguration();
+        configuration.insert("networkCompatibility",QString::fromLatin1(host.networkCompatibility().toHex()));
+        snapshot=host.captureNetworkState();
+        require(!snapshot.isEmpty() && read(hostSave)==disk && disk!=live,
+                "network capture did not preserve unsaved authoritative SRAM");
+        host.setNetworkReadOnly(true); host.unload();
+    }
+    for(bool hasSave:{false,true}) {
+        const auto guestData=temp.filePath(hasSave?"guest-saved":"guest-empty");
+        const auto guestSave=guestData+"/saves/network.srm";
+        const QByteArray personal(65536,char(0x29)), backup(65536,char(0x19));
+        if(hasSave) {
+            require(QDir().mkpath(QFileInfo(guestSave).absolutePath()),"guest save directory failed");
+            write(guestSave,personal); write(guestSave+".bak",backup);
+        }
+        LibretroHost guest(core,guestData); require(guest.load(path,error),qPrintable(error));
+        require(QByteArray(bytes(),65536)==(hasSave?personal:QByteArray(65536,char(0xff))),
+                "guest SRAM fixture was not loaded");
+        guest.setNetworkReadOnly(true);
+        require(guest.prepareNetwork(configuration,error) &&
+                guest.restoreNetworkState(snapshot,error),qPrintable(error));
+        require(QByteArray(bytes(),65536)==live &&
+                (!linked || QByteArray(bytes(true),65536)==peerLive),
+                "network snapshot did not replace both consoles' live SRAM");
+        require(guest.flushSaveRam(error),qPrintable(error));
+        guest.unload(); // Real guest exit keeps disk protection until after unload.
+        guest.setNetworkReadOnly(false);
+        require(hasSave ? read(guestSave)==personal && read(guestSave+".bak")==backup
+                        : !QFile::exists(guestSave) && !QFile::exists(guestSave+".bak"),
+                "network guest exit replaced or created personal SRAM files");
+    }
+}
+void networkCdIntegration(const QString& core, const QString& bios) {
+    QTemporaryDir temp; require(temp.isValid(),"temporary directory failed"); QString error;
+    QByteArray disc(150*2048,0); disc.replace(0,14,"SEGADISCSYSTEM"); disc[0x20b]=0;
+    const auto path=temp.filePath("network.iso"); write(path,disc);
+    QLibrary lib(core);
+    using Getter=bool(*)(unsigned,const void**,size_t*,const char**);
+    const auto get=reinterpret_cast<Getter>(lib.resolve("retro_kegarefusion_get_bram_raw"));
+    require(get,"raw BRAM extension missing");
+    auto region=[&](unsigned index, QString* path=nullptr) {
+        const void* data=nullptr; size_t size=0; const char* raw=nullptr;
+        require(get(index,&data,&size,&raw) && data && raw &&
+                size==(index?512*1024u:8192u),"network BRAM region unavailable or wrong size");
+        if(path) *path=QString::fromUtf8(raw);
+        return QByteArray(static_cast<const char*>(data),qsizetype(size));
+    };
+    auto replace=[&](unsigned index,const QByteArray& bytes) {
+        const void* data=nullptr; size_t size=0; const char* raw=nullptr;
+        require(get(index,&data,&size,&raw) && data && size==size_t(bytes.size()),
+                "network BRAM destination changed");
+        std::memcpy(const_cast<void*>(data),bytes.constData(),size);
+    };
+    const auto hostData=temp.filePath("host");
+    SegaCdBios::importDirectory(bios,hostData,error); require(error.isEmpty(),qPrintable(error));
+    std::array<QByteArray,2> live,disk; QByteArray snapshot; QJsonObject configuration;
+    {
+        LibretroHost host(core,hostData); require(host.load(path,error),qPrintable(error));
+        for(unsigned i=0;i<2;++i) {
+            auto seed=region(i); seed[0]=char(0x31+i); replace(i,seed);
+        }
+        require(host.flushSaveRam(error),qPrintable(error));
+        for(unsigned i=0;i<2;++i) {
+            QString savePath; live[i]=region(i,&savePath); disk[i]=read(savePath);
+            live[i][0]=char(0x63+i);
+            // An in-progress format marker still belongs to the current core.
+            live[i][live[i].size()-1]^=1; replace(i,live[i]);
+        }
+        configuration=host.movieConfiguration();
+        configuration.insert("networkCompatibility",QString::fromLatin1(host.networkCompatibility().toHex()));
+        snapshot=host.captureNetworkState(); require(!snapshot.isEmpty(),"network CD capture failed");
+        for(unsigned i=0;i<2;++i) {
+            QString savePath; region(i,&savePath);
+            require(read(savePath)==disk[i] && live[i]!=disk[i],"CD capture wrote live BRAM to disk");
+        }
+        host.setNetworkReadOnly(true); host.unload();
+    }
+    const auto guestData=temp.filePath("guest");
+    SegaCdBios::importDirectory(bios,guestData,error); require(error.isEmpty(),qPrintable(error));
+    const std::array<QString,2> saves{guestData+"/saves/network/scd_U.brm",
+                                     guestData+"/saves/network/4Mbit_cart.brm"};
+    std::array<QByteArray,2> personal=disk,backup=disk;
+    require(QDir().mkpath(QFileInfo(saves[0]).absolutePath()),"guest BRAM directory failed");
+    for(unsigned i=0;i<2;++i) {
+        personal[i][0]=char(0x21+i); backup[i][0]=char(0x11+i);
+        write(saves[i],personal[i]); write(saves[i]+".bak",backup[i]);
+    }
+    LibretroHost guest(core,guestData); require(guest.load(path,error),qPrintable(error));
+    for(unsigned i=0;i<2;++i)
+        require(region(i)==personal[i],"guest personal BRAM fixture was not loaded");
+    guest.setNetworkReadOnly(true);
+    require(guest.prepareNetwork(configuration,error) &&
+            guest.restoreNetworkState(snapshot,error),qPrintable(error));
+    for(unsigned i=0;i<2;++i)
+        require(region(i)==live[i],"network snapshot did not restore raw CD BRAM");
+    require(guest.flushSaveRam(error),qPrintable(error));
+    guest.unload(); guest.setNetworkReadOnly(false);
+    for(unsigned i=0;i<2;++i)
+        require(read(saves[i])==personal[i] && read(saves[i]+".bak")==backup[i],
+                "network guest exit replaced personal CD BRAM or backup");
+}
 int main(int argc,char** argv){
     QCoreApplication app(argc,argv);
     try{
         policy();
-        if(argc>=2) storageRootsIntegration(QString::fromLocal8Bit(argv[1]));
+        if(argc>=2) {
+            const auto core=QString::fromLocal8Bit(argv[1]);
+            storageRootsIntegration(core);
+            networkCartridgeIntegration(core,false);
+            networkCartridgeIntegration(core,true);
+        }
         if(argc==4) {
             cartridgeIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
             cdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[3]));
+            networkCdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[3]));
         } else if(argc==3) {
             cdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
+            networkCdIntegration(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]));
         } else require(argc==1,"usage: battery_tests [CORE BIOS_DIR | CORE OLD_CORE BIOS_DIR]");
         std::puts("Battery saves: debounce, rate limit, backup, failure preservation and requested integration passed");
         return 0;
