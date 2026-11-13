@@ -400,12 +400,14 @@ void ShaderPipeline::draw(Program& program, unsigned texture, const QSize& input
 
 bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSize& surface,
                             const QRect& viewport, quint64 frameCount, int direction, QString& error,
-                            const QImage& spriteOwnership, double originalAspect) {
+                            const QImage& spriteOwnership, double originalAspect, const QSize& presentationSize) {
     if (frame.isNull() || viewport.isEmpty()) return true;
     for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
     if (frame.width() > maxTexture_ || frame.height() > maxTexture_)
         return fail(error, QStringLiteral("The video source exceeds the GPU texture size limit."));
-    finalViewportSize_ = viewport.size();
+    // A screenshot changes only the final blit. Keep viewport-dependent passes
+    // and feedback buffers at their presentation sizes.
+    finalViewportSize_ = presentationSize.isEmpty() ? viewport.size() : presentationSize;
     originalAspect_ = originalAspect > 0 ? float(originalAspect) : float(frame.width()) / frame.height();
     const bool reset = resetHistory_ || frameCount < lastFrame_;
     const bool advance = !reset && frameCount != lastFrame_;
@@ -441,8 +443,8 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
                                            mode == ShaderPass::Scale::Viewport ? out : in);
             return result > maxTexture_ ? 0 : qMax(1, qRound(result));
         };
-        const QSize output(dimension(pass.scaleX, pass.factorX, input.width(), viewport.width()),
-                           dimension(pass.scaleY, pass.factorY, input.height(), viewport.height()));
+        const QSize output(dimension(pass.scaleX, pass.factorX, input.width(), finalViewportSize_.width()),
+                           dimension(pass.scaleY, pass.factorY, input.height(), finalViewportSize_.height()));
         if (output.isEmpty())
             return fail(error, QStringLiteral("Shader pass %1 exceeds the GPU texture size limit.").arg(i + 1));
         const bool mipmap = i + 1 < preset_.passes.size() && preset_.passes[i + 1].mipmap;

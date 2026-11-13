@@ -59,7 +59,8 @@ public:
     bool initialize(const ShaderPreset& preset, QString& error);
     bool render(const QImage& frame, unsigned framebuffer, const QSize& surface,
                 const QRect& viewport, quint64 frameCount, int frameDirection, QString& error,
-                const QImage& spriteOwnership = {}, double originalAspect = 0);
+                const QImage& spriteOwnership = {}, double originalAspect = 0,
+                const QSize& presentationSize = {});
     void resetFrameHistory() { resetHistory_ = true; }
     bool setParameter(const QString& id, float value);
     QVector<ShaderParameter> parameters() const { return preset_.parameters; }

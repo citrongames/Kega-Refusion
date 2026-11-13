@@ -199,7 +199,6 @@ private:
     double emulatedFps_ = 0.0;
     double gameFps_ = 0.0;
     QStringList metricsLines_;
-    bool capturingGame_ = false;
     bool capturingReticles_ = false;
     struct GunState {
         QPointF aim{0.5, 0.5};

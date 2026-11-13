@@ -450,16 +450,12 @@ void screenshotWidgetTests() {
     QString error;
     require(view.setShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp"), &error), qPrintable(error));
     require(view.setShaderParameter(QStringLiteral("DITHER_STRENGTH"), 1), "screenshot shader parameter unavailable");
-    const QImage baseline = capture(view);
+    capture(view);
     view.setPausedStatus(true);
     view.showOsd(QStringLiteral("Screenshot saved"));
     const QImage overlays = capture(view);
     const QImage clean = view.captureGameImage();
-    require(!clean.isNull() && clean.width() < baseline.width() && clean.height() == baseline.height(),
-            "clean native screenshot retained display borders");
-    const int left = qRound((baseline.width() - clean.width()) / 2.0);
-    require(clean == baseline.copy(left, 0, clean.width(), clean.height()),
-            "clean native screenshot retained OSD or changed filtered output");
+    require(clean.size() == source.size(), "shader screenshot differs from native dimensions");
     const QColor centre = clean.pixelColor(clean.width()/2, clean.height()/2);
     require(qAbs(centre.red()-120) <= 2 && qAbs(centre.blue()-120) <= 2,
             "clean native screenshot omitted the dither filter shader");
@@ -499,11 +495,9 @@ void widgetTests(const QString& directory) {
     view.showOsd(QStringLiteral("Saved: slot 3"));
     const QImage shaderOsd = capture(view);
     const QImage cleanShader = view.captureGameImage();
-    require(!cleanShader.isNull() && cleanShader.width() < shaderOsd.width() &&
-            cleanShader.height() == shaderOsd.height(), "clean shader screenshot did not crop pillarboxes");
-    const int left = qRound((shaderOsd.width() - cleanShader.width()) / 2.0);
-    require(cleanShader == filtered.copy(left, 0, cleanShader.width(), cleanShader.height()),
-            "clean screenshot contains OSD or lost shader rendering");
+    require(cleanShader.size() == stripes.size(), "shader screenshot differs from original console raster");
+    require(cleanShader.pixelColor(cleanShader.width()/2, cleanShader.height()/2) == center,
+            "native screenshot lost shader rendering");
     require(view.captureImage() == shaderOsd, "clean GPU screenshot changed the visible OSD");
     require(view.setShaderPreset({}, &error), qPrintable(error));
     const QImage stockOsd = capture(view);

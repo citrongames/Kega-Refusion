@@ -15,6 +15,7 @@
 #include <QGuiApplication>
 #include <QOpenGLWidget>
 #include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QScopedValueRollback>
@@ -130,6 +131,22 @@ public:
         if (okay) update();
         return okay;
     }
+    QImage captureGameImage(const QSize& native) {
+        if (!pipeline_ || !isValid()) return {};
+        makeCurrent();
+        QImage image;
+        {
+            QOpenGLFramebufferObject target(native);
+            QString error;
+            if (target.isValid() && pipeline_->render(owner_->frame_, target.handle(), native,
+                    QRect(QPoint(), native), owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error,
+                    owner_->spriteOwnership_, owner_->aspectRatio_, presentationRect().size()))
+                image = target.toImage();
+            glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+        }
+        doneCurrent();
+        return image;
+    }
     void resetFrameHistory() {
         if (pipeline_) pipeline_->resetFrameHistory();
     }
@@ -168,11 +185,6 @@ protected:
             return;
         }
         const qreal dpr = devicePixelRatioF();
-        const QRectF logical = owner_->gameRect();
-        // Round edges, rather than independently rounding position and dimensions.
-        const QRect target(QPoint(qRound(logical.left() * dpr), qRound(logical.top() * dpr)),
-                           QPoint(qRound((logical.left() + logical.width()) * dpr) - 1,
-                                  qRound((logical.top() + logical.height()) * dpr) - 1));
         // Invalidate Qt's cached GL state around native drawing; otherwise its
         // font atlas can be mistaken for the video texture on subsequent paints.
         QPainter painter(this);
@@ -180,13 +192,21 @@ protected:
         QString error;
         if (!pipeline_->render(owner_->frame_, defaultFramebufferObject(),
                                QSize(qRound(width() * dpr), qRound(height() * dpr)),
-                               target, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_, owner_->aspectRatio_)) {
+                               presentationRect(), owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_, owner_->aspectRatio_)) {
             failed(error);
         }
         painter.endNativePainting();
         owner_->paintOverlays(painter);
     }
 private:
+    QRect presentationRect() const {
+        const qreal dpr = devicePixelRatioF();
+        const QRectF logical = owner_->gameRect();
+        // Round edges, rather than independently rounding position and dimensions.
+        return QRect(QPoint(qRound(logical.left() * dpr), qRound(logical.top() * dpr)),
+                           QPoint(qRound((logical.left() + logical.width()) * dpr) - 1,
+                                  qRound((logical.top() + logical.height()) * dpr) - 1));
+    }
     void failed(const QString& error) {
         if (failurePending_) return;
         failurePending_ = true;
@@ -246,25 +266,13 @@ QImage GameView::captureImage() {
 }
 
 QImage GameView::captureGameImage() {
-    if (frame_.isNull() || width() <= 0 || height() <= 0) return {};
-    QImage image;
-    {
-        // Grab the rendered shader/raster output without changing OSD settings,
-        // notices or persistent status. The next presentation restores overlays.
-        const QScopedValueRollback<bool> capture(capturingGame_, true);
-        image = captureImage();
-    }
-    repaintView();
-    if (image.isNull()) return {};
-    const QRectF game = gameRect();
-    const qreal scaleX = qreal(image.width()) / width();
-    const qreal scaleY = qreal(image.height()) / height();
-    const QRect crop(QPoint(qRound(game.left() * scaleX), qRound(game.top() * scaleY)),
-                     QPoint(qRound((game.left() + game.width()) * scaleX) - 1,
-                            qRound((game.top() + game.height()) * scaleY) - 1));
-    image = image.copy(crop.intersected(image.rect()));
-    image.setDevicePixelRatio(1.0);
-    return image;
+    if (frame_.isNull()) return {};
+    const QSize native = VideoFrameGeometry::nativeSize(frame_);
+    if (shaderView_ && shaderView_->isVisible() && shaderView_->isValid() && !shaderPreset_.path.isEmpty())
+        return shaderView_->captureGameImage(native);
+    // Debug masks and backdrop are already applied in the core. A core video
+    // filter can produce more samples than the console raster (e.g. Blargg).
+    return frame_.size() == native ? frame_ : frame_.scaled(native, Qt::IgnoreAspectRatio, Qt::FastTransformation);
 }
 
 void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
@@ -710,7 +718,7 @@ qreal GameView::osdScale() const {
 }
 
 void GameView::paintOverlays(QPainter& painter) {
-    if (osdEnabled_ && !capturingGame_) {
+    if (osdEnabled_) {
         const bool status = !notices_.isEmpty() || stateSlots_.expiresAt ||
             paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
             movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||
@@ -1293,7 +1301,7 @@ void GameView::focusOutEvent(QFocusEvent* event) {
 }
 
 void GameView::paintCrosshairs(QPainter& painter) {
-    if (frame_.isNull() || loading_ || capturingGame_ || capturingReticles_) return;
+    if (frame_.isNull() || loading_ || capturingReticles_) return;
     const bool visible = std::any_of(std::begin(guns_), std::end(guns_),
         [](const GunState& gun) { return gun.enabled && gun.crosshairVisible && gun.hasAim && !gun.offscreen; });
     if (!visible) return;

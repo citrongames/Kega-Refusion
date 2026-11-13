@@ -342,8 +342,7 @@ void testCleanScreenshot() {
         const QImage clean = view.captureGameImage();
         require(!clean.isNull() && colorBounds(clean, colour) == clean.rect(),
                 "clean screenshot contains display borders or missing game pixels");
-        if (mode == GameView::AspectMode::Stretch)
-            require(clean.size() == view.size(), "stretched screenshot dimensions differ from game viewport");
+        require(clean == frame, "screenshot differs from the original console raster");
         view.setPausedStatus(true);
         view.setMutedStatus(true);
         view.setFastForwardStatus(true);
@@ -363,6 +362,10 @@ void testCleanScreenshot() {
         view.setOsdEnabled(false);
         view.setOsdEnabled(true);
     }
+    QImage filtered = frame.scaled(640, 224);
+    VideoFrameGeometry::setNativeSize(filtered, frame.size());
+    view.setFrame(filtered, 4.0 / 3.0);
+    require(view.captureGameImage().size() == frame.size(), "core filter changed screenshot dimensions");
     QTemporaryDir directory;
     require(directory.isValid(), "screenshot codec scratch unavailable");
     const QImage clean = view.captureGameImage();
@@ -938,7 +941,9 @@ void testOverlayScaling() {
         prepare(view, window.size());
         show(view);
         const auto bounds = [&view] {
-            return changedBounds(view.captureGameImage(), render(view));
+            GameView clean;
+            prepare(clean, view.size());
+            return changedBounds(render(clean), render(view));
         };
         const QRect reference = bounds();
         require(!reference.isEmpty(), "scaled overlay did not render");
