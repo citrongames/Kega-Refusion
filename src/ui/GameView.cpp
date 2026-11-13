@@ -619,16 +619,15 @@ void GameView::setRewindStatus(bool enabled) {
 void GameView::setMovieCounterAsTime(bool enabled) {
     if (movieCounterAsTime_ == enabled) return;
     movieCounterAsTime_ = enabled;
-    if (osdEnabled_ && (movieMode_ == 1 || movieMode_ == 2)) repaintView();
+    if (osdEnabled_ && movieMode_ == 2) repaintView();
 }
 
 void GameView::setMovieStatus(int mode, quint64 frame, quint64 length, double fps) {
     if (!std::isfinite(fps) || fps <= 0.0 || fps > 1000.0) fps = 60.0;
-    const bool changed = mode != movieMode_ || ((mode == 1 || mode == 2) &&
-        (movieCounterAsTime_
-            ? movieSeconds(frame, fps) != movieSeconds(movieFrame_, movieFps_) ||
-              (mode == 2 && movieSeconds(length, fps) != movieSeconds(movieLength_, movieFps_))
-            : frame != movieFrame_ || (mode == 2 && length != movieLength_)));
+    const bool changed = mode != movieMode_ || (mode == 2 && (movieCounterAsTime_
+        ? movieSeconds(frame, fps) != movieSeconds(movieFrame_, movieFps_) ||
+          movieSeconds(length, fps) != movieSeconds(movieLength_, movieFps_)
+        : frame != movieFrame_ || length != movieLength_));
     movieMode_ = mode;
     movieFrame_ = frame;
     movieLength_ = length;
@@ -801,8 +800,11 @@ void GameView::paintOsd(QPainter& painter, const QSize& canvas) {
         drawPanel({runTimerText_}, rightY, true, Qt::AlignRight);
 
     int y = margin;
-    if (videoRecording_) {
-        const QString label = Localization::text(QStringLiteral("ЗАПИСЬ ВИДЕО"));
+    if (movieMode_ == 1 || videoRecording_) {
+        QStringList sources;
+        if (movieMode_ == 1) sources << Localization::text(QStringLiteral("ВВОД"));
+        if (videoRecording_) sources << Localization::text(QStringLiteral("ВИДЕО"));
+        const QString label = sources.join(QStringLiteral(" + "));
         const int dotSize = qMax(7, fm.height() / 2);
         const int panelWidth = qMin(canvas.width() - 2 * margin,
                                     fm.horizontalAdvance(label) + dotSize + 3 * pad);
@@ -813,7 +815,7 @@ void GameView::paintOsd(QPainter& painter, const QSize& canvas) {
         painter.setPen(QColor(126, 224, 233));
         painter.drawRect(box.adjusted(0, 0, -1, -1));
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(232, 56, 62));
+        painter.setBrush((osdClock_.elapsed() / 650) % 2 ? QColor(149, 43, 48) : QColor(232, 56, 62));
         painter.drawEllipse(QRect(margin + pad, y + (panelHeight - dotSize) / 2,
                                   dotSize, dotSize));
         const int textX = margin + 2 * pad + dotSize;
@@ -825,17 +827,16 @@ void GameView::paintOsd(QPainter& painter, const QSize& canvas) {
         painter.restore();
         y += panelHeight + 4;
     }
-    const auto counter = [this](quint64 frame) {
-        return movieCounterAsTime_ ? movieTime(frame, movieFps_) : QString::number(frame);
-    };
-    const QString unit = movieCounterAsTime_ ? Localization::text(QStringLiteral("ВРЕМЯ")) : Localization::text(QStringLiteral("КАДР"));
-    if (movieMode_ == 1)
-        y += drawPanel({Localization::text(QStringLiteral("ЗАПИСЬ")),
-                        QStringLiteral("%1 %2").arg(unit, counter(movieFrame_))}, y, true) + 4;
-    else if (movieMode_ == 2)
+    if (movieMode_ == 2) {
+        const auto counter = [this](quint64 frame) {
+            return movieCounterAsTime_ ? movieTime(frame, movieFps_) : QString::number(frame);
+        };
+        const QString unit = movieCounterAsTime_ ? Localization::text(QStringLiteral("ВРЕМЯ"))
+                                                 : Localization::text(QStringLiteral("КАДР"));
         y += drawPanel({Localization::text(QStringLiteral("ВОСПРОИЗВЕДЕНИЕ")),
                         QStringLiteral("%1 %2 / %3").arg(unit, counter(movieFrame_), counter(movieLength_))},
                        y, true) + 4;
+    }
     if (connectionWaiting_)
         y += drawPanel({Localization::text(QStringLiteral("СВЯЗЬ ПОТЕРЯНА"))}, y, true) + 4;
     else if (readinessWaiting_)
