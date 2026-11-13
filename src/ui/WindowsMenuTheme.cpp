@@ -2,11 +2,17 @@
 
 #ifdef Q_OS_WIN
 
+#include <QGuiApplication>
 #include <QOperatingSystemVersion>
+#include <QPalette>
 #include <uxtheme.h>
 #include <commctrl.h>
+#include <vsstyle.h>
+#include <vssym32.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <string>
 
 namespace {
@@ -29,13 +35,6 @@ struct UahDrawMenuItem {
     int position;
 };
 
-constexpr COLORREF background = RGB(32, 32, 32);
-constexpr COLORREF hoverBackground = RGB(53, 53, 53);
-constexpr COLORREF selectedBackground = RGB(65, 65, 65);
-constexpr COLORREF textColor = RGB(235, 235, 235);
-constexpr COLORREF inactiveTextColor = RGB(160, 160, 160);
-constexpr COLORREF disabledTextColor = RGB(112, 112, 112);
-
 class SavedDc final {
 public:
     explicit SavedDc(HDC dc) : dc_(dc), saved_(SaveDC(dc)) {}
@@ -48,27 +47,322 @@ private:
     int saved_;
 };
 
-class MenuFont final {
+bool fill(HDC dc, const RECT& rectangle, COLORREF color) {
+    SetDCBrushColor(dc, color);
+    return FillRect(dc, &rectangle, static_cast<HBRUSH>(GetStockObject(DC_BRUSH))) != 0;
+}
+
+bool highContrastEnabled() {
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = sizeof(contrast);
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0)
+            && (contrast.dwFlags & HCF_HIGHCONTRASTON);
+}
+
+COLORREF nativeColor(const QColor& color) {
+    return RGB(color.red(), color.green(), color.blue());
+}
+
+bool darkColor(COLORREF color) {
+    return qGray(GetRValue(color), GetGValue(color), GetBValue(color)) < 128;
+}
+
+double luminance(COLORREF color) {
+    const auto channel = [](BYTE value) {
+        const double component = value / 255.0;
+        return component <= 0.04045 ? component / 12.92
+                : std::pow((component + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(GetRValue(color)) + 0.7152 * channel(GetGValue(color))
+            + 0.0722 * channel(GetBValue(color));
+}
+
+bool readable(COLORREF background, COLORREF text, bool disabled = false) {
+    const double a = luminance(background), b = luminance(text);
+    return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05) >= (disabled ? 1.25 : 3.0);
+}
+
+struct MenuVisual {
+    COLORREF background = 0;
+    COLORREF text = 0;
+    HTHEME theme = nullptr;
+    int part = 0;
+    int state = 0;
+};
+
+// Some Windows versions expose light BARITEM parts even for dark menu classes.
+// Render the actual parts once when settings change, rather than assuming that
+// OpenThemeData succeeding means the class has a usable dark implementation.
+class ThemeSampler final {
 public:
-    explicit MenuFont(HWND window, bool bold) {
-        // These APIs are available on the Windows 10 baseline required by Qt 6.
-        // Query for every menu paint, so monitor DPI/settings/HWND replacement
-        // cannot leave a cached font or theme handle attached to an old window.
-        const UINT dpi = GetDpiForWindow(window);
+    explicit ThemeSampler(HWND window) {
+        HDC screen = GetDC(window);
+        if (!screen) return;
+        dc_ = CreateCompatibleDC(screen);
+        bitmap_ = CreateCompatibleBitmap(screen, rectangle_.right, rectangle_.bottom);
+        ReleaseDC(window, screen);
+        if (dc_ && bitmap_) previous_ = SelectObject(dc_, bitmap_);
+    }
+    ~ThemeSampler() {
+        if (dc_ && previous_) SelectObject(dc_, previous_);
+        if (bitmap_) DeleteObject(bitmap_);
+        if (dc_) DeleteDC(dc_);
+    }
+    bool color(HTHEME theme, int part, int state, COLORREF base, COLORREF& result,
+               bool edge = false) {
+        if (!dc_ || !previous_ || !IsThemePartDefined(theme, part, state)
+                || !fill(dc_, rectangle_, base)
+                || FAILED(DrawThemeBackground(theme, dc_, part, state, &rectangle_, nullptr)))
+            return false;
+        result = GetPixel(dc_, edge ? 0 : rectangle_.right / 2, rectangle_.bottom / 2);
+        return result != CLR_INVALID;
+    }
+private:
+    RECT rectangle_{0, 0, 80, 30};
+    HDC dc_ = nullptr;
+    HBITMAP bitmap_ = nullptr;
+    HGDIOBJ previous_ = nullptr;
+};
+
+class MenuPaintResources final {
+public:
+    ~MenuPaintResources() { reset(); }
+    HWND window = nullptr;
+    bool dark = false;
+    bool highContrast = false;
+    UINT dpi = 0;
+    COLORREF background = 0;
+    COLORREF inactiveText = 0;
+    COLORREF selectedBorder = 0;
+    bool frameSelected = false;
+    std::array<MenuVisual, MBI_DISABLEDPUSHED> visuals{};
+
+    HFONT font(bool bold) const {
+        const HFONT selected = fonts_[bold ? 1 : 0];
+        return selected ? selected : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+    }
+    void refresh(HWND hwnd, bool darkMode) {
+        closeThemeAndFonts();
+        window = hwnd;
+        dpi = GetDpiForWindow(hwnd);
+        if (!dpi) dpi = GetDpiForSystem();
+        highContrast = highContrastEnabled();
+        dark = darkMode && !highContrast;
+        systemPalette();
+        if (!highContrast) {
+            if (dark) darkPaletteFallback();
+            if (IsThemeActive()) {
+                ThemeSampler sampler(hwnd);
+                if (dark) loadDarkTheme(sampler);
+                else loadBarTheme(sampler);
+            }
+        }
         NONCLIENTMETRICSW metrics{};
         metrics.cbSize = sizeof(metrics);
-        if (dpi && SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS,
-                sizeof(metrics), &metrics, 0, dpi)) {
-            if (bold) metrics.lfMenuFont.lfWeight = FW_BOLD;
-            font_ = CreateFontIndirectW(&metrics.lfMenuFont);
+        if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi)
+                || SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0)) {
+            fonts_[0] = CreateFontIndirectW(&metrics.lfMenuFont);
+            metrics.lfMenuFont.lfWeight = FW_BOLD;
+            fonts_[1] = CreateFontIndirectW(&metrics.lfMenuFont);
+        }
+        replaceBrush();
+    }
+    void reset() {
+        // A hidden fullscreen bar is still a live, detached HMENU. Remove our
+        // brush from that menu before deleting it, as well as on HWND replacement.
+        if (brushedMenu_ && IsMenu(brushedMenu_)) setBrush(brushedMenu_, nullptr);
+        brushedMenu_ = nullptr;
+        if (ownsBrush_ && brush_) DeleteObject(brush_);
+        brush_ = nullptr;
+        ownsBrush_ = false;
+        closeThemeAndFonts();
+        window = nullptr;
+        dpi = 0;
+    }
+    void applyBrush(HMENU menu) {
+        if (brushedMenu_ != menu && brushedMenu_ && IsMenu(brushedMenu_))
+            setBrush(brushedMenu_, nullptr);
+        if (setBrush(menu, brush_)) brushedMenu_ = menu;
+    }
+private:
+    std::array<HTHEME, 2> themes_{};
+    std::array<HFONT, 2> fonts_{};
+    HMENU brushedMenu_ = nullptr;
+    HBRUSH brush_ = nullptr;
+    bool ownsBrush_ = false;
+
+    static bool setBrush(HMENU menu, HBRUSH brush) {
+        MENUINFO info{};
+        info.cbSize = sizeof(info);
+        info.fMask = MIM_BACKGROUND;
+        info.hbrBack = brush;
+        return SetMenuInfo(menu, &info) != 0;
+    }
+    void replaceBrush() {
+        HBRUSH replacement = nullptr;
+        bool owned = false;
+        if (background == GetSysColor(COLOR_MENUBAR))
+            replacement = GetSysColorBrush(COLOR_MENUBAR);
+        else if (background == GetSysColor(COLOR_MENU))
+            replacement = GetSysColorBrush(COLOR_MENU);
+        else {
+            replacement = CreateSolidBrush(background);
+            owned = true;
+        }
+        if (!replacement) return;
+        if (brushedMenu_ && IsMenu(brushedMenu_) && !setBrush(brushedMenu_, replacement)) {
+            if (owned) DeleteObject(replacement);
+            return;
+        }
+        if (ownsBrush_ && brush_) DeleteObject(brush_);
+        brush_ = replacement;
+        ownsBrush_ = owned;
+    }
+    void closeThemeAndFonts() {
+        for (auto& theme : themes_) {
+            if (theme) CloseThemeData(theme);
+            theme = nullptr;
+        }
+        for (auto& font : fonts_) {
+            if (font) DeleteObject(font);
+            font = nullptr;
         }
     }
-    ~MenuFont() { if (font_) DeleteObject(font_); }
+    void systemPalette() {
+        BOOL flat = FALSE;
+        SystemParametersInfoW(SPI_GETFLATMENU, 0, &flat, 0);
+        background = GetSysColor(flat ? COLOR_MENUBAR : COLOR_MENU);
+        const COLORREF text = GetSysColor(COLOR_MENUTEXT);
+        const COLORREF disabled = GetSysColor(COLOR_GRAYTEXT);
+        visuals[MBI_NORMAL - 1] = {background, text};
+        visuals[MBI_HOT - 1] = {GetSysColor(COLOR_MENUHILIGHT), GetSysColor(COLOR_HIGHLIGHTTEXT)};
+        visuals[MBI_PUSHED - 1] = {GetSysColor(COLOR_HIGHLIGHT), GetSysColor(COLOR_HIGHLIGHTTEXT)};
+        visuals[MBI_DISABLED - 1] = {background, disabled};
+        visuals[MBI_DISABLEDHOT - 1] = {background, disabled};
+        visuals[MBI_DISABLEDPUSHED - 1] = {background, disabled};
+        inactiveText = text;
+        selectedBorder = GetSysColor(COLOR_WINDOWTEXT);
+        frameSelected = visuals[MBI_HOT - 1].background == visuals[MBI_PUSHED - 1].background;
+    }
+    void darkPaletteFallback() {
+        const auto palette = QGuiApplication::palette();
+        const auto base = nativeColor(palette.color(QPalette::Window));
+        const auto text = nativeColor(palette.color(QPalette::WindowText));
+        // Qt can still carry a light palette during a Windows theme transition.
+        // In that case retain paired native system colors until dark parts load.
+        if (!darkColor(base) || !readable(base, text)) return;
+        background = base;
+        visuals[MBI_NORMAL - 1] = {base, text};
+        auto disabled = nativeColor(palette.color(QPalette::Disabled, QPalette::WindowText));
+        if (!readable(base, disabled, true)) disabled = GetSysColor(COLOR_GRAYTEXT);
+        if (!readable(base, disabled, true)) disabled = text;
+        visuals[MBI_DISABLED - 1] = {base, disabled};
+        visuals[MBI_DISABLEDHOT - 1] = visuals[MBI_DISABLED - 1];
+        visuals[MBI_DISABLEDPUSHED - 1] = visuals[MBI_DISABLED - 1];
+        const auto hot = nativeColor(palette.color(QPalette::Button));
+        const auto hotText = nativeColor(palette.color(QPalette::ButtonText));
+        visuals[MBI_HOT - 1] = readable(hot, hotText) ? MenuVisual{hot, hotText} : visuals[MBI_NORMAL - 1];
+        const auto pushed = nativeColor(palette.color(QPalette::Highlight));
+        const auto pushedText = nativeColor(palette.color(QPalette::HighlightedText));
+        if (readable(pushed, pushedText)) visuals[MBI_PUSHED - 1] = {pushed, pushedText};
+        inactiveText = nativeColor(palette.color(QPalette::Inactive, QPalette::WindowText));
+        if (!readable(base, inactiveText)) inactiveText = text;
+        selectedBorder = readable(base, pushed, true) ? pushed : text;
+        frameSelected = visuals[MBI_HOT - 1].background == visuals[MBI_PUSHED - 1].background;
+    }
+    bool readVisual(ThemeSampler& sampler, HTHEME theme, int part, int state,
+                    COLORREF base, bool expectDark, bool disabled, MenuVisual& visual) {
+        COLORREF fillColor{}, textColor{};
+        if (!sampler.color(theme, part, state, base, fillColor)
+                || darkColor(fillColor) != expectDark
+                || FAILED(GetThemeColor(theme, part, state, TMT_TEXTCOLOR, &textColor))
+                || !readable(fillColor, textColor, disabled)) return false;
+        visual = {fillColor, textColor, theme, part, state};
+        return true;
+    }
+    void loadBarTheme(ThemeSampler& sampler) {
+        HTHEME theme = OpenThemeData(window, L"Menu");
+        if (!theme) return;
+        COLORREF base{};
+        std::array<MenuVisual, MBI_DISABLEDPUSHED> native{};
+        bool valid = sampler.color(theme, MENU_BARBACKGROUND, MB_ACTIVE, background, base)
+                && !darkColor(base);
+        for (int state = MBI_NORMAL; valid && state <= MBI_DISABLEDPUSHED; ++state)
+            valid = readVisual(sampler, theme, MENU_BARITEM, state, base, false,
+                               state >= MBI_DISABLED, native[state - 1]);
+        if (!valid) {
+            CloseThemeData(theme);
+            return;
+        }
+        themes_[0] = theme;
+        visuals = native;
+        background = base;
+        inactiveText = native[MBI_NORMAL - 1].text;
+        frameSelected = false;
+    }
+    void loadDarkTheme(ThemeSampler& sampler) {
+        constexpr const wchar_t* classes[] = {L"DarkMode_ImmersiveStart::Menu", L"Menu",
+                                              L"DarkMode::Menu", L"DarkMode_Explorer::Menu"};
+        for (const auto* name : classes) {
+            HTHEME theme = OpenThemeData(window, name);
+            if (!theme) continue;
+            MenuVisual normal{}, hot{}, disabled{}, disabledHot{};
+            const bool valid = readVisual(sampler, theme, MENU_POPUPITEM, MPI_NORMAL,
+                                           background, true, false, normal)
+                    && readVisual(sampler, theme, MENU_POPUPITEM, MPI_HOT,
+                                  normal.background, true, false, hot)
+                    && readVisual(sampler, theme, MENU_POPUPITEM, MPI_DISABLED,
+                                  normal.background, true, true, disabled);
+            if (!valid) {
+                CloseThemeData(theme);
+                continue;
+            }
+            if (!readVisual(sampler, theme, MENU_POPUPITEM, MPI_DISABLEDHOT,
+                            normal.background, true, true, disabledHot)) disabledHot = disabled;
+            if (!themes_[0]) {
+                themes_[0] = theme;
+                background = normal.background;
+                inactiveText = normal.text;
+                visuals = {normal, hot, hot, disabled, disabledHot, disabledHot};
+                frameSelected = true;
+                // Use the active Windows popup border when a pressed-state
+                // fill is unavailable; no application-defined color is needed.
+                COLORREF border{};
+                if (sampler.color(theme, MENU_POPUPBORDERS, 0, background, border, true)
+                        && readable(background, border, true)) selectedBorder = border;
+                continue;
+            }
+            // Dark menu bar parts are often light. Two real dark popup styles
+            // provide OS-owned hover/pressed fills without reusing those parts.
+            if (hot.background != visuals[MBI_HOT - 1].background
+                    && luminance(hot.background) > luminance(visuals[MBI_HOT - 1].background)) {
+                themes_[1] = theme;
+                visuals[MBI_PUSHED - 1] = hot;
+                visuals[MBI_DISABLEDPUSHED - 1] = disabledHot;
+                frameSelected = false;
+                break;
+            }
+            CloseThemeData(theme);
+        }
+    }
+};
+
+MenuPaintResources& menuPaintResources(HWND window) {
+    static MenuPaintResources resources;
+    if (window && (resources.window != window || resources.dpi != GetDpiForWindow(window)))
+        resources.refresh(window, resources.window == window ? resources.dark
+                                                           : WindowsMenuTheme::systemPrefersDark());
+    return resources;
+}
+
+class MenuFont final {
+public:
+    explicit MenuFont(HWND window, bool bold) : font_(menuPaintResources(window).font(bold)) {}
     HFONT get() const { return font_; }
     MenuFont(const MenuFont&) = delete;
     MenuFont& operator=(const MenuFont&) = delete;
 private:
-    HFONT font_ = nullptr;
+    HFONT font_;
 };
 
 bool menuBarRect(HWND window, HMENU menu, RECT& rectangle) {
@@ -100,17 +394,28 @@ bool menuBarRect(HWND window, HMENU menu, RECT& rectangle) {
     return !IsRectEmpty(&rectangle);
 }
 
-bool fill(HDC dc, const RECT& rectangle, COLORREF color) {
-    SetDCBrushColor(dc, color);
-    return FillRect(dc, &rectangle, static_cast<HBRUSH>(GetStockObject(DC_BRUSH))) != 0;
-}
+
+bool measureHeading(HWND window, HMENU bar, MEASUREITEMSTRUCT& item);
 
 // USER32 paints the native separator after the themed menu callbacks. Finish
 // the single nonclient scanline after the normal window procedure has returned.
 LRESULT CALLBACK finishMenuPaint(HWND window, UINT msg, WPARAM wParam, LPARAM lParam,
                                  UINT_PTR id, DWORD_PTR) {
+    // Qt handles WM_MEASUREITEM before the nativeEvent hook and supplies its
+    // own item padding. Measure our headings before forwarding to Qt so USER32
+    // can add its native margins exactly once, in both captioned and fullscreen
+    // windows. Unrelated menu/control measurements continue through Qt.
+    if (msg == WM_MEASUREITEM) {
+        auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+        if (item && item->CtlType == ODT_MENU && measureHeading(window, GetMenu(window), *item))
+            return TRUE;
+    }
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(window, finishMenuPaint, id);
     const auto result = DefSubclassProc(window, msg, wParam, lParam);
+    if (msg == WM_NCDESTROY) {
+        WindowsMenuTheme::resetMenuPaintResources(window);
+        return result;
+    }
     const bool printing = msg == WM_PRINT && (lParam & PRF_NONCLIENT);
     if (!printing && msg != WM_NCPAINT && !(msg == WM_NCACTIVATE && lParam != -1))
         return result;
@@ -121,7 +426,7 @@ LRESULT CALLBACK finishMenuPaint(HWND window, UINT msg, WPARAM wParam, LPARAM lP
     if (dc) {
         {
             const SavedDc saved(dc);
-            if (saved) fill(dc, band, background);
+            if (saved) fill(dc, band, menuPaintResources(window).background);
         }
         if (!printing) ReleaseDC(window, dc);
     }
@@ -135,7 +440,7 @@ bool drawBackground(const MSG& message) {
         return false;
     }
     const SavedDc saved(menu->dc);
-    return saved && fill(menu->dc, rectangle, background);
+    return saved && fill(menu->dc, rectangle, menuPaintResources(message.hwnd).background);
 }
 
 struct MenuLabel {
@@ -187,32 +492,46 @@ bool paintHeading(HWND window, HDC dc, HMENU menu, UINT position, RECT itemRect,
             hot = !selected;
         }
     }
+    auto& resources = menuPaintResources(window);
     const MenuFont font(window, (state & ODS_DEFAULT) || (itemState & MFS_DEFAULT));
     if (!font.get()) return false;
-    // Restore the DC before MenuFont is destroyed, so it is never deleted while
-    // selected. The caller owns the DC; every color, font and clip is restored.
+    // Every color, font and clip on the caller-owned DC is restored.
     const SavedDc saved(dc);
     if (!saved) return false;
     if (IntersectClipRect(dc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom) == ERROR)
         return false;
-    COLORREF color = background;
-    if (!disabled) {
-        if (selected) color = selectedBackground;
-        else if (hot) color = hoverBackground;
+    const int themeState = disabled
+            ? (selected ? MBI_DISABLEDPUSHED : hot ? MBI_DISABLEDHOT : MBI_DISABLED)
+            : (selected ? MBI_PUSHED : hot ? MBI_HOT : MBI_NORMAL);
+    const auto& visual = resources.visuals[themeState - 1];
+    if (!fill(dc, itemRect, visual.background)) return false;
+    if (visual.theme)
+        DrawThemeBackground(visual.theme, dc, visual.part, visual.state, &itemRect, nullptr);
+    if (selected && resources.frameSelected) {
+        SetDCBrushColor(dc, disabled ? visual.text : resources.selectedBorder);
+        FrameRect(dc, &itemRect, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
     }
-    if (!fill(dc, itemRect, color)) return false;
     if (!SelectObject(dc, font.get())) return false;
     SetBkMode(dc, TRANSPARENT);
-    const bool inactive = (state & ODS_INACTIVE) && !selected && !hot && !label.custom();
-    SetTextColor(dc, disabled ? disabledTextColor : inactive ? inactiveTextColor : textColor);
+    const bool inactive = (state & ODS_INACTIVE) && !selected && !hot && !disabled;
+    const COLORREF text = inactive ? resources.inactiveText : visual.text;
+    SetTextColor(dc, text);
     UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
     if (state & ODS_NOACCEL) format |= DT_HIDEPREFIX;
     const auto exStyle = GetWindowLongPtrW(window, GWL_EXSTYLE);
-    if ((label.info.fType & MFT_RIGHTORDER) || (exStyle & (WS_EX_LAYOUTRTL | WS_EX_RTLREADING))) {
+    if ((label.info.fType & MFT_RIGHTORDER) || (exStyle & (WS_EX_LAYOUTRTL | WS_EX_RTLREADING)))
         format |= DT_RTLREADING;
+    if (label.text.empty()) return true;
+    if (visual.theme) {
+        DTTOPTS options{};
+        options.dwSize = sizeof(options);
+        options.dwFlags = DTT_TEXTCOLOR;
+        options.crText = text;
+        if (SUCCEEDED(DrawThemeTextEx(visual.theme, dc, visual.part, visual.state,
+                label.text.data(), static_cast<int>(label.text.size()), format, &itemRect, &options)))
+            return true;
     }
-    return label.text.empty() || DrawTextW(dc, label.text.data(), static_cast<int>(label.text.size()),
-                                          &itemRect, format) != 0;
+    return DrawTextW(dc, label.text.data(), static_cast<int>(label.text.size()), &itemRect, format) != 0;
 }
 
 bool measureHeading(HWND window, HMENU bar, MEASUREITEMSTRUCT& item) {
@@ -220,22 +539,46 @@ bool measureHeading(HWND window, HMENU bar, MEASUREITEMSTRUCT& item) {
     MenuLabel label;
     if (pos < 0 || !label.read(bar, pos) || !label.custom()) return false;
     const MenuFont font(window, label.info.fState & MFS_DEFAULT);
+    if (!font.get()) return false;
     HDC dc = GetDC(window);
     if (!dc) return false;
     RECT size{};
-    TEXTMETRICW metrics{};
     {
         const SavedDc saved(dc);
-        if (saved && font.get() && SelectObject(dc, font.get()) && GetTextMetricsW(dc, &metrics))
+        if (saved && SelectObject(dc, font.get()))
             DrawTextW(dc, label.text.data(), static_cast<int>(label.text.size()), &size,
                       DT_SINGLELINE | DT_CALCRECT);
     }
     ReleaseDC(window, dc);
     if (!size.bottom) return false;
-    // USER32 adds two extra average character widths for an owner-drawn item.
-    item.itemWidth = std::max(1L, size.right - 2 * metrics.tmAveCharWidth);
-    item.itemHeight = size.bottom;
+    // Return only the text extent. USER32 supplies the same horizontal menu
+    // margins as a native string heading (two average character widths).
+    // Removing them here clips long labels; adding them duplicates the padding.
+    item.itemWidth = std::max(1L, size.right - size.left);
+    item.itemHeight = size.bottom - size.top;
     return true;
+}
+
+// USER32 caches an owner-drawn item's dimensions even after SetMenuItemInfo,
+// DrawMenuBar, a frame change, or detaching/reattaching the same HMENU. Replace
+// only the heading record when its font/DPI changes; submenu handles, command
+// IDs, strings, state and accessibility data remain part of the native menu.
+bool resetHeadingSize(HMENU menu, UINT position) {
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_STRING | MIIM_FTYPE | MIIM_STATE | MIIM_BITMAP
+            | MIIM_SUBMENU | MIIM_DATA | MIIM_ID | MIIM_CHECKMARKS;
+    if (!GetMenuItemInfoW(menu, position, TRUE, &item) || item.cch > 32767) return false;
+    std::wstring text(item.cch + 1, L'\0');
+    item.dwTypeData = text.data();
+    item.cch = static_cast<UINT>(text.size());
+    if (!GetMenuItemInfoW(menu, position, TRUE, &item)) return false;
+    // Insert first so an allocation failure leaves the original item intact.
+    // RemoveMenu keeps the shared submenu alive; DeleteMenu would destroy it.
+    if (!InsertMenuItemW(menu, position, TRUE, &item)) return false;
+    if (RemoveMenu(menu, position + 1, MF_BYPOSITION)) return true;
+    RemoveMenu(menu, position, MF_BYPOSITION);
+    return false;
 }
 
 // Preserve access keys for owner-drawn headings, including cycling duplicate mnemonics.
@@ -340,44 +683,32 @@ const PopupThemeApi& popupApi() {
 }
 }
 
-void WindowsMenuTheme::refreshMenuBar(HWND hwnd, bool dark, bool fullscreen) {
+void WindowsMenuTheme::refreshMenuBar(HWND hwnd, bool dark, bool remeasure) {
     const HMENU menu = GetMenu(hwnd);
     if (!menu) return;
-    // Without a caption USER32 may skip the themed (UAH) item notifications.
-    // Ask it to send WM_DRAWITEM for these headings; keep the strings, submenu
-    // handles and commands in the native menu. Drop-down items are untouched.
-    const bool custom = dark && fullscreen;
+    // The same headings receive the same measure and paint messages in both modes.
     const int count = GetMenuItemCount(menu);
     for (int i = 0; i < count; ++i) {
         MENUITEMINFOW item{};
         item.cbSize = sizeof(item);
         item.fMask = MIIM_FTYPE | MIIM_DATA | MIIM_SUBMENU;
-        if (!GetMenuItemInfoW(menu, i, TRUE, &item) || !item.hSubMenu) continue;
+        if (!GetMenuItemInfoW(menu, i, TRUE, &item) || !item.hSubMenu ||
+            (item.fType & (MFT_BITMAP | MFT_SEPARATOR))) continue;
         const auto tag = reinterpret_cast<ULONG_PTR>(item.hSubMenu);
-        if (custom && !item.dwItemData && !(item.fType & (MFT_OWNERDRAW | MFT_BITMAP | MFT_SEPARATOR))) {
-            item.fType |= MFT_OWNERDRAW;
-            item.dwItemData = tag;
-        } else if (!custom && item.dwItemData == tag && (item.fType & MFT_OWNERDRAW)) {
-            item.fType &= ~MFT_OWNERDRAW;
-            item.dwItemData = 0;
-        } else {
-            continue;
-        }
+        if ((item.fType & MFT_OWNERDRAW) ? item.dwItemData != tag : item.dwItemData != 0) continue;
+        const bool newHeading = !(item.fType & MFT_OWNERDRAW);
+        if (!newHeading && !remeasure) continue;
+        item.fType |= MFT_OWNERDRAW;
+        item.dwItemData = tag;
         item.fMask = MIIM_FTYPE | MIIM_DATA;
-        SetMenuItemInfoW(menu, i, TRUE, &item);
+        if (SetMenuItemInfoW(menu, i, TRUE, &item))
+            resetHeadingSize(menu, static_cast<UINT>(i));
     }
-    // A borderless window can use the classic menu background instead of UAH.
-    // Set the root brush only; popup menus keep their native theme.
-    struct BackgroundBrush {
-        HBRUSH handle = CreateSolidBrush(background);
-        ~BackgroundBrush() { if (handle) DeleteObject(handle); }
-    };
-    static const BackgroundBrush brush;
-    MENUINFO info{};
-    info.cbSize = sizeof(info);
-    info.fMask = MIM_BACKGROUND;
-    info.hbrBack = dark ? brush.handle : nullptr;
-    SetMenuInfo(menu, &info);
+    // Share the exact themed base with the unused strip and nonclient edge.
+    // The cache keeps a detached fullscreen menu's brush alive until replaced.
+    auto& resources = menuPaintResources(hwnd);
+    if (resources.dark != (dark && !resources.highContrast)) resources.refresh(hwnd, dark);
+    resources.applyBrush(menu);
     DrawMenuBar(hwnd);
 }
 
@@ -396,9 +727,18 @@ bool WindowsMenuTheme::systemPrefersDark() {
         RRF_RT_REG_DWORD, nullptr, &light, &size) == ERROR_SUCCESS && light == 0;
 }
 
+void WindowsMenuTheme::refreshMenuPaintResources(HWND hwnd, bool dark) {
+    if (hwnd) menuPaintResources(nullptr).refresh(hwnd, dark);
+}
+
+void WindowsMenuTheme::resetMenuPaintResources(HWND hwnd) {
+    auto& resources = menuPaintResources(nullptr);
+    if (!hwnd || resources.window == hwnd) resources.reset();
+}
+
 void WindowsMenuTheme::applyPopupTheme(HWND hwnd, bool dark) {
-    if (dark) SetWindowSubclass(hwnd, finishMenuPaint, 1, 0);
-    else RemoveWindowSubclass(hwnd, finishMenuPaint, 1);
+    // This also intercepts native heading measurements before Qt in both modes.
+    SetWindowSubclass(hwnd, finishMenuPaint, 1, 0);
     const auto& api = popupApi();
     if (!api.allowWindow || (!api.setMode && !api.setLegacyMode)) return;
     if (api.setMode) api.setMode(dark ? PopupThemeApi::AppMode::AllowDark : PopupThemeApi::AppMode::Default);

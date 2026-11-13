@@ -252,7 +252,10 @@ private:
     bool fastForwardActive_ = false;
 #ifdef Q_OS_WIN
     void updateFullscreenComposition();
-    void refreshWindowsMenuTheme(bool newWindow);
+    void refreshWindowsMenuTheme(bool windowCreated);
+    void scheduleWindowsMenuRefresh(bool systemMetricsChanged);
+    bool menuRefreshPending_ = false;
+    bool menuMetricsDirty_ = false;
     bool darkNativeMenu_ = false;
     bool modalWindowBlocked_ = false;
     bool fullscreenMenuShown_ = false;

@@ -74,6 +74,7 @@
 #include <QWidgetAction>
 #include <QWindowStateChangeEvent>
 #include <optional>
+#include <utility>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #include <dwmapi.h>
@@ -401,8 +402,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         // Native menus use the Windows menu loop and do not send QMenu::aboutToHide.
         if (menuBar()->isNativeMenuBar()) {
             connect(action, &QAction::changed, this, [this] {
-                if (darkNativeMenu_ && fullscreenMenuShown_ && isMainMenuVisible())
-                    WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), true, true);
+                // Qt may still be inserting the newly visible heading into HMENU.
+                scheduleWindowsMenuRefresh(false);
             });
             continue;
         }
@@ -3270,7 +3271,7 @@ void MainWindow::setMainMenuVisible(bool visible) {
         if (visible != isMainMenuVisible()) {
             native->handleReparent(visible ? windowHandle() : nullptr);
             if (visible)
-                WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_, fullscreenMenuShown_);
+                WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_, true);
         }
         return;
     }
@@ -3285,22 +3286,39 @@ void MainWindow::pauseForMenu() {
 }
 
 #ifdef Q_OS_WIN
-void MainWindow::refreshWindowsMenuTheme(bool newWindow) {
+void MainWindow::refreshWindowsMenuTheme(bool windowCreated) {
     if (!windowHandle() || !windowHandle()->handle()) return;
     const auto hwnd = reinterpret_cast<HWND>(windowHandle()->winId());
     const bool dark = WindowsMenuTheme::systemPrefersDark();
-    if (!newWindow && darkNativeMenu_ == dark) return;
-    darkNativeMenu_ = dark;
-    WindowsMenuTheme::applyPopupTheme(hwnd, dark);
-    WindowsMenuTheme::refreshMenuBar(hwnd, dark, fullscreenMenuShown_);
+    if (windowCreated || darkNativeMenu_ != dark) {
+        darkNativeMenu_ = dark;
+        WindowsMenuTheme::applyPopupTheme(hwnd, dark);
+    }
+    WindowsMenuTheme::refreshMenuPaintResources(hwnd, darkNativeMenu_);
+    WindowsMenuTheme::refreshMenuBar(hwnd, darkNativeMenu_, true);
+}
+
+void MainWindow::scheduleWindowsMenuRefresh(bool systemMetricsChanged) {
+    menuMetricsDirty_ |= systemMetricsChanged;
+    if (menuRefreshPending_) return;
+    menuRefreshPending_ = true;
+    QTimer::singleShot(0, this, [this] {
+        menuRefreshPending_ = false;
+        const bool metricsChanged = std::exchange(menuMetricsDirty_, false);
+        if (!internalWinId() || !menuBar()->isNativeMenuBar()) return;
+        if (metricsChanged) refreshWindowsMenuTheme(false);
+        else WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_);
+    });
 }
 
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
     const auto& msg = *static_cast<MSG*>(message);
-    if (darkNativeMenu_ && WindowsMenuTheme::drawMenuBar(msg, result)) return true;
-    if ((msg.message == WM_SETTINGCHANGE || msg.message == WM_THEMECHANGED ||
-         msg.message == WM_SYSCOLORCHANGE) && menuWidget() && menuBar()->isNativeMenuBar())
-        refreshWindowsMenuTheme(false);
+    if (WindowsMenuTheme::drawMenuBar(msg, result)) return true;
+    if ((msg.message == WM_DPICHANGED || msg.message == WM_SETTINGCHANGE ||
+         msg.message == WM_THEMECHANGED || msg.message == WM_SYSCOLORCHANGE) && menuWidget()) {
+        // Apply new DPI, theme and menu fonts after Qt and USER32 finish the transition.
+        scheduleWindowsMenuRefresh(true);
+    }
     if ((msg.message == WM_ENTERMENULOOP || msg.message == WM_EXITMENULOOP) &&
         !msg.wParam && netplay_ && menuBar()->isNativeMenuBar()) {
         if (msg.message == WM_ENTERMENULOOP) {
@@ -3445,10 +3463,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             const auto type = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
             if (type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
                 native->handleReparent(nullptr);
+                WindowsMenuTheme::resetMenuPaintResources(reinterpret_cast<HWND>(windowHandle()->winId()));
             } else {
-                refreshWindowsMenuTheme(true);
                 if (!isFullScreen() || fullscreenMenuShown_)
                     native->handleReparent(windowHandle());
+                refreshWindowsMenuTheme(true);
             }
         }
     }
