@@ -82,7 +82,6 @@
 #include <QPlatformSurfaceEvent>
 #include <QWindow>
 #include <qpa/qplatformmenu.h>
-#include <qpa/qplatformwindow_p.h>
 #endif
 
 namespace {
@@ -342,7 +341,6 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     debugAudioGains_.fill(100);
     buildMenus();
 #ifdef Q_OS_WIN
-    prepareWindowsFullscreen();
     if (menuBar()->isNativeMenuBar()) refreshWindowsMenuTheme(true);
 #endif
     refreshCommandShortcuts();
@@ -3248,13 +3246,14 @@ void MainWindow::setFullscreenMode(bool enabled) {
         windowedGeometry_ = saveGeometry();
         wasMaximizedBeforeFullscreen_ = isMaximized();
 #ifdef Q_OS_WIN
-        prepareWindowsFullscreen();
+        windowsFullscreenRequested_ = true;
 #endif
         showFullScreen();
     } else {
 #ifdef Q_OS_WIN
         // Restore the monitor-sized client before Qt restores the window style.
         if (fullscreenMenuShown_) setMainMenuVisible(false);
+        windowsFullscreenRequested_ = false;
 #endif
         if (wasMaximizedBeforeFullscreen_) showMaximized();
         else showNormal();
@@ -3356,8 +3355,63 @@ bool MainWindow::nativeEventFilter(const QByteArray&, void* message, qintptr*) {
     return true;
 }
 
+namespace {
+// Qt measures fullscreen against the client rectangle. Keep the Win32
+// composition style but let the game use the space its border would take.
+bool fullscreenWindowMessage(const MSG& msg, qintptr* result) {
+    const auto fullscreenStyle = [](LONG_PTR style) {
+        return (style & WS_POPUP) && !(style & (WS_DLGFRAME | WS_THICKFRAME));
+    };
+    if (msg.message == WM_STYLECHANGING && int(msg.wParam) == GWL_STYLE) {
+        auto* style = reinterpret_cast<STYLESTRUCT*>(msg.lParam);
+        if (fullscreenStyle(style->styleNew)) style->styleNew |= WS_BORDER;
+    } else if (msg.message == WM_NCCALCSIZE) {
+        const auto style = GetWindowLongPtrW(msg.hwnd, GWL_STYLE);
+        if (fullscreenStyle(style) && (style & WS_BORDER) && !(style & WS_MINIMIZE)) {
+            // Give USER32 the border space outside the proposed client.
+            // Its normal menu layout (including wrapping and DPI) still runs.
+            RECT border{};
+            if (AdjustWindowRectExForDpi(&border, WS_BORDER, FALSE, 0, GetDpiForWindow(msg.hwnd))) {
+                RECT* client = msg.wParam
+                    ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(msg.lParam)->rgrc[0]
+                    : reinterpret_cast<RECT*>(msg.lParam);
+                client->left += border.left;
+                client->top += border.top;
+                client->right += border.right;
+                client->bottom += border.bottom;
+                *result = DefWindowProcW(msg.hwnd, msg.message, msg.wParam, msg.lParam);
+                return true;
+            }
+        }
+    } else if (msg.message == WM_WINDOWPOSCHANGING) {
+        // The shell can move a fullscreen window to another monitor using
+        // its old size or the destination work area (excluding the taskbar).
+        auto* pos = reinterpret_cast<WINDOWPOS*>(msg.lParam);
+        const auto style = GetWindowLongPtrW(msg.hwnd, GWL_STYLE);
+        if ((pos->flags & (SWP_NOMOVE | SWP_HIDEWINDOW)) || !fullscreenStyle(style) || (style & WS_MINIMIZE))
+            return false;
+        RECT proposed{};
+        if (!GetWindowRect(msg.hwnd, &proposed)) return false;
+        const int width = pos->flags & SWP_NOSIZE ? proposed.right - proposed.left : pos->cx;
+        const int height = pos->flags & SWP_NOSIZE ? proposed.bottom - proposed.top : pos->cy;
+        if (width <= 0 || height <= 0) return false;
+        proposed = {pos->x, pos->y, pos->x + width, pos->y + height};
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfoW(MonitorFromRect(&proposed, MONITOR_DEFAULTTONULL), &monitor)) return false;
+        pos->x = monitor.rcMonitor.left;
+        pos->y = monitor.rcMonitor.top;
+        pos->cx = monitor.rcMonitor.right - pos->x;
+        pos->cy = monitor.rcMonitor.bottom - pos->y;
+        if (pos->cx != width || pos->cy != height) pos->flags &= ~SWP_NOSIZE;
+    }
+    return false;
+}
+} // namespace
+
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
     const auto& msg = *static_cast<MSG*>(message);
+    if (windowsFullscreenRequested_ && fullscreenWindowMessage(msg, result)) return true;
     if (WindowsMenuTheme::drawMenuBar(msg, result)) return true;
     if ((msg.message == WM_DPICHANGED || msg.message == WM_SETTINGCHANGE ||
          msg.message == WM_THEMECHANGED || msg.message == WM_SYSCOLORCHANGE) && menuWidget()) {
@@ -3374,14 +3428,6 @@ bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* res
         }
     }
     return QMainWindow::nativeEvent(type, message, result);
-}
-
-void MainWindow::prepareWindowsFullscreen() {
-    if (!windowHandle()) return;
-    // Set this before Qt constructs the fullscreen style. Keep desktop composition
-    // stable when the native menu, another window or another monitor gets focus.
-    if (auto* native = windowHandle()->nativeInterface<QNativeInterface::Private::QWindowsWindow>())
-        native->setHasBorderInFullScreen(true);
 }
 
 #endif
@@ -3500,7 +3546,6 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             } else {
                 if (!isFullScreen() || fullscreenMenuShown_)
                     native->handleReparent(windowHandle());
-                prepareWindowsFullscreen();
                 refreshWindowsMenuTheme(true);
             }
         }
@@ -3673,10 +3718,9 @@ void MainWindow::changeEvent(QEvent* event) {
     if (event->type() == QEvent::WindowStateChange) {
         const auto* change = static_cast<QWindowStateChangeEvent*>(event);
 #ifdef Q_OS_WIN
-        // Qt infers fullscreen from the client rectangle. An attached Win32 menu
-        // shortens that rectangle while the borderless window still fills the monitor.
-        if (fullscreenMenuShown_ && !isFullScreen() && !isMinimized() &&
-            (change->oldState() & Qt::WindowFullScreen)) {
+        // The menu and intermediate monitor/DPI geometry can both make Qt
+        // report a normal window before the native move has finished.
+        if (windowsFullscreenRequested_ && !isFullScreen() && !isMinimized()) {
             overrideWindowState(windowState() | Qt::WindowFullScreen);
             return;
         }
@@ -3690,7 +3734,7 @@ void MainWindow::changeEvent(QEvent* event) {
             if (!fullscreenMenuShown_)
 #endif
                 setMainMenuVisible(false);
-        } else if (!isFullScreen()) {
+        } else if (!isFullScreen() && !isMinimized()) {
             setMainMenuVisible(true);
         }
 #ifdef Q_OS_WIN
