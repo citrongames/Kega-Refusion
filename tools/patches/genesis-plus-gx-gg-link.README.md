@@ -30,3 +30,9 @@ The input scripts in `tests/data/link-*-input.txt` drive the two handhelds throu
 | Striker (Europe) | Pass the SEGA logo, choose teams, then confirm Match On with Start. The consoles show the football match from different viewpoints. |
 | Sonic Drift (Japan) | Choose Versus and Battle. Sonic and Tails accelerate independently. The race finishes with opposite win/loss records on the two screens. |
 | Sonic Drift 2 | Choose Versus and Battle. Both players pass the start lights on Emerald Hill and can steer and accelerate independently. |
+
+### Mortal Kombat 3 (Europe)
+
+The European box advertises Gear-to-Gear. No working link path was found in the retail ROM (CRC32 `C2BE62BB`). Its title loop at Z80 `$1480` checks Start. During a fight the call at `$3746` updates the local fighter and the call at `$3749` updates the computer opponent. Its decision routine at `$67B6` uses fighter distance and a random number. Starting the second handheld during a fight opens its own tournament. A paired run from boot to gameplay recorded no reads or writes to EXT ports 1–5.
+
+The pre-fight code handler at `$124A` takes all six digits from one local controller. At `$11B8` the game checks 18 entries at ROM file offset `0x7BD50`. Several effects name “PLAYER 2”. Entering `000-033` on one handheld sets RAM `$CEA4` and starts the computer opponent with 28 health instead of 56. The matching “HALF ENERGY PLAYER 2” message is part of that feature.
