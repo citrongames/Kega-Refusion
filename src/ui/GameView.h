@@ -187,7 +187,7 @@ private:
     bool inputDisplayEnabled_ = false;
     InputDisplayState inputDisplay_{};
     InputDisplayState inputDisplayRasterState_{};
-    QPixmap inputDisplayPixmap_;
+    QImage inputDisplayRaster_;
     QSize inputDisplayRasterPixels_;
     qreal inputDisplayRasterScale_ = 0;
     qreal inputDisplayRasterDpr_ = 0;

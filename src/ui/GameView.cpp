@@ -538,7 +538,7 @@ void GameView::setInputDisplayEnabled(bool enabled) {
     if (inputDisplayEnabled_ == enabled) return;
     inputDisplayEnabled_ = enabled;
     if (!enabled) {
-        inputDisplayPixmap_ = {};
+        inputDisplayRaster_ = {};
         inputDisplayRasterValid_ = false;
     }
     repaintView();
@@ -752,20 +752,20 @@ void GameView::paintInputDisplay(QPainter& painter, const QSize& canvas) {
     if (!inputDisplayRasterValid_ || !(inputDisplayRasterState_ == visual) ||
         inputDisplayRasterPixels_ != pixels || inputDisplayRasterScale_ != row.scale ||
         inputDisplayRasterDpr_ != dpr) {
-        QPixmap raster(pixels);
-        raster.setDevicePixelRatio(dpr);
+        QImage raster(pixels, QImage::Format_ARGB32_Premultiplied);
         raster.fill(Qt::transparent);
         QPainter rowPainter(&raster);
-        InputDisplayPainter::paintRow(rowPainter, visual, row.scale);
+        InputDisplayPainter::paintRow(rowPainter, visual, row.scale * dpr);
         rowPainter.end();
-        inputDisplayPixmap_ = std::move(raster);
+        inputDisplayRaster_ = std::move(raster);
         inputDisplayRasterState_ = visual;
         inputDisplayRasterPixels_ = pixels;
         inputDisplayRasterScale_ = row.scale;
         inputDisplayRasterDpr_ = dpr;
         inputDisplayRasterValid_ = true;
     }
-    painter.drawPixmap(row.topLeft, inputDisplayPixmap_);
+    const QRectF target(row.topLeft, QSizeF(pixels) / dpr);
+    painter.drawImage(target, inputDisplayRaster_);
 }
 
 void GameView::paintOsd(QPainter& painter, const QSize& canvas) {

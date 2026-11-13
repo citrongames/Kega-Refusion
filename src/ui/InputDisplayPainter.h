@@ -59,41 +59,58 @@ inline void dpad(QPainter& p, const InputDisplaySlot& s, qreal x, qreal y) {
     p.drawRect(QRectF(x - 2, y - 2, 4, 4));
 }
 
-inline void md(QPainter& p, const InputDisplaySlot& s, bool six) {
+inline void md6(QPainter& p, const InputDisplaySlot& s) {
     QPainterPath shape;
-    if (six) {
-        shape.moveTo(5, 8); shape.cubicTo(10, 3, 18, 5, 26, 7);
-        shape.cubicTo(36, 7, 46, 3, 53, 8);
-        shape.cubicTo(60, 14, 56, 26, 49, 28);
-        shape.cubicTo(43, 30, 38, 25, 29, 25);
-        shape.cubicTo(19, 25, 15, 30, 9, 28);
-        shape.cubicTo(1, 26, -1, 14, 5, 8);
-    } else {
-        shape.moveTo(7, 6); shape.cubicTo(17, 1, 42, 1, 51, 6);
-        shape.cubicTo(59, 11, 58, 24, 51, 27);
-        shape.cubicTo(44, 30, 38, 25, 29, 25);
-        shape.cubicTo(19, 25, 14, 30, 7, 27);
-        shape.cubicTo(0, 24, -1, 12, 7, 6);
-    }
+    shape.moveTo(2, 17);
+    shape.cubicTo(3.5, 10, 8.5, 5, 16, 3);
+    shape.cubicTo(24, 0.7, 34, 0.7, 41.5, 3);
+    shape.cubicTo(49, 5, 54, 10, 55.7, 16);
+    shape.cubicTo(58, 22.5, 55, 28.6, 50.6, 28.3);
+    shape.cubicTo(47.6, 28.2, 45.6, 25.6, 42, 24.1);
+    shape.cubicTo(34.5, 21, 23.5, 21, 16, 24.3);
+    shape.cubicTo(12, 26, 10.5, 28.3, 7.2, 28.2);
+    shape.cubicTo(2.4, 28.2, 0.3, 23.2, 2, 17);
+    shape.closeSubpath();
+    body(p, shape);
+
+    p.save();
+    p.translate(13.5, 15);
+    p.setPen(QPen(idle(), 0.7));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(), 7.5, 7.5);
+    p.scale(0.77, 0.77);
+    dpad(p, s, 0, 0);
+    p.restore();
+
+    miniButton(p, QRectF(25, 11.8, 5.5, 2.2), down(s, 3)); // Start
+    p.save();
+    p.translate(42, 5.6);
+    p.rotate(18);
+    miniButton(p, QRectF(-2.5, -0.8, 5, 1.6), down(s, 2)); // Mode
+    p.restore();
+
+    button(p, 36.5, 12.5, 1.9, down(s, 10)); // X
+    button(p, 42,   11,   1.9, down(s, 9));  // Y
+    button(p, 47.5, 10,   1.9, down(s, 11)); // Z
+    button(p, 38,   18.5, 2.5, down(s, 1));  // A
+    button(p, 44,   17,   2.5, down(s, 0));  // B
+    button(p, 50,   16,   2.5, down(s, 8));  // C
+}
+
+inline void md3(QPainter& p, const InputDisplaySlot& s) {
+    QPainterPath shape;
+    shape.moveTo(7, 6); shape.cubicTo(17, 1, 42, 1, 51, 6);
+    shape.cubicTo(59, 11, 58, 24, 51, 27);
+    shape.cubicTo(44, 30, 38, 25, 29, 25);
+    shape.cubicTo(19, 25, 14, 30, 7, 27);
+    shape.cubicTo(0, 24, -1, 12, 7, 6);
     shape.closeSubpath();
     body(p, shape);
     dpad(p, s, 13, 16);
-    if (six) {
-        const qreal xs[] = {37, 45, 53};
-        const unsigned upper[] = {10, 9, 11};
-        const unsigned lower[] = {1, 0, 8};
-        for (int i = 0; i < 3; ++i) {
-            button(p, xs[i], 11, 2.6, down(s, upper[i]));
-            button(p, xs[i], 20, 3.1, down(s, lower[i]));
-        }
-        miniButton(p, QRectF(23, 12, 8, 3), down(s, 3));
-        miniButton(p, QRectF(23, 20, 6, 2.7), down(s, 2));
-    } else {
-        button(p, 37, 17, 3.3, down(s, 1));
-        button(p, 45, 17, 3.3, down(s, 0));
-        button(p, 53, 17, 3.3, down(s, 8));
-        miniButton(p, QRectF(25, 10, 7, 3.2), down(s, 3));
-    }
+    button(p, 37, 17, 3.3, down(s, 1));
+    button(p, 45, 17, 3.3, down(s, 0));
+    button(p, 53, 17, 3.3, down(s, 8));
+    miniButton(p, QRectF(25, 10, 7, 3.2), down(s, 3));
 }
 
 inline void sms(QPainter& p, const InputDisplaySlot& s) {
@@ -229,8 +246,8 @@ inline void paddle(QPainter& p, const InputDisplaySlot& s) {
 
 inline void device(QPainter& p, const InputDisplaySlot& s) {
     switch (s.device) {
-    case InputDisplayDevice::MegaDrive3: md(p, s, false); break;
-    case InputDisplayDevice::MegaDrive6: md(p, s, true); break;
+    case InputDisplayDevice::MegaDrive3: md3(p, s); break;
+    case InputDisplayDevice::MegaDrive6: md6(p, s); break;
     case InputDisplayDevice::MasterSystem: sms(p, s); break;
     case InputDisplayDevice::GameGear: gear(p, s); break;
     case InputDisplayDevice::SG1000: sg(p, s); break;

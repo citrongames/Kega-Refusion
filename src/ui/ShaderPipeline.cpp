@@ -567,6 +567,8 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     glClear(GL_COLOR_BUFFER_BIT);
     glViewport(viewport.x(), surface.height() - viewport.y() - viewport.height(), viewport.width(), viewport.height());
     draw(*stock_, source, input, viewport.size(), frameCount, direction, false, GL_CLAMP_TO_EDGE);
+    // Qt draws the OSD across the entire widget, including the letterbox area.
+    glViewport(0, 0, surface.width(), surface.height());
     const unsigned glError = glGetError();
     if (glError != GL_NO_ERROR)
         return fail(error, QStringLiteral("OpenGL shader rendering failed (0x%1).").arg(glError, 0, 16));
