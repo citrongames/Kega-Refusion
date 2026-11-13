@@ -588,7 +588,7 @@ void EmulationSession::run() {
             ? host.achievementHardcoreBlockReason() : QString();
         if (!blocked.isEmpty()) achievementStatusOverride = Localization::text(QStringLiteral("Hardcore недоступен: %1")).arg(blocked);
         if (achievementSuppressed && achievementHardcoreRequested)
-            achievementStatusOverride = Localization::text(QStringLiteral("Завершите запись управления перед включением Hardcore."));
+            achievementStatusOverride = Localization::text(QStringLiteral("Завершите запись ввода перед включением Hardcore."));
         if (achievementHardcoreRequested && !AchievementsHardcoreApproved)
             achievementStatusOverride = Localization::text(QStringLiteral("Hardcore требует одобрения Kega Refusion сервисом RetroAchievements. Учёт работает в Softcore."));
         achievements.configure(achievementEnabled,achievementHardcoreRequested && AchievementsHardcoreApproved &&

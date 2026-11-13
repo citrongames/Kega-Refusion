@@ -750,7 +750,7 @@ void MainWindow::buildMenus() {
     });
     recentMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Недавние игры")));
     updateRecentMenu();
-    movieMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Запись управления")));
+    movieMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Ввод")));
     movieMenu_->setObjectName(QStringLiteral("movieMenu"));
     movieRecordAction_ = movieMenu_->addAction(Localization::text(QStringLiteral("Начать запись…")));
     movieRecordAction_->setObjectName(QStringLiteral("movieRecord"));
@@ -767,8 +767,8 @@ void MainWindow::buildMenus() {
     connect(movieResumeAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString directory = DataFolders::path(dataPath_, QStringLiteral("movies"));
-        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Продолжить запись управления")),
-            directory, Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
+        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Продолжить запись ввода")),
+            directory, Localization::text(QStringLiteral("Записи ввода (*.krm);;Все файлы (*)")));
         view_->setFocus();
         if (path.isEmpty()) return;
         moviePending_ = true;
@@ -781,8 +781,8 @@ void MainWindow::buildMenus() {
     connect(moviePlayAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString directory = DataFolders::path(dataPath_, QStringLiteral("movies"));
-        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Воспроизвести запись управления")),
-            directory, Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
+        const QString path = QFileDialog::getOpenFileName(this, Localization::text(QStringLiteral("Воспроизвести запись ввода")),
+            directory, Localization::text(QStringLiteral("Записи ввода (*.krm);;Все файлы (*)")));
         view_->setFocus();
         if (path.isEmpty()) return;
         moviePending_ = true;
@@ -826,9 +826,9 @@ void MainWindow::buildMenus() {
     videoStartAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Начать запись видео…")));
     videoStartAction_->setObjectName(QStringLiteral("videoRecord"));
     connect(videoStartAction_, &QAction::triggered, this, &MainWindow::startVideoCapture);
-    videoExportAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Экспортировать запись управления…")));
+    videoExportAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Экспортировать запись ввода…")));
     videoExportAction_->setObjectName(QStringLiteral("videoExport"));
-    videoExportAction_->setToolTip(Localization::text(QStringLiteral("Откройте игру, для которой сохранена запись управления.")));
+    videoExportAction_->setToolTip(Localization::text(QStringLiteral("Откройте игру, для которой сохранена запись ввода.")));
     connect(videoExportAction_, &QAction::triggered, this, &MainWindow::exportInputVideo);
     videoMenu_->addSeparator();
     videoStopAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Остановить запись видео")));
@@ -2022,7 +2022,7 @@ void MainWindow::editSettings(int initialPage) {
         "Лимит сохранённой истории. Рабочие буферы эмулятора учитываются отдельно.")));
     // The history memory limit remains adjustable while a recording is active.
 
-    auto* recording = addPage(Localization::text(QStringLiteral("Запись управления")),
+    auto* recording = addPage(Localization::text(QStringLiteral("Ввод")),
         Localization::text(QStringLiteral("Формат счётчика записи и воспроизведения на экране игры.")));
     const QString counterUnit = settings_.value(QStringLiteral("recording/counterUnit"),
         QStringLiteral("time")).toString();
@@ -2904,8 +2904,8 @@ QString MainWindow::chooseMovieSavePath(bool branch) {
         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz")) +
         (branch ? QStringLiteral("-branch") : QString()) + QStringLiteral(".krm"));
     QString path = QFileDialog::getSaveFileName(this,
-        branch ? Localization::text(QStringLiteral("Записывать с этого места в новый файл")) : Localization::text(QStringLiteral("Начать запись управления")),
-        proposal, Localization::text(QStringLiteral("Записи управления (*.krm)")), nullptr,
+        branch ? Localization::text(QStringLiteral("Записывать с этого места в новый файл")) : Localization::text(QStringLiteral("Начать запись ввода")),
+        proposal, Localization::text(QStringLiteral("Записи ввода (*.krm)")), nullptr,
         QFileDialog::DontConfirmOverwrite);
     view_->setFocus();
     if (path.isEmpty()) return {};
@@ -2953,7 +2953,7 @@ QString MainWindow::chooseVideoSavePath(bool exporting) {
         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz")) +
         QStringLiteral(".mov"));
     QString path = QFileDialog::getSaveFileName(this,
-        exporting ? Localization::text(QStringLiteral("Экспортировать запись управления в видео"))
+        exporting ? Localization::text(QStringLiteral("Экспортировать запись ввода в видео"))
                   : Localization::text(QStringLiteral("Начать запись видео")),
         proposal, Localization::text(QStringLiteral("Видео MOV без потерь (*.mov)")), nullptr,
         QFileDialog::DontConfirmOverwrite);
@@ -2985,9 +2985,9 @@ void MainWindow::exportInputVideo() {
         moviePending_ || achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
     releaseInput();
     const QString source = QFileDialog::getOpenFileName(this,
-        Localization::text(QStringLiteral("Экспортировать запись управления в видео")),
+        Localization::text(QStringLiteral("Экспортировать запись ввода в видео")),
         DataFolders::path(dataPath_, QStringLiteral("movies")),
-        Localization::text(QStringLiteral("Записи управления (*.krm);;Все файлы (*)")));
+        Localization::text(QStringLiteral("Записи ввода (*.krm);;Все файлы (*)")));
     view_->setFocus();
     if (source.isEmpty()) return;
     const QString path = chooseVideoSavePath(true);
