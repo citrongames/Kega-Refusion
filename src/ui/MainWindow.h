@@ -10,6 +10,9 @@
 #include <QColor>
 #include <QHash>
 #include <QMainWindow>
+#ifdef Q_OS_WIN
+#include <QAbstractNativeEventFilter>
+#endif
 #include <QSettings>
 #include <QPointer>
 #include <QStringList>
@@ -35,7 +38,11 @@ class UpdateService;
 class UpdateDialog;
 enum class ConsoleProfile;
 
-class MainWindow final : public QMainWindow {
+class MainWindow final : public QMainWindow
+#ifdef Q_OS_WIN
+    , private QAbstractNativeEventFilter
+#endif
+{
     Q_OBJECT
 public:
     explicit MainWindow(EmulationSession& session, const QString& dataPath,
@@ -52,6 +59,7 @@ signals:
 
 protected:
 #ifdef Q_OS_WIN
+    bool nativeEventFilter(const QByteArray& type, void* message, qintptr* result) override;
     bool nativeEvent(const QByteArray& type, void* message, qintptr* result) override;
 #endif
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -115,6 +123,7 @@ private:
     void handleInputCommand(int command, bool pressed, bool keyboard);
     QAction* commandAction(int command) const;
     void refreshCommandShortcuts();
+    int keyboardCommand(int chord, int key, Qt::KeyboardModifiers modifiers) const;
     QHash<int, int> keyboardCommands_; // chord -> command
     QHash<int, int> heldCommandChords_; // held command -> physical chord at key-down
 
@@ -256,6 +265,7 @@ private:
     void scheduleWindowsMenuRefresh(bool systemMetricsChanged);
     bool menuRefreshPending_ = false;
     bool menuMetricsDirty_ = false;
+    bool fullscreenAltConsumed_ = false;
     bool darkNativeMenu_ = false;
     bool modalWindowBlocked_ = false;
     bool fullscreenMenuShown_ = false;

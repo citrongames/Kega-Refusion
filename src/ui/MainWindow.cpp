@@ -709,9 +709,15 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     connect(inputTimer_, &QTimer::timeout, this, &MainWindow::updateInputEnabled);
     inputTimer_->start();
     qApp->installEventFilter(this);
+#ifdef Q_OS_WIN
+    qApp->installNativeEventFilter(this);
+#endif
 }
 
 MainWindow::~MainWindow() {
+#ifdef Q_OS_WIN
+    qApp->removeNativeEventFilter(this);
+#endif
     if (volumeSaveTimer_ && volumeSaveTimer_->isActive()) flushVolumePreference();
     if (netplay_) netplay_->leaveSession();
     inputTimer_->stop();
@@ -3311,6 +3317,40 @@ void MainWindow::scheduleWindowsMenuRefresh(bool systemMetricsChanged) {
     });
 }
 
+// With an attached HMENU Qt leaves Alt+Enter to USER32. Claim a bound
+// fullscreen chord before TranslateMessage can turn it into a menu character.
+bool MainWindow::nativeEventFilter(const QByteArray&, void* message, qintptr*) {
+    const auto& msg = *static_cast<const MSG*>(message);
+    if (msg.message != WM_SYSKEYDOWN && msg.message != WM_SYSKEYUP &&
+        msg.message != WM_KEYDOWN && msg.message != WM_KEYUP) return false;
+    const bool down = msg.message == WM_SYSKEYDOWN || msg.message == WM_KEYDOWN;
+    if (msg.wParam != VK_RETURN && msg.wParam != VK_MENU) return false;
+    const auto window = reinterpret_cast<HWND>(internalWinId());
+    if (!window || (msg.hwnd != window && !IsChild(window, msg.hwnd))) return false;
+    if (msg.wParam == VK_MENU) {
+        // A release after the shortcut must not activate the restored menu bar.
+        if (down) {
+            if (!(msg.lParam & (1u << 30))) fullscreenAltConsumed_ = false;
+        } else if (std::exchange(fullscreenAltConsumed_, false)) {
+            QKeyEvent release(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+            eventFilter(this, &release);
+            return true;
+        }
+        return false;
+    }
+    if (!down || !isActiveWindow() || QApplication::activeModalWidget() ||
+        QApplication::activePopupWidget() || menuPauseActive_) return false;
+    auto modifiers = QGuiApplication::queryKeyboardModifiers();
+    if (msg.lParam & (1u << 29)) modifiers |= Qt::AltModifier;
+    if (!(modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier))) return false;
+    const bool keypad = (msg.lParam & (1u << 24)) != 0;
+    QKeyEvent event(QEvent::KeyPress, keypad ? Qt::Key_Enter : Qt::Key_Return, modifiers);
+    if (keyboardCommand(InputManager::keyboardChord(event), event.key(), modifiers) != FullscreenCommand || !fullscreenAction_->isEnabled()) return false;
+    fullscreenAltConsumed_ = true;
+    if (!(msg.lParam & (1u << 30))) handleInputCommand(FullscreenCommand, true, true);
+    return true;
+}
+
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
     const auto& msg = *static_cast<MSG*>(message);
     if (WindowsMenuTheme::drawMenuBar(msg, result)) return true;
@@ -3414,6 +3454,19 @@ void MainWindow::refreshCommandShortcuts() {
             action->setText(label);
         }
     }
+}
+
+int MainWindow::keyboardCommand(int chord, int key, Qt::KeyboardModifiers modifiers) const {
+    int command = keyboardCommands_.value(chord, -1);
+    // Preserve right Alt (AltGr) and keypad Enter for the traditional fullscreen
+    // shortcut. An explicitly assigned chord always takes precedence.
+    key &= ~int(Qt::KeypadModifier);
+    if (command < 0 && input_->commandKey(FullscreenCommand) == InputManager::defaultCommandKey(FullscreenCommand) &&
+        (key == Qt::Key_Return || key == Qt::Key_Enter) &&
+        (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
+        !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier)))
+        command = FullscreenCommand;
+    return command;
 }
 
 void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
@@ -3566,15 +3619,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         else if (pressed) setVolume(volume_ + (volumeUp ? 5 : -5));
         return true;
     }
-    int command = keyboardCommands_.value(chord, -1);
-    // Preserve right Alt (AltGr) and keypad Enter for the traditional fullscreen
-    // shortcut. An explicitly assigned chord always takes precedence.
-    if (command < 0 && input_->commandKey(FullscreenCommand) == InputManager::defaultCommandKey(FullscreenCommand) &&
-        ((key & ~int(Qt::KeypadModifier)) == Qt::Key_Return ||
-         (key & ~int(Qt::KeypadModifier)) == Qt::Key_Enter) &&
-        (modifiers & (Qt::AltModifier | Qt::GroupSwitchModifier)) &&
-        !(modifiers & (Qt::ShiftModifier | Qt::MetaModifier)))
-        command = FullscreenCommand;
+    const int command = keyboardCommand(chord, key, modifiers);
     if (command >= 0 && (shortcutOverride || pressed)) {
         auto* action = commandAction(command);
         const bool needsGameFocus = command == FastForwardCommand || command == RewindCommand;
