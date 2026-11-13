@@ -75,7 +75,7 @@ QVector<int> updatedKeys(int first, int second, int key, bool replace) {
     if (!key) return {0, 0};
     if (replace) return {key, 0};
     if (first == key || second == key) return {first, second};
-    if (!first) return {key, 0};
+    if (!first) return second ? QVector<int>{second, key} : QVector<int>{key, 0};
     return !second ? QVector<int>{first, key} : QVector<int>{second, key};
 }
 
@@ -83,7 +83,9 @@ QVector<PadBinding> updatedPads(const PadBinding& first, const PadBinding& secon
                               const PadBinding& binding, bool replace) {
     if (replace) return {binding, PadBinding{}};
     if (first == binding || second == binding) return {first, second};
-    if (first.kind == PadBinding::None) return {binding, PadBinding{}};
+    if (first.kind == PadBinding::None)
+        return second.kind == PadBinding::None ? QVector<PadBinding>{binding, PadBinding{}}
+                                               : QVector<PadBinding>{second, binding};
     return second.kind == PadBinding::None ? QVector<PadBinding>{first, binding}
                                            : QVector<PadBinding>{second, binding};
 }
