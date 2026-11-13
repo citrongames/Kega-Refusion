@@ -220,8 +220,8 @@ private:
 
 GameView::GameView(QWidget* parent) : QWidget(parent) {
 #ifdef Q_OS_WIN
-    // Present the OpenGL child on the game area's own HWND. Qt can then keep
-    // the top-level window and its native menu on the desktop compositor.
+    // Keep OpenGL on the game area's own HWND. When Esc reveals the menu,
+    // the video surface shrinks below it and Windows can composite Qt popups.
     if (parent) setAttribute(Qt::WA_NativeWindow);
 #endif
     waylandMouse_ = new WaylandMouseCapture(this);

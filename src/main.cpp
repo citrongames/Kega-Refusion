@@ -14,7 +14,6 @@
 #include <QIcon>
 #include <QLibraryInfo>
 #include <QKeyEvent>
-#include <QMenuBar>
 #include <QMessageBox>
 #include <QTimer>
 #include <QSslSocket>
@@ -76,11 +75,6 @@ void configurePluginPaths() {
 }
 
 int main(int argc, char* argv[]) {
-#ifdef Q_OS_WIN
-    // Let Qt mirror the existing QActions into real Win32 menus, including later edits.
-    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
-        qputenv("QT_QPA_PLATFORM", "windows:menus=native");
-#endif
     configurePluginPaths(); // The platform plugin loads in QApplication's constructor.
     QApplication app(argc, argv);
 #ifdef Q_OS_LINUX

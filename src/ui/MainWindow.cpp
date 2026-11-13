@@ -77,10 +77,6 @@
 #include <utility>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
-#include "WindowsMenuTheme.h"
-#include <QPlatformSurfaceEvent>
-#include <QWindow>
-#include <qpa/qplatformmenu.h>
 #endif
 
 namespace {
@@ -341,9 +337,6 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     debugAudioGains_.fill(100);
     buildMenus();
-#ifdef Q_OS_WIN
-    if (menuBar()->isNativeMenuBar()) refreshWindowsMenuTheme(true);
-#endif
     refreshCommandShortcuts();
     connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
     updateService_ = new UpdateService(this);
@@ -398,16 +391,6 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateShaderActions();
     });
     for (QAction* action : menuBar()->actions()) {
-#ifdef Q_OS_WIN
-        // Native menus use the Windows menu loop and do not send QMenu::aboutToHide.
-        if (menuBar()->isNativeMenuBar()) {
-            connect(action, &QAction::changed, this, [this] {
-                // Qt may still be inserting the newly visible heading into HMENU.
-                scheduleWindowsMenuRefresh(false);
-            });
-            continue;
-        }
-#endif
         QMenu* menu = action->menu();
         if (!menu) continue;
         connect(menu, &QMenu::aboutToShow, this, &MainWindow::pauseForMenu);
@@ -729,6 +712,9 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::buildMenus() {
+#ifdef Q_OS_WIN
+    menuBar()->setNativeMenuBar(false);
+#endif
     auto shortcut = [this](QAction* action) {
         action->setShortcutContext(Qt::WindowShortcut);
         addAction(action);
@@ -1233,7 +1219,6 @@ void MainWindow::buildMenus() {
     volumeSaveTimer_->setSingleShot(true);
     volumeSaveTimer_->setInterval(400);
     connect(volumeSaveTimer_, &QTimer::timeout, this, &MainWindow::flushVolumePreference);
-#ifndef Q_OS_WIN
     QWidget* volumePanel = new QWidget(soundMenu);
     QVBoxLayout* volumeLayout = new QVBoxLayout(volumePanel);
     volumeLayout->setContentsMargins(12, 6, 12, 8);
@@ -1249,7 +1234,6 @@ void MainWindow::buildMenus() {
     soundMenu->addAction(volumeAction);
     connect(volumeSlider, &QSlider::valueChanged, this, &MainWindow::setVolume);
     connect(this, &MainWindow::volumeChanged, volumeSlider, &QSlider::setValue);
-#endif
     QMenu* onlineMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Сетевая игра")));
     onlineMenu->setObjectName(QStringLiteral("onlineMenu"));
     QAction* createSessionAction = onlineMenu->addAction(Localization::text(QStringLiteral("Создать сеанс…")));
@@ -3267,8 +3251,6 @@ void MainWindow::setFullscreenMode(bool enabled) {
         showFullScreen();
     } else {
 #ifdef Q_OS_WIN
-        // Restore the monitor-sized client before Qt restores the window style.
-        if (fullscreenMenuShown_) setMainMenuVisible(false);
         windowsFullscreenRequested_ = false;
 #endif
         if (wasMaximizedBeforeFullscreen_) showMaximized();
@@ -3282,27 +3264,7 @@ void MainWindow::setFullscreenMode(bool enabled) {
 }
 
 bool MainWindow::isMainMenuVisible() const {
-#ifdef Q_OS_WIN
-    if (menuBar()->isNativeMenuBar())
-        return GetMenu(reinterpret_cast<HWND>(internalWinId())) != nullptr;
-#endif
     return menuBar()->isVisible();
-}
-
-void MainWindow::setMainMenuVisible(bool visible) {
-#ifdef Q_OS_WIN
-    if (auto* native = menuBar()->platformMenuBar()) {
-        fullscreenMenuShown_ = isFullScreen() && visible;
-        // QWidget visibility only describes the unused Qt menu widget on Windows.
-        if (visible != isMainMenuVisible()) {
-            native->handleReparent(visible ? windowHandle() : nullptr);
-            if (visible)
-                WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_, true);
-        }
-        return;
-    }
-#endif
-    menuBar()->setVisible(visible);
 }
 
 void MainWindow::pauseForMenu() {
@@ -3312,33 +3274,7 @@ void MainWindow::pauseForMenu() {
 }
 
 #ifdef Q_OS_WIN
-void MainWindow::refreshWindowsMenuTheme(bool windowCreated) {
-    if (!windowHandle() || !windowHandle()->handle()) return;
-    const auto hwnd = reinterpret_cast<HWND>(windowHandle()->winId());
-    const bool dark = WindowsMenuTheme::systemPrefersDark();
-    if (windowCreated || darkNativeMenu_ != dark) {
-        darkNativeMenu_ = dark;
-        WindowsMenuTheme::applyPopupTheme(hwnd, dark);
-    }
-    WindowsMenuTheme::refreshMenuPaintResources(hwnd, darkNativeMenu_);
-    WindowsMenuTheme::refreshMenuBar(hwnd, darkNativeMenu_, true);
-}
-
-void MainWindow::scheduleWindowsMenuRefresh(bool systemMetricsChanged) {
-    menuMetricsDirty_ |= systemMetricsChanged;
-    if (menuRefreshPending_) return;
-    menuRefreshPending_ = true;
-    QTimer::singleShot(0, this, [this] {
-        menuRefreshPending_ = false;
-        const bool metricsChanged = std::exchange(menuMetricsDirty_, false);
-        if (!internalWinId() || !menuBar()->isNativeMenuBar()) return;
-        if (metricsChanged) refreshWindowsMenuTheme(false);
-        else WindowsMenuTheme::refreshMenuBar(reinterpret_cast<HWND>(internalWinId()), darkNativeMenu_);
-    });
-}
-
-// With an attached HMENU Qt leaves Alt+Enter to USER32. Claim a bound
-// fullscreen chord before TranslateMessage can turn it into a menu character.
+// Handle the configured Alt+Enter chord before Windows enters menu-key mode.
 bool MainWindow::nativeEventFilter(const QByteArray&, void* message, qintptr*) {
     const auto& msg = *static_cast<const MSG*>(message);
     if (msg.message != WM_SYSKEYDOWN && msg.message != WM_SYSKEYUP &&
@@ -3400,21 +3336,6 @@ void fitFullscreenMove(const MSG& msg) {
 bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
     const auto& msg = *static_cast<MSG*>(message);
     if (windowsFullscreenRequested_ && msg.message == WM_WINDOWPOSCHANGING) fitFullscreenMove(msg);
-    if (WindowsMenuTheme::drawMenuBar(msg, result)) return true;
-    if ((msg.message == WM_DPICHANGED || msg.message == WM_SETTINGCHANGE ||
-         msg.message == WM_THEMECHANGED || msg.message == WM_SYSCOLORCHANGE) && menuWidget()) {
-        // Apply new DPI, theme and menu fonts after Qt and USER32 finish the transition.
-        scheduleWindowsMenuRefresh(true);
-    }
-    if ((msg.message == WM_ENTERMENULOOP || msg.message == WM_EXITMENULOOP) &&
-        !msg.wParam && netplay_ && menuBar()->isNativeMenuBar()) {
-        if (msg.message == WM_ENTERMENULOOP) {
-            pauseForMenu();
-        } else {
-            menuPauseActive_ = false;
-            QTimer::singleShot(0, this, &MainWindow::updateInputEnabled);
-        }
-    }
     return QMainWindow::nativeEvent(type, message, result);
 }
 
@@ -3422,7 +3343,7 @@ bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* res
 
 void MainWindow::toggleFullscreenMenu() {
     if (!isFullScreen()) return;
-    setMainMenuVisible(!isMainMenuVisible());
+    menuBar()->setVisible(!isMainMenuVisible());
     view_->setFocus();
 }
 
@@ -3509,11 +3430,6 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
     case PreviousSlotCommand: setSlot(stateSlot_ + 9); break;
     case MenuCommand:
         if (isFullScreen()) toggleFullscreenMenu();
-#ifdef Q_OS_WIN
-        else if (menuBar()->isNativeMenuBar()) {
-            PostMessageW(reinterpret_cast<HWND>(internalWinId()), WM_SYSCOMMAND, SC_KEYMENU, 0);
-        }
-#endif
         else {
             menuBar()->setFocus();
             menuBar()->setActiveAction(menuBar()->actions().first());
@@ -3524,26 +3440,6 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-#ifdef Q_OS_WIN
-    // A move between monitors of equal DPI need not send WM_DPICHANGED.
-    if (watched == this && event->type() == QEvent::ScreenChangeInternal)
-        scheduleWindowsMenuRefresh(true);
-    if (event->type() == QEvent::PlatformSurface && watched == windowHandle()) {
-        // Windows destroys the attached menu with its HWND. Retain it if Qt
-        // recreates the top-level window.
-        if (auto* native = menuBar()->platformMenuBar()) {
-            const auto type = static_cast<QPlatformSurfaceEvent*>(event)->surfaceEventType();
-            if (type == QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
-                native->handleReparent(nullptr);
-                WindowsMenuTheme::resetMenuPaintResources(reinterpret_cast<HWND>(windowHandle()->winId()));
-            } else {
-                if (!isFullScreen() || fullscreenMenuShown_)
-                    native->handleReparent(windowHandle());
-                refreshWindowsMenuTheme(true);
-            }
-        }
-    }
-#endif
     if (event->type() == QEvent::Polish || event->type() == QEvent::Show) {
         auto* window = qobject_cast<QWidget*>(watched);
         if (window && window != this && !qobject_cast<QFileDialog*>(window) &&
@@ -3715,8 +3611,8 @@ void MainWindow::changeEvent(QEvent* event) {
     if (event->type() == QEvent::WindowStateChange) {
         const auto* change = static_cast<QWindowStateChangeEvent*>(event);
 #ifdef Q_OS_WIN
-        // The menu and intermediate monitor/DPI geometry can both make Qt
-        // report a normal window before the native move has finished.
+        // An intermediate monitor/DPI geometry can make Qt report a normal
+        // window before the native fullscreen move has finished.
         if (windowsFullscreenRequested_ && !isFullScreen() && !isMinimized()) {
             overrideWindowState(windowState() | Qt::WindowFullScreen);
             return;
@@ -3727,12 +3623,9 @@ void MainWindow::changeEvent(QEvent* event) {
             fullscreenAction_->setChecked(isFullScreen());
         }
         if (isFullScreen() && !(change->oldState() & Qt::WindowFullScreen)) {
-#ifdef Q_OS_WIN
-            if (!fullscreenMenuShown_)
-#endif
-                setMainMenuVisible(false);
+            menuBar()->hide();
         } else if (!isFullScreen() && !isMinimized()) {
-            setMainMenuVisible(true);
+            menuBar()->show();
         }
     }
     QMainWindow::changeEvent(event);

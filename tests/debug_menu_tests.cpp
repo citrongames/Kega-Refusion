@@ -30,6 +30,7 @@
 #include <QListWidget>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -997,6 +998,13 @@ int main(int argc, char** argv) {
             MainWindow window(session, data.path(), true);
             window.show();
             QApplication::processEvents();
+            require(!window.menuBar()->isNativeMenuBar(),
+                    "main window did not use the shared Qt menu bar");
+#ifdef Q_OS_WIN
+            if (QGuiApplication::platformName() == QLatin1String("windows"))
+                require(GetMenu(reinterpret_cast<HWND>(window.winId())) == nullptr,
+                        "main window still has a native Windows menu bar");
+#endif
             QMenu* shader = child<QMenu>(window, "shaderMenu");
             require(!window.findChild<QMenu*>(QStringLiteral("blarggMenu")),
                     "Blargg still has a separate submenu");
@@ -1121,11 +1129,7 @@ int main(int argc, char** argv) {
             QApplication::processEvents();
             require(window.isActiveWindow(), "main window did not regain focus for hotkey test");
             auto* master = window.findChild<QSlider*>(QStringLiteral("masterVolumeSlider"));
-#ifdef Q_OS_WIN
-            require(!master, "Windows native sound menu still contains a volume widget");
-#else
-            require(master, "Linux sound menu lost its volume slider");
-#endif
+            require(master, "shared Qt sound menu lost its volume slider");
             const int initialVolume = qBound(0, QSettings(settingsPath, QSettings::IniFormat)
                 .value(QStringLiteral("audio/volume"), 80).toInt(), 100);
             int currentVolume = initialVolume;
@@ -1139,11 +1143,11 @@ int main(int argc, char** argv) {
             require(currentVolume == initialVolume,
                     "global volume hotkeys did not change master volume");
             press(window, Qt::Key_Plus, Qt::KeypadModifier);
-            require(currentVolume == initialVolume + 5,
-                    "keypad plus did not raise master volume");
+            require(currentVolume == initialVolume,
+                    "unbound keypad plus changed master volume");
             press(window, Qt::Key_Minus, Qt::KeypadModifier);
             require(currentVolume == initialVolume,
-                    "keypad minus did not lower master volume");
+                    "unbound keypad minus changed master volume");
             if (master) {
                 require(master->value() == currentVolume,
                         "menu volume slider did not follow hotkeys");
@@ -1175,6 +1179,61 @@ int main(int argc, char** argv) {
             });
             child<QAction>(window, "emulatorSettingsAction")->trigger();
             require(volumeInspected && volumeFailure.isEmpty(), qPrintable(volumeFailure));
+
+            QMenu* sound = nullptr;
+            for (QWidget* parent = master->parentWidget(); parent && !sound;
+                 parent = parent->parentWidget())
+                sound = qobject_cast<QMenu*>(parent);
+            require(sound && window.menuBar()->actions().contains(sound->menuAction()),
+                    "volume slider is not hosted in a top-level Qt sound menu");
+            auto* view = window.findChild<GameView*>();
+            require(view, "game view is missing for the fullscreen menu test");
+            window.activateWindow();
+            view->setFocus();
+            window.setFullscreenMode(true);
+            QApplication::processEvents();
+            require(window.isFullScreen() && !window.menuBar()->isVisible(),
+                    "fullscreen did not hide the Qt menu bar");
+            press(*view, Qt::Key_Escape);
+            QApplication::processEvents();
+            require(window.isFullScreen() && window.menuBar()->isVisible(),
+                    "Escape did not reveal the fullscreen Qt menu bar");
+
+            auto* bar = window.menuBar();
+            const QPoint heading = bar->actionGeometry(sound->menuAction()).center();
+            QMouseEvent menuDown(QEvent::MouseButtonPress, heading, bar->mapToGlobal(heading),
+                                 Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(bar, &menuDown);
+            QMouseEvent menuUp(QEvent::MouseButtonRelease, heading, bar->mapToGlobal(heading),
+                               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(bar, &menuUp);
+            QApplication::processEvents();
+            require(sound->isVisible() && QApplication::activePopupWidget() == sound &&
+                    master->isVisible(),
+                    "fullscreen sound heading did not open its Qt popup and volume slider");
+            const int popupVolume = currentVolume;
+            master->setFocus();
+            press(*master, Qt::Key_Left);
+            require(currentVolume == popupVolume - master->singleStep() &&
+                    master->value() == currentVolume && sound->isVisible(),
+                    "fullscreen popup volume slider did not handle keyboard input");
+            master->setValue(popupVolume);
+            press(*sound, Qt::Key_Escape);
+            QApplication::processEvents();
+            require(!sound->isVisible() && !QApplication::activePopupWidget() &&
+                    window.isFullScreen() && bar->isVisible(),
+                    "Escape did not close only the fullscreen menu popup");
+            window.activateWindow();
+            view->setFocus();
+            QApplication::processEvents();
+            press(*view, Qt::Key_Escape);
+            QApplication::processEvents();
+            require(window.isFullScreen() && !bar->isVisible(),
+                    "Escape did not hide the fullscreen menu bar after closing its popup");
+            window.setFullscreenMode(false);
+            QApplication::processEvents();
+            require(!window.isFullScreen() && bar->isVisible(),
+                    "leaving fullscreen did not restore the Qt menu bar");
         }
 
         QSettings settings(settingsPath, QSettings::IniFormat);
@@ -1182,7 +1241,7 @@ int main(int argc, char** argv) {
         require(std::none_of(keys.begin(), keys.end(), [](const QString& key) {
             return key.contains(QStringLiteral("debug"), Qt::CaseInsensitive);
         }), "debug controls were persisted to settings");
-        std::puts("debug UI tests passed: Blargg selection, live modeless dialogs, reset, volume hotkeys");
+        std::puts("debug UI tests passed: Blargg selection, live modeless dialogs, reset, volume hotkeys, fullscreen Qt menus");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "debug UI tests failed: %s\n", error.what());

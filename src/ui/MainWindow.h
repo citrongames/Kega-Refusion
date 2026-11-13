@@ -117,7 +117,6 @@ private:
     void updateRewind();
     void setPausedUi(bool paused);
     void setSlot(int slot);
-    void setMainMenuVisible(bool visible);
     void toggleFullscreenMenu();
     void pauseForMenu();
     void handleInputCommand(int command, bool pressed, bool keyboard);
@@ -260,14 +259,8 @@ private:
     bool fastForwardPadHeld_ = false;
     bool fastForwardActive_ = false;
 #ifdef Q_OS_WIN
-    void refreshWindowsMenuTheme(bool windowCreated);
-    void scheduleWindowsMenuRefresh(bool systemMetricsChanged);
-    bool menuRefreshPending_ = false;
-    bool menuMetricsDirty_ = false;
     bool fullscreenAltConsumed_ = false;
-    bool darkNativeMenu_ = false;
     bool windowsFullscreenRequested_ = false;
-    bool fullscreenMenuShown_ = false;
 #endif
     bool wasMaximizedBeforeFullscreen_ = false;
     bool loading_ = false;
