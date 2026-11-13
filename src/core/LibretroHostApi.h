@@ -14,6 +14,9 @@ struct LibretroHost::Api {
     void (*link_deadline)(unsigned) = nullptr;
     unsigned (*link_latch)() = nullptr;
     void (*link_restore_latch)(unsigned) = nullptr;
+    size_t (*gg_link_state_size)() = nullptr;
+    bool (*gg_link_state_save)(void*,size_t) = nullptr;
+    bool (*gg_link_state_load)(const void*,size_t) = nullptr;
     size_t (*link_audio_size)() = nullptr;
     bool (*link_audio_save)(void*,size_t) = nullptr;
     bool (*link_audio_load)(const void*,size_t) = nullptr;

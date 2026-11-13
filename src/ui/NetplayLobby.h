@@ -25,8 +25,10 @@ class QTableWidget;
 //   participants: [{id, nickname, role, readiness, pingMs, local, host}];
 //   rom: {filename, status, message, progress (0..100), canSelect,
 //         canDownload, canCancel}.
-// Roles are player1 through player8 and spectator, limited by playerCount. Only the host can assign roles, and
-// any number of peers may have the same role. Peer IDs must be stable strings.
+// Roles are player1 through player8 and spectator, limited by playerCount.
+// Link Cable / Gear-to-Gear limits roles to player1 (console A), player2 (console B)
+// and spectator. Only the host can assign roles, and any number of peers may
+// have the same role. Peer IDs must be stable strings.
 class NetplayLobby final : public QWidget {
     Q_OBJECT
 public:

@@ -239,6 +239,15 @@ if(BUILD_TESTING)
         src/net/NetFileTransfer.cpp src/net/NetFileTransfer.h
         src/net/NetTransferWorker.cpp src/net/NetTransferWorker.h
         src/ui/NetplayLobby.cpp src/ui/NetplayLobby.h)
+    # Explicit local-ROM integration probe; not registered with CTest.
+    get_target_property(GG_MATCH_SESSION_SOURCES netplay_session_tests SOURCES)
+    list(REMOVE_ITEM GG_MATCH_SESSION_SOURCES tests/netplay_session_tests.cpp)
+    add_executable(gg_link_match_probe EXCLUDE_FROM_ALL tests/gg_link_match_probe.cpp ${GG_MATCH_SESSION_SOURCES})
+    target_compile_definitions(gg_link_match_probe PRIVATE KEGA_NETPLAY_TEST_INPUTS)
+    target_link_libraries(gg_link_match_probe PRIVATE core_host Qt6::Widgets Qt6::Network OpenSSL::Crypto)
+    if(WIN32)
+        target_link_libraries(gg_link_match_probe PRIVATE iphlpapi ws2_32)
+    endif()
     target_compile_definitions(netplay_session_tests PRIVATE KEGA_NETPLAY_TEST_INPUTS)
     target_link_libraries(netplay_session_tests PRIVATE core_host Qt6::Widgets Qt6::Network OpenSSL::Crypto)
     if(WIN32)

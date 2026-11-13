@@ -32,11 +32,18 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);try{
  const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
  QJsonObject result{{"frames",frames},{"seconds",seconds},{"emulated_fps",frames/seconds},{"video_rate",host.fps()},{"rss_before_kib",before},{"rss_linked_kib",rss()},{"peer_mappings",peerMappings()},{"audio_nonzero_bytes",audioNonzero}};
  if(!single){
- const auto native=host.serialize();require(native.startsWith("KRLINK01"),"pair was not created");
+ const auto native=host.serialize();
+ const bool gameGear=host.isGameGear();
+ require(native.startsWith(gameGear?"KRGGLK01":"KRLINK01"),"pair was not created");
+ result["pair_state_magic"]=QString::fromLatin1(native.left(8));
+ result["video_width"]=host.frameForLinkRole(1).width();result["video_height"]=host.frameForLinkRole(1).height();
  auto corrupt=native;const auto aSize=qFromBigEndian<quint32>(native.constData()+8);corrupt[48+aSize]='!';
  require(!host.unserialize(corrupt),"corrupt second console state accepted");
  require(host.serialize()==native,"failed pair restore changed the live session");
  result["failed_restore_atomic"]=true;
+ if(gameGear){auto brokenWire=native;brokenWire[brokenWire.size()-1]=char(0xff);
+ require(!host.unserialize(brokenWire),"corrupt GG wire state accepted");
+ require(host.serialize()==native,"failed GG wire restore changed the live session");result["failed_wire_restore_atomic"]=true;}
  const auto state=host.captureMovieState();require(!state.isEmpty(),"empty pair state");
  auto replay=[&]{QCryptographicHash video(QCryptographicHash::Sha256),audio(QCryptographicHash::Sha256);for(int n=0;n<180;++n){host.setButtons(0,n>=10&&n<70?1u<<4:0);host.setButtons(1,n>=10&&n<40?1u<<7:0);host.runFrame();hashFrame(video,host.frameForLinkRole(1));hashFrame(video,host.frameForLinkRole(2));audio.addData(host.audio());}return std::array<QByteArray,2>{{video.result().toHex(),audio.result().toHex()}};};
  const auto first=replay();for(int r=1;r<=2;++r)host.frameForLinkRole(r).save(out+QString("/replay-%1.png").arg(r));require(host.restoreMovieState(state,error),error);const auto second=replay();

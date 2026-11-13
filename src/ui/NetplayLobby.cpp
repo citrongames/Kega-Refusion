@@ -44,10 +44,12 @@ bool validManualAddress(const QString& address) {
     return true;
 }
 
-QString roleName(const QString& role,const QJsonArray& kinds,int jcartBase) {
+QString roleName(const QString& role,const QJsonArray& kinds,int jcartBase,bool linkCable) {
     if (role.startsWith(QLatin1String("player"))) {
         bool ok=false;const int player=role.mid(6).toInt(&ok);
         if(ok && player>=1 && player<=8 && role==QStringLiteral("player%1").arg(player)) {
+            if(linkCable && player<=2)
+                return t("Игрок %1 · консоль %2").arg(player).arg(player==1?QStringLiteral("A"):QStringLiteral("B"));
             if(jcartBase>=2 && player>jcartBase && player<=jcartBase+2)
                 return t("Игрок %1 · J-Cart (порт %2)").arg(player).arg(player-jcartBase);
             const int kind=player<=kinds.size()?kinds[player-1].toInt(0):0;
@@ -252,9 +254,9 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     romStatus_->setWordWrap(true);
     romLayout->addWidget(romName_);
     romLayout->addWidget(romStatus_);
-    linkCable_ = new QCheckBox(t("Link Cable (две консоли Mega Drive)"), romBox);
+    linkCable_ = new QCheckBox(t("Link Cable / Gear-to-Gear (две консоли)"), romBox);
     linkCable_->setObjectName(QStringLiteral("netplayLinkCable"));
-    linkCable_->setToolTip(t("Хост может включить Link Cable в этом лобби. Включение перезапускает игру на двух консолях; выключение продолжает игру на консоли A. Игроки 1 и 2 управляют первым геймпадом консолей A и B."));
+    linkCable_->setToolTip(t("Хост включает кабель в этом лобби: Link Cable для Mega Drive или Gear-to-Gear для Game Gear. Включение перезапускает игру на двух консолях; выключение продолжает игру на консоли A. Игрок 1 управляет консолью A, игрок 2 — консолью B, зрители видят экран консоли A."));
     romLayout->addWidget(linkCable_);
     connect(linkCable_, &QCheckBox::toggled, this, &NetplayLobby::linkCableRequested);
     progress_ = new QProgressBar(romBox);
@@ -486,6 +488,7 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
 void NetplayLobby::updateParticipants(const QJsonObject& state) {
     const QJsonArray entries = state.value(QStringLiteral("participants")).toArray();
     const QJsonArray kinds = state.value(QStringLiteral("roleKinds")).toArray();
+    const bool linkCable = state.value(QStringLiteral("linkCable")).toBool();
     const int jcartBase=state.value(QStringLiteral("jcart")).toBool()?
         state.value(QStringLiteral("jcartBase")).toInt():0;
     const int count = qMin(entries.size(), 32);
@@ -507,11 +510,11 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
         if (nameCell->data(Qt::UserRole).toString() != id) nameCell->setData(Qt::UserRole, id);
         if (nameCell->data(Qt::UserRole + 1).toBool() != local)
             nameCell->setData(Qt::UserRole + 1, local);
-        setCell(participants_, row, 1, roleName(role,kinds,jcartBase));
+        setCell(participants_, row, 1, roleName(role,kinds,jcartBase,linkCable));
         auto* roleBox = qobject_cast<QComboBox*>(participants_->cellWidget(row, 1));
         if (state.value(QStringLiteral("active")).toBool() &&
             state.value(QStringLiteral("host")).toBool() && !id.isEmpty()) {
-            const int playerCount=qBound(2,state.value(QStringLiteral("playerCount")).toInt(2),8);
+            const int playerCount=linkCable?2:qBound(2,state.value(QStringLiteral("playerCount")).toInt(2),8);
             if (!roleBox || roleBox->property("peerId").toString() != id || roleBox->count()!=playerCount+1) {
                 if(roleBox)participants_->removeCellWidget(row,1);
                 roleBox = new QComboBox(participants_);
@@ -519,7 +522,7 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
                 roleBox->setProperty("peerId", id);
                 roleBox->addItem(t("Зритель"), QStringLiteral("spectator"));
                 for(int player=1;player<=playerCount;++player)
-                    roleBox->addItem(roleName(QStringLiteral("player%1").arg(player),kinds,jcartBase),QStringLiteral("player%1").arg(player));
+                    roleBox->addItem(roleName(QStringLiteral("player%1").arg(player),kinds,jcartBase,linkCable),QStringLiteral("player%1").arg(player));
                 participants_->setCellWidget(row, 1, roleBox);
                 connect(roleBox, &QComboBox::currentIndexChanged, this, [this, roleBox, id](int index) {
                     if (index >= 0 && state_.value(QStringLiteral("active")).toBool() &&
@@ -529,7 +532,7 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
             }
             const QSignalBlocker roleBlocker(roleBox);
             for(int player=1;player<=playerCount;++player) {
-                const auto label=roleName(QStringLiteral("player%1").arg(player),kinds,jcartBase);
+                const auto label=roleName(QStringLiteral("player%1").arg(player),kinds,jcartBase,linkCable);
                 if(roleBox->itemText(player)!=label)roleBox->setItemText(player,label);
             }
             const int roleIndex = roleBox->findData(role);

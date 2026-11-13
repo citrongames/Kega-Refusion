@@ -199,6 +199,9 @@ bool LibretroHost::initialize(QString& error) {
     api_->link_deadline = reinterpret_cast<decltype(api_->link_deadline)>(library_.resolve("retro_kegarefusion_link_deadline"));
     api_->link_latch = reinterpret_cast<decltype(api_->link_latch)>(library_.resolve("retro_kegarefusion_link_latch"));
     api_->link_restore_latch = reinterpret_cast<decltype(api_->link_restore_latch)>(library_.resolve("retro_kegarefusion_link_restore_latch"));
+    api_->gg_link_state_size = reinterpret_cast<decltype(api_->gg_link_state_size)>(library_.resolve("retro_kegarefusion_gg_link_state_size"));
+    api_->gg_link_state_save = reinterpret_cast<decltype(api_->gg_link_state_save)>(library_.resolve("retro_kegarefusion_gg_link_state_save"));
+    api_->gg_link_state_load = reinterpret_cast<decltype(api_->gg_link_state_load)>(library_.resolve("retro_kegarefusion_gg_link_state_load"));
     api_->link_audio_size = reinterpret_cast<decltype(api_->link_audio_size)>(library_.resolve("retro_kegarefusion_link_audio_size"));
     api_->link_audio_save = reinterpret_cast<decltype(api_->link_audio_save)>(library_.resolve("retro_kegarefusion_link_audio_save"));
     api_->link_audio_load = reinterpret_cast<decltype(api_->link_audio_load)>(library_.resolve("retro_kegarefusion_link_audio_load"));
@@ -1290,10 +1293,13 @@ void LibretroHost::applyControllerPorts(bool force) {
     const unsigned hardware=api_->system_hw?api_->system_hw():0;
     const bool sms=smsControllerHardware(hardware);
     const bool md=mdControllerHardware(hardware);
+    auto pad = [&](unsigned owner) -> unsigned {
+        return md ? (controllerSixButton_[owner] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
+            : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)) : RETRO_DEVICE_JOYPAD;
+    };
     if (linkRequested_ || linkParent_) {
         callbackPlayers_.fill(-1); callbackPlayers_[0] = 0;
-        const unsigned pad = controllerSixButton_[0] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,1) : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD,0);
-        const std::array<unsigned,2> wanted{{pad,RETRO_DEVICE_NONE}};
+        const std::array<unsigned,2> wanted{{pad(0),RETRO_DEVICE_NONE}};
         for (unsigned i=0;i<2;++i) if (force || controllerDevices_[i]!=wanted[i]) { api_->set_controller_port_device(i,wanted[i]); controllerDevices_[i]=wanted[i]; }
         return;
     }
@@ -1353,10 +1359,6 @@ void LibretroHost::applyControllerPorts(bool force) {
     std::array<unsigned,2> devices{{RETRO_DEVICE_NONE,RETRO_DEVICE_NONE}};
     callbackPlayers_.fill(-1);
     unsigned callback = 0;
-    auto pad = [&](unsigned owner) -> unsigned {
-        return md ? (controllerSixButton_[owner] ? RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1)
-            : RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0)) : RETRO_DEVICE_JOYPAD;
-    };
     for (unsigned port=0;port<2;++port) if (controllerConnected_[port]) {
         const auto kind = controllerKind(port);
         if (md && port == 1 && (kind == ControllerType::Menacer || kind == ControllerType::Justifier)) {
@@ -1673,7 +1675,7 @@ QByteArray LibretroHost::networkCompatibility() const {
     const char* contract = api_->network_state_abi();
     if (!contract || !*contract) return {};
     return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) +
-        (linkPeer_ ? QByteArrayLiteral(":md-link-v1") : QByteArray()) +
+        (linkPeer_ ? (isGameGear() ? QByteArrayLiteral(":gg-link-v1") : QByteArrayLiteral(":md-link-v1")) : QByteArray()) +
         (api_->get_bram_raw ? QByteArrayLiteral(":rewind-native-v1") : QByteArray()));
 }
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
@@ -1777,7 +1779,7 @@ void LibretroHost::refreshRecordingIdentity() {
     }
     // Native serialization is platform/architecture dependent. The core's explicit
     // contract covers both the state layout and deterministic execution behavior.
-    if (linkRequested_ && !recordingAbi_.isEmpty()) recordingAbi_ += "-md-link-v1";
+    if (linkRequested_ && !recordingAbi_.isEmpty()) recordingAbi_ += isGameGear() ? "-gg-link-v1" : "-md-link-v1";
     recordingCoreHash_ = recordingAbi_.isEmpty() ? exactCoreHash_
         : digest(QByteArrayLiteral("KegaRefusion-recording-contract:") + recordingAbi_ + ':'
                  + QSysInfo::kernelType().toUtf8() + ':' + QSysInfo::buildAbi().toUtf8());
@@ -2434,7 +2436,7 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     return true;
 }
 QByteArray LibretroHost::stateCoreIdentity() const {
-    if (linkPeer_) return digest(coreHash_ + QByteArrayLiteral("md-link-state-v1"));
+    if (linkPeer_) return digest(coreHash_ + (isGameGear() ? QByteArrayLiteral("gg-link-state-v1") : QByteArrayLiteral("md-link-state-v1")));
     // Ordinary MD/CD retain their stable GPX state identity. The attachment
     // has its own versioned state contract, independent of executable hashes.
     if (api_->paprium_cd_active && api_->paprium_cd_active())

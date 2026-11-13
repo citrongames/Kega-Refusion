@@ -27,6 +27,7 @@ struct LibretroHost::LinkPair {
     struct Endpoint { LinkPair* pair; unsigned side; } endpoint[2]{{this,0},{this,1}};
     LibretroHost* host[2];
     cothread_t control=nullptr, fiber[2]{};
+    size_t wireBytes = 0; // Extra in-flight UART state per Game Gear.
     unsigned cycles[2]{};
     bool done[2]{true,true};
     std::exception_ptr failure;
@@ -99,17 +100,23 @@ double LibretroHost::aspectRatioForLinkRole(int role) const {
     return h->av_.geometry.aspect_ratio>0?h->av_.geometry.aspect_ratio:
         h->av_.geometry.base_height?double(h->av_.geometry.base_width)/h->av_.geometry.base_height:4.0/3.0;
 }
+bool LibretroHost::supportsLinkCable() const {
+    if (!api_->system_hw) return false;
+    const auto hardware = api_->system_hw();
+    if (hardware == 0x40) return true; // Native Game Gear EXT port.
+    return hardware == 0x80 && !hasCdHardware() &&
+        !(api_->features && (api_->features() & 2u)) &&
+        !(api_->paprium_active && api_->paprium_active());
+}
 bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     error.clear();
     if(linkParent_) {error=QStringLiteral("A cable peer cannot own another console");return false;}
-    if(enabled && adapter_ != ControllerAdapter::None) {
+    if(enabled && controllerAdapter() != ControllerAdapter::None) {
         error=Localization::text(QStringLiteral("Отключите мультиадаптер перед включением Link Cable."));return false;
     }
     if(linkRequested_==enabled && (!loaded_ || !enabled || linkPair_))return true;
-    if(enabled && loaded_ && (!api_->system_hw || api_->system_hw()!=0x80 || hasCdHardware() ||
-            (api_->features&&(api_->features()&2u)) ||
-            (api_->paprium_active&&api_->paprium_active()))) {
-        error=Localization::text(QStringLiteral("Link Cable доступен для картриджей Mega Drive без Sega CD и 32X."));return false;
+    if(enabled && loaded_ && !supportsLinkCable()) {
+        error=Localization::text(QStringLiteral("Link Cable доступен для Game Gear и картриджей Mega Drive без Sega CD и 32X."));return false;
     }
     if(!enabled) {
         stopLinkedPair();linkRequested_=false;buttons_.fill(0);
@@ -132,13 +139,20 @@ void LibretroHost::stopLinkedPair() {
 bool LibretroHost::startLinkedPair(QString& error) {
     if(linkParent_ || !linkRequested_ || !loaded_)return true;
     if(linkPair_)return true;
-    if(!api_->system_hw || api_->system_hw()!=0x80 || hasCdHardware() ||
-       (api_->features&&(api_->features()&2u)) || (api_->paprium_active&&api_->paprium_active())) {
-        error=Localization::text(QStringLiteral("Link Cable доступен для картриджей Mega Drive без Sega CD и 32X."));return false;
+    if(!supportsLinkCable()) {
+        error=Localization::text(QStringLiteral("Link Cable доступен для Game Gear и картриджей Mega Drive без Sega CD и 32X."));return false;
     }
     if(!api_->link_io||!api_->link_connect||!api_->link_deadline||!api_->link_latch||
        !api_->link_restore_latch||!api_->link_audio_size||!api_->link_audio_save||!api_->link_audio_load||!api_->link_audio_size()) {
         error=Localization::text(QStringLiteral("Для Link Cable требуется обновлённое ядро."));return false;
+    }
+    const auto hardware = api_->system_hw();
+    size_t wireBytes = 0;
+    if (hardware == 0x40) {
+        if (!api_->gg_link_state_size || !api_->gg_link_state_save || !api_->gg_link_state_load ||
+            !(wireBytes = api_->gg_link_state_size()) || wireBytes > 4096) {
+            error=Localization::text(QStringLiteral("Для Link Cable требуется обновлённое ядро."));return false;
+        }
     }
     const QFileInfo core(library_.fileName());
     const QString peerPath=core.dir().filePath(core.completeBaseName()+QStringLiteral("_linkpeer.")+core.suffix());
@@ -167,7 +181,7 @@ bool LibretroHost::startLinkedPair(QString& error) {
                 peer->loaded_=peer->api_->load_game(&game);peer->contentInfoActive_=false;
                 if(peer->loaded_) {
                     peer->api_->get_system_av_info(&peer->av_);
-                    if(std::abs(peer->fps()-fps())>1e-9 || peer->api_->system_hw()!=0x80)
+                    if(std::abs(peer->fps()-fps())>1e-9 || peer->api_->system_hw()!=hardware)
                         error=QStringLiteral("Link Cable console hardware/timing differs");
                     else {
                         peer->applyControllerPorts(true);
@@ -185,6 +199,7 @@ bool LibretroHost::startLinkedPair(QString& error) {
     }
     if(!ok) {Activation scope(peer.get());peer.reset();return false;}
     linkPeer_=std::move(peer);linkPair_.reset(new LinkPair(this,linkPeer_.get()));
+    linkPair_->wireBytes = wireBytes;
     if(!linkPair_->initialize()) {error=QStringLiteral("Cannot allocate Link Cable execution contexts");stopLinkedPair();return false;}
     setDebugMasks(debugVideoMask_,debugAudioMask_);setDebugBackdrop(debugBackdrop_);
     { Activation scope(linkPeer_.get());
@@ -208,7 +223,7 @@ void LibretroHost::resetLinkedPair() {
 qsizetype LibretroHost::serializedSize() const {
     if(!loaded_)return 0;
     if(!linkPeer_)return qsizetype(api_->serialize_size());
-    quint64 total=PairHeader;
+    quint64 total=PairHeader + 2 * linkPair_->wireBytes;
     for(const auto* h:std::array<const LibretroHost*,2>{this,linkPeer_.get()}) {
         total+=h->api_->serialize_size()+h->api_->link_audio_size()+h->saveMemorySizes_[0]+h->saveMemorySizes_[1];
     }
@@ -220,7 +235,7 @@ QByteArray LibretroHost::captureLinkedState() const {
     size[0]=api_->serialize_size();size[1]=linkPeer_->api_->serialize_size();
     size[2]=api_->link_audio_size();size[3]=linkPeer_->api_->link_audio_size();
     size[4]=saveMemorySizes_[0];size[5]=saveMemorySizes_[1];size[6]=linkPeer_->saveMemorySizes_[0];size[7]=linkPeer_->saveMemorySizes_[1];
-    QByteArray out("KRLINK01",8);out.reserve(total);
+    QByteArray out(linkPair_->wireBytes ? "KRGGLK01" : "KRLINK01",8);out.reserve(total);
     for(auto n:size)append32(out,n);
     append32(out,api_->link_latch());append32(out,linkPeer_->api_->link_latch());
     out.resize(total);
@@ -236,10 +251,16 @@ QByteArray LibretroHost::captureLinkedState() const {
         else if(size[i]) {const auto* data=h->api_->get_memory_data(i%2?RETRO_MEMORY_RTC:RETRO_MEMORY_SAVE_RAM);if(!data)return {};std::memcpy(out.data()+off,data,size[i]);}
         off+=size[i];
     }
+    if (const auto n = linkPair_->wireBytes) {
+        if (!api_->gg_link_state_save(out.data()+off,n) ||
+            !linkPeer_->api_->gg_link_state_save(out.data()+off+n,n)) return {};
+    }
     return out;
 }
 bool LibretroHost::restoreLinkedState(const QByteArray& state,bool transactional) {
-    if(!linkPeer_||state.size()!=serializedSize()||state.left(8)!="KRLINK01")return false;
+    if (!linkPeer_ || state.size()!=serializedSize()) return false;
+    const auto wireBytes = linkPair_->wireBytes;
+    if (!state.startsWith(wireBytes ? "KRGGLK01" : "KRLINK01")) return false;
     std::array<quint32,8> sizes{};std::array<qsizetype,8> offset{};quint64 total=PairHeader;
     for(unsigned i=0;i<8;++i) {
         const auto* h=(i==1||i==3||i>=6)?linkPeer_.get():this;
@@ -248,7 +269,7 @@ bool LibretroHost::restoreLinkedState(const QByteArray& state,bool transactional
         if(sizes[i]!=expected||total>quint64(state.size()))return false;
     }
     const unsigned latch[2]{qFromBigEndian<quint32>(state.constData()+40),qFromBigEndian<quint32>(state.constData()+44)};
-    if(total!=quint64(state.size()) || (latch[0]&~0x703u) || (latch[1]&~0x703u))return false;
+    if(total + 2 * wireBytes != quint64(state.size()) || (latch[0]&~0x703u) || (latch[1]&~0x703u))return false;
     for(auto value:latch) {const unsigned level=value>>8;if(level!=0&&level!=4&&level!=6)return false;}
     const auto previous=transactional?captureLinkedState():QByteArray();
     if(transactional&&previous.isEmpty())return false;
@@ -264,7 +285,13 @@ bool LibretroHost::restoreLinkedState(const QByteArray& state,bool transactional
         }
         h->applyControllerPorts();h->audio_.clear();
     }
-    linkPair_->connect();api_->link_restore_latch(latch[0]);linkPeer_->api_->link_restore_latch(latch[1]);return true;
+    linkPair_->connect();
+    if (wireBytes) {
+        const char* wire = state.constData()+total;
+        return api_->gg_link_state_load(wire,wireBytes) &&
+            linkPeer_->api_->gg_link_state_load(wire+wireBytes,wireBytes);
+    }
+    api_->link_restore_latch(latch[0]);linkPeer_->api_->link_restore_latch(latch[1]);return true;
     };
     if(apply())return true;
     if(transactional&&!restoreLinkedState(previous,false))unload();

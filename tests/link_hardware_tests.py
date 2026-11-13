@@ -88,7 +88,7 @@ def fixture(stop=False):
     return bytes(rom)
 
 class Core:
-    def __init__(self, path, rom=None, audio_filter="disabled"):
+    def __init__(self, path, rom=None, audio_filter="disabled", fixture_extension=".md"):
         self.path = str(Path(path).resolve())
         self.library = C.CDLL(self.path)
         self.keep = []
@@ -165,7 +165,7 @@ class Core:
         self.library.retro_init()
         self.rom = fixture() if rom is None else rom
         self.buffer = C.create_string_buffer(self.rom)
-        fixture_path = Path(self.temporary.name) / "original-link.md"
+        fixture_path = Path(self.temporary.name) / ("original-link" + fixture_extension)
         fixture_path.write_bytes(self.rom)
         game = Game(os.fsencode(fixture_path), C.cast(self.buffer, P), len(self.rom), None)
         require(self.library.retro_load_game(C.byref(game)), "original fixture load")

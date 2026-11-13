@@ -1,6 +1,7 @@
 #include "ui/NetplayLobby.h"
 #include "i18n/Localization.h"
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QJsonArray>
@@ -61,6 +62,24 @@ void checkLobby(const QString& language,const QString& projectRoot) {
     require(summary->text().contains("99")&&summary->text().contains("4")&&table->cellWidget(1,1)==role&&table->currentRow()==1,"opening lobby did not apply latest cached sample without rebuilding roles");
     lobby.setNetworkQuality({{"active",false}});
     require(summary->text()==text("Качество связи появится после запуска игры")&&table->item(1,3)->text()==text("%1 мс").arg(88),"inactive quality retained stale game measurements");
+    auto* cable=lobby.findChild<QCheckBox*>(QStringLiteral("netplayLinkCable"));
+    require(cable&&cable->text().contains(QStringLiteral("Gear-to-Gear"))&&cable->isEnabled(),
+        "host cable switch does not expose Game Gear support");
+    state.insert("linkCable",true);state.insert("playerCount",8);lobby.setLobbyState(state);
+    auto* cableRole=qobject_cast<QComboBox*>(table->cellWidget(1,1));
+    require(cableRole&&cableRole->count()==3&&
+        cableRole->itemText(1)==text("Игрок %1 · консоль %2").arg(1).arg(QStringLiteral("A"))&&
+        cableRole->itemText(2)==text("Игрок %1 · консоль %2").arg(2).arg(QStringLiteral("B"))&&
+        cableRole->itemData(0)==QStringLiteral("spectator")&&roleRequests==0,
+        "cable roles do not identify two separate consoles and spectator without emitting requests");
+    state.insert("host",false);lobby.setLobbyState(state);
+    require(!cable->isEnabled()&&!table->cellWidget(1,1)&&
+        table->item(1,1)->text()==text("Игрок %1 · консоль %2").arg(2).arg(QStringLiteral("B"))&&
+        table->item(2,1)->text()==text("Зритель"),
+        "client cable roles or host-only switching incorrect");
+    state.insert("linkCable",false);state.insert("playerCount",2);lobby.setLobbyState(state);
+    require(table->item(1,1)->text()==text("Игрок %1").arg(2)&&roleRequests==0,
+        "disabling cable did not restore ordinary role names");
     state.insert("active",false);lobby.setLobbyState(state);
     require(summary->isHidden(),"quality summary stayed visible after leaving session");
 }
@@ -70,6 +89,6 @@ int main(int argc,char** argv) {
     try {
         const QString root=app.arguments().size()>1?app.arguments()[1]:QDir::currentPath();
         checkLobby(QStringLiteral("ru"),root);checkLobby(QStringLiteral("en"),root);
-        std::puts("lobby local quality: RU/EN, UDP/TCP fallback, unknown values, stable roles/selection, hidden cache and inactive cleanup passed");return 0;
+        std::puts("lobby local quality: RU/EN, UDP/TCP fallback, unknown values, stable roles/selection, cable roles, hidden cache and inactive cleanup passed");return 0;
     } catch(const std::exception& error) {std::fprintf(stderr,"quality UI test failed: %s\n",error.what());return 1;}
 }

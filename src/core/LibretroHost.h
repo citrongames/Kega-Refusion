@@ -183,6 +183,7 @@ private:
     LibretroHost* linkParent_ = nullptr;
     bool linkRequested_ = false;
     int linkPresentationRole_ = 1;
+    bool supportsLinkCable() const;
     bool startLinkedPair(QString& error);
     void stopLinkedPair();
     void runLinkedFrame(bool video, bool audio);
