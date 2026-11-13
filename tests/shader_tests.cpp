@@ -101,6 +101,24 @@ void memoryBudgetTests(const QString& directory) {
 void gpuTests(const QString& directory) {
     QString error;
     ShaderPreset preset;
+    // A final shader may draw the cabinet from framebuffer coordinates while
+    // sampling the game with texture coordinates. Both must have the right top.
+    const QString scenePath = directory + QStringLiteral("/scene.glsl");
+    write(scenePath, shader(R"(void main() {
+        if (tc.x < 0.5) gl_FragColor = texture2D(Texture, tc);
+        else gl_FragColor = gl_FragCoord.y > OutputSize.y * 0.5
+            ? vec4(0,1,0,1) : vec4(0,0,1,1);
+    })"));
+    require(ShaderPreset::load(scenePath, preset, error), qPrintable(error));
+    ShaderPipeline scene;
+    require(scene.initialize(preset, error), qPrintable(error));
+    QImage pattern(8, 8, QImage::Format_RGB32);
+    pattern.fill(Qt::black);
+    pattern.setPixelColor(1, 1, Qt::red);
+    const QImage sceneImage = render(scene, pattern, pattern.size());
+    require(sceneImage.pixelColor(1, 1) == Qt::red && sceneImage.pixelColor(1, 6) == Qt::black &&
+            sceneImage.pixelColor(6, 1) == Qt::green && sceneImage.pixelColor(6, 6) == Qt::blue,
+            "final shader inverted the game texture or its procedural scene");
     // Two noncommuting passes prove real GPU programs execute in preset order.
     write(directory + QStringLiteral("/a.glsl"), shader("void main() { vec4 c=texture2D(Texture,tc); gl_FragColor=vec4(c.b,c.g,c.r,0.25); }"));
     write(directory + QStringLiteral("/b.glsl"), shader("void main() { vec4 c=texture2D(Texture,tc); gl_FragColor=vec4(c.r,c.a,c.b,1.0); }"));

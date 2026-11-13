@@ -224,10 +224,10 @@ bool ShaderPreset::load(const QString& path, ShaderPreset& result, QString& erro
         const QString yType = take(QStringLiteral("scale_type_y"));
         const QString xScale = take(QStringLiteral("scale_x"));
         const QString yScale = take(QStringLiteral("scale_y"));
-        const bool scaled = !commonType.isEmpty() || !commonScale.isEmpty() ||
+        pass.explicitScale = !commonType.isEmpty() || !alternateType.isEmpty() || !commonScale.isEmpty() ||
                             !xType.isEmpty() || !yType.isEmpty() || !xScale.isEmpty() || !yScale.isEmpty();
         auto scale = [&](QString type, QString value, ShaderPass::Scale& mode, double& factor) {
-            if (type.isEmpty()) type = (i == count - 1 && !scaled)
+            if (type.isEmpty()) type = (i == count - 1 && !pass.explicitScale)
                                        ? QStringLiteral("viewport") : QStringLiteral("source");
             if (type == QStringLiteral("source")) mode = ShaderPass::Scale::Source;
             else if (type == QStringLiteral("viewport")) mode = ShaderPass::Scale::Viewport;

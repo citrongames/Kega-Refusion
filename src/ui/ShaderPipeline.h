@@ -23,6 +23,7 @@ struct ShaderPass {
     QString path;
     QByteArray source;
     bool linear = false;
+    bool explicitScale = false;
     bool floating = false, srgb = false, mipmap = false;
     QString alias;
     Scale scaleX = Scale::Source, scaleY = Scale::Source;
@@ -90,4 +91,5 @@ private:
     unsigned texture_ = 0;
     QSize textureSize_, finalViewportSize_;
     float originalAspect_ = 1.f;
+    bool lastPassFacesScreen_ = false;
 };

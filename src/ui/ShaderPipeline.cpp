@@ -270,7 +270,15 @@ bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
         buffers_.push_back(nullptr);
     }
     if (!compile(stockSource, stock_, error, -1) || !loadTextures(error)) return false;
-    constexpr float quad[] = {0,0, 0,0, 1,0, 1,0, 0,1, 0,1, 1,1, 1,1};
+    // RetroArch presents an unscaled final shader in screen coordinates. Use
+    // the same orientation in our final pass buffer; its blit then stays upright.
+    // Explicit FBOs (including feedback) retain the intermediate texture layout.
+    const int last = preset_.passes.size() - 1;
+    lastPassFacesScreen_ = last >= 0 && !preset_.passes[last].explicitScale
+        && preset_.feedbackPass != last && !preset_.passes[last].floating && !preset_.passes[last].srgb;
+    // Texture-space position / display-space position. Texture coordinates
+    // always use the first pair, also when a shader computes its own scene.
+    constexpr float quad[] = {0,0, 0,1, 1,0, 1,1, 0,1, 0,0, 1,1, 1,0};
     if (!vertices_.create() || !vertices_.bind())
         return fail(error, QStringLiteral("Cannot create shader vertex buffer."));
     vertices_.allocate(quad, int(sizeof(quad)));
@@ -323,8 +331,7 @@ void ShaderPipeline::draw(Program& program, unsigned texture, const QSize& input
     }
     if (program.mvp >= 0) {
         QMatrix4x4 matrix;
-        if (program.passIndex < 0) matrix.ortho(0, 1, 1, 0, -1, 1);
-        else matrix.ortho(0, 1, 0, 1, -1, 1);
+        matrix.ortho(0, 1, 0, 1, -1, 1);
         glUniformMatrix4fv(program.mvp, 1, GL_FALSE, matrix.constData());
     }
     for (const auto& parameter : program.parameters)
@@ -382,10 +389,12 @@ void ShaderPipeline::draw(Program& program, unsigned texture, const QSize& input
         shader.setAttributeBuffer(location, GL_FLOAT, offset * int(sizeof(float)),
                                   2, 4 * int(sizeof(float)));
     };
-    bindCoord(program.vertexCoord, 0);
-    bindCoord(program.texCoord, 2);
-    bindCoord(program.lutTexCoord, 2);
-    for (const auto& frame : program.frames) bindCoord(frame.texCoord, 2);
+    const bool displayVertices = program.passIndex < 0 ? !lastPassFacesScreen_
+        : lastPassFacesScreen_ && program.passIndex == preset_.passes.size() - 1;
+    bindCoord(program.vertexCoord, displayVertices ? 2 : 0);
+    bindCoord(program.texCoord, 0);
+    bindCoord(program.lutTexCoord, 0);
+    for (const auto& frame : program.frames) bindCoord(frame.texCoord, 0);
     if (program.color >= 0) shader.setAttributeValue(program.color, 1.f, 1.f, 1.f, 1.f);
     if (program.colorUpper >= 0) shader.setAttributeValue(program.colorUpper, 1.f, 1.f, 1.f, 1.f);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -474,7 +483,7 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     const bool hasSpriteOwnership = usesSpriteOwnership && spriteOwnership.size() == frame.size()
         && spriteOwnership.format() == QImage::Format_Grayscale8;
     // Like RetroArch, keep the top row at v=0 for source images, LUTs and intermediate
-    // targets. Only the final display quad is flipped. RGB32 usually uploads without a copy.
+    // targets. The display pass selects screen-facing vertices. RGB32 normally uploads without a copy.
 #if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
     const bool uploadBgra = frame.format() == QImage::Format_RGB32;
 #else
