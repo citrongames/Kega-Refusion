@@ -1675,7 +1675,7 @@ QByteArray LibretroHost::networkCompatibility() const {
     const char* contract = api_->network_state_abi();
     if (!contract || !*contract) return {};
     return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) +
-        (linkPeer_ ? (isGameGear() ? QByteArrayLiteral(":gg-link-v1") : QByteArrayLiteral(":md-link-v1")) : QByteArray()) +
+        (linkPeer_ ? (isGameGear() ? QByteArrayLiteral(":gg-link-v2") : QByteArrayLiteral(":md-link-v1")) : QByteArray()) +
         (api_->get_bram_raw ? QByteArrayLiteral(":rewind-native-v1") : QByteArray()));
 }
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
@@ -1779,7 +1779,7 @@ void LibretroHost::refreshRecordingIdentity() {
     }
     // Native serialization is platform/architecture dependent. The core's explicit
     // contract covers both the state layout and deterministic execution behavior.
-    if (linkRequested_ && !recordingAbi_.isEmpty()) recordingAbi_ += isGameGear() ? "-gg-link-v1" : "-md-link-v1";
+    if (linkRequested_ && !recordingAbi_.isEmpty()) recordingAbi_ += isGameGear() ? "-gg-link-v2" : "-md-link-v1";
     recordingCoreHash_ = recordingAbi_.isEmpty() ? exactCoreHash_
         : digest(QByteArrayLiteral("KegaRefusion-recording-contract:") + recordingAbi_ + ':'
                  + QSysInfo::kernelType().toUtf8() + ':' + QSysInfo::buildAbi().toUtf8());

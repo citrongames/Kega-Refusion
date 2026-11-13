@@ -71,6 +71,8 @@ def checks(path):
         peer[7] = 0x7f
         core.connect(peer)
         core.cycles.value = 0
+        core.write(2, 0xec)
+        require(core.read(1) & 3 == 3, 'unwritten PC0/PC1 outputs are idle high')
         core.write(2, 0xff)
         for pin, crossed in enumerate((2, 3, 0, 1, 5, 4, 6)):
             peer[7] = 0x7f ^ (1 << pin)
@@ -102,23 +104,25 @@ def checks(path):
 
         rows = []
         for speed, baud in enumerate((4800, 2400, 1200, 300)):
-            # TX line decodes as 8N1, status busy lasts ten bit periods.
+            # Fill the shift register, then enqueue a second byte while it is busy.
             core.disconnect(); peer[7] = 0x7f; core.connect(peer)
             core.cycles.value = 0
             core.write(2, 0xff); core.write(5, speed << 6 | 0x38)
             core.write(3, 0xa6)
             period = (53693175 + baud // 2) // baud
-            require(core.read(5) & 1, 'TXFL starts on TX write')
-            core.write(3, 0x11)
-            require(core.read(3) == 0xa6, 'busy TX ignores replacement')
-            actual = []
-            for bit in range(10):
-                core.at(bit * period + period // 2)
-                actual.append((core.io[7] >> 4) & 1)
-                require(core.read(5) & 1, 'TXFL remains until stop bit ends')
-            require(actual == [0] + [(0xa6 >> n) & 1 for n in range(8)] + [1], '8N1 TX bits')
-            core.at(10 * period)
-            require(not core.read(5) & 1, 'TXFL clears after stop bit')
+            require(not core.read(5) & 1, 'shift register leaves the holding register free')
+            for index, value in enumerate((0xa6, 0x11)):
+                actual = []
+                for bit in range(10):
+                    core.at((index * 10 + bit) * period + period // 2)
+                    if index == 0 and bit == 6:
+                        core.write(3, 0x11)
+                        require(core.read(5) & 1, 'second byte fills the holding register')
+                    actual.append((core.io[7] >> 4) & 1)
+                require(actual == [0] + [(value >> n) & 1 for n in range(8)] + [1],
+                        'consecutive bytes retain all 8N1 bits')
+                core.at((index + 1) * 10 * period)
+                require(not core.read(5) & 1, 'holding register free at byte boundary')
 
             # RX at same rate while TX remains enabled, with one bad stop bit.
             for value, stop in ((0x53, 1), (0x8c, 0)):
@@ -141,7 +145,7 @@ def checks(path):
                 require(status & 2 and bool(status & 4) == (not stop), 'RX ready/framing status')
                 require(core.take_nmi() == 1, 'serial NMI independent of port02 mask')
                 require(core.read(4) == value and core.read(5) & 6 == 0, 'receive read clears ready/error')
-                require(core.read(5) & 1, 'RX completion does not clear simultaneous TX')
+                require(core.io[7] & 16, 'TX is sending its stop bit at RX completion')
                 core.at(10 * period)
                 require(not core.read(5) & 1, 'full-duplex TX completes independently')
             rows.append({'baud': baud, 'period_master_cycles': period, 'tx_8n1': True, 'rx_nmi_and_framing': True, 'full_duplex': True})
@@ -153,6 +157,7 @@ def checks(path):
         peer[7] &= ~16
         core.at(100)
         core.at(6000)
+        core.write(3, 0x56)  # Capture the queued byte as well as the shift register.
         wire = core.wire_save()
         native = core.native_save()
         expected = (bytes(core.io[:8]), wire)
@@ -162,7 +167,7 @@ def checks(path):
             require(core.wire_save() == wire, 'malformed restore changes nothing')
         def continue_uart():
             trace = []
-            for cycle in (16000, 30000, 60000, 90000, 120000):
+            for cycle in (16000, 30000, 60000, 90000, 120000, 160000, 190000, 230000):
                 core.at(cycle)
                 trace.append((core.read(5), int(core.io[7]), core.take_nmi()))
             trace.append(core.read(4))
@@ -174,6 +179,19 @@ def checks(path):
         require(core.wire_load(wire), 'GG in-flight extension after reconnect')
         require((bytes(core.io[:8]), core.wire_save()) == expected, 'in-flight exact restore')
         require(continue_uart() == first, 'in-flight UART timing replay')
+
+        # Old captures used TXFL for the shifting byte and had no queued byte.
+        core.disconnect(); peer[7] = 0x7f; core.connect(peer)
+        core.cycles.value = 0
+        core.write(5, 0x30); core.write(3, 0xa7); core.at(5000)
+        legacy = bytearray(core.wire_save())
+        legacy[:8] = b'KRGGL001'
+        legacy[69] |= 1
+        core.io[5] |= 1  # Matching register in the old native state.
+        require(core.wire_load(legacy), 'old single-byte TX state is accepted')
+        require(not core.read(5) & 1, 'old busy flag does not invent a queued byte')
+        core.at(120000)
+        require(struct.unpack_from('<I', core.wire_save(), 40)[0] == 0, 'old TX stops after one byte')
 
         # RX disable aborts reception and does not synthesize a completion.
         core.disconnect(); peer[7] = 0x7f; core.connect(peer)

@@ -154,7 +154,11 @@ static int driver(const QStringList& args) {
     // https://www.smspower.org/Development/Columns-GG ; never writes game memory.
     for(int role=1;role<=2;++role){verify.setLinkPresentationRole(role);std::array<uint8_t,2> result{};
         require(verify.readAchievementMemory(0x6cc,result.data(),result.size())==result.size(),"Cannot inspect GG result counters");
-        require(result[0]==(role==1?2:0)&&result[1]==(role==1?0:2),QStringLiteral("Best-of-three role %1 ended at %2:%3").arg(role).arg(result[0]).arg(result[1]));
+        const int winner = result[role == 1 ? 0 : 1];
+        const int runnerUp = result[role == 1 ? 1 : 0];
+        require(winner == 2 && runnerUp < 2, QStringLiteral("Best-of-three role %1 ended at %2:%3").arg(role).arg(result[0]).arg(result[1]));
+        if (role == 2)
+            require(runnerUp == scores[0].toObject().value("losses").toInt(), "Final scores differ between consoles");
         uint8_t mode=0;require(verify.readAchievementMemory(0x18,&mode,1)==1&&mode==0x15,"Game is not on its versus result screen");
         scores.append(QJsonObject{{"role",role},{"wins",result[0]},{"losses",result[1]}});
     }
