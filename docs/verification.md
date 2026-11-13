@@ -379,3 +379,9 @@ At 320×224 input and 1280×720 output, median software-rendering times across t
 The published Linux 0.23.2 updater displayed the new release notes, downloaded 0.24.0 from GitHub and restarted into the new version. All 169 installed package files matched the manifest. A portable setting and a battery save survived the update. The Debian 12 package requires at most glibc 2.36.
 
 The public Windows ZIP matched the updater SHA-256. All 124 manifest entries matched and the packaged executable reported 0.24.0 on Windows. Both production targets built. The separate Windows video UI test target still lacks the Qt private platform header in its include path.
+
+## Release 0.25.0
+
+An isolated installation of the published Linux 0.24.0 build discovered 0.25.0 on startup, downloaded it from GitHub, and restarted. All 169 installed files matched the new manifest. The screenshot format setting and a battery save survived the update. The portable Linux archive retains the glibc 2.36 baseline.
+
+On Windows, the 0.24.0 helper applied the new package to a temporary installation and launched the 0.25.0 executable. Its version check exited successfully, all 124 managed files matched the manifest, and ten user-data markers survived. The public Windows download and update metadata matched the verified release artifacts.
