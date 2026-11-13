@@ -4,6 +4,8 @@
 
 Native Game Gear hardware (`SYSTEM_GG`, `0x40`) uses the same process-local host `link_io`, `link_connect` and `link_deadline` exports as MD. `SYSTEM_GGMS` is deliberately excluded. The peer pointer still names its sixteen I/O registers; otherwise unused GG register 7 publishes outgoing pin levels including the active UART TX bit. The cross wiring is PC0/PC2, PC1/PC3, PC4/PC5, with PC6 straight through. Input pins publish pull-ups; local output direction controls readback. EXT pins also mirror through DC/DD, and serial enables override PC4/PC5 direction. Port 1's stored bit 7 survives all pin reads.
 
+The frontend powers the first GG one emulated frame before connecting its peer. Two freshly reset copies with identical oscillator phase execute parallel role-election writes at the same time and can wait forever for the opposite role. The fixed startup ordering models separately switched physical consoles; it applies to every native GG pair and its power resets, without title detection or ROM changes. Native/paired state restoration resumes the saved timing directly and must not insert another startup frame.
+
 The linked Z80 loop uses master-clock cycles, the same unit as the MD scheduler. It advances and samples at instruction boundaries, yields when the host deadline is reached, and queues UART/PC6 NMIs for the next instruction boundary. A separate loop keeps the ordinary per-instruction path unchanged; unlinked sessions perform no cable callbacks. HALT still advances through instruction fetch boundaries. `io_link_yield` remains MD-only, so MD IRQ arbitration and 68000 behavior are preserved.
 
 The UART sends and receives independently: start, eight data bits least-significant first, one stop bit. The documented nominal 4800/2400/1200/300 baud rates are converted to integer NTSC master-clock periods. Each transaction retains its period if baud control changes mid-byte. TXFL remains set through the stop bit and busy TX writes are ignored. RXRD and framing error latch on completion, reading port 4 clears both, and disabling RX aborts its incomplete reception. Serial NMI depends on port 5 bit 3 independently of the PC6 enable in port 2. Parallel NMI requires a peer PC6 falling edge, input direction and the active-low enable; local output/direction changes generate no synthetic edge. The receiving latch is overwritten by the next completed byte; GG has no separately exposed overrun status. Exact physical ASIC baud division, overrun/baud-change behavior, and sustained-break repetition are not hardware-verified here.
@@ -13,3 +15,15 @@ The UART sends and receives independently: start, eight data bits least-signific
 Restore both ordinary native states, reconnect both endpoints, restore both GG wire extensions, then their existing 496-byte `KRLKA001` audio extensions. Wire load never samples the peer, yields or delivers NMI, so the two extension loads may be ordered either way. Connection preserves native UART flags for this sequence and initializes edge baselines without inventing interrupts. Disable/unload removes callbacks and discards UART work. Ordinary native state layout remains unchanged. Paired GG states need their own envelope version and the GG wire extension; the MD latch cannot represent an active GG UART.
 
 `audio_link_state_size()` now accepts GG as well as MD. GG stereo PSG context lives in the native sound state; the canonical audio extension retains resampler phase/tails and stereo filters. `tests/gg_link_hardware_tests.py` generates its own original GG ROM and checks all wire crossings/directions, DC/DD mirrors, queued PC6 NMI, four baud settings, full-duplex timing, TXFL/RXRD/framing, mid-byte restore/replay, malformed-state atomicity, RX abort, and exact stereo PSG/audio/video replay with all three filters. The existing MD `tests/link_hardware_tests.py` remains a regression check.
+
+### Checking two-player startup with real games
+
+The input scripts in `tests/data/link-*-input.txt` drive the two handhelds through the normal game menus with `link_cable_probe`. Supply your own ROM. These checkpoints distinguish a working cable from two consoles that merely display the same title screen.
+
+| Game | Linked gameplay checkpoint |
+| --- | --- |
+| Faceball 2000 (Japan) | Both consoles report two players. Start both and enter the multiplayer arena. Each player has a different view. |
+| Mortal Kombat (USA, Europe) | Sonya fights Sub-Zero. Second-player movement appears on both screens. |
+| Mortal Kombat II | The second fighter is detected. Jax fights Liu Kang. |
+| Primal Rage | Sauron fights Blizzard. Both consoles respond to the second player's attacks. |
+| Micro Machines 2 (Europe) | Select **Linked Games → Single Race** and confirm both drivers. On Roller Coaster the two players can accelerate the blue and red cars independently. |

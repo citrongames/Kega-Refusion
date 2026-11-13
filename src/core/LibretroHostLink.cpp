@@ -209,16 +209,28 @@ bool LibretroHost::startLinkedPair(QString& error) {
         error=Localization::text(QStringLiteral("Не удалось подготовить исходные кадры для записи видео."));
         stopLinkedPair();return false;
     }
-    linkPair_->connect();applyControllerPorts(true);refreshRecordingIdentity();return true;
+    applyControllerPorts(true);connectLinkAfterReset();refreshRecordingIdentity();return true;
 }
 void LibretroHost::runLinkedFrame(bool video,bool audio) {linkPair_->run(video,audio);}
+void LibretroHost::connectLinkAfterReset() {
+    if (linkPair_->wireBytes) {
+        // Two handhelds do not power on on the same clock edge. Identical boots
+        // can make both games claim the same role and wait for each other.
+        // A fixed lead gives every netplay participant the same initial pair.
+        Activation scope(this);
+        videoEnabled_ = audioEnabled_ = false;
+        api_->run();
+        videoEnabled_ = audioEnabled_ = true;
+    }
+    linkPair_->connect();
+}
 void LibretroHost::resetLinkedPair() {
     // Both contexts are suspended outside retro_run at this public boundary.
     api_->link_connect(nullptr,nullptr,nullptr);linkPeer_->api_->link_connect(nullptr,nullptr,nullptr);
     spriteOwnership_={};
     clearCoreCheats();api_->reset();resetAchievementMemory();applyCheats();audio_.clear();
     {Activation scope(linkPeer_.get());linkPeer_->reset();}
-    linkPair_->connect();
+    connectLinkAfterReset();
 }
 qsizetype LibretroHost::serializedSize() const {
     if(!loaded_)return 0;

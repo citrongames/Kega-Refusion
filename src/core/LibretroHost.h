@@ -187,6 +187,7 @@ private:
     bool startLinkedPair(QString& error);
     void stopLinkedPair();
     void runLinkedFrame(bool video, bool audio);
+    void connectLinkAfterReset();
     void resetLinkedPair();
     qsizetype serializedSize() const;
     QByteArray captureLinkedState() const;
