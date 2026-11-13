@@ -342,6 +342,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     debugAudioGains_.fill(100);
     buildMenus();
 #ifdef Q_OS_WIN
+    prepareWindowsFullscreen();
     if (menuBar()->isNativeMenuBar()) refreshWindowsMenuTheme(true);
 #endif
     refreshCommandShortcuts();
@@ -3246,6 +3247,9 @@ void MainWindow::setFullscreenMode(bool enabled) {
     if (enabled) {
         windowedGeometry_ = saveGeometry();
         wasMaximizedBeforeFullscreen_ = isMaximized();
+#ifdef Q_OS_WIN
+        prepareWindowsFullscreen();
+#endif
         showFullScreen();
     } else {
 #ifdef Q_OS_WIN
@@ -3372,39 +3376,14 @@ bool MainWindow::nativeEvent(const QByteArray& type, void* message, qintptr* res
     return QMainWindow::nativeEvent(type, message, result);
 }
 
-void MainWindow::updateFullscreenComposition() {
+void MainWindow::prepareWindowsFullscreen() {
     if (!windowHandle()) return;
-    auto* native = windowHandle()->nativeInterface<QNativeInterface::Private::QWindowsWindow>();
-    if (!native) return;
-
-    // Win32 can present a monitor-sized OpenGL window above its own popups.
-    // Only separate dialog/tool windows need this adjustment.
-    bool needsFrame = false;
-    if (isFullScreen()) {
-        needsFrame = modalWindowBlocked_;
-        if (!needsFrame) {
-            for (QWidget* widget : QApplication::topLevelWidgets()) {
-                if (widget != this && widget->isVisible() && !qobject_cast<QMenu*>(widget) &&
-                    widget->windowType() != Qt::ToolTip &&
-                    widget->windowType() != Qt::Desktop) {
-                    needsFrame = true;
-                    break;
-                }
-            }
-        }
-    }
-    if (native->hasBorderInFullScreen() == needsFrame) return;
-    const auto hwnd = reinterpret_cast<HWND>(windowHandle()->winId());
-    native->setHasBorderInFullScreen(needsFrame);
-    // Windows 11 can keep the compositing style without drawing its accent outline.
-    const COLORREF color = needsFrame ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
-    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color, sizeof(color));
-    if (isFullScreen()) {
-        // Apply the style's client-area change immediately in both directions.
-        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    // Set this before Qt constructs the fullscreen style. Keep desktop composition
+    // stable when the native menu, another window or another monitor gets focus.
+    if (auto* native = windowHandle()->nativeInterface<QNativeInterface::Private::QWindowsWindow>())
+        native->setHasBorderInFullScreen(true);
 }
+
 #endif
 
 void MainWindow::toggleFullscreenMenu() {
@@ -3521,17 +3500,10 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
             } else {
                 if (!isFullScreen() || fullscreenMenuShown_)
                     native->handleReparent(windowHandle());
+                prepareWindowsFullscreen();
                 refreshWindowsMenuTheme(true);
             }
         }
-    }
-    if (watched == this && (event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowUnblocked)) {
-        modalWindowBlocked_ = event->type() == QEvent::WindowBlocked;
-        updateFullscreenComposition();
-    } else if (isFullScreen() && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
-        auto* widget = qobject_cast<QWidget*>(watched);
-        if (widget && widget != this && widget->isWindow() && widget->windowType() != Qt::ToolTip)
-            updateFullscreenComposition();
     }
 #endif
     if (event->type() == QEvent::Polish || event->type() == QEvent::Show) {
@@ -3722,7 +3694,12 @@ void MainWindow::changeEvent(QEvent* event) {
             setMainMenuVisible(true);
         }
 #ifdef Q_OS_WIN
-        updateFullscreenComposition();
+        if ((change->oldState() ^ windowState()) & Qt::WindowFullScreen) {
+            if (const auto hwnd = reinterpret_cast<HWND>(internalWinId())) {
+                const COLORREF border = isFullScreen() ? DWMWA_COLOR_NONE : DWMWA_COLOR_DEFAULT;
+                DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+            }
+        }
 #endif
     }
     QMainWindow::changeEvent(event);
