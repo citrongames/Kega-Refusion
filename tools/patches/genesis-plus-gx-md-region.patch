@@ -1,0 +1,82 @@
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -1058,6 +1058,68 @@
+   return(1);
+ }
+ 
++/* Verified PAL-market dumps with ambiguous MD region headers, matched against
++ * libretro-database's No-Intro Mega Drive DAT (2026-10-07). Real checksum and
++ * size cheaply shortlist candidates. CRC32 covers the normalized cartridge
++ * except the two header checksum bytes an emulator may optionally repair. */
++static int md_pal_release(const unsigned char *rom)
++{
++  static const struct { unsigned int checksum, size, crc; } releases[] = {
++    {0x1122, 1048576, 0x19054014u}, /* Disney Collection, The - QuackShot Starring Donald Duck + Castle of Illusion Starring Mickey Mouse (Europe) */
++    {0x15a6, 262144, 0x04ac502du}, /* Double Clutch (Europe) */
++    {0x2221, 2097152, 0x29c93fbbu}, /* Winter Olympics (Europe) (En,Fr,De,Es,It,Pt,Sv,No) */
++    {0x277e, 524288, 0xadfdf8dcu}, /* Super Hang-On (Europe) (En,Ja) (Rev A) */
++    {0x28fc, 524288, 0x6b052ec3u}, /* Olympic Gold (Europe) (En,Fr,De,Es,It,Nl,Pt,Sv) */
++    {0x2ac9, 3145728, 0x13065890u}, /* Mega Games 6 Vol. 2 (Europe) */
++    {0x2ddc, 1048576, 0xe4db4aaau}, /* Mig-29 Fighter Pilot (Europe) (En,Fr,De,Es,It,Nl,Sv,Fi) */
++    {0x35d1, 1048576, 0x9201687du}, /* Street Racer (Europe) */
++    {0x3a72, 3145728, 0x751035beu}, /* Mega Games 6 (Europe) */
++    {0x3fde, 1048576, 0x54f2c6aeu}, /* Indiana Jones and the Last Crusade (Europe) */
++    {0x4263, 524288, 0x22743699u}, /* Super League (Europe) */
++    {0x49ba, 2097152, 0xdb6bbecfu}, /* Bloodshot (Europe) (En,Fr,De,Es) */
++    {0x5e7b, 1048576, 0x17a35b54u}, /* Power Drive (Europe) (En,Fr,De,Es,Pt) */
++    {0x7b35, 2097152, 0x7fb6d403u}, /* Taz in Escape from Mars (Europe) */
++    {0x7c81, 1048576, 0x9f067223u}, /* Man Overboard! (Europe) */
++    {0x818d, 2097152, 0xad316c29u}, /* Classic Collection (Europe) */
++    {0x861c, 1048576, 0x1cd1f158u}, /* Gods (Europe) */
++    {0x892a, 1048576, 0x8d4048d7u}, /* Puggsy (Europe) */
++    {0x8bb7, 1048576, 0xa6f9bba2u}, /* Pete Sampras Tennis (Europe) (Rev 2) (MDSTEE13) */
++    {0x918e, 2097152, 0x4359bfd9u}, /* Hurricanes (Europe) */
++    {0x9409, 524288, 0x6670da59u}, /* World Class Leader Board (Europe) */
++    {0xa06e, 1048576, 0x66555f9bu}, /* Strider II (Europe) */
++    {0xa557, 1048576, 0xaa46ffe8u}, /* Gunship (Europe) */
++    {0xa5d4, 2097152, 0xa5453a78u}, /* Marko's Magic Football (Europe) (En,Fr,De,Es) */
++    {0xa853, 3145728, 0x7691139bu}, /* Rise of the Robots (Europe) */
++    {0xad22, 1048576, 0x12fa65a5u}, /* Bram Stoker's Dracula (Europe) */
++    {0xb033, 524288, 0xd2dd4e2cu}, /* Midway Presents Arcade's Greatest Hits (Europe) */
++    {0xb1aa, 2097152, 0x338e7cb2u}, /* Daffy Duck in Hollywood (Europe) (En,Fr,De,Es,It) */
++    {0xb220, 524288, 0x28574da6u}, /* International Rugby (Europe) */
++    {0xb4be, 524288, 0xc5a97be6u}, /* James Bond 007 - The Duel (Europe) */
++    {0xc0de, 1048576, 0xcd65a764u}, /* Wiz 'n' Liz - The Frantic Wabbit Wescue (Europe) */
++    {0xcae7, 1048576, 0x6f8e6725u}, /* Empire of Steel (Europe) */
++    {0xcbc8, 524288, 0x8ce050d0u}, /* Andre Agassi Tennis (Europe) */
++    {0xd074, 1048576, 0xb481e93eu}, /* Micro Machines 2 - Turbo Tournament (Europe) */
++    {0xd50a, 1048576, 0x5f06b016u}, /* Brian Lara Cricket (Europe) */
++    {0xe3d5, 2097152, 0xf30a91dau}, /* Beavis and Butt-Head (Europe) */
++    {0xe697, 524288, 0xd10811b1u}, /* Back to the Future Part III (Europe) */
++    {0xe962, 1048576, 0x6a9d6b0cu}, /* Mega Bomberman (Europe, Korea) (En) */
++    {0xf0d1, 2097152, 0x5a161c16u}, /* Time Killers (Europe) */
++    {0xf364, 524288, 0x1e931c28u}, /* Super Kick Off (Europe) */
++    {0xfe96, 2097152, 0xd471c48bu}, /* Fever Pitch Soccer (Europe) (En,Fr,De,Es,It) */
++  };
++  unsigned int i;
++  for (i = 0; i < sizeof(releases) / sizeof(releases[0]); ++i)
++  {
++    if (rominfo.realchecksum == releases[i].checksum && cart.romsize == releases[i].size)
++    {
++      unsigned long crc = crc32(0, rom, ROMCHECKSUM);
++      crc = crc32(crc, rom + ROMCHECKSUM + 2, cart.romsize - ROMCHECKSUM - 2);
++      if (crc == releases[i].crc) return 1;
++    }
++  }
++  return 0;
++}
++
+ /****************************************************************************
+  * get_region
+  *
+@@ -1135,6 +1197,10 @@
+       else if (country & 2) region_code = REGION_JAPAN_PAL;
+       else region_code = REGION_USA;
+ 
++      if ((system_hw == SYSTEM_MD) && (country & 8) && (country & 5) &&
++          md_pal_release((const unsigned char *)romheader))
++        region_code = REGION_EUROPE;
++
+       /* some games need specific region settings but have wrong header*/
+       if (((strstr(rominfo.product,"T-45033") != NULL) && (rominfo.checksum == 0x0F81)) || /* Alisia Dragon (Europe) */
+            (strstr(rominfo.product,"T-69046-50") != NULL) ||    /* Back to the Future III (Europe) */

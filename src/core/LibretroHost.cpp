@@ -2366,14 +2366,14 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         // AUTO may resolve differently after a cartridge-region catalog update.
         // Native GPX states do not contain the console clock/PAL selection, so
         // replay must retain the cadence recorded alongside the snapshot.
-        // Explicit region/VDP choices and non-SMS hardware keep their policy.
+        // Explicit region/VDP choices and unrelated hardware keep their policy.
         const unsigned hardware = api_->system_hw ? api_->system_hw() : 0;
         const double recordedRate = configuration.value(QStringLiteral("frameRate")).toDouble(0);
         const bool recordedPal = std::abs(recordedRate - 50.0) < 1.0;
         const bool recordedNtsc = std::abs(recordedRate - 60.0) < 1.0;
         const bool actualPal = std::abs(fps() - 50.0) < 1.0;
         const bool actualNtsc = std::abs(fps() - 60.0) < 1.0;
-        if ((hardware == 0x20 || hardware == 0x21) &&
+        if ((hardware == 0x20 || hardware == 0x21 || hardware == 0x80) &&
             options.value(QStringLiteral("genesis_plus_gx_region_detect")).toString() == QLatin1String("auto") &&
             options.value(QStringLiteral("genesis_plus_gx_vdp_mode")).toString() == QLatin1String("auto") &&
             ((recordedPal && actualNtsc) || (recordedNtsc && actualPal))) {
