@@ -385,3 +385,9 @@ The public Windows ZIP matched the updater SHA-256. All 124 manifest entries mat
 An isolated installation of the published Linux 0.24.0 build discovered 0.25.0 on startup, downloaded it from GitHub, and restarted. All 169 installed files matched the new manifest. The screenshot format setting and a battery save survived the update. The portable Linux archive retains the glibc 2.36 baseline.
 
 On Windows, the 0.24.0 helper applied the new package to a temporary installation and launched the 0.25.0 executable. Its version check exited successfully, all 124 managed files matched the manifest, and ten user-data markers survived. The public Windows download and update metadata matched the verified release artifacts.
+
+## Release 0.26.0
+
+On Debian 12, the published 0.25.0 application discovered 0.26.0, displayed the grouped release notes, downloaded the Linux archive from GitHub and restarted into the packaged 0.26.0 executable. All 172 installed manifest entries matched. Twelve user-file markers and two settings survived. The portable Linux package retains the glibc 2.36 baseline.
+
+On Windows, the 0.25.0 helper installed the release ZIP in an isolated copy and started the new executable. The installed application reported 0.26.0, all 127 manifest entries matched and ten user-data markers survived.
