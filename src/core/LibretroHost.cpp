@@ -229,6 +229,9 @@ bool LibretroHost::initialize(QString& error) {
     api_->recording_video = reinterpret_cast<decltype(api_->recording_video)>(library_.resolve("retro_kegarefusion_recording_video"));
     api_->recording_frame = reinterpret_cast<decltype(api_->recording_frame)>(library_.resolve("retro_kegarefusion_recording_frame"));
     api_->get_cd_header = reinterpret_cast<decltype(api_->get_cd_header)>(library_.resolve("retro_kegarefusion_cd_header"));
+    api_->megald_sides = reinterpret_cast<decltype(api_->megald_sides)>(library_.resolve("retro_kegarefusion_megald_sides"));
+    api_->megald_side = reinterpret_cast<decltype(api_->megald_side)>(library_.resolve("retro_kegarefusion_megald_side"));
+    api_->megald_select_side = reinterpret_cast<decltype(api_->megald_select_side)>(library_.resolve("retro_kegarefusion_megald_select_side"));
     api_->cheat_reset = reinterpret_cast<decltype(api_->cheat_reset)>(library_.resolve("retro_cheat_reset"));
     api_->cheat_set = reinterpret_cast<decltype(api_->cheat_set)>(library_.resolve("retro_cheat_set"));
     api_->invalidate_code = reinterpret_cast<decltype(api_->invalidate_code)>(library_.resolve("retro_kegarefusion_invalidate_code"));
@@ -281,9 +284,23 @@ bool LibretroHost::initialize(QString& error) {
     initialized_ = true;
     return true;
 }
+unsigned LibretroHost::megaLdSideCount() const {
+    if (!isMegaLd() || !api_->megald_sides || !api_->megald_side || !api_->megald_select_side) return 0;
+    const unsigned count = api_->megald_sides();
+    return count <= MEGALD_MEDIA_MAX_SIDES ? count : 0;
+}
+int LibretroHost::discIndex() const {
+    if (!isMegaLd() || !api_->megald_sides || !api_->megald_side || !api_->megald_select_side) return discIndex_;
+    const unsigned count = megaLdSideCount(), index = api_->megald_side();
+    return index < count ? int(index) : -1;
+}
 QStringList LibretroHost::discPaths() const {
     QStringList result;
     if (isCd()) for (const auto& disc : discs_) result.append(disc.path);
+    else if (isMegaLd()) {
+        const unsigned count = megaLdSideCount();
+        for (unsigned i=0; i<count; ++i) result.append(gamePath_);
+    }
     return result;
 }
 bool LibretroHost::discEjected() const {
@@ -441,6 +458,9 @@ bool LibretroHost::loadMegaLd(const QString& path, QString& error) {
         megald_media_open(encoded.constData(),detail,sizeof(detail)),megald_media_close);
     if (!media) { error = Localization::text(QStringLiteral("Не удалось открыть MegaLD: %1")).arg(QString::fromUtf8(detail)); return false; }
     const auto* metadata = megald_media_get_info(media.get());
+    if (metadata && !std::strcmp(metadata->system,"LDROM2")) {
+        error = Localization::text(QStringLiteral("Для этого диска нужен модуль NEC PAC (LD-ROM²).")); return false;
+    }
     if (!metadata || std::strcmp(metadata->system,"MegaLD")) {
         error = Localization::text(QStringLiteral("Этот MMI не является образом Sega MegaLD.")); return false;
     }
@@ -526,6 +546,22 @@ bool LibretroHost::setDiscEjected(bool ejected, QString& error, bool* timelineCh
 bool LibretroHost::selectDisc(int index, QString& error, bool* timelineChanged) {
     error.clear();
     if (timelineChanged) *timelineChanged = false;
+    if (isMegaLd()) {
+        const unsigned count = megaLdSideCount();
+        if (!count) { error = Localization::text(QStringLiteral("Это ядро не поддерживает смену сторон MegaLD.")); return false; }
+        if (index < 0 || unsigned(index) >= count) {
+            error = Localization::text(QStringLiteral("Неверный номер стороны MegaLD.")); return false;
+        }
+        if (index == discIndex()) return true;
+        if (!api_->megald_select_side(unsigned(index)) || discIndex() != index) {
+            error = Localization::text(QStringLiteral("Не удалось выбрать сторону %1 MegaLD.")).arg(index+1); return false;
+        }
+        if (timelineChanged) *timelineChanged = true;
+        audio_.clear();
+        // The mounted image and save/state namespace belong to the entire MMI.
+        // Side selection only operates the native tray; it does not reset CPUs.
+        return true;
+    }
     if (!isCd() || index < 0 || index >= discs_.size()) {
         error = Localization::text(QStringLiteral("Неверный номер диска.")); return false;
     }
@@ -947,6 +983,7 @@ bool LibretroHost::isMasterSystem() const {
 bool LibretroHost::hardReset(QString& error, bool applyPending) {
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
+    const int selectedMegaLdSide = isMegaLd() ? discIndex() : 0;
     std::array<QByteArray,2> peerBattery;
     if (linkPeer_) for (unsigned i=0;i<2;++i) {
         const auto size=linkPeer_->saveMemorySizes_[i];
@@ -1004,6 +1041,13 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     loaded_ = true;
+    if (megaLd_ && selectedMegaLdSide != 0) {
+        if (selectedMegaLdSide < 0 || unsigned(selectedMegaLdSide) >= megaLdSideCount() ||
+            !api_->megald_select_side(unsigned(selectedMegaLdSide)) || discIndex() != selectedMegaLdSide) {
+            error = Localization::text(QStringLiteral("Не удалось восстановить выбранную сторону MegaLD после перезапуска питания."));
+            unload(); return false;
+        }
+    }
     if (!applyGameGearLcd(error)) { unload(); return false; }
     snapshot32xBios();
     runClock_ = {};
@@ -1639,6 +1683,7 @@ bool LibretroHost::restoreCore(const char* data, qsizetype size, bool transactio
         if (!restoreLinkedState(QByteArray::fromRawData(data,nativeSize),transactional)) return false;
     } else {
         if (!api_->unserialize(data,size_t(nativeSize))) return false;
+        if (megaLd_ && api_->megald_sides && api_->megald_side && api_->megald_select_side && discIndex() < 0) return false;
         applyControllerPorts();
     }
     runClock_ = clock;
@@ -2220,7 +2265,7 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         {QStringLiteral("coreCompatibility"),QString::fromUtf8(recordingAbi_)},
         {QStringLiteral("options"),options},
         {QStringLiteral("autoFixChecksum"),autoFixChecksum_},
-        {QStringLiteral("discIndex"),discIndex_},
+        {QStringLiteral("discIndex"),discIndex()},
         {QStringLiteral("frameRate"),fps()},
         {QStringLiteral("controllers"),controllers},
         {QStringLiteral("adapter"),int(controllerAdapter())},
@@ -2318,7 +2363,8 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         error = Localization::text(QStringLiteral("BIOS записи отличаются от установленных.")); return false;
     }
     const int recordedDisc = configuration.value(QStringLiteral("discIndex")).toInt(-1);
-    if (recordedDisc < 0 || (discs_.isEmpty() ? recordedDisc != 0 : recordedDisc >= discs_.size())) {
+    const int mediaCount = megaLd_ ? int(megaLdSideCount()) : int(discs_.size());
+    if (recordedDisc < 0 || (mediaCount ? recordedDisc >= mediaCount : recordedDisc != 0)) {
         error = Localization::text(QStringLiteral("Номер диска записи не совпадает с плейлистом.")); return false;
     }
     if (!discs_.isEmpty()) {
@@ -2482,8 +2528,10 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     adapter_ = ControllerAdapter(adapterValue);
     movieCheats_ = std::move(normalized); movieCheatsActive_ = true;
     buttons_.fill(0); gunAim_.fill(GunAim{});
-    const int previousDisc = discIndex_;
-    if (recordedDisc != discIndex_) { discIndex_ = recordedDisc; setDiscIdentity(); }
+    const int previousDisc = discIndex();
+    if (megaLd_) {
+        if (recordedDisc != previousDisc && !selectDisc(recordedDisc,error)) return false;
+    } else if (recordedDisc != discIndex_) { discIndex_ = recordedDisc; setDiscIdentity(); }
     if (hardReset(error)) {
         // AUTO may resolve differently after a cartridge-region catalog update.
         // Native GPX states do not contain the console clock/PAL selection, so
@@ -2509,7 +2557,10 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     }
     // Preflight failures leave the original core running; undo the pending
     // playlist selection so a caller can restore its previous movie state.
-    if (loaded_ && previousDisc != discIndex_) { discIndex_ = previousDisc; setDiscIdentity(); }
+    if (loaded_ && previousDisc != discIndex()) {
+        if (megaLd_) { QString ignored; selectDisc(previousDisc,ignored); }
+        else { discIndex_ = previousDisc; setDiscIdentity(); }
+    }
     return false;
 }
 bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm) {

@@ -47,6 +47,9 @@ struct LibretroHost::Api {
     bool (*input_polled)() = nullptr;
     unsigned (*rewind_video)(unsigned) = nullptr;
     bool (*get_cd_header)(void*, size_t) = nullptr;
+    unsigned (*megald_sides)() = nullptr;
+    unsigned (*megald_side)() = nullptr;
+    bool (*megald_select_side)(unsigned) = nullptr;
     void (*invalidate_code)() = nullptr;
     int (*preserve_header_checksum)(const std::uint8_t*, size_t, unsigned) = nullptr;
     using PapriumMusicCallback = std::uint64_t (*)(void*, unsigned, std::uint64_t,

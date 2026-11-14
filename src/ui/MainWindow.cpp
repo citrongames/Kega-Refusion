@@ -614,8 +614,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         cheatsAction_->setToolTip(detail);
     });
     connect(&session_, &EmulationSession::discStateChanged, this,
-            [this](const QStringList& paths, int index, bool ejected) {
+            [this](const QStringList& paths, int index, bool ejected, bool megaLd) {
         discPaths_ = paths;
+        discSides_ = megaLd;
         discIndex_ = index;
         discEjected_ = ejected;
         updateDiscMenu();
@@ -856,8 +857,10 @@ void MainWindow::buildMenus() {
     videoStopAction_->setObjectName(QStringLiteral("videoStop"));
     connect(videoStopAction_, &QAction::triggered, this, &MainWindow::stopVideoCapture);
     updateMovieActions();
-    QMenu* segaCdMenu = fileMenu->addMenu(QStringLiteral("Sega CD"));
-    changeDiscAction_ = segaCdMenu->addAction(Localization::text(QStringLiteral("Сменить диск…")));
+    discDriveMenu_ = fileMenu->addMenu(QStringLiteral("Sega CD"));
+    discDriveMenu_->setObjectName(QStringLiteral("discDriveMenu"));
+    changeDiscAction_ = discDriveMenu_->addAction(Localization::text(QStringLiteral("Сменить диск…")));
+    changeDiscAction_->setObjectName(QStringLiteral("changeDisc"));
     connect(changeDiscAction_, &QAction::triggered, this, [this] {
         releaseInput();
         const QString initial = discIndex_ >= 0 && discIndex_ < discPaths_.size()
@@ -868,7 +871,8 @@ void MainWindow::buildMenus() {
         if (!path.isEmpty()) session_.changeDisc(path);
         view_->setFocus();
     });
-    ejectDiscAction_ = segaCdMenu->addAction(Localization::text(QStringLiteral("Извлечь диск")));
+    ejectDiscAction_ = discDriveMenu_->addAction(Localization::text(QStringLiteral("Извлечь диск")));
+    ejectDiscAction_->setObjectName(QStringLiteral("ejectDisc"));
     ejectDiscAction_->setCheckable(true);
     connect(ejectDiscAction_, &QAction::triggered, this, [this](bool ejected) {
         releaseInput();
@@ -876,7 +880,8 @@ void MainWindow::buildMenus() {
         ejectDiscAction_->setChecked(discEjected_);
         view_->setFocus();
     });
-    discMenu_ = segaCdMenu->addMenu(Localization::text(QStringLiteral("Диски плейлиста")));
+    discMenu_ = discDriveMenu_->addMenu(Localization::text(QStringLiteral("Диски плейлиста")));
+    discMenu_->setObjectName(QStringLiteral("discSelectionMenu"));
     discGroup_ = new QActionGroup(this);
     discGroup_->setExclusive(true);
     updateDiscMenu();
@@ -1576,7 +1581,11 @@ void MainWindow::editShaderParameters() {
 void MainWindow::updateDiscMenu() {
     if (!discMenu_) return;
     const bool hasDisc = !discPaths_.isEmpty();
-    const bool discCommandsEnabled = hasDisc && movieMode_ == 0 && !moviePending_ && !videoExporting_;
+    discDriveMenu_->setTitle(discSides_ ? QStringLiteral("MegaLD") : QStringLiteral("Sega CD"));
+    discMenu_->setTitle(Localization::text(discSides_ ? QStringLiteral("Стороны диска") : QStringLiteral("Диски плейлиста")));
+    changeDiscAction_->setVisible(!discSides_);
+    ejectDiscAction_->setVisible(!discSides_);
+    const bool discCommandsEnabled = hasDisc && !discSides_ && movieMode_ == 0 && !moviePending_ && !videoExporting_;
     changeDiscAction_->setEnabled(discCommandsEnabled);
     ejectDiscAction_->setEnabled(discCommandsEnabled);
     ejectDiscAction_->setChecked(hasDisc && discEjected_);
@@ -1584,7 +1593,9 @@ void MainWindow::updateDiscMenu() {
     discMenu_->setEnabled(discPaths_.size() > 1 && movieMode_ == 0 && !moviePending_ && !videoExporting_);
     for (int index = 0; index < discPaths_.size(); ++index) {
         QAction* action = discMenu_->addAction(
-            QStringLiteral("%1. %2").arg(index + 1).arg(QFileInfo(discPaths_[index]).fileName()));
+            discSides_ ? Localization::text(QStringLiteral("Сторона %1")).arg(index+1) :
+                QStringLiteral("%1. %2").arg(index + 1).arg(QFileInfo(discPaths_[index]).fileName()));
+        action->setObjectName(QStringLiteral("discChoice%1").arg(index));
         action->setToolTip(discPaths_[index]);
         action->setCheckable(true);
         action->setChecked(index == discIndex_);
@@ -3186,8 +3197,8 @@ void MainWindow::updateMovieActions() {
     if (loadFileAction_) loadFileAction_->setEnabled(namedStateAvailable && !achievementsHardcore_);
     if (rewindAction_) rewindAction_->setEnabled(game && rewindEnabled_ &&
                                                 !moviePending_ && !achievementsHardcore_);
-    if (changeDiscAction_) changeDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_ && !videoExporting_);
-    if (ejectDiscAction_) ejectDiscAction_->setEnabled(!discPaths_.isEmpty() && !protectedMovie && !moviePending_ && !videoExporting_);
+    if (changeDiscAction_) changeDiscAction_->setEnabled(!discSides_ && !discPaths_.isEmpty() && !protectedMovie && !moviePending_ && !videoExporting_);
+    if (ejectDiscAction_) ejectDiscAction_->setEnabled(!discSides_ && !discPaths_.isEmpty() && !protectedMovie && !moviePending_ && !videoExporting_);
     if (discMenu_) discMenu_->setEnabled(discPaths_.size() > 1 && !protectedMovie && !moviePending_ && !videoExporting_);
     if (pauseAction_) pauseAction_->setEnabled(game);
     if (fastForwardAction_) fastForwardAction_->setEnabled(game);

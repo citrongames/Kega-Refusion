@@ -96,11 +96,15 @@
  
    /* PCM chip */
    bufferptr += pcm_context_save(&state[bufferptr]);
-@@ -2126,6 +2131,7 @@
+@@ -2126,6 +2131,11 @@
  
    /* CD Drive processor */
    bufferptr += cdd_context_load(&state[bufferptr], version);
-+  if (kr_megald_active) bufferptr += kr_megald_restore(&state[bufferptr]);
++  if (kr_megald_active) {
++    unsigned n = kr_megald_restore(&state[bufferptr]);
++    if (!n) return 0;
++    bufferptr += n;
++  }
  
    /* PCM chip */
    bufferptr += pcm_context_load(&state[bufferptr]);
@@ -178,16 +182,22 @@
     info->block_extract = false;
     info->need_fullpath = true;
  }
-@@ -3872,7 +3874,7 @@
+@@ -3872,8 +3874,12 @@
  
  RETRO_API unsigned retro_kegarefusion_core_features(void)
  {
 -   return kegarefusion_32x_features();
+-}
 +   return kegarefusion_32x_features() | 0x40u;
- }
++}
++
++RETRO_API unsigned retro_kegarefusion_megald_sides(void) { return kr_megald_sides(); }
++RETRO_API unsigned retro_kegarefusion_megald_side(void) { return kr_megald_side(); }
++RETRO_API bool retro_kegarefusion_megald_select_side(unsigned index) { return kr_megald_select_side(index) != 0; }
  
  /* Compatible rebuilds and optimizations keep this ABI unchanged.
-@@ -4276,9 +4278,13 @@
+  * Bump only for incompatible state layout or deterministic execution changes. */
+@@ -4276,9 +4282,13 @@
     fill_pathname_join(MS_BIOS_EU, dir, "bios_E.sms",    sizeof(MS_BIOS_EU));
     fill_pathname_join(MS_BIOS_US, dir, "bios_U.sms",    sizeof(MS_BIOS_US));
     fill_pathname_join(MS_BIOS_JP, dir, "bios_J.sms",    sizeof(MS_BIOS_JP));
@@ -203,7 +213,7 @@
   
     check_variables(true);
  
-@@ -4429,7 +4435,7 @@
+@@ -4429,7 +4439,7 @@
        kr_yx5200_set_directory(info_ext, info ? info->path : NULL);
     system_reset();
  #ifdef KEGAREFUSION_32X
@@ -212,7 +222,7 @@
  #endif
     is_running = false;
  
-@@ -4438,6 +4444,7 @@
+@@ -4438,6 +4448,7 @@
     else
        environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, NULL);
  
@@ -220,7 +230,7 @@
     update_viewport();
  
  #ifdef HAVE_OVERCLOCK
-@@ -4452,6 +4459,7 @@
+@@ -4452,6 +4463,7 @@
     return true;
  
  error:
@@ -228,7 +238,7 @@
     kr_yx5200_close();
  #ifdef KEGAREFUSION_32X
     kegarefusion_32x_detach();
-@@ -4479,6 +4487,7 @@
+@@ -4479,6 +4491,7 @@
  
  void retro_unload_game(void) 
  {
@@ -236,7 +246,7 @@
     kega_sprite_hint_release();
     kega_recording_frame_ready = false;
  #ifdef KEGAREFUSION_32X
-@@ -4847,6 +4856,7 @@
+@@ -4847,6 +4860,7 @@
     kega_recording_frame_ready = false;
     if (system_hw == SYSTEM_MCD)
     {
@@ -244,3 +254,16 @@
        system_frame_scd(do_skip);
     }
     else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+--- a/core/state.c
++++ b/core/state.c
+@@ -194,7 +194,9 @@
+     }
+ 
+     /* CD hardware */
+-    bufferptr += scd_context_load(&state[bufferptr], version);
++    int n = scd_context_load(&state[bufferptr], version);
++    if (!n) return 0;
++    bufferptr += n;
+   }
+   else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
+   {  

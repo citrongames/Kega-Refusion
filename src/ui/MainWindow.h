@@ -157,6 +157,7 @@ private:
     QVector<QMenu*> exportBlockedMenus_;
     QMenu* regionMenu_ = nullptr;
     QMenu* gameSpeedMenu_ = nullptr;
+    QMenu* discDriveMenu_ = nullptr;
     QMenu* discMenu_ = nullptr;
     QMenu* debugMenu_ = nullptr;
     QAction* debugGraphicsAction_ = nullptr;
@@ -230,6 +231,7 @@ private:
     QStringList discPaths_;
     int discIndex_ = -1;
     bool discEjected_ = false;
+    bool discSides_ = false;
     QVector<QAction*> slotActions_;
     QString currentRom_;
     QString currentGameName_;

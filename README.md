@@ -17,7 +17,7 @@ Emulation is based on a modified **Genesis Plus GX** core, with integrated 32X s
 | Sega CD / Mega-CD | CUE/BIN, ISO, CHD, M3U playlists and supported MP3 audio tracks |
 | 32X and Sega CD + 32X | Integrated, experimental support; compatibility is still being improved |
 | Paprium | Experimental cartridge support, external MP3 soundtrack and CPU MATE integration |
-| MegaLD / LaserActive Sega PAC | Experimental direct MMI loading for Japan and USA; Hi-Roller Battle tested in play |
+| MegaLD / LaserActive Sega PAC | Experimental MMI support; tested in Hi-Roller Battle (Japan/USA), Road Prosecutor and J.B. Harold: Blue Chicago Blues |
 
 Supply your own games and Sega CD BIOS files. The 32X uses each recognized original G/M/S BIOS when available and a built-in fallback for each missing piece. CD32X still requires the Sega CD BIOS for the selected region.
 
@@ -39,6 +39,8 @@ Extract the entire package into a writable folder. On Windows, run `KegaRefusion
 Open a game with **Ctrl+O**, drag it onto the window, or click the central **+** area. ZIP/7z cartridge archives can be opened directly. Configure BIOS files, controllers, audio and other preferences in **Settings → Emulator settings**.
 
 For experimental MegaLD support, import your Sega LaserActive BIOS in **Emulator settings → BIOS → MegaLD**: PAC-S1 Japan v1.02 (`bios_LD_J.bin`) or PAC-S10 USA v1.04 (`bios_LD_U.bin`), matching the image's Japan/USA region. Sega CD and NEC PAC-N BIOS files are incompatible. Open the original `.mmi` file directly with **Ctrl+O**, drag and drop, or its full command-line filepath; the image is streamed from that location. MMI loading from ZIP/7z, game-file transfer and achievements are unavailable. In *Hi-Roller Battle*, press **C** on the PAC’s **Play** button. In Mission 1, rotate the view right from **Command** to **Heliport** and press **C** to take off. Aim with the D-pad, fire the gun with **A** and missiles with **B**.
+
+For a two-sided MMI such as *J.B. Harold — Blue Chicago Blues*, choose **File → MegaLD → Disc sides → Side 1** or **Side 2**. Switching sides keeps the running session and original image path. Loading a save state restores its saved side; a power restart retains the selected side.
 
 For Kaiser Wave cartridges such as *Death & Lead* and *The Secret of the Four Winds*, keep the numbered MP3 files (`01.mp3`, `02.mp3`, …) beside the ROM or its archive. Four Winds offers **Enhanced Music** and **FM Music** after language selection. Keep the complete soundtrack for both options. Netplay includes those tracks when transferring the cartridge.
 

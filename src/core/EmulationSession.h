@@ -169,7 +169,7 @@ signals:
     void masterSystemChanged(bool masterSystem);
     void gameGearChanged(bool gameGear);
     void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
-    void discStateChanged(const QStringList& paths, int index, bool ejected);
+    void discStateChanged(const QStringList& paths, int index, bool ejected, bool megaLd);
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);
     void rewindingChanged(bool enabled);

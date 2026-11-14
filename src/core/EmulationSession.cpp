@@ -639,9 +639,16 @@ void EmulationSession::run() {
         emit cheatsChanged(host.cheats(),int(host.cheatPlatform()),host.cheatsSupported(),host.cheatSupportText());
     };
     bool lastDiscEjected = false;
+    int lastDiscIndex = -1;
     auto discStatus = [&] {
         lastDiscEjected = host.discEjected();
-        emit discStateChanged(host.discPaths(),host.discIndex(),lastDiscEjected);
+        lastDiscIndex = host.discIndex();
+        emit discStateChanged(host.discPaths(),lastDiscIndex,lastDiscEjected,host.isMegaLd());
+    };
+    const auto refreshMegaLdSide = [&] {
+        // The native state owns the side. Refresh after restore boundaries;
+        // no path-list construction or media probing belongs in the frame loop.
+        if (host.isMegaLd() && host.discIndex() != lastDiscIndex) discStatus();
     };
     Cheats::Search cheatSearch;
     NetRollbackSession networkTimeline;
@@ -1050,6 +1057,7 @@ void EmulationSession::run() {
         if (!selected.isNull()) presentFrame(selected,aspect);
         if (networkMode) { networkRewindImage = frame; networkRewindAspect = aspect; }
         movieStatus(exactStep && movie.active());
+        refreshMegaLdSide();
         return true;
     };
     while (!quitting_.load()) {
@@ -1642,10 +1650,11 @@ void EmulationSession::run() {
                     if (networkMode == 1) networkDirty = true;
                 }
                 discStatus(); cheatStatus(); emit stateSlotsChanged(-1,host.occupiedStateSlots());
-                if (ok && timelineChanged && command.type != Type::Eject) loadAchievements(true);
+                if (ok && timelineChanged && command.type != Type::Eject && !host.isMegaLd()) loadAchievements(true);
                 if (ok) emit actionCompleted(command.type == Type::Eject ?
                     (command.value ? Localization::text(QStringLiteral("Привод открыт")) : Localization::text(QStringLiteral("Привод закрыт"))) :
-                    Localization::text(QStringLiteral("Диск: %1")).arg(QFileInfo(host.discPaths().value(host.discIndex())).completeBaseName()));
+                    (host.isMegaLd() ? Localization::text(QStringLiteral("Сторона %1")).arg(host.discIndex()+1) :
+                     Localization::text(QStringLiteral("Диск: %1")).arg(QFileInfo(host.discPaths().value(host.discIndex())).completeBaseName())));
                 else emit errorOccurred(error);
                 break;
             }
@@ -1802,6 +1811,7 @@ void EmulationSession::run() {
             }
         }
         if (!pending.empty()) {
+            refreshMegaLdSide();
             publishClock();
             const bool jcart=host.hasJCart();
             if(jcart_.exchange(jcart)!=jcart)emit jcartChanged(jcart);

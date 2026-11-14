@@ -11,6 +11,7 @@ extern int8 audio_hard_disable;
 int kr_megald_active;
 static megald_media *disc_image;
 static const megald_media_side *side;
+static unsigned side_index;
 static kr_ld_player player;
 static kr_ld_cache *cache;
 static const uint8_t *rgb;
@@ -57,22 +58,44 @@ static void sync_timeline(void)
   kr_ld_player_set_timeline(&player, cdd.lba, sample * 4, status, cdd.index + 1);
 }
 
-int kr_megald_mount(const char *path, char *header)
+unsigned kr_megald_sides(void)
+{
+  return kr_megald_active ? megald_media_get_info(disc_image)->side_count : 0;
+}
+
+unsigned kr_megald_side(void)
+{
+  return side_index;
+}
+
+/* Prepare the new side before dropping the current one. No emulated CPU,
+ * CD RAM, backup RAM or frontend session is reset during a physical flip. */
+static int mount_side(unsigned index, char *boot_header)
 {
   uint8_t sector[2352];
-  char reason[256];
-  disc_image = megald_media_open(path, reason, sizeof(reason));
-  if (!disc_image) return -1;
-  const megald_media_info *info = megald_media_get_info(disc_image);
-  side = megald_media_get_side(disc_image, 0);
-  if (strcmp(info->system, "MegaLD") || !side || !side->has_video ||
-      side->width < 256 || side->height != 525 || !side->track_count ||
-      !side->digital_sectors || side->digital_sectors > INT_MAX ||
-      !megald_media_read_sector(disc_image, 0, 0, sector) ||
-      memcmp(sector + 16, "SEGADISCSYSTEM", 14)) goto fail;
-  cache = kr_ld_cache_open(disc_image, side->width, side->height);
-  if (!cache) goto fail;
-  memcpy(header, sector + 16, 0x210);
+  const megald_media_side *candidate = megald_media_get_side(disc_image, index);
+  if (!candidate || !candidate->has_video || candidate->width < 256 ||
+      candidate->height != 525 || !candidate->track_count ||
+      !candidate->digital_sectors || candidate->digital_sectors > INT_MAX)
+    return 0;
+  if (boot_header && (!megald_media_read_sector(disc_image, index, 0, sector) ||
+                      memcmp(sector + 16, "SEGADISCSYSTEM", 14))) return 0;
+  if (cache && side->width == candidate->width && side->height == candidate->height) {
+    kr_ld_cache_select_side(cache, index);
+  } else {
+    kr_ld_cache *new_cache = kr_ld_cache_open(disc_image, index, candidate->width, candidate->height);
+    if (!new_cache) return 0;
+    kr_ld_cache_close(cache);
+    cache = new_cache;
+  }
+  side = candidate;
+  side_index = index;
+  rgb = NULL;
+  decoded_frame = -1;
+  table_width = 0;
+  memset(&view, 0, sizeof(view));
+  memset(&cdd.toc, 0, sizeof(cdd.toc));
+  if (boot_header) memcpy(boot_header, sector + 16, 0x210);
   cdd.toc.end = (int)side->digital_sectors;
   cdd.toc.last = side->track_count;
   kr_ld_disc_info layout = {0};
@@ -98,9 +121,28 @@ int kr_megald_mount(const char *path, char *header)
   cdd.loaded = HW_ADDON_MEGACD;
   cdd.sectorSize = 2352;
   lead_samples = (uint64_t)side->lead_in_frames * 44100 * 1001 / 30000;
+  kr_ld_player_set_disc(&player, &layout);
+  return 1;
+}
+
+int kr_megald_select_side(unsigned index)
+{
+  if (index >= kr_megald_sides()) return 0;
+  if (index == side_index) return 1;
+  if (!mount_side(index, NULL)) return 0;
+  cdd_reset();
+  scd.regs[0x36>>1].byte.h = cdd.toc.tracks[0].type != 0;
+  return 1;
+}
+
+int kr_megald_mount(const char *path, char *header)
+{
+  char reason[256];
+  disc_image = megald_media_open(path, reason, sizeof(reason));
+  if (!disc_image) return -1;
   kr_ld_player_init(&player);
   kr_ld_player_set_hooks(&player, drive_event, NULL);
-  kr_ld_player_set_disc(&player, &layout);
+  if (strcmp(megald_media_get_info(disc_image)->system, "MegaLD") || !mount_side(0, header)) goto fail;
   kr_megald_active = 1;
   return 1;
 fail:
@@ -120,6 +162,7 @@ void kr_megald_close(void)
   if (disc_image) megald_media_close(disc_image);
   disc_image = NULL;
   side = NULL;
+  side_index = 0;
   rgb = NULL;
   decoded_frame = -1;
   table_width = 0;
@@ -162,7 +205,7 @@ void kr_megald_map_bus(void)
 void kr_megald_sector(uint8_t *dst)
 {
   uint8_t sector[2352];
-  if (cdd.lba >= 0 && megald_media_read_sector(disc_image, 0, cdd.lba, sector))
+  if (cdd.lba >= 0 && megald_media_read_sector(disc_image, side_index, cdd.lba, sector))
     memcpy(dst, sector + 16, 2048);
   else memset(dst, 0, 2048);
 }
@@ -202,9 +245,9 @@ void kr_megald_audio(unsigned samples, int *previous, int left_gain, int right_g
     if (playing && !audio_hard_disable) {
       int64_t source = pos + 150 * 588 + (int64_t)lead_samples;
       if (source >= 0 && side->has_analog_audio)
-        megald_media_read_pcm(disc_image, 0, source, analog, n);
+        megald_media_read_pcm(disc_image, side_index, source, analog, n);
       if (lba >= 0 && lba < cdd.toc.end && !cdd.toc.tracks[track_at((int)lba)].type)
-        megald_media_read_sector(disc_image, 0, lba, digital);
+        megald_media_read_sector(disc_image, side_index, lba, digital);
     }
     for (unsigned j = 0; j < n; ++j) {
       const unsigned char *p = digital + (offset + j) * 4;
@@ -294,11 +337,17 @@ unsigned kr_megald_save(uint8_t *out)
   /* Only emulated state between immutable disc metadata and host callbacks. */
   size_t size = offsetof(kr_ld_player,event) - offsetof(kr_ld_player,video);
   memcpy(out,&player.video,size);
+  /* drawIndex uses one bit. Older saves have zero in the upper bits, i.e.
+   * side A. This retains the original state size and the following PCM state. */
+  out[offsetof(kr_ld_video_state, drawIndex)] |= (uint8_t)(side_index << 1);
   return (unsigned)size;
 }
 unsigned kr_megald_restore(const uint8_t *in)
 {
   size_t size = offsetof(kr_ld_player,event) - offsetof(kr_ld_player,video);
+  unsigned saved_side = in[offsetof(kr_ld_video_state, drawIndex)] >> 1;
+  /* The surrounding CDD state was already restored. Only switch its media. */
+  if (saved_side != side_index && !mount_side(saved_side, NULL)) return 0;
   memcpy(&player.video,in,size);
   player.video.drawIndex &= 1;
   decoded_frame = -1;

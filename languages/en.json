@@ -1116,6 +1116,13 @@
     "BIOS Sega CD, MegaLD и дополнительные оригинальные BIOS 32X.": "Sega CD and MegaLD BIOS files, and optional original 32X BIOS files.",
     "Для MegaLD нужен BIOS Sega LaserActive PAC-S своего региона: PAC-S1 Japan v1.02 или PAC-S10 USA v1.04. BIOS Sega CD и NEC PAC-N не подходят.": "MegaLD requires a matching Sega LaserActive PAC-S BIOS: PAC-S1 Japan v1.02 or PAC-S10 USA v1.04. Sega CD and NEC PAC-N BIOS files are incompatible.",
     "Папка с BIOS MegaLD": "Folder containing MegaLD BIOS files",
-    "Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)": "Sega games (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Sega CD discs (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Archives (*.zip *.7z);;All files (*)"
+    "Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)": "Sega games (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Sega CD discs (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Archives (*.zip *.7z);;All files (*)",
+    "Сторона %1": "Side %1",
+    "Стороны диска": "Disc sides",
+    "Это ядро не поддерживает смену сторон MegaLD.": "This core does not support switching MegaLD sides.",
+    "Неверный номер стороны MegaLD.": "Invalid MegaLD side number.",
+    "Не удалось выбрать сторону %1 MegaLD.": "Could not select MegaLD side %1.",
+    "Не удалось восстановить выбранную сторону MegaLD после перезапуска питания.": "Could not restore the selected MegaLD side after the power restart.",
+    "Для этого диска нужен модуль NEC PAC (LD-ROM²).": "This disc requires the NEC PAC module (LD-ROM²)."
   }
 }

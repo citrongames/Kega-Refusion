@@ -35,8 +35,9 @@ public:
     bool isMegaLd() const { return loaded_ && megaLd_; }
     // A loaded game keeps one storage snapshot through resets and settings edits.
     QString dataFolder(const QString& category) const;
+    // MMI sides repeat the same original path; they are not replaceable CD images.
     QStringList discPaths() const;
-    int discIndex() const { return discIndex_; }
+    int discIndex() const;
     bool discEjected() const;
     // Reports only operations capable of disturbing the drive, even if they fail.
     bool changeDisc(const QString& path, QString& error, bool* timelineChanged = nullptr);
@@ -220,6 +221,7 @@ private:
     void applyControllerPorts(bool force = false);
     bool loadCd(const QString& path, QString& error);
     bool loadMegaLd(const QString& path, QString& error);
+    unsigned megaLdSideCount() const;
     void setMegaLdIdentity();
     bool checkDiscBios(const DiscImage& image, QString& error, const QString& biosDirectory = {}) const;
     bool registerDiscs(QString& error);

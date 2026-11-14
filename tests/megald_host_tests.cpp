@@ -35,7 +35,10 @@ int main(int argc,char** argv) {
         LibretroHost host(QString::fromLocal8Bit(argv[1]),temp.path());
         host.setExpansionDevices(ExpansionMode::Disconnected,ExpansionMode::Connected);
         if (!host.load(path,error)) throw std::runtime_error(error.toStdString());
-        require(host.isMegaLd() && !host.isCd() && host.discPaths().isEmpty(),"MMI routed through ordinary CD tray");
+        require(host.isMegaLd() && !host.isCd(),"MMI routed through ordinary CD tray");
+        const auto sides=host.discPaths();
+        require(!sides.isEmpty() && sides.size()<=16 && host.discIndex()==0,"MMI side API is unavailable or invalid");
+        for (const auto& side : sides) require(side==path,"MMI sides do not retain the same original path");
         require(host.gamePath()==path,"original MMI path not preserved");
         require(host.achievementConsoleId()==0 && host.achievementHash(error).isEmpty(),"MMI fell into full ROM achievements hashing");
         const auto identity=host.movieGameIdentity(); require(identity.size()==32,"MMI lacks bounded recording identity");
@@ -44,8 +47,32 @@ int main(int argc,char** argv) {
             fingerprint.contains(QStringLiteral("bios_LD_U.bin"))),"MMI used ordinary CD/32X firmware identity");
         for (int i=0;i<120;++i) host.runFrame();
         require(!host.frame().isNull(),"MMI core did not present frames");
+        bool changed=true;
+        require(host.selectDisc(0,error,&changed) && !changed,"selecting current MMI side changed timeline");
+        require(!host.selectDisc(sides.size(),error,&changed) && !changed,"invalid MMI side disturbed timeline");
+        require(!host.changeDisc(path,error,&changed) && !changed,"MMI exposed ordinary disc replacement");
+        require(!host.setDiscEjected(true,error,&changed) && !changed,"MMI exposed ordinary CD tray control");
+        const int selected=sides.size()>1?1:0;
+        if (selected) {
+            const auto clock=host.runClock();
+            if (!host.selectDisc(selected,error,&changed)) throw std::runtime_error(error.toStdString());
+            require(changed && host.discIndex()==selected,"MMI side selection did not reach core");
+            require(host.runClock().frames==clock.frames && host.runClock().ticks==clock.ticks,"MMI side selection reset the session clock");
+            require(host.movieGameIdentity()==identity && host.gamePath()==path,"MMI side changed image identity/path");
+            require(host.movieConfiguration().value(QStringLiteral("discIndex")).toInt(-1)==selected,"recording omitted selected MMI side");
+            if (!host.saveState(0,error)) throw std::runtime_error(error.toStdString());
+            if (!host.selectDisc(0,error,&changed)) throw std::runtime_error(error.toStdString());
+            require(changed && host.discIndex()==0,"MMI side did not switch back");
+            if (!host.loadState(0,error)) throw std::runtime_error(error.toStdString());
+            require(host.discIndex()==selected,"quick-state restore did not report restored MMI side");
+            const auto recorded=host.movieConfiguration();
+            if (!host.selectDisc(0,error)) throw std::runtime_error(error.toStdString());
+            if (!host.prepareMovie(recorded,error)) throw std::runtime_error(error.toStdString());
+            require(host.discIndex()==selected,"recording preparation did not restore MMI side");
+            if (!host.restoreMovieConfiguration(error)) throw std::runtime_error(error.toStdString());
+        }
         if (!host.hardReset(error)) throw std::runtime_error(error.toStdString());
-        require(host.isMegaLd() && host.movieGameIdentity()==identity,"MMI reset lost media/identity");
+        require(host.isMegaLd() && host.movieGameIdentity()==identity && host.discIndex()==selected,"MMI reset lost side/media/identity");
         for (int i=0;i<5;++i) host.runFrame();
         host.setExpansionDevices(ExpansionMode::Auto,ExpansionMode::Auto);
         const auto rom=temp.filePath("generated.md");
