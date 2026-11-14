@@ -1,0 +1,94 @@
+--- a/core/sound/sound.c
++++ b/core/sound/sound.c
+@@ -266,24 +266,35 @@
+ #ifdef HAVE_YM3438_CORE
+ static void YM3438_Update(int *buffer, int length)
+ {
+-  int i, j;
+-  for (i = 0; i < length; i++)
+-  {
+-    OPN2_Clock(&ym3438, ym3438_accm[ym3438_cycles]);
+-    ym3438_cycles = (ym3438_cycles + 1) % 24;
+-    if (ym3438_cycles == 0)
+-    {
+-      ym3438_sample[0] = 0;
+-      ym3438_sample[1] = 0;
+-      for (j = 0; j < 24; j++)
++  while (length > 0)
++  {
++    /* Register reads and writes can split an output sample at any clock. */
++    int count = 24 - ym3438_cycles;
++    int i;
++    if (count > length) count = length;
++    buffer[0] = ym3438_audible[0] * 11;
++    buffer[1] = ym3438_audible[1] * 11;
++    for (i = 0; i < count; ++i)
++    {
++      OPN2_Clock(&ym3438, ym3438_accm[ym3438_cycles + i]);
++    }
++    ym3438_cycles += count;
++    if (ym3438_cycles == 24)
++    {
++      ym3438_cycles = 0;
++      ym3438_sample[0] = ym3438_sample[1] = 0;
++      for (i = 0; i < 24; ++i)
+       {
+-        ym3438_sample[0] += ym3438_accm[j][0];
+-        ym3438_sample[1] += ym3438_accm[j][1];
++        ym3438_sample[0] += ym3438_accm[i][0];
++        ym3438_sample[1] += ym3438_accm[i][1];
+       }
+       YM3438_DebugResync();
+-    }
+-    *buffer++ = ym3438_audible[0] * 11;
+-    *buffer++ = ym3438_audible[1] * 11;
++      /* The new DAC sample becomes audible on the last clock of the group. */
++      buffer[2 * (count - 1)] = ym3438_audible[0] * 11;
++      buffer[2 * (count - 1) + 1] = ym3438_audible[1] * 11;
++    }
++    buffer += 2 * count;
++    length -= count;
+   }
+ }
+ 
+@@ -555,6 +566,40 @@
+ 
+     if (!audio_hard_disable)
+     {
++#ifdef HAVE_YM3438_CORE
++      if (YM_Update == YM3438_Update)
++      {
++        /* The DAC holds its level between complete 24-clock groups. Apply
++         * the initial level and each group boundary at its exact blip time. */
++        /* A CPU may overshoot the end of a frame before a register access.
++         * Recover the initial phase from all generated clocks, but flush only
++         * timestamps belonging to this frame, as in the other FM backends. */
++        const int generated = (int)(fm_ptr - fm_buffer) / 2;
++        const int end_phase = ym3438_cycles;
++        const int start_phase = (end_phase + 24 - generated % 24) % 24;
++        int next = 23 - start_phase;
++        int clock = 0;
++        const int clocks = (cycles - time + YM2612_CLOCK_RATIO - 1) / YM2612_CLOCK_RATIO;
++        if (!next) next = 24;
++        for (; clock < clocks; clock = next, next += 24)
++        {
++          l = (fm_buffer[2 * clock] * preamp) / 100;
++          r = (fm_buffer[2 * clock + 1] * preamp) / 100;
++          if (l != prev_l || r != prev_r)
++          {
++            unsigned int stamp = time + clock * YM2612_CLOCK_RATIO;
++            if (config.hq_fm)
++              blip_add_delta(snd.blips[0], stamp, l - prev_l, r - prev_r);
++            else
++              blip_add_delta_fast(snd.blips[0], stamp, l - prev_l, r - prev_r);
++            prev_l = l;
++            prev_r = r;
++          }
++        }
++        time += clocks * YM2612_CLOCK_RATIO;
++      }
++      else
++#endif
+       /* flush FM samples */
+       if (config.hq_fm)
+       {

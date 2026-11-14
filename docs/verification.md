@@ -391,3 +391,9 @@ On Windows, the 0.24.0 helper applied the new package to a temporary installatio
 On Debian 12, the published 0.25.0 application discovered 0.26.0, displayed the grouped release notes, downloaded the Linux archive from GitHub and restarted into the packaged 0.26.0 executable. All 172 installed manifest entries matched. Twelve user-file markers and two settings survived. The portable Linux package retains the glibc 2.36 baseline.
 
 On Windows, the 0.25.0 helper installed the release ZIP in an isolated copy and started the new executable. The installed application reported 0.26.0, all 127 manifest entries matched and ten user-data markers survived.
+
+## Nuked YM2612 output (2026-11-14)
+
+Compared the Linux core against the preceding 0.26.0 core on Sonic the Hedgehog 2 and Doom 32X. PCM, rendered pixels, Nuked state and native save states matched across cold boot, soft and hard reset, state-file replay and the return from fast-forward. Both cores loaded each other's saves and reproduced the recorded frames. The FM channel mask and gain test passed.
+
+On the same WSL CPU with 600 warm-up frames and 2,400 timed frames, drawing one frame in 32, Sonic 2 ran at 658–664 fps before and 701–704 fps after the change. Doom 32X ran at 331–335 fps before and 307–345 fps after. The 32X measurements did not establish a consistent speedup.
