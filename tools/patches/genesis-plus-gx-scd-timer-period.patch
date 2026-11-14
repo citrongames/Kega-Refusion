@@ -1,0 +1,83 @@
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -1082,14 +1082,19 @@
+     case 0x31: /* Timer */
+     case 0x30: /* !LDS and !UDS are ignored (verified on real hardware, cf. Krikzz's mcd-verificator) */
+     {
+-      /* reload timer (one timer clock = 384 CPU cycles) */
+-      scd.timer = data * TIMERS_SCYCLES_RATIO;
+-
+-      /* only non-zero data starts timer, writing zero stops it */
++      /* only non-zero value starts timer */
+       if (data)
+       {
++        /* reload timer (one timer clock = 384 CPU cycles, see also mcd-verificator REG 8030 test #7) */
++        scd.timer = (data + 1) * TIMERS_SCYCLES_RATIO;
++
+         /* adjust regarding current CPU cycle */
+         scd.timer += (s68k.cycles - scd.cycles);
++      }
++      else
++      {
++        /* writing zero stops timer */
++        scd.timer = 0;
+       }
+ 
+       scd.regs[0x30>>1].byte.l = data;
+@@ -1446,14 +1451,19 @@
+       /* LSB only */
+       data &= 0xff;
+ 
+-      /* reload timer (one timer clock = 384 CPU cycles) */
+-      scd.timer = data * TIMERS_SCYCLES_RATIO;
+-
+-      /* only non-zero data starts timer, writing zero stops it */
++      /* only non-zero value starts timer */
+       if (data)
+       {
++        /* reload timer (one timer clock = 384 CPU cycles, see also mcd-verificator REG 8030 test #7) */
++        scd.timer = (data + 1) * TIMERS_SCYCLES_RATIO;
++
+         /* adjust regarding current CPU cycle */
+         scd.timer += (s68k.cycles - scd.cycles);
++      }
++      else
++      {
++        /* writing zero stops it */
++        scd.timer = 0;
+       }
+ 
+       scd.regs[0x30>>1].byte.l = data;
+@@ -1940,7 +1950,7 @@
+         /* pending level 4 interrupt */
+         scd.pending |= (1 << 4);
+ 
+-        /* level 4 interrupt enabled */
++        /* level 4 interrupt enabled ? */
+         if (scd.regs[0x32>>1].byte.l & 0x10)
+         {
+           /* update IRQ level */
+@@ -1954,10 +1964,12 @@
+     {
+       /* decrement timer */
+       scd.timer -= s68k_run_cycles;
++
++      /* timer elapsed ? */
+       if (scd.timer <= 0)
+       {
+-        /* reload timer (one timer clock = 384 CPU cycles) */
+-        scd.timer += (scd.regs[0x30>>1].byte.l * TIMERS_SCYCLES_RATIO);
++        /* reload timer (one timer clock = 384 CPU cycles, see also mcd-verificator REG 8030 test #7) */
++        scd.timer += ((scd.regs[0x30>>1].byte.l + 1) * TIMERS_SCYCLES_RATIO);
+ 
+         /* level 3 interrupt enabled ? */
+         if (scd.regs[0x32>>1].byte.l & 0x08)
+@@ -2457,7 +2469,7 @@
+       if (scd.timer <= 0)
+       {
+         /* reload timer (one timer clock = 384 CPU cycles) */
+-        scd.timer += (scd.regs[0x30>>1].byte.l * TIMERS_SCYCLES_RATIO);
++        scd.timer += ((scd.regs[0x30>>1].byte.l + 1) * TIMERS_SCYCLES_RATIO);
+ 
+         /* level 3 interrupt enabled ? */
+         if (scd.regs[0x32>>1].byte.l & 0x08)
