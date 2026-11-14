@@ -1,0 +1,91 @@
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -133,6 +133,14 @@
+   {0x8D2D695D, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 3-in-1 The Best Game Collection (Vol. 4) (KR) */
+   {0x82C09B57, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 3-in-1 The Best Game Collection (Vol. 5) (KR) */
+   {0x4088EEB4, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 3-in-1 The Best Game Collection (Vol. 6) (KR) */
++  {0x752D198C, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 3-in-1 G, 128 KiB segment of Super 12 in 1 */
++  {0x761E35AE, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 A (KR) */
++  {0x002E1A49, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 B (KR) */
++  {0x6A63EEA6, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 C (KR) */
++  {0xF27E8F80, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 D (KR) */
++  {0x52587FB9, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 E (KR) */
++  {0x6F62F5A4, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 F (KR) */
++  {0xDEB45078, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 4-in-1 G (KR) */
+   {0xFBA94148, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 8-in-1 The Best Game Collection (Vol. 1) (KR) */
+   {0x8333C86E, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 8-in-1 The Best Game Collection (Vol. 2) (KR) */
+   {0x00E9809F, 0, 0, 0, MAPPER_HICOM,            SYSTEM_SMS, REGION_JAPAN_NTSC}, /* Hi-Com 8-in-1 The Best Game Collection (Vol. 3) (KR) */
+@@ -796,6 +804,7 @@
+   /* reset cartridge ROM paging */
+   switch (cart_rom.mapper)
+   {
++    case MAPPER_HWASUNG: /* Start in the documented selector-zero layout. */
+     case MAPPER_SEGA:
+     case MAPPER_SEGA_X:
+       cart_rom.fcr[0] = 0;
+@@ -953,6 +962,12 @@
+ }
+ 
+ /* Scope deterministic compatibility to this board, not unrelated SMS games. */
++int sms_cart_korean_window_active(void)
++{
++  return system_hw && ((system_hw & SYSTEM_PBC) != SYSTEM_MD) &&
++         ((cart_rom.mapper == MAPPER_HICOM) || (cart_rom.mapper == MAPPER_HWASUNG));
++}
++
+ int sms_cart_codies_active(void)
+ {
+   return cart_rom.mapper == MAPPER_CODIES;
+@@ -1314,6 +1329,7 @@
+     /* set default cartridge ROM paging */
+     switch (cart_rom.mapper)
+     {
++      case MAPPER_HWASUNG: /* Start in the documented selector-zero layout. */
+       case MAPPER_SEGA:
+       case MAPPER_SEGA_X:
+         cart_rom.fcr[0] = 0;
+@@ -2252,10 +2268,12 @@
+       z80_readmap[i] = &page[i << 10];
+     }
+ 
+-    /* lower 16K of selected 32K page is mirrored in $8000-$BFFF */
++    /* Hi-Com exposes the first 16 KiB of the chip in the upper window.
++     * Other boards here mirror the lower half of the selected bank. */
++    uint8 *upper = (slot.mapper == MAPPER_HICOM) ? slot.rom : page;
+     for (i = 0x20; i < 0x30; i++)
+     {
+-      z80_readmap[i] = z80_readmap[i & 0x0F];
++      z80_readmap[i] = upper + ((i & 0x0F) << 10);
+     }
+   }
+ 
+--- a/core/cart_hw/sms_cart.h
++++ b/core/cart_hw/sms_cart.h
+@@ -51,6 +51,7 @@
+ extern void sms_cart_reset(void);
+ extern void sms_cart_switch(uint8 mode);
+ extern int sms_cart_ram_size(void);
++extern int sms_cart_korean_window_active(void);
+ extern int sms_cart_codies_active(void);
+ extern int sms_cart_achievement_mapper(void);
+ extern int sms_cart_region_detect(void);
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3890,6 +3890,8 @@
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
++   if (sms_cart_korean_window_active())
++      return "kegarefusion-recording-v3-peripherals-v1-sms-korean-window-v1";
+    if (sms_cart_irata_flash())
+       return "kegarefusion-recording-v3-peripherals-v1-sms-irata-v1";
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+@@ -3921,6 +3923,8 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   if (sms_cart_korean_window_active())
++      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-korean-window-v1-sms-pause-v1";
+    if (sms_cart_irata_flash())
+       return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-irata-v1-sms-pause-v1";
+    /* Pause/NMI snapshots now round-trip on SMS/SG/PBC. Native GG has no

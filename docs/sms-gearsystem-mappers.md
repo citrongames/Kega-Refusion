@@ -39,9 +39,25 @@ For comparison, a second run updated the upper map immediately on `3FFE` with th
 
 [Bock's original cartridge investigation](https://www.smspower.org/forums/13548-Sega8BitWinterOfDumpsPart24PAKAllAction) gives the upper bank as the sum of the group bits from `3FFE` and the value written to `BFFF`, masked to 64 banks. [MEKA](https://github.com/ocornut/meka/blob/master/meka/srcs/mappers.cpp) applies it on `BFFF`; [Gearsystem](https://github.com/drhelius/Gearsystem/blob/master/src/Multi4PAKAllActionMemoryRule.cpp) also applies it on `3FFE`. The published cartridge measurements do not establish which bank an immediate read between those two writes would see. No gameplay fault attributable to this difference was found in these runs.
 
+## HiCom and Hwasung
+
+**HiCom.** A write to `FFFF` selects a 32 KiB bank for `0000-7FFF`. The upper window at `8000-BFFF` stays on the first 16 KiB of the ROM. The old core mirrored the first half of the selected bank there. The fixed window agrees with [Bock's cartridge measurements](https://www.smspower.org/forums/15147-KoreanHiCom3In18In1Cartridges) and [Gearsystem's decoder](https://github.com/drhelius/Gearsystem/blob/master/src/KoreanFFFFHiComMemoryRule.cpp).
+
+| The Best Game Collection | CRC32 by volume, in letter order | Menu routes checked |
+| --- | --- | --- |
+| 3-in-1 A-F | `98AF0236`, `6EBFE1C3`, `81A36A4F`, `8D2D695D`, `82C09B57`, `4088EEB4` | All three on each |
+| 8-in-1 A-C | `FBA94148`, `8333C86E`, `00E9809F` | All eight on each |
+| 4-in-1 A-F, standalone 128 KiB images | `761E35AE`, `002E1A49`, `6A63EEA6`, `F27E8F80`, `52587FB9`, `6F62F5A4` | Third entry on each |
+| 3-in-1 G / 4-in-1 G | `752D198C` / `DEB45078` | Identified from published dump metadata; gameplay unverified |
+
+On each of the 42 routes through the nine full dumps, the old and fixed cores selected the requested bank and produced identical video and PCM over 850 frames. No upper-window data read encountered differing ROM bytes on those routes. Standalone 4-in-1 A-F showed a separate, visible recognition bug. They are the six 128 KiB halves of the three 8-in-1 dumps. With the cursor on entry three, the old core left the lower window on bank 0 on all six. The fixed core selected bank 2 on all six. The [dumper's database entries](https://github.com/ocornut/meka/pull/108) identify the two G images. The 3-in-1 G entry applies to the standalone 128 KiB segment only.
+
+**Hwasung.** On the 64 KiB 2 Hap in 1 cartridge (`1B3E032E`), even writes to `2000` select pages 0/1/2, odd writes select 0/3/0. Our selector and Gearsystem's arithmetic agree for every byte value. The old core powered up with pages 0/1/0. The [hardware report](https://www.smspower.org/forums/19383-Dumping2HapIn1David2MoaiUiBomulKRHwaseongHwasungMulticart) describes either game selection at startup. We initialize to the valid even selection, consistently across launches. David II and Moai-ui Bomul both reached gameplay on each build. Fourteen sampled frames per game matched through frame 1,500.
+
+To exercise the actual Z80 bus and native state restoration on generated ROMs, run `python3 -B tests/sms_hicom_hwasung_tests.py build/linux/core/genesis_plus_gx_libretro.so`. The diagnostic also checks the shared 32 KiB mapping code on an 11 Hap Gam-Boy cartridge fixture.
+
 ## Candidates for hardware or cartridge verification
 
-* HiCom: check which bank is visible at 8000-BFFF. Hwasung: check values beyond 0 and 1 at its selector.
 * Korean 2000 XOR 1F and FFF3/FFFC: compare address aliases, especially BFF3/BFFC on the latter board.
 
 These are differences between the implementations. Record a cartridge access or hardware reference before changing a decoder. Of 657 loose SMS files surveyed by CRC, 18 matched the special Gearsystem entries checked (5 Codemasters, 4 Korean A000, 7 MSX including Nemesis, one Janggun and one 4PAK). The survey did not inventory archive contents.
