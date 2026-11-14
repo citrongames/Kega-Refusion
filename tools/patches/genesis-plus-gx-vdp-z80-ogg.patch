@@ -1,0 +1,82 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -1173,8 +1173,13 @@
+             parse_satb = parse_satb_m4;
+             render_obj = render_obj_m4;
+ 
+-            /* force BG cache update*/
++            /* force BG cache update */
+             bg_list_index = 0x200;
++            for (i=0;i<0x200;i++) 
++            {
++              bg_name_list[i] = i;
++              bg_name_dirty[i] = 0xFF;
++            }
+           }
+           else
+           {
+@@ -2181,16 +2186,16 @@
+           bitmap.viewport.w = max_sprite_pixels;
+         }
+ 
+-        /* Allow active screen width to be modified during first two lines (Bugs Bunny in Double Trouble) */
+-        else if (v_counter <= 1)
+-        {
++        /* Allow active screen width to be modified during first 3 lines (Bugs Bunny in Double Trouble) */
++        else if (v_counter <= 2)
++        {
++          int i;
+           bitmap.viewport.w = max_sprite_pixels;
+ 
+           /* Redraw lines */
+-          render_line(0);
+-          if (v_counter)
++          for (i=0; i<=v_counter; i++)
+           {
+-            render_line(1);
++            render_line(i);
+           }
+         }
+         else
+--- a/core/memz80.c
++++ b/core/memz80.c
+@@ -5,7 +5,7 @@
+  *  Support for SG-1000, Mark-III, Master System, Game Gear & Mega Drive ports access
+  *
+  *  Copyright (C) 1998-2003  Charles Mac Donald (original code)
+- *  Copyright (C) 2007-2025  Eke-Eke (Genesis Plus GX)
++ *  Copyright (C) 2007-2026  Eke-Eke (Genesis Plus GX)
+  *
+  *  Redistribution and use of this code or any derivative works are permitted
+  *  provided that the following conditions are met:
+@@ -108,10 +108,12 @@
+     }
+   }
+ 
+-  /* approximate 68k wait-states during Z80 access to 68k bus (cf https://docs.google.com/document/d/1ST9GbFfPnIjLT5loytFCm3pB0kWQ1Oe34DCBBV8saY8) */
+-  /* value is adjusted to get ride of graphical glitches in Rick Dangerous 2 title screen when bus refresh delays are also emulated and still get */
+-  /* "M68K DELAY ON Z80 ROM READ" test "passed" in Ti_'s test ROM (misc_test.bin), although the measured delay value is still slightly too high. */
+-  m68k.cycles += (((Z80.cycles % 7) + 72)/7)*7;
++  /* Estimate two 68000 bus cycles for arbitration and transfer, as in BlastEm.
++   * A stopped or halted 68000 has no instruction stream to delay. */
++  if (!m68k.stopped)
++  {
++    m68k.cycles += 8 * 7;
++  }
+ 
+   /* average Z80 wait-states when accessing 68k bus (cf https://docs.google.com/document/d/1ST9GbFfPnIjLT5loytFCm3pB0kWQ1Oe34DCBBV8saY8) */
+   Z80.cycles += (3 * 15);
+--- a/core/cd_hw/cdd.c
++++ b/core/cd_hw/cdd.c
+@@ -1179,9 +1179,9 @@
+         /* auto-detect PAUSE within audio files */
+         ov_pcm_seek(&cdd.toc.tracks[cdd.toc.last].vf, 100 * 588);
+ #if defined(USE_LIBVORBIS)
+-        ov_read(&cdd.toc.tracks[cdd.toc.last].vf, (char *)head, 32, 0, 2, 1, 0);
++        ov_read(&cdd.toc.tracks[cdd.toc.last].vf, (char *)head, 4, 0, 2, 1, 0);
+ #else
+-        ov_read(&cdd.toc.tracks[cdd.toc.last].vf, (char *)head, 32, 0);
++        ov_read(&cdd.toc.tracks[cdd.toc.last].vf, (char *)head, 4, 0);
+ #endif
+         ov_pcm_seek(&cdd.toc.tracks[cdd.toc.last].vf, 0);
+         if (*(int32 *)head == 0)
