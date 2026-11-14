@@ -1123,6 +1123,6 @@
     "Неверный номер стороны MegaLD.": "Invalid MegaLD side number.",
     "Не удалось выбрать сторону %1 MegaLD.": "Could not select MegaLD side %1.",
     "Не удалось восстановить выбранную сторону MegaLD после перезапуска питания.": "Could not restore the selected MegaLD side after the power restart.",
-    "Для этого диска нужен модуль NEC PAC (LD-ROM²).": "This disc requires the NEC PAC module (LD-ROM²)."
+    "Диски NEC PAC (LD-ROM²) не поддерживаются.": "NEC PAC (LD-ROM²) discs are not supported."
   }
 }

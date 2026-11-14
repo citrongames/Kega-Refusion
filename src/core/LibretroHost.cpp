@@ -459,7 +459,7 @@ bool LibretroHost::loadMegaLd(const QString& path, QString& error) {
     if (!media) { error = Localization::text(QStringLiteral("Не удалось открыть MegaLD: %1")).arg(QString::fromUtf8(detail)); return false; }
     const auto* metadata = megald_media_get_info(media.get());
     if (metadata && !std::strcmp(metadata->system,"LDROM2")) {
-        error = Localization::text(QStringLiteral("Для этого диска нужен модуль NEC PAC (LD-ROM²).")); return false;
+        error = Localization::text(QStringLiteral("Диски NEC PAC (LD-ROM²) не поддерживаются.")); return false;
     }
     if (!metadata || std::strcmp(metadata->system,"MegaLD")) {
         error = Localization::text(QStringLiteral("Этот MMI не является образом Sega MegaLD.")); return false;
