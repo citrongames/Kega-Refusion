@@ -56,8 +56,24 @@ On each of the 42 routes through the nine full dumps, the old and fixed cores se
 
 To exercise the actual Z80 bus and native state restoration on generated ROMs, run `python3 -B tests/sms_hicom_hwasung_tests.py build/linux/core/genesis_plus_gx_libretro.so`. The diagnostic also checks the shared 32 KiB mapping code on an 11 Hap Gam-Boy cartridge fixture.
 
-## Candidates for hardware or cartridge verification
+## Korean 2000 XOR 1F and FFF3/FFFC
 
-* Korean 2000 XOR 1F and FFF3/FFFC: compare address aliases, especially BFF3/BFFC on the latter board.
+| Cartridge | CRC32 | Comparison on the original ROM |
+| --- | --- | --- |
+| 128 Hap | `BA5EC0E3` | Two menu selections, 1,200 and 1,800 frames. Only writes to `2000`. |
+| Game Mo-eumjip 188 Hap v0 | `380D7400` | Menu to Bomberman gameplay, 1,200 frames. Five writes to `2000`. |
+| Game Mo-eumjip 188 Hap v1 | `C76601E0` | Same route and five writes, verified separately. |
+| Super Game 150 | `1B8956D1` | Five selections, 1,150 frames per route. Teddy Boy, Knightmare, Galaga, The Goonies and a fifth selection using mode `50`, mapper `03`. |
+| Super Game 270 | `D9EF7D69` | Board identification from the [MEKA database](https://github.com/ocornut/meka/blob/master/meka/meka.nam). No game dump available for this check. The similarly named `D3056492` uses a different board. |
 
-These are differences between the implementations. Record a cartridge access or hardware reference before changing a decoder. Of 657 loose SMS files surveyed by CRC, 18 matched the special Gearsystem entries checked (5 Codemasters, 4 Korean A000, 7 MSX including Nemesis, one Janggun and one 4PAK). The survey did not inventory archive contents.
+**2000 XOR 1F.** [The cartridge measurements](https://www.smspower.org/forums/17902-DumpingKorean128128In1CartridgeLikelyPirateMissingOriginalLabel) establish that any write in `2000-3FFF` or `A000-BFFF` sets the selector. Both fixed windows read logical page zero, and a frequent power-on layout puts pages `60-63` at `4000-BFFF`. The old core accepted only `2000`, exposed page one at `2000` and started all switchable slots on page zero. The fixed core uses the measured startup layout consistently. Unlike [Gearsystem](https://github.com/drhelius/Gearsystem/blob/master/src/Korean2000XOR1FMemoryRule.cpp), it returns zero for unpopulated pages, as reported by the dumper. All three ROMs wrote the selector on the first frame. Complete video and PCM matched the baseline on each tested route.
+
+**FFF3/FFFC.** The original [Super Game 150 cartridge investigation](https://www.smspower.org/forums/19752-DumpingSuperGame150) describes the bank modes and tests the canonical addresses. The later [MEKA integration credited to the dumper](https://github.com/ocornut/meka/commit/cdc96303454484355f4ae9a9bbb345fddda811e9) and [Gearsystem](https://github.com/drhelius/Gearsystem/blob/master/src/KoreanFFF3FFFCMemoryRule.cpp) both ignore address bit A14 for these two registers. The fixed core accepts `BFF3/BFFC` accordingly. Canonical writes also put the original CPU byte in work RAM; the old core stored an intermediate bank index. Alias writes leave RAM untouched. The existing bank layouts agree with the published mode table.
+
+Each of the five original Super Game 150 routes wrote twice to each canonical register, never to either alias, and had identical video and PCM on both builds. A separate controlled run redirected the four canonical writes to the aliases during The Goonies selection, without modifying the dump. The old core selected different banks and produced different output. The fixed core reproduced the original route's video and PCM. This distinguishes a demonstrable decoder defect from a failure seen in an unmodified game.
+
+Run `python3 -B tests/sms_korean_alias_tests.py build/linux/core/genesis_plus_gx_libretro.so` for generated Z80 bus checks covering all eight mode values, both bank parities, both register pairs, RAM mirrors, nearby addresses and XOR power-on/missing pages.
+
+## Collection survey
+
+Of 657 loose SMS files surveyed by CRC, 18 matched the special Gearsystem entries checked (5 Codemasters, 4 Korean A000, 7 MSX including Nemesis, one Janggun and one 4PAK). The survey did not inventory archive contents.
