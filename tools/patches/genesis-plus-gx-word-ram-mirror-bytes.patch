@@ -1,0 +1,29 @@
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -287,7 +287,7 @@
+   }
+   else
+   {
+-    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data | (data << 8);
++    WRITE_BYTE(m68k.memory_map[offset].base, address & 0xffff, data);
+   }
+ }
+ 
+@@ -325,7 +325,7 @@
+   }
+   else
+   {
+-    *(uint16 *)(m68k.memory_map[offset].base + (address & 0xfffe)) = data | (data << 8);
++    WRITE_BYTE(m68k.memory_map[offset].base, address & 0xffff, data);
+   }
+ }
+ 
+@@ -377,7 +377,7 @@
+   }
+   else
+   {
+-    *(uint16 *)(s68k.memory_map[offset].base + (address & 0xfffe)) = data | (data << 8);
++    WRITE_BYTE(s68k.memory_map[offset].base, address & 0xffff, data);
+   }
+ }
+ 
