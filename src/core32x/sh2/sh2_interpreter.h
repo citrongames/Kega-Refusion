@@ -36,6 +36,7 @@ typedef struct KegaSh2Host {
      * It must validate the complete span and reject MMIO/handler side effects.
      * NULL forbids idle batching even when the optimization is enabled. */
     bool (*can_idle_fetch)(void *user, KegaSh2 *cpu, uint32_t address, size_t bytes);
+    const uint16_t *const *rom_pages;
 } KegaSh2Host;
 
 #define KEGA_SH2_STATE_VERSION 1u

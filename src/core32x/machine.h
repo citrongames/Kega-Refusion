@@ -24,6 +24,9 @@ typedef struct Kega32xMachineHost {
     /* Pure query for the complete ROM-relative instruction span. NULL forbids
        extra ROM peeks/idle batching; never read a mapper/MMIO register here. */
     bool (*rom_fetch_is_pure)(void *, uint32_t romOffset, size_t bytes);
+    /* Optional live 64 KiB pages in native word order for SH-2 ROM reads.
+       A null entry always takes the mapper callback. Owned by the cartridge. */
+    const uint16_t *const *rom_pages;
 } Kega32xMachineHost;
 /* BIOS arrays are raw file order, exact sizes checked before allocation.
    ROM/BIOS files are loaded by the host; this module performs no file I/O. */

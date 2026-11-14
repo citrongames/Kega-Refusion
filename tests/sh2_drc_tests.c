@@ -171,7 +171,96 @@ static void cache_pressure(void) {
     kega_sh2_drc_disable();kega_sh2_destroy(a->cpu);kega_sh2_destroy(b->cpu);kega_sh2_destroy(peer->cpu);
     free(a);free(b);free(peer);
 }
+/* Exercise the shared interpreter/DRC data entry points without translating
+ * code. ROM words are native numeric uint16 values; callbacks are the oracle. */
+extern uint32_t kega_sh2_host_read(struct SH2_ *, uint32_t, unsigned);
+typedef struct RomReadFixture {
+    const uint16_t *const *pages;
+    unsigned reads[3];
+    uint32_t address[3];
+} RomReadFixture;
+static uint16_t rom_word(RomReadFixture *f, uint32_t a) {
+    const uint16_t *page=f->pages[(a>>16)&63];
+    return page ? page[(a&0xffff)>>1] : 0x6bad;
+}
+static uint8_t rom_r8(void *u,KegaSh2 *c,uint32_t a) {
+    RomReadFixture *f=u;(void)c;++f->reads[0];f->address[0]=a;
+    return (uint8_t)(rom_word(f,a)>>((a&1)?0:8));
+}
+static uint16_t rom_r16(void *u,KegaSh2 *c,uint32_t a) {
+    RomReadFixture *f=u;(void)c;++f->reads[1];f->address[1]=a;return rom_word(f,a);
+}
+static uint32_t rom_r32(void *u,KegaSh2 *c,uint32_t a) {
+    RomReadFixture *f=u;(void)c;++f->reads[2];f->address[2]=a;
+    return ((uint32_t)rom_word(f,a)<<16)|rom_word(f,a+2);
+}
+static void rom_w8(void *u,KegaSh2 *c,uint32_t a,uint8_t v) { (void)u;(void)c;(void)a;(void)v;assert(0); }
+static void rom_w16(void *u,KegaSh2 *c,uint32_t a,uint16_t v) { (void)u;(void)c;(void)a;(void)v;assert(0); }
+static void rom_w32(void *u,KegaSh2 *c,uint32_t a,uint32_t v) { (void)u;(void)c;(void)a;(void)v;assert(0); }
+static void rom_read_case(KegaSh2 *reference,KegaSh2 *fast,RomReadFixture *r,RomReadFixture *f,
+                          uint32_t address,unsigned width,uint32_t expected,bool direct) {
+    unsigned selected=width==8?0:width==16?1:2;
+    memset(r->reads,0,sizeof(r->reads));memset(f->reads,0,sizeof(f->reads));
+    assert(kega_sh2_host_read(kega_sh2_native(reference),address,width)==expected);
+    assert(kega_sh2_host_read(kega_sh2_native(fast),address,width)==expected);
+    for(unsigned i=0;i<3;++i) {
+        assert(r->reads[i]==(i==selected));
+        assert(f->reads[i]==(i==selected && !direct));
+    }
+    assert(r->address[selected]==address);
+    if(!direct)assert(f->address[selected]==address);
+}
+static void rom_page_reads(void) {
+    uint16_t (*words)[0x8000]=calloc(3,sizeof(*words));assert(words);
+    words[0][0]=0x81f2;words[0][1]=0x3456;words[0][2]=0x789a;
+    words[0][0x7ffe]=0xb1c2;words[0][0x7fff]=0xd3e4;
+    words[1][0]=0xf567;words[1][1]=0x89ab;words[1][0x7fff]=0xab12;
+    words[2][0]=0xdead;words[2][1]=0xbeef;
+    const uint16_t *source[64]={0},*pages[64]={0};
+    source[0]=pages[0]=words[0];source[1]=pages[1]=words[1];
+    source[2]=words[1]; /* Deliberately handled by the host despite ROM data. */
+    source[63]=pages[63]=words[1];
+    RomReadFixture r={0},f={0};r.pages=f.pages=source;
+    KegaSh2Host host={0};host.user=&r;
+    host.read8=rom_r8;host.read16=rom_r16;host.read32=rom_r32;
+    host.write8=rom_w8;host.write16=rom_w16;host.write32=rom_w32;
+    KegaSh2 *reference=kega_sh2_create(&host,false);assert(reference);
+    host.user=&f;host.rom_pages=pages;
+    KegaSh2 *fast=kega_sh2_create(&host,true);assert(fast);
+    static const struct { uint32_t address,expected;unsigned width;bool direct; } cases[]={
+        {0x02000000,0x81,8,true},{0x02000001,0xf2,8,true},
+        {0x02000000,0x81f2,16,true},{0x02000001,0x81f2,16,true},
+        {0x02000000,0x81f23456,32,true},{0x02000001,0x81f23456,32,true},
+        /* Longwords align to two bytes, rather than four, on the ROM bus. */
+        {0x02000002,0x3456789a,32,true},{0x02000003,0x3456789a,32,true},
+        {0x0200ffff,0xe4,8,true},{0x0200ffff,0xd3e4,16,true},
+        {0x0200fffd,0xb1c2d3e4,32,true},
+        {0x0200fffe,0xd3e4f567,32,false},{0x0200ffff,0xd3e4f567,32,false},
+        {0x02010000,0xf56789ab,32,true},
+        {0x02020001,0x67,8,false},{0x02020001,0xf567,16,false},
+        {0x02020001,0xf56789ab,32,false},{0x02030000,0x6bad6bad,32,false},
+        {0x02400001,0xf2,8,true},{0x22000001,0x81f2,16,true},
+        {0x22400003,0x3456789a,32,true},
+        {0x023ffffe,0xab1281f2,32,false},{0x223fffff,0xab1281f2,32,false},
+        {0x06000001,0xf2,8,false},{0x42000001,0x81f2,16,false}
+    };
+    for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i)
+        rom_read_case(reference,fast,&r,&f,cases[i].address,cases[i].width,cases[i].expected,cases[i].direct);
+    /* The live table is reread after bank replacement, including aliases. */
+    source[0]=pages[0]=words[2];
+    rom_read_case(reference,fast,&r,&f,0x02000001,32,0xdeadbeef,true);
+    rom_read_case(reference,fast,&r,&f,0x22400000,16,0xdead,true);
+    words[2][0]=0x7654;
+    rom_read_case(reference,fast,&r,&f,0x22000000,16,0x7654,true);
+    pages[0]=NULL;
+    rom_read_case(reference,fast,&r,&f,0x02400001,8,0x54,false);
+    rom_read_case(reference,fast,&r,&f,0x02000000,32,0x7654beef,false);
+    pages[0]=source[0]=words[0];
+    rom_read_case(reference,fast,&r,&f,0x02000000,32,0x81f23456,true);
+    kega_sh2_destroy(reference);kega_sh2_destroy(fast);free(words);
+}
 int main(void) {
+    rom_page_reads();
     assert(kega_sh2_drc_cache_capacity()==4u*1024*1024);
     for(unsigned mode=0;mode<8;++mode) parity(mode);
     smc_and_nested();

@@ -37,6 +37,7 @@ typedef struct Gpx32xVideoRow {
 typedef struct Gpx32x {
     Kega32xMachine *machine;
     cpu_memory_map original[256];
+    const uint16_t *rom_pages[64];
     t_zbank_memory_map original_zbank[256];
     int has_cart_rom;
     uint32_t boot_identity; /* Zero in existing states with three original BIOS. */
@@ -167,11 +168,18 @@ static void maps_restore(void)
         zbank_memory_map[i]=ctx->original_zbank[i];
     }
 }
+static void update_rom_page(unsigned i)
+{
+    const cpu_memory_map *map = &ctx->original[i];
+    ctx->rom_pages[i] = ctx->has_cart_rom && !map->read16 ?
+        (const uint16_t *)(const void *)map->base : NULL;
+}
 static void maps_capture(void)
 {
     ctx->has_cart_rom=system_hw!=SYSTEM_MCD || scd.cartridge.boot!=0;
     memcpy(ctx->original,m68k.memory_map,sizeof(ctx->original));
     memcpy(ctx->original_zbank,zbank_memory_map,sizeof(ctx->original_zbank));
+    for(unsigned i=0;i<64;i++)update_rom_page(i);
     /* Keep the G bootstrap/HINT vectors; the rest follows the selected bank. */
     if(ctx->has_cart_rom && ctx->original[0].base)
         memcpy(ctx->boot_page+256,ctx->original[0].base+256,sizeof(ctx->boot_page)-256);
@@ -209,6 +217,7 @@ void kegarefusion_32x_cart_reads_changed(unsigned first,unsigned count)
         ctx->original[i].read8=m68k.memory_map[i].read8;
         ctx->original[i].read16=m68k.memory_map[i].read16;
         ctx->original_zbank[i].read=zbank_memory_map[i].read;
+        update_rom_page(i);
     }
 #ifdef KEGA_SH2_DRC
     kega_sh2_drc_flush();
@@ -393,7 +402,7 @@ int kegarefusion_32x_attach(const uint8_t *g,const uint8_t *m,const uint8_t *s)
     if (!m) { builtin_boot_sh2(builtin_m, 0, ctx->has_cart_rom); m = builtin_m; }
     if (!s) { builtin_boot_sh2(builtin_s, 1, ctx->has_cart_rom); s = builtin_s; }
     for(i=0;i<256;i++)WRITE_BYTE(ctx->boot_page,i,g[i]);
-    host.rom_read16=rom_read;host.rom_fetch_is_pure=rom_fetch_is_pure;host.changed=changed;host.render_sync=render_sync;host.audio_delta=audio_delta;
+    host.rom_pages=ctx->rom_pages;host.rom_read16=rom_read;host.rom_fetch_is_pure=rom_fetch_is_pure;host.changed=changed;host.render_sync=render_sync;host.audio_delta=audio_delta;
     ctx->machine=kega32x_machine_create(&host,m,2048,s,1024,vdp_pal,!ctx->has_cart_rom);
     if(!ctx->machine){free(ctx);ctx=NULL;return 0;}
     ctx->hint_due=UINT64_MAX;ctx->line=-1;

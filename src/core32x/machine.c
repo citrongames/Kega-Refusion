@@ -282,7 +282,7 @@ Kega32xMachine *kega32x_machine_create(const Kega32xMachineHost *h,const uint8_t
     m=calloc(1,sizeof(*m)); if(!m)return NULL;
     m->host=*h;memcpy(m->bios[0],mb,ml);memcpy(m->bios[1],sb,sl);
     ch.user=m;ch.read8=r8;ch.read16=r16;ch.read32=r32;ch.write8=w8;ch.write16=w16;ch.write32=w32;
-    ch.fetch16=instruction_fetch16;ch.can_idle_fetch=can_idle_fetch;
+    ch.rom_pages=h->rom_pages;ch.fetch16=instruction_fetch16;ch.can_idle_fetch=can_idle_fetch;
     m->cpu[0]=kega_sh2_create(&ch,0);m->cpu[1]=kega_sh2_create(&ch,1);
     if(!m->cpu[0] || !m->cpu[1]) {kega32x_machine_destroy(m);return NULL;}
     /* Shared SDRAM is word-swapped plain storage for the lifetime of this

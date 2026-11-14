@@ -47,6 +47,12 @@ static uint16_t plain_word(const void *base, uint32_t offset) {
     memcpy(&word, (const uint8_t *)base + offset, sizeof(word));
     return word;
 }
+/* The SH-2 cartridge window repeats every 4 MiB. Only the first
+ * word of a longword is aligned to two bytes on this bus. */
+static inline const uint16_t *rom_page(SH2 *s, uint32_t a) {
+    const uint16_t *const *pages = owner(s)->host.rom_pages;
+    return pages && (a & 0xc6000000u) == 0x02000000u ? pages[(a >> 16) & 63] : NULL;
+}
 static uint8_t read8(SH2 *s, uint32_t a) {
     uint32_t offset;
     const void *base=plain_base(s,a,&offset);
@@ -54,12 +60,18 @@ static uint8_t read8(SH2 *s, uint32_t a) {
         uint16_t word=plain_word(base,offset & ~1u);
         return (uint8_t)(word >> ((offset & 1u) ? 0 : 8));
     }
+    const uint16_t *page = rom_page(s, a);
+    unsigned index = (a & 0xffff) >> 1;
+    if (page) return (uint8_t)(page[index] >> ((a & 1) ? 0 : 8));
     KegaSh2 *c = owner(s); return c->host.read8(c->host.user, c, a);
 }
 static uint16_t read16(SH2 *s, uint32_t a) {
     uint32_t offset;
     const void *base=plain_base(s,a,&offset);
     if (base) return plain_word(base,offset & ~1u);
+    const uint16_t *page = rom_page(s, a);
+    unsigned index = (a & 0xffff) >> 1;
+    if (page) return page[index];
     KegaSh2 *c = owner(s); return c->host.read16(c->host.user, c, a);
 }
 static uint16_t fetch16(SH2 *s, uint32_t a) {
@@ -77,6 +89,9 @@ static uint32_t read32(SH2 *s, uint32_t a) {
         return ((uint32_t)plain_word(base,offset) << 16) |
             plain_word(base,offset+2u);
     }
+    const uint16_t *page = rom_page(s, a);
+    unsigned index = (a & 0xffff) >> 1;
+    if (page && index < 0x7fff) return ((uint32_t)page[index] << 16) | page[index + 1];
     KegaSh2 *c = owner(s); return c->host.read32(c->host.user, c, a);
 }
 /* Plain machine RAM has no write side effects other than translated code

@@ -403,3 +403,13 @@ On the same WSL CPU with 600 warm-up frames and 2,400 timed frames, drawing one 
 Sampled the unmodified Linux release core at 6e8d07a during fast-forward. OPN2_Clock accounted for 37.8% of samples in Doom 32X and 76.8% in Sonic 2. In Doom, operator waveform generation, modulation routing and channel accumulation accounted for 17%, 10% and 9% of chip time respectively. Generated SH-2 code alone accounted for 14.4% of total time. Inline locations were mapped using a debug object with identical machine code.
 
 On one pinned WSL CPU, two runs per version (600 warm-up and 2,000 timed frames, rendering one in 32) gave 342 to 356–357 fps in Doom and 705–709 to 752–759 fps in Sonic 2. A comparison over two million clocks in four modes found identical stereo outputs and chip state. Both games produced identical audio, video and native save states across normal play, fast-forward, resets and cross-version save/load.
+
+## 32X SH-2 cartridge reads (2026-11-15)
+
+On Doom (Japan, USA), samples of the 79e8977 Linux release core during fast-forward put the outer scheduler at 7.1%, SH-2 peripheral timers at 4.0%, generated SH-2 memory helpers at 6.0% and translated guest blocks at 7.5% of total CPU time. ROM callbacks and purity checks accounted for another 3.7%. The build now reads plain cartridge pages directly; handlers and longwords crossing a page still use the cartridge bus. A separate timer experiment was slower and was discarded.
+
+On one WSL CPU, with 600 warm-up frames and the same 2,400 measured frames and input at 1-in-32 rendering, Doom ran at 525–526 to 571–573 fps with MAME and 353–358 to 362–371 fps with Nuked. The DRC component test checks access width, alignment, page boundaries, mirrors, replacing a bank and reverting to a handler.
+
+Doom matched the baseline frame, PCM and native state comparisons through restore, fast-forward and reset. In the short Night Trap (USA, Disc 1) CD32X run, video, PCM and cross-version replay matched. Four bytes in early Sega CD graphics save fields varied across independent processes on both the baseline and the optimized core, including the early hard-reset checkpoint.
+
+Two other cartridges were compared for 1,200 frames with input. Darxide (Europe, En/Fr/De/Es) ran at 49.70146 Hz PAL, from the Sega intro to a moving cockpit scene with HUD. Sangokushi IV (Japan) ran at 59.92274 Hz NTSC, from its animated intro to the Koei title screen. Each matched all captured frames and PCM, sampled states and the final raw state. These scenes cover startup and presentation; player control was not separately confirmed.
