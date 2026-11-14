@@ -21,7 +21,7 @@ qint64 rss(){QFile f("/proc/self/status");if(!f.open(QIODevice::ReadOnly))return
 void hashFrame(QCryptographicHash& hash,const QImage& frame){hash.addData(QByteArrayView(reinterpret_cast<const char*>(frame.constBits()),frame.sizeInBytes()));}
 int main(int argc,char**argv){QCoreApplication app(argc,argv);try{
  require(argc>=5,"usage CORE ROM OUT FRAMES [INPUT] [single]");const QString out=argv[3];QDir().mkpath(out);QTemporaryDir temp;QString error;
- const bool single=argc>6&&QByteArray(argv[6])=="single";LibretroHost host(argv[1],temp.path());host.setExpansionDevices(false,false);
+ const bool single=argc>6&&QByteArray(argv[6])=="single";LibretroHost host(argv[1],temp.path());host.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Auto);
  const auto before=rss();require(host.setLinkCableEnabled(!single,error),error);require(host.load(argv[2],error),error);
  std::vector<Action> actions;
  if(argc>5){QFile f(argv[5]);require(f.open(QIODevice::ReadOnly),f.errorString());QTextStream stream(&f);while(!stream.atEnd()){const auto row=stream.readLine().simplified().split(' ');if(row.size()==4)actions.push_back({row[0].toInt(),row[1].toInt(),row[2].toInt(),row[3].toInt()});}}

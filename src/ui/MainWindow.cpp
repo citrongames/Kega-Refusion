@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../core/EmulationSession.h"
+#include "../core/ExpansionMode.h"
 #include "../core/DataFolders.h"
 #include "../core/RomArchive.h"
 #include "../core/SegaCdBios.h"
@@ -84,6 +85,38 @@ constexpr int kBiosSettingsPage = 6;
 constexpr int kControlsSettingsPage = 7;
 constexpr int kNetplaySettingsPage = 8;
 constexpr int kFoldersSettingsPage = 9;
+
+QString expansionModeValue(ExpansionMode mode) {
+    switch (mode) {
+    case ExpansionMode::Connected: return QStringLiteral("connected");
+    case ExpansionMode::Disconnected: return QStringLiteral("disconnected");
+    case ExpansionMode::Auto: return QStringLiteral("auto");
+    }
+    return QStringLiteral("auto");
+}
+
+ExpansionMode expansionModeFromValue(const QString& value) {
+    if (value == QLatin1String("connected")) return ExpansionMode::Connected;
+    if (value == QLatin1String("disconnected")) return ExpansionMode::Disconnected;
+    return ExpansionMode::Auto;
+}
+
+ExpansionMode readExpansionMode(QSettings& settings, const QString& key, const QString& legacyKey) {
+    if (settings.contains(key)) {
+        const QString value = settings.value(key).toString();
+        const ExpansionMode mode = expansionModeFromValue(value);
+        if (value != expansionModeValue(mode)) settings.setValue(key, expansionModeValue(mode));
+        if (settings.contains(legacyKey)) settings.remove(legacyKey);
+        return mode;
+    }
+    const ExpansionMode mode = settings.value(legacyKey, false).toBool()
+        ? ExpansionMode::Connected : ExpansionMode::Auto;
+    if (settings.contains(legacyKey)) {
+        settings.setValue(key, expansionModeValue(mode));
+        settings.remove(legacyKey);
+    }
+    return mode;
+}
 
 // Small native line icons; created only when opening settings, with palette-aware selection.
 QIcon settingsSectionIcon(int section, const QPalette& palette) {
@@ -294,8 +327,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
     session_.setPerGameCdBackup(settings_.value(QStringLiteral("emulation/perGameCdBackup"), true).toBool());
     session_.setRemoveSpriteLimit(settings_.value(QStringLiteral("emulation/removeSpriteLimit"), false).toBool());
-    session_.setExpansionDevices(settings_.value(QStringLiteral("emulation/attachCd"), false).toBool(),
-                                 settings_.value(QStringLiteral("emulation/attach32x"), false).toBool());
+    session_.setExpansionDevices(
+        readExpansionMode(settings_, QStringLiteral("emulation/cdMode"), QStringLiteral("emulation/attachCd")),
+        readExpansionMode(settings_, QStringLiteral("emulation/x32Mode"), QStringLiteral("emulation/attach32x")));
     connect(&session_, &EmulationSession::performanceMetricsChanged,
             view_, &GameView::setPerformanceMetrics);
     connect(&session_, &EmulationSession::runTimerChanged,
@@ -1887,23 +1921,27 @@ void MainWindow::editSettings(int initialPage) {
 
     auto* games = addPage(Localization::text(QStringLiteral("Игры")),
         Localization::text(QStringLiteral("Совместимость картриджей и загрузка Sega CD.")));
-    const bool attachCd = settings_.value(QStringLiteral("emulation/attachCd"), false).toBool();
-    const bool attach32x = settings_.value(QStringLiteral("emulation/attach32x"), false).toBool();
+    const ExpansionMode cdMode = readExpansionMode(settings_, QStringLiteral("emulation/cdMode"),
+                                                   QStringLiteral("emulation/attachCd"));
+    const ExpansionMode x32Mode = readExpansionMode(settings_, QStringLiteral("emulation/x32Mode"),
+                                                    QStringLiteral("emulation/attach32x"));
     auto* cdAttachment = new QComboBox(&dialog);
     cdAttachment->setObjectName(QStringLiteral("cdAttachment"));
     auto* x32Attachment = new QComboBox(&dialog);
     x32Attachment->setObjectName(QStringLiteral("x32Attachment"));
     for (auto* combo : {cdAttachment, x32Attachment}) {
-        combo->addItem(Localization::text(QStringLiteral("Автоматически")), false);
-        combo->addItem(Localization::text(QStringLiteral("Подключено")), true);
+        combo->addItem(Localization::text(QStringLiteral("Автоматически")), QStringLiteral("auto"));
+        combo->addItem(Localization::text(QStringLiteral("Подключено")), QStringLiteral("connected"));
+        combo->addItem(Localization::text(QStringLiteral("Отключено")), QStringLiteral("disconnected"));
     }
-    cdAttachment->setCurrentIndex(attachCd ? 1 : 0);
-    x32Attachment->setCurrentIndex(attach32x ? 1 : 0);
+    cdAttachment->setCurrentIndex(cdAttachment->findData(expansionModeValue(cdMode)));
+    x32Attachment->setCurrentIndex(x32Attachment->findData(expansionModeValue(x32Mode)));
     games->addRow(Localization::text(QStringLiteral("Sega CD для обычных игр:")), cdAttachment);
     games->addRow(Localization::text(QStringLiteral("32X для обычных игр:")), x32Attachment);
     auto* attachmentHelp = new QLabel(Localization::text(QStringLiteral(
-        "Игры Sega CD и 32X подключают нужное устройство автоматически. «Подключено» оставляет устройство "
-        "и для обычных игр Mega Drive. Для Sega CD нужен BIOS региона; 32X использует встроенные BIOS, "
+        "Для обычных игр Mega Drive: «Автоматически» выбирает устройство по игре, «Подключено» "
+        "всегда подключает его, «Отключено» отключает. Игры Sega CD и 32X подключают нужное устройство "
+        "независимо от выбора. Для Sega CD нужен BIOS региона; 32X использует встроенные BIOS, "
         "если оригинальные не установлены. Изменения применятся при следующей загрузке или перезапуске питания.")), &dialog);
     attachmentHelp->setWordWrap(true);
     games->addRow(attachmentHelp);
@@ -2602,11 +2640,14 @@ void MainWindow::editSettings(int initialPage) {
         view_->setCursorIdleTimeout(hideCursor->isChecked() ? cursorDelay->value() : 0);
         if (language->currentData().toString() != selectedLanguage)
             settings_.setValue(QStringLiteral("ui/language"), language->currentData());
-        if (cdAttachment->isEnabled() && x32Attachment->isEnabled() &&
-            (cdAttachment->currentData().toBool() != attachCd || x32Attachment->currentData().toBool() != attach32x)) {
-            settings_.setValue(QStringLiteral("emulation/attachCd"), cdAttachment->currentData());
-            settings_.setValue(QStringLiteral("emulation/attach32x"), x32Attachment->currentData());
-            session_.setExpansionDevices(cdAttachment->currentData().toBool(), x32Attachment->currentData().toBool());
+        if (cdAttachment->isEnabled() && x32Attachment->isEnabled()) {
+            const ExpansionMode selectedCd = expansionModeFromValue(cdAttachment->currentData().toString());
+            const ExpansionMode selected32x = expansionModeFromValue(x32Attachment->currentData().toString());
+            if (selectedCd != cdMode || selected32x != x32Mode) {
+                settings_.setValue(QStringLiteral("emulation/cdMode"), expansionModeValue(selectedCd));
+                settings_.setValue(QStringLiteral("emulation/x32Mode"), expansionModeValue(selected32x));
+                session_.setExpansionDevices(selectedCd, selected32x);
+            }
         }
         const bool selectedAchievements = achievementEnabledBox->isChecked();
         const bool selectedHardcore = achievementMode->currentData().toBool();

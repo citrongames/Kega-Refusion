@@ -1,4 +1,5 @@
 #pragma once
+#include "ExpansionMode.h"
 #include "InputDisplay.h"
 #include <QByteArray>
 #include <QImage>
@@ -55,7 +56,7 @@ public:
     void runRewindPreviewFrame(bool renderVideo = true, bool singleFieldFallback = false, bool publishVideo = true);
     bool frameInputPolled() const;
     bool supportsInputPollMetrics() const;
-    void setExpansionDevices(bool cd, bool x32);
+    void setExpansionDevices(ExpansionMode cd, ExpansionMode x32);
     void reset();
     bool hardReset(QString& error, bool applyPending = true);
     void setNukedYm2612(bool enabled) { nukedYm2612_ = enabled; }
@@ -272,7 +273,8 @@ private:
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     bool nukedYm2612_ = false;
     bool smsFmEnabled_ = true;
-    bool attachCd_ = false, attach32x_ = false, contentNeeds32x_ = false;
+    ExpansionMode cdMode_ = ExpansionMode::Auto, x32Mode_ = ExpansionMode::Auto;
+    bool contentNeeds32x_ = false;
     std::array<unsigned,MaxControllerPlayers> buttons_{};
     std::array<bool,MaxControllerPlayers> controllerConnected_{{true,false,false}};
     std::array<bool,MaxControllerPlayers> controllerSixButton_{{true,true,true,true,true,true,true,true}};

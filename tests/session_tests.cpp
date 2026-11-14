@@ -427,7 +427,7 @@ int main(int argc,char** argv){
   preserved([&]{session.setRegion(2);},"no-op region command cleared history");
   preserved([&]{session.setRemoveSpriteLimit(false);},"no-op sprite limit cleared history");
   preserved([&]{session.setFastCdLoading(true);session.setFastCdLoading(true);},"CD policy on cartridge cleared history");
-  preserved([&]{session.setAutoFixChecksum(true);session.setExpansionDevices(true,true);},"pending power options cleared history");
+  preserved([&]{session.setAutoFixChecksum(true);session.setExpansionDevices(ExpansionMode::Connected, ExpansionMode::Connected);},"pending power options cleared history");
   preserved([&]{session.setControllerConnected(0,true);session.setControllerSixButton(0,true);
                  session.setControllerKind(0,ControllerType::Pad);session.setControllerAdapter(ControllerAdapter::None);},
             "no-op controller settings cleared history");

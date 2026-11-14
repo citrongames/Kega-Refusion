@@ -342,7 +342,15 @@ void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.stor
 void EmulationSession::setRunTimerEnabled(bool enabled) { enqueue({Type::RunTimer,{},int(enabled)}); }
 void EmulationSession::setPerformanceMetricsEnabled(bool enabled) { enqueue({Type::PerformanceMetrics,{},enabled ? 1 : 0}); }
 void EmulationSession::setGameFpsEnabled(bool enabled) { enqueue({Type::GameFps,{},enabled ? 1 : 0}); }
-void EmulationSession::setExpansionDevices(bool cd, bool x32) { enqueue({Type::Expansions,{},(cd ? 1 : 0) | (x32 ? 2 : 0)}); }
+void EmulationSession::setExpansionDevices(ExpansionMode cd, ExpansionMode x32) {
+    // Preserve the existing connected bits in shared commands from older clients.
+    int flags = 0;
+    if (cd == ExpansionMode::Connected) flags |= 1;
+    if (x32 == ExpansionMode::Connected) flags |= 2;
+    if (cd == ExpansionMode::Disconnected) flags |= 4;
+    if (x32 == ExpansionMode::Disconnected) flags |= 8;
+    enqueue({Type::Expansions, {}, flags});
+}
 void EmulationSession::requestSlotStatus(int selected) { enqueue({Type::Slots,{},selected}); }
 void EmulationSession::configureAchievements(bool enabled, bool hardcore) {
     enqueue({Type::AchievementsConfigure,{},(enabled ? 1 : 0) | (hardcore ? 2 : 0)});
@@ -384,6 +392,7 @@ void EmulationSession::applyNetworkCommand(const QByteArray& bytes) {
     if (Type(t)!=Type::Cheats && bytes.size()>64*1024) return;
     Command c{Type(t),{},v}; c.networkAuthorized=true;
     if ((c.type==Type::Save || c.type==Type::Restore) && (v<0 || v>9)) return;
+    if (c.type==Type::Expansions && ((v & ~15) || (v & 5) == 5 || (v & 10) == 10)) return;
     if (c.type==Type::Region && (v<0 || v>3)) return;
     if (c.type==Type::Filter && (v<0 || v>4)) return;
     if ((c.type==Type::ControllerType || c.type==Type::Port) && (v<0 || v>15)) return;
@@ -1346,9 +1355,15 @@ void EmulationSession::run() {
                     resetMetrics();
                 }
                 break;
-            case Type::Expansions:
-                host.setExpansionDevices(command.value & 1, command.value & 2);
+            case Type::Expansions: {
+                const auto mode = [&command](int connectedBit) {
+                    if (command.value & connectedBit) return ExpansionMode::Connected;
+                    if (command.value & (connectedBit << 2)) return ExpansionMode::Disconnected;
+                    return ExpansionMode::Auto;
+                };
+                host.setExpansionDevices(mode(1), mode(2));
                 break;
+            }
             case Type::AchievementsConfigure:
                 achievementEnabled = bool(command.value & 1);
                 achievementHardcoreRequested = bool(command.value & 2);

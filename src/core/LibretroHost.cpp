@@ -365,7 +365,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         !checkDiscBios(images.first(),error,DataFolders::path(dataPath_,QStringLiteral("bios")))) return false;
     if (!initialize(error)) return false;
     const bool needs32x = images.first().needs32x;
-    if (needs32x || attach32x_) {
+    if (needs32x || x32Mode_ == ExpansionMode::Connected) {
         if (!api_->features || !(api_->features() & 1u)) {
             error = Localization::text(QStringLiteral("Этот диск требует CD32X, но загруженное ядро не поддерживает 32X."));
             return false;
@@ -559,17 +559,17 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         ((content.size() / 512) & 1) && !(content.size() % 512) && !((content.size() - 512) % 0x4000);
     const bool needs32x = ext == "32x" || header32x(0) || header32x(1) || (smdLayout && header32x(2));
     const bool mdCartridge = ext != "sms" && ext != "gg" && ext != "sg";
-    if (needs32x || (attach32x_ && mdCartridge)) {
+    if (needs32x || (x32Mode_ == ExpansionMode::Connected && mdCartridge)) {
         if (!api_->features || !(api_->features() & 1u)) {
             error = Localization::text(QStringLiteral("Это ядро ещё не поддерживает 32X."));
             return false;
         }
     }
-    if (attachCd_ && mdCartridge && content.size() > 8 * 1024 * 1024) {
+    if (cdMode_ == ExpansionMode::Connected && mdCartridge && content.size() > 8 * 1024 * 1024) {
         error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
         return false;
     }
-    if (attachCd_ && mdCartridge &&
+    if (cdMode_ == ExpansionMode::Connected && mdCartridge &&
         !checkDiscBios(DiscImage{}, error, DataFolders::path(dataPath_,QStringLiteral("bios")))) return false;
     // Preserve the previous game's battery saves before switching content.
     if (loaded_ && !flushSaveRam(error)) return false;
@@ -675,9 +675,17 @@ bool LibretroHost::hasCdHardware() const {
     return loaded_ && (isCd() || (api_->system_hw && api_->system_hw() == 0x84) ||
                       (api_->paprium_cd_active && api_->paprium_cd_active()));
 }
-void LibretroHost::setExpansionDevices(bool cd, bool x32) {
+void LibretroHost::setExpansionDevices(ExpansionMode cd, ExpansionMode x32) {
     // Settings are pending until the next load or power cycle.
-    attachCd_ = cd; attach32x_ = x32;
+    cdMode_ = cd; x32Mode_ = x32;
+}
+static const char* attachmentOption(ExpansionMode mode, const char* connected, const char* disconnected) {
+    switch (mode) {
+    case ExpansionMode::Connected: return connected;
+    case ExpansionMode::Disconnected: return disconnected;
+    case ExpansionMode::Auto: return "auto";
+    }
+    return "auto";
 }
 bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     // Match the native CD/32X BIOS and BRAM buffers, including the longest
@@ -708,10 +716,10 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     if (movieConfigurationActive_ || !applyPending) return true;
     if (!setCoreOption(ym2612Key, ym2612Model(nukedYm2612_), error)) return false;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
-    if (!setCoreOption("genesis_plus_gx_add_on", attachCd_ ? "sega/mega cd" : "auto", error)) return false;
+    if (!setCoreOption("genesis_plus_gx_add_on", attachmentOption(cdMode_, "sega/mega cd", "none"), error)) return false;
     if (variableValues_.count("genesis_plus_gx_32x_add_on"))
-        return setCoreOption("genesis_plus_gx_32x_add_on", attach32x_ ? "connected" : "auto", error);
-    if (!attach32x_) return true;
+        return setCoreOption("genesis_plus_gx_32x_add_on", attachmentOption(x32Mode_, "connected", "disconnected"), error);
+    if (x32Mode_ != ExpansionMode::Connected) return true;
     error = Localization::text(QStringLiteral("Это ядро не поддерживает подключение 32X к обычным играм."));
     return false;
 }
@@ -862,7 +870,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         const auto value = variables_.find(key);
         return value != variables_.end() && (value->second == "connected" || value->second == "sega/mega cd");
     };
-    const bool targetCd = wantedOption("genesis_plus_gx_add_on", attachCd_);
+    const bool targetCd = wantedOption("genesis_plus_gx_add_on", cdMode_ == ExpansionMode::Connected);
     if (targetCd && mdHardware && !isCd()) {
         if (content_.size() > 8 * 1024 * 1024) {
             error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));

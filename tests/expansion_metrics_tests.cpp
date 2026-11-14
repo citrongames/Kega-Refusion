@@ -42,7 +42,8 @@ int main(int argc,char**argv) {
         using Memory=void*(*)(unsigned);auto memory=reinterpret_cast<Memory>(lib.resolve("retro_get_memory_data"));
         check(hardware && features && memory,"inspection exports");
         for(int mode=0;mode<4;++mode) {
-            host.setExpansionDevices(mode&1,mode&2);
+            host.setExpansionDevices((mode & 1) ? ExpansionMode::Connected : ExpansionMode::Auto,
+                                     (mode & 2) ? ExpansionMode::Connected : ExpansionMode::Auto);
             if(!host.load(polling,error)) throw std::runtime_error(error.toStdString());
             check(host.supportsInputPollMetrics(),"input telemetry API");
             check((hardware()==0x84)==bool(mode&1),"CD mode1 presence");
@@ -55,10 +56,14 @@ int main(int argc,char**argv) {
             const auto state=host.captureMovieState();check(!state.isEmpty(),"snapshot with hardware");
             check(host.restoreMovieState(state,error),"restore hardware snapshot");
             check(host.saveState(0,error),"save quick state with attachment topology");
-            host.setExpansionDevices(false,false);
+            host.setExpansionDevices(ExpansionMode::Disconnected, ExpansionMode::Disconnected);
             check(bool(features()&2)==bool(mode&2),"setting must not reset running session");
             check(host.hardReset(error),"apply pending hardware on power reset");
-            check(hardware()!=0x84 && !(features()&2),"power reset applies automatic attachments");
+            check(hardware()!=0x84 && !(features()&2),"power reset disconnects both optional devices");
+            const auto options = host.movieConfiguration().value("options").toObject();
+            check(options.value("genesis_plus_gx_add_on").toString() == "none" &&
+                  options.value("genesis_plus_gx_32x_add_on").toString() == "disconnected",
+                  "recordings distinguish disconnected from automatic");
             if(mode) check(!host.loadState(0,error),"quick state must reject incompatible attachment topology");
             check(host.prepareMovie(configuration,error),"recording restores its own attachment options");
             check((hardware()==0x84)==bool(mode&1) && bool(features()&2)==bool(mode&2),"recorded hardware topology");

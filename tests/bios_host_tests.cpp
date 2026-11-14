@@ -182,7 +182,7 @@ Identity exerciseCd(const QString& corePath, const QString& dataPath, const QStr
 
 Identity exercise32x(const QString& corePath, const QString& dataPath, const QString& cartridgePath, bool restoreExisting) {
     LibretroHost host(corePath, dataPath);
-    host.setExpansionDevices(false, true);
+    host.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Connected);
     QString error;
     if (!host.load(cartridgePath, error))
         throw std::runtime_error((QStringLiteral("32X cartridge load: ") + error).toStdString());
@@ -216,7 +216,7 @@ void verifyMixedBiosGuards(const QString& corePath, const QString& dataPath,
     QByteArray networkIdentity;
     {
         LibretroHost original(corePath, dataPath);
-        original.setExpansionDevices(false, true);
+        original.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Connected);
         QString error;
         require(original.load(cartridgePath, error), "cannot load 32X with original BIOS");
         originalConfig = original.movieConfiguration();
@@ -226,7 +226,7 @@ void verifyMixedBiosGuards(const QString& corePath, const QString& dataPath,
     require(QFile::remove(QDir(biosPath).filePath(QStringLiteral("renamed_32x_master.rom"))),
             "cannot isolate a missing Master SH2 BIOS");
     LibretroHost mixed(corePath, dataPath);
-    mixed.setExpansionDevices(false, true);
+    mixed.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Connected);
     QString error;
     require(mixed.load(cartridgePath, error), "mixed original/built-in 32X BIOS failed to load");
     const auto mixedConfig = mixed.movieConfiguration();
@@ -329,7 +329,7 @@ void verifyConfiguredBios(const QString& corePath, const QString& source, const 
     requireOnlyRenamedBios(second);
 
     host.unload();
-    host.setExpansionDevices(false,true);
+    host.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Connected);
     require(host.load(cartridgePath,error),qPrintable(error)); // Short folder baseline.
     const auto original32x=host.captureMovieState();
     const auto identity32x=snapshot(host);

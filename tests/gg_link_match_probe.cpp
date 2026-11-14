@@ -58,7 +58,7 @@ static int participant(QApplication& app,const QStringList& args) {
     QTemporaryDir data;require(data.isValid(),"Cannot create session data directory");
     QSettings settings(data.filePath("settings.ini"),QSettings::IniFormat);
     settings.setValue("netplay/nickname",hosting?"GG match host":"GG match guest");
-    EmulationSession session(core,data.path());session.setExpansionDevices(false,false);session.setRewindEnabled(false);
+    EmulationSession session(core,data.path());session.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Auto);session.setRewindEnabled(false);
     NetplayController controller(session,data.path(),settings,nullptr);
     int phase=0,frames=0,snapshots=0,resyncs=0,combined=0;quint64 position=0;
     bool created=false,paused=false,finished=false;QImage latest;QElapsedTimer elapsed;elapsed.start();
@@ -147,7 +147,7 @@ static int driver(const QStringList& args) {
     require(imageHash(first)==imageHash(preview.copy(0,0,160,144))&&imageHash(second)==imageHash(preview.copy(0,144,160,144)),"Host/guest pictures disagree with their authenticated role-specific snapshot");
     const auto jsonSize=qFromBigEndian<quint32>(snapshot.constData());
     const auto state=LibretroHost::unpackNetworkState(snapshot.mid(4+jsonSize));require(!state.isEmpty(),"Invalid compressed final state");
-    QTemporaryDir data;LibretroHost verify(core,data.path());verify.setExpansionDevices(false,false);QString error;
+    QTemporaryDir data;LibretroHost verify(core,data.path());verify.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Auto);QString error;
     require(verify.setLinkCableEnabled(true,error),error);require(verify.load(rom,error),error);require(verify.restoreNetworkState(state,error),error);
     QJsonArray scores;
     // Columns' reference symbols identify RESULT/RIVAL_RESULT at GG RAM C6CC/C6CD.

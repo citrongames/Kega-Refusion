@@ -1,4 +1,5 @@
 #pragma once
+#include "ExpansionMode.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -91,7 +92,7 @@ public:
     void setRunTimerEnabled(bool enabled);
     void setPerformanceMetricsEnabled(bool enabled);
     void setGameFpsEnabled(bool enabled);
-    void setExpansionDevices(bool cd, bool x32);
+    void setExpansionDevices(ExpansionMode cd, ExpansionMode x32);
     void requestSlotStatus(int selected);
     void configureAchievements(bool enabled, bool hardcore);
     void loginAchievements(QString user, QString password);

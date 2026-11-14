@@ -1,0 +1,45 @@
+--- a/core/cd_hw/cdd.c
++++ b/core/cd_hw/cdd.c
+@@ -690,6 +690,9 @@
+ 
+       /* close file */
+       cdStreamClose(fd);
++
++      /* Cartridge audio is optional; an explicitly opened disc still mounts. */
++      if (config.add_on == HW_ADDON_NONE) return 0;
+     }
+ 
+     /* automatically try to mount CD associated CUE file */
+--- a/libretro/libretro_core_options.h
++++ b/libretro/libretro_core_options.h
+@@ -218,6 +218,7 @@
+       {
+          { "auto", "Automatic" },
+          { "connected", "Connected" },
++         { "disconnected", "Disconnected" },
+          { NULL, NULL },
+       },
+       "auto"
+--- a/core/input_hw/input.c
++++ b/core/input_hw/input.c
+@@ -531,6 +531,9 @@
+ {
+   uint32 h;
+   if(memcmp(p,"KRINP001",8))return 1;
++  /* MD+ and plain cartridges have different native state layouts. */
++  if (!memcmp(p+90,"KRMD",4) && (system_hw == SYSTEM_MD) &&
++      p[94] != !!(cart.special & HW_MEGASD)) return 0;
+   h=input_kr_hash(p);p+=KR_INPUT_STATE_SIZE-4;
+   return h==((uint32)p[0]|((uint32)p[1]<<8)|((uint32)p[2]<<16)|((uint32)p[3]<<24));
+ }
+@@ -546,6 +549,10 @@
+   {
+     memcpy(p+90,"KRSMS001",8);p[98]=(uint8)system_sms_pause_state();
+   }
++  else if (system_hw == SYSTEM_MD)
++  {
++    memcpy(p+90,"KRMD",4);p[94]=!!(cart.special & HW_MEGASD);
++  }
+   h=input_kr_hash(p);for(i=0;i<4;++i)p[KR_INPUT_STATE_SIZE-4+i]=(uint8)(h>>(i*8));
+ }
+ void input_kr_load(const uint8 *p)

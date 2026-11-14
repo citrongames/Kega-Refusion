@@ -163,7 +163,7 @@ QByteArray makeSmsRegionFixture() {
 void smsRegionRecording(const QString& core) {
     QTemporaryDir temp;require(temp.isValid(),"SMS movie temp failed");QString error;
     const auto rom=makeSmsRegionFixture();const QString path=temp.filePath("renamed-original-fixture.sms");writeFile(path,rom);
-    LibretroHost host(core,temp.filePath("data"));host.setExpansionDevices(false,false);
+    LibretroHost host(core,temp.filePath("data"));host.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Auto);
     require(host.load(path,error),qPrintable(error));host.runFrame();
     require(host.isMasterSystem()&&std::abs(host.fps()-50.0)<1.0,"SMS region fixture did not select PAL AUTO");
     require(host.setRegion(2,error)&&host.hardReset(error),qPrintable(error));host.runFrame();
