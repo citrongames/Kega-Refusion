@@ -33,6 +33,7 @@ These are evidence records, not a claim that every listed game has been complete
 
 | Area | Main reports |
 |---|---|
+| MegaLD / Sega PAC | [Deferred hardware and gameplay checks](megald-follow-up.md) |
 | Mega Drive unlicensed games | [Per-ROM review](pirate-rom-review.txt), [machine-readable ledger](pirate-rom-review.json), [mapper audit](pirate-mapper-audit.txt) |
 | Master System | [Overall review](sms-rom-review.txt), [pirate games](sms-pirate-review.txt), [homebrew](sms-homebrew-review.txt), [Codemasters](sms-codemasters-audit.txt) |
 | Master System PAL detection | [Region catalog](sms-region-catalog.json), [validation](sms-region-validation.json) |
