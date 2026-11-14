@@ -1,0 +1,15 @@
+Backport Genesis Plus GX 29ba0a882fb81e129d5d837293a3e08fe89f400b.
+
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -2546,8 +2546,8 @@
+ 
+ static unsigned int vdp_68k_data_r_m4(void)
+ {
+-  /* VRAM address (interleaved format) */
+-  int index = ((addr << 1) & 0x3FC) | ((addr & 0x200) >> 8) | (addr & 0x3C00);
++  /* VRAM address */
++  int index = addr & 0x3FFE;
+ 
+   /* Clear pending flag */
+   pending = 0;
