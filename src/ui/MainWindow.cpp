@@ -1329,8 +1329,8 @@ void MainWindow::buildMenus() {
     connect(aboutAction, &QAction::triggered, this, [this] {
         QMessageBox about(QMessageBox::Information, Localization::text(QStringLiteral("О Kega Refusion")),
             Localization::text(QStringLiteral("<b>Kega Refusion</b><br>Компактный эмулятор на базе Genesis Plus GX (Libretro)."
-            "<br><br>Игры: MD, GEN, BIN, SMD, SMS, GG, SG, 68K и Sega CD (CUE, ISO, CHD, M3U). "
-            "Поддерживаются архивы ZIP и 7z. Поддержка 32X — экспериментальная.")) +
+            "<br><br>Игры: MD, GEN, BIN, SMD, 32X, SMS, GG, SG, 68K.<br>Sega CD: CUE, ISO, CHD, M3U.<br>MegaLD: MMI.<br>"
+            "Поддерживаются архивы ZIP и 7z.")) +
             QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Версия: %1"))
                 .arg(QApplication::applicationVersion().toHtmlEscaped()) +
             QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Авторы:")) +
