@@ -1,0 +1,14 @@
+Backport Genesis Plus GX 865c02fd4cfb2ff30517bf7c133bde99105eb3e9.
+
+--- a/core/cd_hw/cdd.c
++++ b/core/cd_hw/cdd.c
+@@ -1830,6 +1830,9 @@ void cdd_update(void)
+   /* drive latency */
+   if (cdd.latency > 0)
+   {
++    /* keep the CDC decoder running while the drive is seeking */
++    cdc_decoder_update(0);
++
+     cdd.latency--;
+   }
+   else
