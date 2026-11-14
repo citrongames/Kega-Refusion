@@ -1,0 +1,165 @@
+--- a/core/sound/ym3438.c
++++ b/core/sound/ym3438.c
+@@ -184,40 +184,17 @@
+     108, 77, 71, 67, 62, 44, 8, 5
+ };
+ 
+-/* FM algorithm */
+-static const Bit32u fm_algorithm[4][6][8] = {
+-    {
+-        { 1, 1, 1, 1, 1, 1, 1, 1 }, /* OP1_0         */
+-        { 1, 1, 1, 1, 1, 1, 1, 1 }, /* OP1_1         */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* OP2           */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* Last operator */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* Last operator */
+-        { 0, 0, 0, 0, 0, 0, 0, 1 }  /* Out           */
+-    },
+-    {
+-        { 0, 1, 0, 0, 0, 1, 0, 0 }, /* OP1_0         */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* OP1_1         */
+-        { 1, 1, 1, 0, 0, 0, 0, 0 }, /* OP2           */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* Last operator */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* Last operator */
+-        { 0, 0, 0, 0, 0, 1, 1, 1 }  /* Out           */
+-    },
+-    {
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* OP1_0         */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* OP1_1         */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* OP2           */
+-        { 1, 0, 0, 1, 1, 1, 1, 0 }, /* Last operator */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* Last operator */
+-        { 0, 0, 0, 0, 1, 1, 1, 1 }  /* Out           */
+-    },
+-    {
+-        { 0, 0, 1, 0, 0, 1, 0, 0 }, /* OP1_0         */
+-        { 0, 0, 0, 0, 0, 0, 0, 0 }, /* OP1_1         */
+-        { 0, 0, 0, 1, 0, 0, 0, 0 }, /* OP2           */
+-        { 1, 1, 0, 1, 1, 0, 0, 0 }, /* Last operator */
+-        { 0, 0, 1, 0, 0, 0, 0, 0 }, /* Last operator */
+-        { 1, 1, 1, 1, 1, 1, 1, 1 }  /* Out           */
+-    }
++/* Inputs routed into each operator, indexed by operator and connection. */
++enum {
++    OP1_NOW = 1, OP1_PREV = 2, OP2_ROUTE = 4, LAST_BUS2 = 8, LAST_BUS1 = 16, OUT = 32
++};
++static const Bit8u fm_routes[4][8] = {
++    { OP1_NOW|OP1_PREV, OP1_NOW|OP1_PREV, OP1_NOW|OP1_PREV, OP1_NOW|OP1_PREV,
++      OP1_NOW|OP1_PREV, OP1_NOW|OP1_PREV, OP1_NOW|OP1_PREV, OP1_NOW|OP1_PREV|OUT },
++    { OP2_ROUTE, OP1_NOW|OP2_ROUTE, OP2_ROUTE, 0, 0, OP1_NOW|OUT, OUT, OUT },
++    { LAST_BUS2, 0, 0, LAST_BUS2, LAST_BUS2|OUT, LAST_BUS2|OUT, LAST_BUS2|OUT, OUT },
++    { LAST_BUS2|OUT, LAST_BUS2|OUT, OP1_NOW|LAST_BUS1|OUT, OP2_ROUTE|LAST_BUS2|OUT,
++      LAST_BUS2|OUT, OP1_NOW|OUT, OUT, OUT }
+ };
+ 
+ static Bit32u chip_type = ym3438_mode_readmode;
+@@ -474,24 +451,30 @@
+     Bit8u kcode = chip->pg_kcode;
+ 
+     fnum <<= 1;
+-    /* Apply LFO */
+-    if (lfo_l & 0x08)
+-    {
+-        lfo_l ^= 0x0f;
+-    }
+-    fm = (fnum_h >> pg_lfo_sh1[pms][lfo_l]) + (fnum_h >> pg_lfo_sh2[pms][lfo_l]);
+-    if (pms > 5)
+-    {
+-        fm <<= pms - 5;
+-    }
+-    fm >>= 2;
+-    if (lfo & 0x10)
+-    {
+-        fnum -= fm;
+-    }
+-    else
+-    {
+-        fnum += fm;
++    /* PMS zero produces no modulation for the chip 11-bit F-number: both
++     * shifts in row zero are 7 and fnum_h is below 128. Keep the original path
++     * for larger restored F-numbers as well as enabled PM sensitivity. */
++    if (pms || fnum_h >= 128)
++    {
++        /* Apply LFO */
++        if (lfo_l & 0x08)
++        {
++            lfo_l ^= 0x0f;
++        }
++        fm = (fnum_h >> pg_lfo_sh1[pms][lfo_l]) + (fnum_h >> pg_lfo_sh2[pms][lfo_l]);
++        if (pms > 5)
++        {
++            fm <<= pms - 5;
++        }
++        fm >>= 2;
++        if (lfo & 0x10)
++        {
++            fnum -= fm;
++        }
++        else
++        {
++            fnum += fm;
++        }
+     }
+     fnum &= 0xfff;
+ 
+@@ -857,29 +840,15 @@
+     Bit8u connect = chip->connect[channel];
+     Bit32u prevslot = (chip->cycles + 18) % 24;
+ 
+-    /* Calculate modulation */
+-    mod1 = mod2 = 0;
+-
+-    if (fm_algorithm[op][0][connect])
+-    {
+-        mod2 |= chip->fm_op1[channel][0];
+-    }
+-    if (fm_algorithm[op][1][connect])
+-    {
+-        mod1 |= chip->fm_op1[channel][1];
+-    }
+-    if (fm_algorithm[op][2][connect])
+-    {
+-        mod1 |= chip->fm_op2[channel];
+-    }
+-    if (fm_algorithm[op][3][connect])
+-    {
+-        mod2 |= chip->fm_out[prevslot];
+-    }
+-    if (fm_algorithm[op][4][connect])
+-    {
+-        mod1 |= chip->fm_out[prevslot];
+-    }
++    const Bit8u routes = fm_routes[op][connect];
++    const Bit16s previous = chip->fm_out[prevslot];
++
++    /* Each bus ORs its connected sources before the two buses are added. */
++    mod2 = (chip->fm_op1[channel][0] & -!!(routes & OP1_NOW))
++         | (previous & -!!(routes & LAST_BUS2));
++    mod1 = (chip->fm_op1[channel][1] & -!!(routes & OP1_PREV))
++         | (chip->fm_op2[channel] & -!!(routes & OP2_ROUTE))
++         | (previous & -!!(routes & LAST_BUS1));
+     mod = mod1 + mod2;
+     if (op == 0)
+     {
+@@ -923,7 +892,7 @@
+     {
+         acc = 0;
+     }
+-    if (fm_algorithm[op][5][chip->connect[channel]] && !test_dac)
++    if ((fm_routes[op][chip->connect[channel]] & OUT) && !test_dac)
+     {
+         add += chip->fm_out[slot] >> 5;
+     }
+@@ -1030,6 +999,13 @@
+ static void OPN2_FMGenerate(ym3438_t *chip)
+ {
+     Bit32u slot = (chip->cycles + 19) % 24;
++    /* At attenuation 13 << 8 the 13-bit exponential output always shifts
++     * to zero, even at the peak. Test mode can still drive its sign bit. */
++    if (chip->eg_out[slot] >= (13 << 6) && chip->eg_out[slot] <= 0x3ff && !chip->mode_test_21[4])
++    {
++        chip->fm_out[slot] = 0;
++        return;
++    }
+     /* Calculate phase */
+     Bit16u phase = (chip->fm_mod[slot] + (chip->pg_phase[slot] >> 10)) & 0x3ff;
+     Bit16u quarter;

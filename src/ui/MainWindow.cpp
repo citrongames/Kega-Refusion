@@ -2208,6 +2208,7 @@ void MainWindow::editSettings(int initialPage) {
 
     auto* sound = addPage(Localization::text(QStringLiteral("Звук")),
         Localization::text(QStringLiteral("Устройство воспроизведения звука игры.")));
+    sound->setRowWrapPolicy(QFormLayout::WrapLongRows);
     auto* settingsVolume = new QSlider(Qt::Horizontal, &dialog);
     settingsVolume->setObjectName(QStringLiteral("settingsMasterVolumeSlider"));
     settingsVolume->setRange(0, 100);
@@ -2273,8 +2274,12 @@ void MainWindow::editSettings(int initialPage) {
     });
     auto* ym2612Core = new QComboBox(&dialog);
     ym2612Core->setObjectName(QStringLiteral("ym2612Core"));
-    ym2612Core->addItem(QStringLiteral("MAME (YM2612)"), QStringLiteral("mame"));
-    ym2612Core->addItem(QStringLiteral("Nuked (YM2612)"), QStringLiteral("nuked"));
+    ym2612Core->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    ym2612Core->setMinimumContentsLength(36);
+    ym2612Core->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    ym2612Core->addItem(Localization::text(QStringLiteral("MAME — быстрее")), QStringLiteral("mame"));
+    ym2612Core->addItem(Localization::text(QStringLiteral("Nuked — потактовая точность, выше нагрузка на ЦП")),
+        QStringLiteral("nuked"));
     const QString selectedYm2612Core = settings_.value(QStringLiteral("audio/ym2612Core"),
         QStringLiteral("mame")).toString();
     ym2612Core->setCurrentIndex(selectedYm2612Core == QLatin1String("nuked") ? 1 : 0);

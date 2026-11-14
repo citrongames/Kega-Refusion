@@ -397,3 +397,9 @@ On Windows, the 0.25.0 helper installed the release ZIP in an isolated copy and 
 Compared the Linux core against the preceding 0.26.0 core on Sonic the Hedgehog 2 and Doom 32X. PCM, rendered pixels, Nuked state and native save states matched across cold boot, soft and hard reset, state-file replay and the return from fast-forward. Both cores loaded each other's saves and reproduced the recorded frames. The FM channel mask and gain test passed.
 
 On the same WSL CPU with 600 warm-up frames and 2,400 timed frames, drawing one frame in 32, Sonic 2 ran at 658–664 fps before and 701–704 fps after the change. Doom 32X ran at 331–335 fps before and 307–345 fps after. The 32X measurements did not establish a consistent speedup.
+
+## Nuked FM operators (2026-11-14)
+
+Sampled the unmodified Linux release core at 6e8d07a during fast-forward. OPN2_Clock accounted for 37.8% of samples in Doom 32X and 76.8% in Sonic 2. In Doom, operator waveform generation, modulation routing and channel accumulation accounted for 17%, 10% and 9% of chip time respectively. Generated SH-2 code alone accounted for 14.4% of total time. Inline locations were mapped using a debug object with identical machine code.
+
+On one pinned WSL CPU, two runs per version (600 warm-up and 2,000 timed frames, rendering one in 32) gave 342 to 356–357 fps in Doom and 705–709 to 752–759 fps in Sonic 2. A comparison over two million clocks in four modes found identical stereo outputs and chip state. Both games produced identical audio, video and native save states across normal play, fast-forward, resets and cross-version save/load.
