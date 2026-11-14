@@ -162,6 +162,11 @@ void testCd(const QString& corePath, const QString& biosSourcePath) {
     require(host.load(playlist, error), "generated CD playlist did not load");
     require(host.isCd() && host.discPaths().size() == 2 && host.discIndex() == 0 &&
             !host.discEjected(), "CD playlist did not register two discs");
+    // Exercise a save before the first rotation/scaling command. An idle
+    // GFX address must survive serialization and restore byte-for-byte.
+    const QByteArray bootState = host.serialize();
+    require(!bootState.isEmpty() && host.unserialize(bootState) && host.serialize() == bootState,
+            "early Sega CD state changed across an immediate restore");
     const QString playlistBrm = dataPath + "/saves/discs/scd_U.brm";
     requireBrmPath(corePath, playlistBrm);
     bool receivedAudio = false;

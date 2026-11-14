@@ -1,0 +1,34 @@
+--- a/core/cd_hw/gfx.c
++++ b/core/cd_hw/gfx.c
+@@ -432,10 +432,12 @@
+   save_param(&gfx.bufferOffset, sizeof(gfx.bufferOffset));
+   save_param(&gfx.bufferStart, sizeof(gfx.bufferStart));
+ 
+-  tmp32 = (uint8 *)(gfx.tracePtr) - scd.word_ram_2M;
++  /* Before the first stamp operation gfx_init clears both pointers.
++   * Offset zero is the portable on-disk representation for that state. */
++  tmp32 = gfx.tracePtr ? (uint32)((uint8 *)gfx.tracePtr - scd.word_ram_2M) : 0;
+   save_param(&tmp32, 4);
+ 
+-  tmp32 = (uint8 *)(gfx.mapPtr) - scd.word_ram_2M;
++  tmp32 = gfx.mapPtr ? (uint32)((uint8 *)gfx.mapPtr - scd.word_ram_2M) : 0;
+   save_param(&tmp32, 4);
+ 
+   return bufferptr;
+@@ -455,11 +457,14 @@
+   load_param(&gfx.bufferStart, sizeof(gfx.bufferStart));
+ 
+   load_param(&tmp32, 4);
+-  tmp32 &= 0x3fff8;
++  /* Old saves made before gfx_start contain process-dependent offsets.
++   * cyclesPerLine is zero only before the first operation. A real command
++   * initializes both addresses and always takes at least 48 cycles/line. */
++  tmp32 = gfx.cyclesPerLine ? (tmp32 & 0x3fff8) : 0;
+   gfx.tracePtr = (uint16 *)(scd.word_ram_2M + tmp32);
+ 
+   load_param(&tmp32, 4);
+-  tmp32 &= ~((1 << ((2*gfx.mapShift) + 1)) - 1) & 0x3ffff;
++  tmp32 = gfx.cyclesPerLine ? (tmp32 & ~((1u << ((2*gfx.mapShift) + 1)) - 1) & 0x3ffff) : 0;
+   gfx.mapPtr = (uint16 *)(scd.word_ram_2M + tmp32);
+ 
+   return bufferptr;

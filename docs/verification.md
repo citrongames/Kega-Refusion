@@ -413,3 +413,13 @@ On one WSL CPU, with 600 warm-up frames and the same 2,400 measured frames and i
 Doom matched the baseline frame, PCM and native state comparisons through restore, fast-forward and reset. In the short Night Trap (USA, Disc 1) CD32X run, video, PCM and cross-version replay matched. Four bytes in early Sega CD graphics save fields varied across independent processes on both the baseline and the optimized core, including the early hard-reset checkpoint.
 
 Two other cartridges were compared for 1,200 frames with input. Darxide (Europe, En/Fr/De/Es) ran at 49.70146 Hz PAL, from the Sega intro to a moving cockpit scene with HUD. Sangokushi IV (Japan) ran at 59.92274 Hz NTSC, from its animated intro to the Koei title screen. Each matched all captured frames and PCM, sampled states and the final raw state. These scenes cover startup and presentation; player control was not separately confirmed.
+
+## Sega CD graphics state before the first stamp operation (2026-11-15)
+
+Night Trap (USA, Disc 1, CD32X) on 0906c0f produced different raw snapshots in two Linux processes after startup and hard reset. The four differing bytes were the upper halves of two 32-bit Word RAM offsets. The original serializer subtracted the host RAM base from null trace-vector and stamp-map pointers. The fixed writer encodes zero for unset pointers; the reader normalizes old offsets only before the first graphics command. The two fields keep their original widths.
+
+Two independent corrected processes matched all PCM, video and full native state hashes through 600 cold-start and 120 post-reset frames. Old native and .krs saves from frames 0, 8 and 120 replayed for 180 frames. An input recording made on the old build played identically in two corrected processes, including resumes from frames 8 and 120. The generated-disc regression also fails on the old core and passes on the fix.
+
+A controlled comparison using the real network snapshot API found identical emulated RAM digests before and after normalizing the unused pointers. On the old build the serialized snapshot SHA changed; on the fixed build the entire snapshot matched. GGPO does not compare that SHA between peers to detect gameplay divergence. This was a snapshot API comparison, not a two-machine session.
+
+Sonic CD (Europe, PAL) also matched with initialized graphics and when restoring an active stamp operation across core versions. In the cold native-restore then file-restore sequence, the first presented image differs from fresh power-on on both builds. PCM and native state match throughout, and subsequent images match.
