@@ -44,16 +44,32 @@ Regenerate and replace `update.json` on the draft after any body or binary chang
 
 ## Release body
 
-The application displays the published GitHub release's `body` as its release notes. Write that body for users: two to five short Markdown bullets describing the changes in this version. Keep the body readable in both the application and GitHub. The application window and GitHub already show the version. Do not repeat it as a body heading or repeat the project overview, downloads, checksum/source notices, full feature list, build instructions or large tables. Include an upgrade action or limitation only when it matters for this version. Describe completed and verified behavior, with the scope of validation stated accurately.
+Write the release body in English. Group short bullets under plain section names on their own lines. The updater displays plain text, so these labels also read cleanly in older versions. Leave a blank line before each list.
 
-Use this template, replacing the placeholders and removing unused lines:
+- **Added** covers new capabilities.
+- **Improved** covers improvements to existing capabilities.
+- **Changed** is optional. Use it when an existing default, control or workflow changes.
+- **Fixed** covers corrected behavior.
+
+Omit empty sections. Give each independently noticeable change its own bullet, even when several affect the same system. A short example or a required user action can stay with the change it explains. Keep the notes focused on what changed since the previous published tag. The version and downloads are already shown separately.
 
 ```markdown
-- [Main change and its practical effect.]
-- [Another completed change or fix.]
-- [Relevant compatibility improvement or limitation.]
+Added
 
-[Indispensable upgrade action, only if required.]
+- [One new capability.]
+
+Improved
+
+- [One improvement.]
+
+Changed
+
+- [One change to an existing workflow.]
+
+Fixed
+
+- [One corrected problem.]
+- [Another corrected problem.]
 ```
 
-Keep verification evidence in the repository's [verification record](verification.md); include a short validation sentence in the release body only when it helps users assess a material compatibility claim. Review the final rendered body and attached files before publishing.
+Keep verification evidence in the repository's [verification record](verification.md). Check the body against the outgoing tag and review the notes and assets before publishing.
