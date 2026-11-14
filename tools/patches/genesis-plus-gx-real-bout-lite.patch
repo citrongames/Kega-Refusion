@@ -1,0 +1,12 @@
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -1054,7 +1054,8 @@
+   /* detect specific mappers */
+   else if (strstr(rominfo.international,"DEMONS OF ASTEBORG") ||
+            strstr(rominfo.international,"ASTEBROS") ||
+-           strstr(rominfo.domestic,"DAEMON CLAW"))
++           strstr(rominfo.domestic,"DAEMON CLAW") ||
++           strstr(rominfo.domestic,"Real Bout Fatal Fury Genesis Lite"))
+   {
+     /* default SSF2+SRAM mapper (fixes patched versions incorrectly indicating Everdrive extended SSF mapper in ROM header) */ 
+     cart.hw.time_w = default_time_w;
