@@ -81,8 +81,9 @@ normal_patches=(
   "$root/tools/patches/genesis-plus-gx-word-ram-mirror-bytes.patch"
   "$root/tools/patches/genesis-plus-gx-scd-timer-period.patch"
   "$root/tools/patches/genesis-plus-gx-cdc-drive-latency.patch"
-  "$root/tools/patches/genesis-plus-gx-mode4-68k-vram-read.patch")
-normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch .kegarefusion-umkt-tracks-applied.patch .kegarefusion-kaiserwave-applied.patch .kegarefusion-yx5200-stream-applied.patch .kegarefusion-sprite-hint-applied.patch .kegarefusion-32x-bootstrap-applied.patch .kegarefusion-32x-acclaim-eeprom-applied.patch .kegarefusion-bram-paths-applied.patch .kegarefusion-sms-pause-state-applied.patch .kegarefusion-music-rewind-applied.patch .kegarefusion-cd-state-rewind-applied.patch .kegarefusion-rewind-audio-applied.patch .kegarefusion-rewind-raster-applied.patch .kegarefusion-rewind-video-applied.patch .kegarefusion-md-region-applied.patch .kegarefusion-ym2612-state-backend-applied.patch .kegarefusion-gg-link-applied.patch .kegarefusion-real-bout-lite-applied.patch .kegarefusion-sms-irata-applied.patch .kegarefusion-sms-korean-windows-applied.patch .kegarefusion-sms-korean-alias-applied.patch .kegarefusion-optional-addons-applied.patch .kegarefusion-megasd-bounds-applied.patch .kegarefusion-vdp-z80-ogg-applied.patch .kegarefusion-word-ram-mirror-bytes-applied.patch .kegarefusion-scd-timer-period-applied.patch .kegarefusion-cdc-drive-latency-applied.patch .kegarefusion-mode4-68k-vram-read-applied.patch)
+  "$root/tools/patches/genesis-plus-gx-mode4-68k-vram-read.patch"
+  "$root/tools/patches/genesis-plus-gx-megald.patch")
+normal_receipts=(.kegarefusion-32x-render-hooks-applied.patch .kegarefusion-32x-libretro-applied.patch .kegarefusion-paprium-applied.patch .kegarefusion-expansions-metrics-applied.patch .kegarefusion-network-state-applied.patch .kegarefusion-checksum-guard-applied.patch .kegarefusion-vmv-audio-applied.patch .kegarefusion-poker-overdump-applied.patch .kegarefusion-aq-microwire-applied.patch .kegarefusion-sonic6-applied.patch .kegarefusion-svp-bus-guard-applied.patch .kegarefusion-sdk99-hardware-applied.patch .kegarefusion-barver-hardware-applied.patch .kegarefusion-poker-family-applied.patch .kegarefusion-sms-region-applied.patch .kegarefusion-sms-codemasters-applied.patch .kegarefusion-link-cable-applied.patch .kegarefusion-link-audio-state-applied.patch .kegarefusion-debug-video-applied.patch .kegarefusion-debug-audio-applied.patch .kegarefusion-multitap-applied.patch .kegarefusion-controller-devices-applied.patch .kegarefusion-recording-video-applied.patch .kegarefusion-large-ssf-applied.patch .kegarefusion-umkt-tracks-applied.patch .kegarefusion-kaiserwave-applied.patch .kegarefusion-yx5200-stream-applied.patch .kegarefusion-sprite-hint-applied.patch .kegarefusion-32x-bootstrap-applied.patch .kegarefusion-32x-acclaim-eeprom-applied.patch .kegarefusion-bram-paths-applied.patch .kegarefusion-sms-pause-state-applied.patch .kegarefusion-music-rewind-applied.patch .kegarefusion-cd-state-rewind-applied.patch .kegarefusion-rewind-audio-applied.patch .kegarefusion-rewind-raster-applied.patch .kegarefusion-rewind-video-applied.patch .kegarefusion-md-region-applied.patch .kegarefusion-ym2612-state-backend-applied.patch .kegarefusion-gg-link-applied.patch .kegarefusion-real-bout-lite-applied.patch .kegarefusion-sms-irata-applied.patch .kegarefusion-sms-korean-windows-applied.patch .kegarefusion-sms-korean-alias-applied.patch .kegarefusion-optional-addons-applied.patch .kegarefusion-megasd-bounds-applied.patch .kegarefusion-vdp-z80-ogg-applied.patch .kegarefusion-word-ram-mirror-bytes-applied.patch .kegarefusion-scd-timer-period-applied.patch .kegarefusion-cdc-drive-latency-applied.patch .kegarefusion-mode4-68k-vram-read-applied.patch .kegarefusion-megald-applied.patch)
 required_patches=("$battery_patch" "$x32_patch")
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   required_patches+=("${normal_patches[@]}")
@@ -92,7 +93,7 @@ for patch in "${required_patches[@]}"; do
 done
 required_sources=(src/core32x third_party/picodrive32x third_party/blargg)
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
-  required_sources+=(src/paprium src/yx5200)
+  required_sources+=(src/paprium src/yx5200 src/megald)
 fi
 for source in "${required_sources[@]}"; do
   [[ -d "$root/$source" ]] || { echo "Required source directory is missing: $source" >&2; exit 1; }
@@ -255,6 +256,7 @@ copy_tree "$root/third_party/blargg" "$checkout/third_party/blargg"
 if [[ "${KEGA32X_FOUNDATION_ONLY:-0}" != 1 ]]; then
   copy_tree "$root/src/paprium" "$checkout/core/kegapaprium"
   copy_tree "$root/src/yx5200" "$checkout/core/kegayx5200"
+  copy_tree "$root/src/megald" "$checkout/core/megald"
 fi
 
 python3 - "$checkout" "$use_drc" <<'PY'
@@ -273,6 +275,8 @@ GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/audio
 GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/video
 GENPLUS_SRC_DIR += $(CORE_DIR)/core/kega32x/gpx
 GENPLUS_SRC_DIR += $(CORE_DIR)/core/kegapaprium
+GENPLUS_SRC_DIR += $(CORE_DIR)/core/megald $(CORE_DIR)/core/megald/player $(CORE_DIR)/core/megald/media
+LDFLAGS += -pthread
 INCFLAGS += -I$(CORE_DIR)/third_party -I$(CORE_DIR)/third_party/picodrive32x
 INCFLAGS += -I$(CORE_DIR)/core/kega32x/sh2
 INCFLAGS += -I$(LIBRETRO_COMM_DIR)/include/streams

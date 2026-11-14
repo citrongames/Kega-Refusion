@@ -93,6 +93,15 @@ int main(int argc, char** argv) {
 
     const QByteArray rom(150000, 'R');
     put(directory.filePath("media/game.md"), rom);
+    put(directory.filePath("media/local.MMI"),QByteArray(512,char(0x55)));
+    check(!NetFileTransfer::prepare(directory.filePath("media/local.MMI"),{},&error) && error.contains("local-only"),
+          "MMI must be rejected before network hashing/transfer");
+    put(directory.filePath("media/mmi-reference.cue"),"FILE \"local.MMI\" BINARY\nTRACK 01 MODE1/2352\nINDEX 01 00:00:00\n");
+    check(!NetFileTransfer::prepare(directory.filePath("media/mmi-reference.cue"),{},&error) && error.contains("local-only"),
+          "MMI CUE reference must be rejected before network hashing/transfer");
+    const QString mmiArchive=directory.filePath("media/laser.zip");
+    put(mmiArchive,storedRomArchive("local.mmi",QByteArray(512,char(0x55))));
+    check(RomArchive::list(mmiArchive,&error).isEmpty() && !error.isEmpty(),"MMI archive must be rejected before extraction");
     auto cartridge = NetFileTransfer::prepare(directory.filePath("media/game.md"), {}, &error);
     check(bool(cartridge), "prepare cartridge");
     const QByteArray manifest = cartridge->manifest.toBytes();

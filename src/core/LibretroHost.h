@@ -32,6 +32,7 @@ public:
               const RomArchive::Entry* archiveEntry = nullptr);
     void unload();
     bool isCd() const { return loaded_ && !discs_.isEmpty(); }
+    bool isMegaLd() const { return loaded_ && megaLd_; }
     // A loaded game keeps one storage snapshot through resets and settings edits.
     QString dataFolder(const QString& category) const;
     QStringList discPaths() const;
@@ -218,6 +219,8 @@ private:
     void clearCoreCheats();
     void applyControllerPorts(bool force = false);
     bool loadCd(const QString& path, QString& error);
+    bool loadMegaLd(const QString& path, QString& error);
+    void setMegaLdIdentity();
     bool checkDiscBios(const DiscImage& image, QString& error, const QString& biosDirectory = {}) const;
     bool registerDiscs(QString& error);
     bool refreshDiscFiles(QString& error);
@@ -266,6 +269,9 @@ private:
     QVector<DiscImage> discs_;
     int discIndex_ = 0;
     bool contentInfoActive_ = false;
+    bool megaLd_ = false;
+    int megaLdRegion_ = 0;
+    QByteArray megaLdMediaIdentity_;
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     QByteArray localBlarggFilter_ = "disabled";
     bool localGameGearLcd_ = false;

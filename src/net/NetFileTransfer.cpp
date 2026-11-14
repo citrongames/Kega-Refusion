@@ -47,13 +47,13 @@ QByteArray canonical(const Transfer::Manifest& manifest) {
 }
 bool validManifest(const Transfer::Manifest& manifest, QString* error) {
     if (manifest.files.isEmpty() || manifest.files.size() > Transfer::MaxFiles ||
-        !safeName(manifest.entry) || manifest.id.size() != 32) {
+        !safeName(manifest.entry) || QFileInfo(manifest.entry).suffix() == "mmi" || manifest.id.size() != 32) {
         fail(error, "Invalid transfer manifest"); return false;
     }
     qint64 total = 0;
     QSet<QString> names;
     for (const auto& file : manifest.files) {
-        if (!safeName(file.name) || names.contains(file.name) || file.size <= 0 ||
+        if (!safeName(file.name) || QFileInfo(file.name).suffix() == "mmi" || names.contains(file.name) || file.size <= 0 ||
             file.size > Transfer::MaxFileSize || file.sha256.size() != 32 ||
             total > Transfer::MaxTotalSize - file.size) {
             fail(error, "Invalid transfer file list"); return false;
@@ -137,6 +137,9 @@ bool addMemory(Transfer::Prepared* output, const QString& name,
 }
 bool addDisk(Transfer::Prepared* output, const QString& name,
              const QString& path, QString* error) {
+    if (QFileInfo(path).suffix().compare("mmi",Qt::CaseInsensitive)==0) {
+        fail(error, "MegaLD MMI images are local-only and cannot be transferred"); return false;
+    }
     if (!safeName(name) || output->sources.size() >= Transfer::MaxFiles ||
         !pathIsSafe(path, output->sourceRoot, error)) {
         if (output->sources.size() >= Transfer::MaxFiles) fail(error, "Too many media files");
@@ -550,6 +553,9 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
     Prepared result;
     result.cancelled = cancelled;
     const QFileInfo selected(sourcePath);
+    if (selected.suffix().compare("mmi",Qt::CaseInsensitive)==0) {
+        fail(error, "MegaLD MMI images are local-only and cannot be transferred"); return std::nullopt;
+    }
     if (!selected.isFile() || selected.isSymLink() || QFileInfo(selected.absolutePath()).isSymLink()) {
         fail(error, "Selected media is missing or is a symlink"); return std::nullopt;
     }

@@ -1,0 +1,246 @@
+--- a/core/cd_hw/cdd.c
++++ b/core/cd_hw/cdd.c
+@@ -36,6 +36,7 @@
+  *
+  ****************************************************************************************/
+ #include "shared.h"
++#include "megald/integration.h"
+ #include "megasd.h"
+ 
+ extern int8 audio_hard_disable;
+@@ -438,6 +439,9 @@
+ 
+   /* first unmount any loaded disc */
+   cdd_unload();
++
++  const char *suffix = strrchr(filename, '.');
++  if (suffix && !strcasecmp(suffix, ".mmi")) return kr_megald_mount(filename, header);
+ 
+   /* open file */
+   fd = cdStreamOpen(filename);
+@@ -1353,6 +1357,7 @@
+ 
+ void cdd_unload(void)
+ {
++  if (kr_megald_active) kr_megald_close();
+   achievement_header_valid = 0;
+   if (cdd.loaded)
+   {
+@@ -1413,6 +1418,7 @@
+ 
+ void cdd_read_data(uint8 *dst, uint8 *subheader)
+ {
++  if (kr_megald_active) { kr_megald_sector(dst); return; }
+   /* only allow reading (first) CD-ROM track sectors */
+   if (cdd.toc.tracks[cdd.index].type && (cdd.lba >= 0))
+   {
+@@ -1544,6 +1550,8 @@
+   int emitted_r = cdd_debug_out[1];
+   const int gain_l = (kega_debug_audio_mask & (UINT64_C(1) << 32)) ? 0 : kega_debug_audio_gain[32];
+   const int gain_r = (kega_debug_audio_mask & (UINT64_C(1) << 33)) ? 0 : kega_debug_audio_gain[33];
++
++  if (kr_megald_active) { kr_megald_audio(samples, cdd_debug_out, gain_l, gain_r); return; }
+ 
+   /* audio track playing ? */
+   if (!scd.regs[0x36>>1].byte.h && cdd.toc.tracks[cdd.index].fd)
+@@ -1902,6 +1910,7 @@
+     cdc_decoder_update(0);
+ 
+     cdd.latency--;
++    if (!cdd.latency && kr_megald_active) kr_megald_seek_complete();
+   }
+   else
+   {
+@@ -1947,6 +1956,9 @@
+         /* audio blocks are still sent to CDC as well as CD DAC/Fader */
+         cdc_decoder_update(0);
+       }
++
++      /* MegaLD owns the playback direction, stop points and field position. */
++      if (kr_megald_active) { kr_megald_advance(); return; }
+ 
+       /* read next sector */
+       cdd.lba++;
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -37,6 +37,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "megald/integration.h"
+ 
+ extern int8 reset_do_not_clear_buffers;
+ 
+@@ -1772,6 +1773,8 @@
+     }
+   }
+ 
++  if (kr_megald_active) kr_megald_map_bus();
++
+   /* Initialize CD hardware */
+   cdc_init();
+   gfx_init();
+@@ -1897,6 +1900,7 @@
+ 
+   /* Reset CD hardware */
+   cdd_reset();
++  if (kr_megald_active) kr_megald_reset(hard);
+   cdc_reset();
+   gfx_reset();
+   pcm_reset();
+@@ -2040,6 +2044,7 @@
+ 
+   /* CD Drive processor */
+   bufferptr += cdd_context_save(&state[bufferptr]);
++  if (kr_megald_active) bufferptr += kr_megald_save(&state[bufferptr]);
+ 
+   /* PCM chip */
+   bufferptr += pcm_context_save(&state[bufferptr]);
+@@ -2126,6 +2131,7 @@
+ 
+   /* CD Drive processor */
+   bufferptr += cdd_context_load(&state[bufferptr], version);
++  if (kr_megald_active) bufferptr += kr_megald_restore(&state[bufferptr]);
+ 
+   /* PCM chip */
+   bufferptr += pcm_context_load(&state[bufferptr]);
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -39,6 +39,7 @@
+ 
+ #include <ctype.h>
+ #include "shared.h"
++#include "megald/integration.h"
+ 
+ /*** ROM Information ***/
+ #define ROMCONSOLE    256
+@@ -1228,6 +1229,7 @@
+     }
+ 
+     /* save auto-detected region */
++    if (kr_megald_active) region_code = kr_megald_japanese() ? REGION_JAPAN_NTSC : REGION_USA;
+     rom_region = region_code;
+   }
+   else
+@@ -1237,6 +1239,7 @@
+   }
+   
+   /* force console region if requested */
++  if (kr_megald_active) { vdp_pal = 0; system_clock = MCLOCK_NTSC; return; }
+   if (config.region_detect == 1) region_code = REGION_USA;
+   else if (config.region_detect == 2) region_code = REGION_EUROPE;
+   else if (config.region_detect == 3) region_code = REGION_JAPAN_NTSC;
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -41,6 +41,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "megald/integration.h"
+ #include "link_state.h"
+ #include "md_ntsc.h"
+ #include "sms_ntsc.h"
+@@ -5278,6 +5279,10 @@
+     for (x = 0; x < width; ++x) dst[x] = ownership[x] & 1;
+   }
+ 
++#if defined(KEGAREFUSION_32X) && defined(USE_16BPP_RENDERING)
++  if (kr_megald_active && kr_megald_scanline(logical_line, line, src, (const uint16 *)output_palette, width)) return;
++#endif
++
+   /* Capture native palette pixels before NTSC or LCD processing only when
+      requested. The ordinary rendering path owns no capture buffer. */
+   if (kega_recording_bitmap && line >= 0 && line < bitmap.height &&
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -78,6 +78,7 @@
+ #include "libretro_core_options.h"
+ 
+ #include "shared.h"
++#include "megald/integration.h"
+ #include "scd.h"
+ #ifdef KEGAREFUSION_32X
+ #include "kega32x/gpx/bridge.h"
+@@ -2207,6 +2208,7 @@
+ #endif
+     }
+ 
++    if (kr_megald_active) config.ntsc = 0;
+     if (orig_value != config.ntsc)
+       update_viewports = true;
+   }
+@@ -3341,7 +3343,7 @@
+ #define GIT_VERSION ""
+ #endif
+    info->library_version = "v1.7.4" GIT_VERSION;
+-   info->valid_extensions = "m3u|mdx|md|smd|gen|bin|cue|iso|chd|bms|sms|gg|sg|68k|sgd|32x";
++   info->valid_extensions = "mmi|m3u|mdx|md|smd|gen|bin|cue|iso|chd|bms|sms|gg|sg|68k|sgd|32x";
+    info->block_extract = false;
+    info->need_fullpath = true;
+ }
+@@ -3872,7 +3874,7 @@
+ 
+ RETRO_API unsigned retro_kegarefusion_core_features(void)
+ {
+-   return kegarefusion_32x_features();
++   return kegarefusion_32x_features() | 0x40u;
+ }
+ 
+ /* Compatible rebuilds and optimizations keep this ABI unchanged.
+@@ -4276,9 +4278,13 @@
+    fill_pathname_join(MS_BIOS_EU, dir, "bios_E.sms",    sizeof(MS_BIOS_EU));
+    fill_pathname_join(MS_BIOS_US, dir, "bios_U.sms",    sizeof(MS_BIOS_US));
+    fill_pathname_join(MS_BIOS_JP, dir, "bios_J.sms",    sizeof(MS_BIOS_JP));
++   const bool pac = !strcasecmp(content_ext,"mmi");
++   static bool previous_pac;
++   if (pac != previous_pac) system_bios &= ~0x10;
++   previous_pac = pac;
+    fill_pathname_join(CD_BIOS_EU, dir, "bios_CD_E.bin", sizeof(CD_BIOS_EU));
+-   fill_pathname_join(CD_BIOS_US, dir, "bios_CD_U.bin", sizeof(CD_BIOS_US));
+-   fill_pathname_join(CD_BIOS_JP, dir, "bios_CD_J.bin", sizeof(CD_BIOS_JP));
++   fill_pathname_join(CD_BIOS_US, dir, pac ? "bios_LD_U.bin" : "bios_CD_U.bin", sizeof(CD_BIOS_US));
++   fill_pathname_join(CD_BIOS_JP, dir, pac ? "bios_LD_J.bin" : "bios_CD_J.bin", sizeof(CD_BIOS_JP));
+  
+    check_variables(true);
+ 
+@@ -4429,7 +4435,7 @@
+       kr_yx5200_set_directory(info_ext, info ? info->path : NULL);
+    system_reset();
+ #ifdef KEGAREFUSION_32X
+-   if (!kegarefusion_load_32x(dir, content_ext)) goto error;
++   if (!kr_megald_active && !kegarefusion_load_32x(dir, content_ext)) goto error;
+ #endif
+    is_running = false;
+ 
+@@ -4438,6 +4444,7 @@
+    else
+       environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, NULL);
+ 
++   if (kr_megald_active) config.ntsc = 0;
+    update_viewport();
+ 
+ #ifdef HAVE_OVERCLOCK
+@@ -4452,6 +4459,7 @@
+    return true;
+ 
+ error:
++   if (kr_megald_active) cdd_unload();
+    kr_yx5200_close();
+ #ifdef KEGAREFUSION_32X
+    kegarefusion_32x_detach();
+@@ -4479,6 +4487,7 @@
+ 
+ void retro_unload_game(void) 
+ {
++   if (kr_megald_active) cdd_unload();
+    kega_sprite_hint_release();
+    kega_recording_frame_ready = false;
+ #ifdef KEGAREFUSION_32X
+@@ -4847,6 +4856,7 @@
+    kega_recording_frame_ready = false;
+    if (system_hw == SYSTEM_MCD)
+    {
++      if (kr_megald_active) kr_megald_begin_field();
+       system_frame_scd(do_skip);
+    }
+    else if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)

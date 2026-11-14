@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "SegaCdBios.h"
+#include "SegaLdBios.h"
 #include "DataFolders.h"
 
 #include <QCryptographicHash>
@@ -64,6 +65,10 @@ const Region* knownRegion(const QByteArray& bytes) {
 const Region* identify(const QByteArray& bytes, QString& reason) {
     if (bytes.size() != biosSize) {
         reason = Localization::text(QStringLiteral("ожидается образ BIOS размером 131072 байта"));
+        return nullptr;
+    }
+    if (SegaLdBios::isPacImage(bytes)) {
+        reason = Localization::text(QStringLiteral("это BIOS MegaLD PAC-S, а не Sega CD"));
         return nullptr;
     }
     if (const Region* known = knownRegion(bytes)) return known;

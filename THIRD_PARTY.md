@@ -34,6 +34,13 @@ No game ROMs, Paprium soundtrack files, or console BIOS files are distributed. I
 
 `copy_core32x_notices` in `tools/package_notices.py` includes these materials in both Windows and Linux packages: `licenses/picodrive32x/COPYING`, `ORIGIN.txt` and `COMPONENT-NOTICES.txt`; `licenses/blargg/COPYING.LGPL-2.1` and `PROVENANCE.txt`; and `licenses/core32x-video/LICENSE` and `PROVENANCE.md`. `COMPONENT-NOTICES.txt` preserves the original source-header notices, including the separate Buchmueller, DRC authors and ares terms. The GPX bundled license remains included separately.
 
+## MegaLD source components
+
+- **Pioneer PD6103A player and Sega PAC behavior**: adapted from [ares](https://github.com/ares-emulator/ares) revision `0b928930af4cc59ed99e942996f0d3c815379388`, including `ares/md/mcd/megald.cpp` and `cdd.cpp`. Copyright (c) 2004–2025 ares team, Near et al. The complete ISC license is retained in `src/megald/player/LICENSE`; source headers identify the adaptation.
+- **QON / QOI2**: MIT-licensed headers from the same ares revision, by Roger Sanders (2025); QOI2 also credits Dominic Szablewski (2021). Full terms are in `src/megald/media/LICENSE.qon-qoi2`, with pinned source URLs and local decoder changes in `src/megald/media/UPSTREAM.md`. The MMI reader is original project code under GPL-3.0-or-later.
+
+Both platform packages include `licenses/megald/LICENSE.ISC`, `LICENSE.qon-qoi2` and `UPSTREAM.md` through `copy_megald_notices` in `tools/package_notices.py`. No MMI images or PAC BIOS files are bundled.
+
 ## RetroAchievements runtime
 
 - **rcheevos 12.5.0**: https://github.com/RetroAchievements/rcheevos at `1433173220a7eaede6a9ed7a18e94117be1821e0`. MIT license and copyright notices are retained in `third_party/rcheevos/LICENSE`. Unmodified public headers and runtime/API/hash/libretro-memory helper sources are vendored; `cmake/AchievementsDependencies.cmake` selects the linked subset. See `third_party/rcheevos/UPSTREAM.md`.

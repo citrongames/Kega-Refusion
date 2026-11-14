@@ -10,6 +10,8 @@
 #include "CartridgeLimits.h"
 #include "VideoFrameGeometry.h"
 #include "SegaCdBios.h"
+#include "SegaLdBios.h"
+#include "megald/media/media.h"
 #include "Sega32xBios.h"
 #include "CoreFileSystem.h"
 #include "StateFile.h"
@@ -34,7 +36,7 @@ thread_local LibretroHost* LibretroHost::active_ = nullptr;
 namespace {
 std::atomic<LibretroHost*> coreOwner{nullptr};
 constexpr const char* biosRoleNames[]{"bios_CD_J.bin", "bios_CD_U.bin", "bios_CD_E.bin",
-    "32X_G_BIOS.BIN", "32X_M_BIOS.BIN", "32X_S_BIOS.BIN"};
+    "32X_G_BIOS.BIN", "32X_M_BIOS.BIN", "32X_S_BIOS.BIN", "bios_LD_J.bin", "bios_LD_U.bin"};
 QString resolvedBiosPath(const QString& biosDirectory, const QString& role) {
     QString error;
     for (int i=0; i<3; ++i)
@@ -43,18 +45,21 @@ QString resolvedBiosPath(const QString& biosDirectory, const QString& role) {
         Sega32xBios::Piece::MasterSh2,Sega32xBios::Piece::SlaveSh2};
     for (int i=0; i<3; ++i)
         if (role == QLatin1String(biosRoleNames[i+3])) return Sega32xBios::resolveInDirectory(biosDirectory,pieces[i],error);
+    for (int i=0; i<2; ++i)
+        if (role == QLatin1String(biosRoleNames[i+6])) return SegaLdBios::resolveInDirectory(biosDirectory,i+1,error);
     return {};
 }
 // The fallback is part of 32X execution. Bump a role's version if its
 // built-in boot program or deterministic boot behavior changes.
 QString biosFingerprint(const QString& biosDirectory, const QString& role, bool cartridge) {
     int index = 0;
-    while (index < 6 && role != QLatin1String(biosRoleNames[index])) ++index;
-    if (index == 6) return {};
-    static constexpr qint64 sizes[]{131072,131072,131072,256,2048,1024};
+    while (index < 8 && role != QLatin1String(biosRoleNames[index])) ++index;
+    if (index == 8) return {};
+    static constexpr qint64 sizes[]{131072,131072,131072,256,2048,1024,131072,131072};
     static const QString fallback[]{QStringLiteral("missing"),QStringLiteral("missing"),
         QStringLiteral("missing"),QStringLiteral("builtin-32x-g-v1"),
-        QStringLiteral("builtin-32x-m-v1"),QStringLiteral("builtin-32x-s-v1")};
+        QStringLiteral("builtin-32x-m-v1"),QStringLiteral("builtin-32x-s-v1"),
+        QStringLiteral("missing"),QStringLiteral("missing")};
     QFile file(resolvedBiosPath(biosDirectory,role));
     if (file.fileName().isEmpty() || !file.open(QIODevice::ReadOnly))
         return index == 4 && cartridge ? QStringLiteral("builtin-32x-m-v2") : fallback[index];
@@ -420,6 +425,94 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
     return true;
 }
+void LibretroHost::setMegaLdIdentity() {
+    gameKey_ = readableSaveStem(QFileInfo(gamePath_).fileName());
+    legacyGameKey_.clear();
+    QByteArray identity = QByteArrayLiteral("KegaRefusion-MegaLD-v1:") + megaLdMediaIdentity_;
+    identity += biosFingerprint(dataFolder(QStringLiteral("bios")),QString::fromLatin1(biosRoleNames[megaLdRegion_+5]),false).toLatin1();
+    romHash_ = digest(identity);
+}
+bool LibretroHost::loadMegaLd(const QString& path, QString& error) {
+    const QFileInfo original(path);
+    const auto encoded = QDir::toNativeSeparators(original.absoluteFilePath()).toUtf8();
+    if (encoded.size() >= 4096) { error = Localization::text(QStringLiteral("Слишком длинный путь для ядра эмуляции: %1")).arg(path); return false; }
+    char detail[512]{};
+    std::unique_ptr<megald_media,decltype(&megald_media_close)> media(
+        megald_media_open(encoded.constData(),detail,sizeof(detail)),megald_media_close);
+    if (!media) { error = Localization::text(QStringLiteral("Не удалось открыть MegaLD: %1")).arg(QString::fromUtf8(detail)); return false; }
+    const auto* metadata = megald_media_get_info(media.get());
+    if (!metadata || std::strcmp(metadata->system,"MegaLD")) {
+        error = Localization::text(QStringLiteral("Этот MMI не является образом Sega MegaLD.")); return false;
+    }
+    const int region = !std::strcmp(metadata->region,"J") ? 1 : !std::strcmp(metadata->region,"U") ? 2 : 0;
+    if (!region) { error = Localization::text(QStringLiteral("Неподдерживаемый регион MegaLD.")); return false; }
+    if (SegaLdBios::resolveInDirectory(DataFolders::path(dataPath_,QStringLiteral("bios")),region,error).isEmpty()) return false;
+    // A bounded identity for states/recordings. Never read or hash a whole MMI.
+    QCryptographicHash identity(QCryptographicHash::Sha256);
+    identity.addData(QByteArrayLiteral("KRMOV-MEGALD1"));
+    identity.addData(QByteArray(metadata->name)); identity.addData(QByteArray(metadata->region));
+    identity.addData(QByteArray(metadata->catalog_id));
+    QFile source(original.absoluteFilePath());
+    if (!source.open(QIODevice::ReadOnly) || source.size() <= 0) {
+        error = Localization::text(QStringLiteral("Не удалось открыть игру: %1")).arg(source.errorString()); return false;
+    }
+    const qint64 size = source.size();
+    identity.addData(QByteArray::number(size));
+    constexpr qint64 sample = 64 * 1024;
+    const QByteArray first = source.read(std::min(size,sample));
+    if (first.size() != std::min(size,sample)) { error = Localization::text(QStringLiteral("Не удалось прочитать заголовок MegaLD.")); return false; }
+    identity.addData(first);
+    if (size > sample) {
+        if (!source.seek(size-sample)) { error = source.errorString(); return false; }
+        const QByteArray last = source.read(sample);
+        if (last.size() != sample) { error = source.errorString(); return false; }
+        identity.addData(last);
+    }
+    source.close(); media.reset();
+    if (!initialize(error)) return false;
+    if (!api_->features || !(api_->features() & 0x40u)) {
+        error = Localization::text(QStringLiteral("Загруженное ядро не поддерживает MegaLD.")); return false;
+    }
+    if (loaded_ && !flushSaveRam(error)) return false;
+    unload();
+    if (!selectDataFolders(error)) return false;
+    megaLd_ = true; megaLdRegion_ = region; megaLdMediaIdentity_ = identity.result();
+    gamePath_ = original.absoluteFilePath(); contentName_ = original.fileName();
+    encodedGamePath_ = encoded;
+    contentDirectory_ = QDir::toNativeSeparators(original.absolutePath()).toUtf8();
+    contentBaseName_ = original.completeBaseName().toUtf8(); contentExtension_ = "mmi";
+    contentInfo_ = {}; contentInfo_.full_path = encodedGamePath_.constData();
+    contentInfo_.dir = contentDirectory_.constData(); contentInfo_.name = contentBaseName_.constData();
+    contentInfo_.ext = contentExtension_.constData();
+    if (perGameCdBackup_) {
+        const auto directory = QDir(dataFolder(QStringLiteral("saves"))).filePath(readableSaveStem(original.fileName()));
+        cdSavePath_ = QDir::toNativeSeparators(directory).toUtf8();
+        if (!api_->get_bram && !QDir().mkpath(directory)) {
+            error = Localization::text(QStringLiteral("Не удалось создать папку сохранений: %1")).arg(directory); unload(); return false;
+        }
+    }
+    CoreFileSystem::clearError(); setMegaLdIdentity();
+    retro_game_info game{}; game.path = encodedGamePath_.constData();
+    contentInfoActive_ = true;
+    if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; unload(); return false; }
+    const bool accepted = api_->load_game(&game);
+    contentInfoActive_ = false;
+    if (!accepted) {
+        error = Localization::text(QStringLiteral("Ядро не смогло загрузить MegaLD. Проверьте образ MMI и BIOS PAC-S."));
+        if (!CoreFileSystem::lastError().isEmpty()) error += QLatin1Char('\n') + CoreFileSystem::lastError();
+        unload(); return false;
+    }
+    loaded_ = true;
+    if (!applyGameGearLcd(error)) { unload(); return false; }
+    setDebugBackdrop(debugBackdrop_); refreshRecordingIdentity();
+    api_->get_system_av_info(&av_);
+    if (!validAvInfo(av_)) {
+        error = Localization::text(QStringLiteral("Ядро вернуло некорректные параметры видео/звука.")); unload(); return false;
+    }
+    applyControllerPorts(true); saveMemorySizes_.fill(0); rememberEmptyCdBackup(); loadCheats();
+    if (linkRequested_ && !startLinkedPair(error)) { unload(); return false; }
+    return true;
+}
 bool LibretroHost::setDiscEjected(bool ejected, QString& error, bool* timelineChanged) {
     error.clear();
     if (timelineChanged) *timelineChanged = false;
@@ -494,6 +587,7 @@ bool LibretroHost::changeDisc(const QString& path, QString& error, bool* timelin
 bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
                         const RomArchive::Entry* archiveEntry) {
     error.clear();
+    if (QFileInfo(path).suffix().compare("mmi",Qt::CaseInsensitive) == 0) return loadMegaLd(path,error);
     if (DiscMedia::isDisc(path)) return loadCd(path,error);
     const QFileInfo info(path);
     QString name = info.fileName();
@@ -597,7 +691,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfo_.persistent_data = false;
     retro_game_info game{};
     game.path = encodedGamePath_.constData();
-    game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
+    game.data = discs_.isEmpty() && !megaLd_ ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
     if (!applyPowerOnOptions(error)) { contentInfoActive_ = false; unload(); return false; }
@@ -621,8 +715,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         error = Localization::text(QStringLiteral("Ядро вернуло некорректные параметры видео/звука.")); unload(); return false;
     }
     applyControllerPorts(true);
-    saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
-    saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
+    saveMemorySizes_[0] = isCd() || megaLd_ ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    saveMemorySizes_[1] = isCd() || megaLd_ ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + Localization::text(QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл.")));
@@ -654,6 +748,7 @@ void LibretroHost::unload() {
     { QString ignored; applyGameGearLcd(ignored); }
     active32xBiosFingerprints_ = {};
     contentNeeds32x_ = false;
+    megaLd_ = false; megaLdRegion_ = 0; megaLdMediaIdentity_.clear();
     if (!linkParent_) CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0; cdSavePath_.clear();
     contentInfo_ = {}; contentInfoActive_ = false;
@@ -672,7 +767,7 @@ bool LibretroHost::frameInputPolled() const {
 }
 bool LibretroHost::supportsInputPollMetrics() const { return api_->input_polled != nullptr; }
 bool LibretroHost::hasCdHardware() const {
-    return loaded_ && (isCd() || (api_->system_hw && api_->system_hw() == 0x84) ||
+    return loaded_ && (isCd() || megaLd_ || (api_->system_hw && api_->system_hw() == 0x84) ||
                       (api_->paprium_cd_active && api_->paprium_cd_active()));
 }
 void LibretroHost::setExpansionDevices(ExpansionMode cd, ExpansionMode x32) {
@@ -716,6 +811,7 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     if (movieConfigurationActive_ || !applyPending) return true;
     if (!setCoreOption(ym2612Key, ym2612Model(nukedYm2612_), error)) return false;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
+    if (megaLd_) return true; // PAC hardware is selected from MMI metadata by the core.
     if (!setCoreOption("genesis_plus_gx_add_on", attachmentOption(cdMode_, "sega/mega cd", "none"), error)) return false;
     if (variableValues_.count("genesis_plus_gx_32x_add_on"))
         return setCoreOption("genesis_plus_gx_32x_add_on", attachmentOption(x32Mode_, "connected", "disconnected"), error);
@@ -860,6 +956,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     stopLinkedPair();
     achievementHashCache_.clear();
     achievementConsoleCache_ = 0;
+    if (megaLd_ && SegaLdBios::resolveInDirectory(dataFolder(QStringLiteral("bios")),megaLdRegion_,error).isEmpty()) return false;
     if (isCd() && !checkDiscBios(discs_[discIndex_],error)) return false;
     // The active attachment also covers CHD, whose 32X header is core-detected.
     // Recheck the required Sega CD BIOS before unloading for a power cycle.
@@ -871,7 +968,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         return value != variables_.end() && (value->second == "connected" || value->second == "sega/mega cd");
     };
     const bool targetCd = wantedOption("genesis_plus_gx_add_on", cdMode_ == ExpansionMode::Connected);
-    if (targetCd && mdHardware && !isCd()) {
+    if (targetCd && mdHardware && !isCd() && !megaLd_) {
         if (content_.size() > 8 * 1024 * 1024) {
             error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
             return false;
@@ -889,13 +986,14 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     loaded_ = false;
     audio_.clear(); frame_ = QImage(); spriteOwnership_ = {}; buttons_.fill(0);
     if (!discs_.isEmpty()) setDiscIdentity();
+    if (megaLd_) setMegaLdIdentity();
     prepareCoreContent();
     CoreFileSystem::clearError();
-    contentInfo_.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
+    contentInfo_.data = discs_.isEmpty() && !megaLd_ ? coreContent_.constData() : nullptr;
     contentInfo_.size = size_t(coreContent_.size());
     retro_game_info game{};
     game.path = encodedGamePath_.constData();
-    game.data = discs_.isEmpty() ? coreContent_.constData() : nullptr;
+    game.data = discs_.isEmpty() && !megaLd_ ? coreContent_.constData() : nullptr;
     game.size = size_t(coreContent_.size());
     contentInfoActive_ = true;
     if (!applyPowerOnOptions(error,applyPending)) { contentInfoActive_ = false; return false; }
@@ -920,8 +1018,8 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         unload(); return false;
     }
     applyControllerPorts(true);
-    saveMemorySizes_[0] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
-    saveMemorySizes_[1] = isCd() ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
+    saveMemorySizes_[0] = isCd() || megaLd_ ? 0 : api_->get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    saveMemorySizes_[1] = isCd() || megaLd_ ? 0 : api_->get_memory_size(RETRO_MEMORY_RTC);
     QString saveError;
     saveRamWritable_ = restoreSaveRam(saveError);
     if (!saveRamWritable_ && message) message(saveError + Localization::text(QStringLiteral(" Автозапись отключена, чтобы не затереть существующий файл.")));
@@ -1814,7 +1912,7 @@ void LibretroHost::achievementCoreMemoryInfo(uint32_t id, rc_libretro_core_memor
         ? host->saveMemorySizes_[0] : host->api_->get_memory_size(id);
 }
 unsigned LibretroHost::achievementConsoleId() const {
-    if (!loaded_) return 0;
+    if (!loaded_ || megaLd_) return 0;
     if (achievementConsoleCache_) return achievementConsoleCache_;
     unsigned id = 0;
     if (isCd()) id = RC_CONSOLE_SEGA_CD;
@@ -1850,6 +1948,7 @@ uint32_t LibretroHost::achievementCdFirstSector(void*) { return 0; }
 QString LibretroHost::achievementHash(QString& error) const {
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return {}; }
+    if (megaLd_) { error = Localization::text(QStringLiteral("Достижения для MegaLD пока не поддерживаются.")); return {}; }
     if (!achievementHashCache_.isEmpty()) return achievementHashCache_;
     const unsigned console = achievementConsoleId();
     if (!console) { error = Localization::text(QStringLiteral("Не удалось определить систему для достижений.")); return {}; }
@@ -2036,6 +2135,7 @@ bool LibretroHost::acceptsLegacyMovieCore(const QByteArray& identity) const {
 }
 QByteArray LibretroHost::movieGameIdentity() const {
     if (!loaded_) return {};
+    if (megaLd_) return megaLdMediaIdentity_;
     if (discs_.isEmpty()) return digest(QByteArrayLiteral("KRMOV-CART1") + content_);
     // CD identity samples each source file at both ends. This is bounded even
     // for multi-gigabyte CHDs; it is not a whole-disc cryptographic guarantee.
@@ -2079,7 +2179,11 @@ void LibretroHost::snapshot32xBios() {
 }
 QJsonObject LibretroHost::movieBiosFingerprints() const {
     QJsonObject result;
-    if (hasCdHardware()) for (int i = 0; i < 3; ++i) {
+    if (megaLd_) {
+        const auto name = QLatin1String(biosRoleNames[megaLdRegion_+5]);
+        result.insert(name,biosFingerprint(dataFolder(QStringLiteral("bios")),name,false));
+    }
+    if (hasCdHardware() && !megaLd_) for (int i = 0; i < 3; ++i) {
         const auto name = QLatin1String(biosRoleNames[i]);
         result.insert(name,biosFingerprint(dataFolder(QStringLiteral("bios")),name,false));
     }
@@ -2453,6 +2557,7 @@ QByteArray LibretroHost::stateCoreIdentity() const {
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-cd-v1"));
     if (api_->paprium_active && api_->paprium_active())
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-gpx-f27655b-paprium-v1"));
+    if (megaLd_) return digest(coreHash_ + QByteArrayLiteral("kegarefusion-megald-state-v1"));
     if (!isCd() && hasCdHardware()) {
         const bool x32 = api_->features && (api_->features() & 2u);
         return digest(coreHash_ + QByteArrayLiteral("kegarefusion-cd-mode1-state-v1") + (x32 ? "32x" : "md"));
@@ -2585,7 +2690,7 @@ bool LibretroHost::updateSaveRam(qint64 nowMs, bool force, QString& error) {
             if (!batterySave_.update(path, data, qsizetype(size), nowMs, force, false, error))
                 return false;
         }
-        if (isCd()) return true;
+        if (isCd() || megaLd_) return true;
     }
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
@@ -2614,7 +2719,7 @@ void LibretroHost::rememberEmptyCdBackup() {
 }
 bool LibretroHost::restoreSaveRam(QString& error) {
     if (linkParent_) return true;
-    if (isCd()) { rememberEmptyCdBackup(); return true; }
+    if (isCd() || megaLd_) { rememberEmptyCdBackup(); return true; }
     for (unsigned id : {RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_RTC}) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         auto data = api_->get_memory_data(id);

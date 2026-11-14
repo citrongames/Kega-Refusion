@@ -47,3 +47,14 @@ def copy_core32x_notices(root: Path, notices: Path) -> None:
         "\n\n".join(parts) + "\n", encoding="utf-8"
     )
 
+
+
+def copy_megald_notices(root: Path, notices: Path) -> None:
+    component = notices / "megald"
+    component.mkdir(parents=True, exist_ok=True)
+    for relative, name in (
+        ("src/megald/player/LICENSE", "LICENSE.ISC"),
+        ("src/megald/media/LICENSE.qon-qoi2", "LICENSE.qon-qoi2"),
+        ("src/megald/media/UPSTREAM.md", "UPSTREAM.md"),
+    ):
+        shutil.copy2(root / relative, component / name)

@@ -31,6 +31,10 @@ endif()
 add_library(kega_libco STATIC third_party/libco/amd64.c)
 target_include_directories(kega_libco PUBLIC third_party/libco)
 target_compile_definitions(kega_libco PRIVATE LIBCO_MP)
+add_library(megald_media STATIC src/megald/media/media.c src/megald/media/media.h
+    src/megald/media/qon.h src/megald/media/qoi2.h)
+set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/Cheats.cpp src/core/Cheats.h
@@ -42,6 +46,7 @@ add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/CoreFileSystem.cpp src/core/CoreFileSystem.h
     src/core/DiscMedia.cpp src/core/DiscMedia.h src/core/SegaCdBios.cpp src/core/SegaCdBios.h
     src/core/Sega32xBios.cpp src/core/Sega32xBios.h
+    src/core/SegaLdBios.cpp src/core/SegaLdBios.h
     src/core/RewindBuffer.cpp src/core/RewindBuffer.h
     src/core/MovieTape.cpp src/core/MovieTape.h
     src/core/MovieSession.cpp src/core/MovieSession.h
@@ -52,7 +57,7 @@ add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/net/NetRollbackSession.cpp src/net/NetRollbackSession.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_archive kega_ggpo kega_libco Qt6::Network kega_video_deps)
+target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE megald_media kega_archive kega_ggpo kega_libco Qt6::Network kega_video_deps)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPreset.cpp src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h
     src/ui/WaylandMouseCapture.cpp src/ui/WaylandMouseCapture.h)
@@ -162,7 +167,7 @@ if(BUILD_TESTING)
     target_link_libraries(audio_backend_probe PRIVATE Qt6::Core Qt6::Multimedia)
     add_executable(video_recording_tests tests/video_recording_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
     target_link_libraries(video_recording_tests PRIVATE core_host)
-    foreach(bios_test IN ITEMS bios_resolution_tests bios_host_tests)
+    foreach(bios_test IN ITEMS bios_resolution_tests bios_host_tests megald_bios_tests megald_host_tests)
         add_executable(${bios_test} tests/${bios_test}.cpp)
         target_link_libraries(${bios_test} PRIVATE core_host)
     endforeach()

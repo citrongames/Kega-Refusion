@@ -1099,6 +1099,23 @@
     "Двойной щелчок — добавить назначение; третье заменяет самое старое. Средняя кнопка мыши — очистить оба назначения.": "Double-click to add a binding; a third replaces the oldest. Middle-click to clear both bindings.",
     "Назначить по одному значению в выбранной колонке. Пропущенные действия сохраняют назначения.": "Assign one binding per action in the selected column. Skipped actions keep their bindings.",
     "Назначение мыши %1": "Mouse binding %1",
-    "Назначение «%1»: выберите кнопку мыши в списке. Esc — отмена.": "Assigning “%1”: choose a mouse button from the list. Esc cancels."
+    "Назначение «%1»: выберите кнопку мыши в списке. Esc — отмена.": "Assigning “%1”: choose a mouse button from the list. Esc cancels.",
+    "Неподдерживаемый регион MegaLD.": "Unsupported MegaLD region.",
+    "Не найден проверенный BIOS MegaLD %1. Импортируйте BIOS через Настройки → Настройки эмулятора… → BIOS → MegaLD.": "Verified MegaLD BIOS %1 was not found. Import it through Options → Emulator settings… → BIOS → MegaLD.",
+    "BIOS MegaLD установлен: %1": "MegaLD BIOS installed: %1",
+    "Существующий файл сохранён без замены: %1": "Existing file preserved without replacement: %1",
+    "В папке не найдены поддерживаемые BIOS MegaLD: PAC-S1 Japan v1.02 или PAC-S10 USA v1.04.": "No supported MegaLD BIOS found in this folder: PAC-S1 Japan v1.02 or PAC-S10 USA v1.04.",
+    "это BIOS MegaLD PAC-S, а не Sega CD": "this is a MegaLD PAC-S BIOS, not a Sega CD BIOS",
+    "Не удалось открыть MegaLD: %1": "Could not open MegaLD: %1",
+    "Этот MMI не является образом Sega MegaLD.": "This MMI is not a Sega MegaLD image.",
+    "Не удалось прочитать заголовок MegaLD.": "Could not read the MegaLD header.",
+    "Загруженное ядро не поддерживает MegaLD.": "The loaded core does not support MegaLD.",
+    "Ядро не смогло загрузить MegaLD. Проверьте образ MMI и BIOS PAC-S.": "The core could not load MegaLD. Check the MMI image and PAC-S BIOS.",
+    "Достижения для MegaLD пока не поддерживаются.": "Achievements are not yet supported for MegaLD.",
+    "Откройте исходный файл MMI напрямую. MegaLD из архивов ZIP и 7z не поддерживается.": "Open the original MMI file directly. MegaLD in ZIP and 7z archives is not supported.",
+    "BIOS Sega CD, MegaLD и дополнительные оригинальные BIOS 32X.": "Sega CD and MegaLD BIOS files, and optional original 32X BIOS files.",
+    "Для MegaLD нужен BIOS Sega LaserActive PAC-S своего региона: PAC-S1 Japan v1.02 или PAC-S10 USA v1.04. BIOS Sega CD и NEC PAC-N не подходят.": "MegaLD requires a matching Sega LaserActive PAC-S BIOS: PAC-S1 Japan v1.02 or PAC-S10 USA v1.04. Sega CD and NEC PAC-N BIOS files are incompatible.",
+    "Папка с BIOS MegaLD": "Folder containing MegaLD BIOS files",
+    "Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)": "Sega games (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Sega CD discs (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Archives (*.zip *.7z);;All files (*)"
   }
 }

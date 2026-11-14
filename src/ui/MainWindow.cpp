@@ -20,6 +20,7 @@
 #include "../core/DataFolders.h"
 #include "../core/RomArchive.h"
 #include "../core/SegaCdBios.h"
+#include "../core/SegaLdBios.h"
 #include "../core/Sega32xBios.h"
 #include "../input/InputManager.h"
 
@@ -193,7 +194,7 @@ bool isSupportedDropFile(const QString& path) {
            (isCdPath(path) || QStringList{QStringLiteral("md"), QStringLiteral("gen"),
                QStringLiteral("bin"), QStringLiteral("smd"), QStringLiteral("sms"),
                QStringLiteral("gg"), QStringLiteral("sg"), QStringLiteral("68k"),
-               QStringLiteral("32x"), QStringLiteral("zip"), QStringLiteral("7z")}.contains(ext));
+               QStringLiteral("32x"), QStringLiteral("mmi"), QStringLiteral("zip"), QStringLiteral("7z")}.contains(ext));
 }
 ConsoleProfile profileFor(const QFileInfo& file) {
     const QString ext = file.suffix().toLower();
@@ -1715,7 +1716,7 @@ void MainWindow::openGameDialog() {
     const QString path = QFileDialog::getOpenFileName(
         this, Localization::text(QStringLiteral("Открыть игру")),
         settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
-        Localization::text(QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;Архивы (*.zip *.7z);;Все файлы (*)")));
+        Localization::text(QStringLiteral("Игры Sega (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)")));
     if (!path.isEmpty()) openRom(path);
     else view_->setFocus();
 }
@@ -2294,7 +2295,7 @@ void MainWindow::editSettings(int initialPage) {
     bool biosCreated = false;
     const auto createBiosPage = [this, &dialog, pages, biosPlaceholder, addPage] {
         auto* bios = addPage(QStringLiteral("BIOS"),
-            Localization::text(QStringLiteral("BIOS Sega CD и дополнительные оригинальные BIOS 32X.")));
+            Localization::text(QStringLiteral("BIOS Sega CD, MegaLD и дополнительные оригинальные BIOS 32X.")));
         const auto reportBiosImport = [&dialog](const QString& title, const QStringList& imported,
                                                const QString& error, const QString& emptyMessage) {
             QString message;
@@ -2352,6 +2353,42 @@ void MainWindow::editSettings(int initialPage) {
             refreshCdBios();
             reportBiosImport(QStringLiteral("BIOS Sega CD"), imported, error,
                              Localization::text(QStringLiteral("Новые BIOS не найдены.")));
+        });
+        auto* ldGroup = new QGroupBox(QStringLiteral("MegaLD"), &dialog);
+        auto* ldLayout = new QVBoxLayout(ldGroup);
+        auto* ldHint = new QLabel(Localization::text(QStringLiteral(
+            "Для MegaLD нужен BIOS Sega LaserActive PAC-S своего региона: PAC-S1 Japan v1.02 или PAC-S10 USA v1.04. BIOS Sega CD и NEC PAC-N не подходят.")), ldGroup);
+        ldHint->setWordWrap(true); ldLayout->addWidget(ldHint);
+        auto* ldForm = new QFormLayout;
+        std::array<QLabel*,2> ldStatusLabels{};
+        const QStringList ldLabels{Localization::text(QStringLiteral("Япония")),Localization::text(QStringLiteral("США"))};
+        for (int i=0; i<2; ++i) {
+            auto* status = new QLabel(ldGroup); status->setObjectName(QStringLiteral("biosLdStatus%1").arg(i));
+            ldStatusLabels[i]=status; ldForm->addRow(ldLabels[i]+QLatin1Char(':'),status);
+        }
+        ldLayout->addLayout(ldForm);
+        const auto refreshLdBios = [this,ldStatusLabels] {
+            for (int i=0; i<2; ++i) {
+                QString error; const auto path=SegaLdBios::resolve(dataPath_,i+1,error);
+                ldStatusLabels[i]->setText(path.isEmpty()?Localization::text(QStringLiteral("Не установлен"))
+                                                       :Localization::text(QStringLiteral("Установлен")));
+                ldStatusLabels[i]->setToolTip(path.isEmpty()?error:QDir::toNativeSeparators(path));
+            }
+        };
+        auto* ldActions = new QHBoxLayout;
+        auto* checkLd = new QPushButton(Localization::text(QStringLiteral("Проверить")),ldGroup);
+        checkLd->setObjectName(QStringLiteral("checkLdBios")); ldActions->addWidget(checkLd);
+        auto* importLd = new QPushButton(Localization::text(QStringLiteral("Импортировать из папки…")),ldGroup);
+        importLd->setObjectName(QStringLiteral("importLdBios")); ldActions->addWidget(importLd); ldActions->addStretch();
+        ldLayout->addLayout(ldActions); bios->addRow(ldGroup);
+        connect(checkLd,&QPushButton::clicked,&dialog,refreshLdBios);
+        connect(importLd,&QPushButton::clicked,&dialog,[this,&dialog,refreshLdBios,reportBiosImport] {
+            const auto source=QFileDialog::getExistingDirectory(&dialog,Localization::text(QStringLiteral("Папка с BIOS MegaLD")),QDir::homePath());
+            if (source.isEmpty()) return;
+            QString error; const auto imported=SegaLdBios::importDirectory(source,dataPath_,error);
+            refreshLdBios();
+            reportBiosImport(QStringLiteral("BIOS MegaLD"),imported,error,
+                             Localization::text(QStringLiteral("Новые BIOS не найдены или уже установлены.")));
         });
         auto* x32Group = new QGroupBox(QStringLiteral("32X"), &dialog);
         auto* x32Layout = new QVBoxLayout(x32Group);
@@ -2421,6 +2458,7 @@ void MainWindow::editSettings(int initialPage) {
         pages->insertWidget(kBiosSettingsPage, biosViewport);
 
         refreshCdBios();
+        refreshLdBios();
         refresh32xBios();
     };
 

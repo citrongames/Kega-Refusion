@@ -13,7 +13,7 @@ import sys
 sys.dont_write_bytecode = True
 from package_manifest import write_manifest
 from package_symbols import strip_binary
-from package_notices import copy_core32x_notices
+from package_notices import copy_core32x_notices, copy_megald_notices
 
 
 PLUGIN_FILES = (
@@ -216,6 +216,7 @@ Windows и Linux x86_64 используют общий контракт сет�
     (stage / "ЗАПУСК-LINUX.txt").write_text(instruction, encoding="utf-8")
     notice = stage / "licenses"
     copy_core32x_notices(root, notice)
+    copy_megald_notices(root, notice)
     for name in ("LICENSE", "PROVENANCE.md"):
         copy(root / "src/paprium" / name, notice / "paprium" / name)
     shutil.copytree(root / "build/deps/video-minimal/linux/share/kegarefusion-ffmpeg", notice / "ffmpeg")

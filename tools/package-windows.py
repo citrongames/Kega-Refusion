@@ -11,7 +11,7 @@ import sys
 sys.dont_write_bytecode = True
 from package_manifest import write_manifest
 from package_symbols import strip_binary
-from package_notices import copy_core32x_notices
+from package_notices import copy_core32x_notices, copy_megald_notices
 
 
 def imports(binary: Path) -> set[str]:
@@ -132,6 +132,7 @@ def main() -> None:
         shutil.copy2(root / name, notices / name)
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
+    copy_megald_notices(root, notices)
     shutil.copy2(root / "third_party/libco/LICENSE.txt", notices / "libco-LICENSE.txt")
     shutil.copy2(root / "third_party/libco/README.txt", notices / "libco-PROVENANCE.txt")
     shutil.copy2(root / "tools/patches/genesis-plus-gx-link-cable.README.md", notices / "LinkCable-PROVENANCE.md")

@@ -121,6 +121,10 @@ bool scan(const QString& path, QVector<RomArchive::Entry>* members,
             fail(error, Localization::text(QStringLiteral("Архив содержит неверное или слишком длинное имя файла.")));
             return false;
         }
+        if (QFileInfo(entryName).suffix().compare("mmi",Qt::CaseInsensitive)==0) {
+            fail(error, Localization::text(QStringLiteral("Откройте исходный файл MMI напрямую. MegaLD из архивов ZIP и 7z не поддерживается.")));
+            return false;
+        }
         const qint64 expected = archive_entry_size_is_set(header) ? archive_entry_size(header) : -1;
         if (expected < 0 || expected > RomArchive::MaxMemberSize) {
             fail(error, Localization::text(QStringLiteral("Файл в архиве превышает 128 МиБ или имеет неверный размер.")));
