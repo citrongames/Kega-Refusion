@@ -111,7 +111,7 @@ def compatibility(corepath,directory):
   path=os.path.join(directory,label+suffix);open(path,'wb').write(data);c=Core(corepath,path,data)
   for name in ['retro_kegarefusion_recording_abi','retro_kegarefusion_network_state_abi']:getattr(c.lib,name).restype=C.c_char_p
   recording=c.lib.retro_kegarefusion_recording_abi().decode();net=c.lib.retro_kegarefusion_network_state_abi();network=None if net is None else net.decode();results.append({'label':label,'recording_abi':recording,'network_abi':network});c.close()
- passed=results[0]['recording_abi']=='kegarefusion-recording-v2-sms-codemasters-v1' and results[1]['recording_abi']==results[2]['recording_abi']=='kegarefusion-recording-v2' and results[0]['network_abi']!=results[1]['network_abi'] and results[1]['network_abi']==results[2]['network_abi']
+ passed=results[0]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1-sms-codemasters-v1' and results[1]['recording_abi']==results[2]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1' and results[0]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1-sms-pause-v1' and results[1]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-pause-v1' and results[2]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1'
  return {'pass':passed,'cases':results}
 
 if __name__=='__main__':

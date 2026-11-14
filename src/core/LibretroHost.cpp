@@ -237,6 +237,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->network_state_abi = reinterpret_cast<decltype(api_->network_state_abi)>(library_.resolve("retro_kegarefusion_network_state_abi"));
     api_->sms_pause_state_version = reinterpret_cast<decltype(api_->sms_pause_state_version)>(
         library_.resolve("retro_kegarefusion_sms_pause_state_version"));
+    api_->sms_irata_flash_active = reinterpret_cast<decltype(api_->sms_irata_flash_active)>(
+        library_.resolve("retro_kegarefusion_sms_irata_flash_active"));
     refreshRecordingIdentity();
     api_->set_paprium_music = reinterpret_cast<decltype(api_->set_paprium_music)>(library_.resolve("retro_kegarefusion_set_paprium_music"));
     api_->paprium_active = reinterpret_cast<decltype(api_->paprium_active)>(library_.resolve("retro_kegarefusion_paprium_active"));
@@ -2609,17 +2611,29 @@ bool LibretroHost::restoreSaveRam(QString& error) {
         const auto size = saveMemorySizes_[id == RETRO_MEMORY_RTC ? 1 : 0];
         auto data = api_->get_memory_data(id);
         if (!size || !data) continue;
+        const bool irataFlash = id == RETRO_MEMORY_SAVE_RAM &&
+            api_->sms_irata_flash_active && api_->sms_irata_flash_active();
+        if (irataFlash && size > size_t(maxStateSize)) {
+            error = Localization::text(QStringLiteral("Ядро вернуло неверный размер памяти сохранения.")); return false;
+        }
         QFile file(saveReadPath(QStringLiteral("saves"), id == RETRO_MEMORY_RTC ? QStringLiteral(".rtc") : QStringLiteral(".srm")));
-        if (!file.exists()) continue;
+        if (!file.exists()) {
+            // This flash starts with the loaded program, not erased SRAM. Only
+            // an in-game program/erase operation should create its first save.
+            if (irataFlash)
+                batterySave_.rememberUnwritten(QDir(dataFolder(QStringLiteral("saves"))).filePath(
+                    gameKey_ + QStringLiteral(".srm")), data, qsizetype(size));
+            continue;
+        }
         if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > qint64(size) ||
-            (id == RETRO_MEMORY_RTC && file.size() != qint64(size))) {
+            ((id == RETRO_MEMORY_RTC || irataFlash) && file.size() != qint64(size))) {
             error = Localization::text(QStringLiteral("Память сохранения имеет неверный размер или недоступна; файл не загружен.")); return false;
         }
         const auto bytes = file.readAll();
         if (bytes.size() != file.size()) { error = Localization::text(QStringLiteral("Ошибка чтения памяти сохранения.")); return false; }
         // Genesis Plus GX reports trimmed SRAM after retro_run, but full capacity before it.
-        // Accept old trimmed saves and normalize future writes to the captured load-time capacity.
-        if (id == RETRO_MEMORY_SAVE_RAM) std::memset(data, 0xff, size);
+        // Accept old trimmed SRAM saves; flash must preserve the complete program image.
+        if (id == RETRO_MEMORY_SAVE_RAM && !irataFlash) std::memset(data, 0xff, size);
         std::memcpy(data, bytes.constData(), size_t(bytes.size()));
     }
     return true;

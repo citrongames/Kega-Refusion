@@ -1,0 +1,286 @@
+--- a/core/cart_hw/sms_cart.h
++++ b/core/cart_hw/sms_cart.h
+@@ -44,6 +44,9 @@
+ #define HW_TEREBI_OEKAKI  0x02
+ 
+ /* Function prototypes */
++#define SMS_IRATA_FLASH_SIZE 0x80000
++extern void sms_cart_new_content(void);
++extern uint8 *sms_cart_irata_flash(void);
+ extern void sms_cart_init(void);
+ extern void sms_cart_reset(void);
+ extern void sms_cart_switch(uint8 mode);
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -697,6 +697,7 @@
+   }
+     
+   /* initialize ROM size */
++  sms_cart_new_content();
+   cart.romsize = size;
+ 
+   /* get infos from ROM header */
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -62,6 +62,7 @@
+ #define MAPPER_ZEMINA_16K_32K   (0x1B)
+ #define MAPPER_HWASUNG          (0x1C)
+ #define MAPPER_MSX_16K          (0x1D)
++#define MAPPER_IRATA            (0x1E)
+ #define MAPPER_KOREA_8K         (0x20)
+ #define MAPPER_MSX_8K           (0x21)
+ #define MAPPER_MSX_8K_NEMESIS   (0x22)
+@@ -494,6 +495,124 @@
+ static unsigned char read_mapper_default(unsigned int address);
+ static unsigned char read_mapper_none(unsigned int address);
+ 
++/* IrataHack board: four 128 KiB games on one SST39SF040.
++ * The original image remains intact for identification and cold starts.
++ * A recognized cartridge has 512 KiB or less; the emulator's existing
++ * cartridge workspace above it can hold the writable chip and an ID page. */
++#define IRATA_FLASH (cart.rom + 0x100000)
++#define IRATA_ID_PAGE (IRATA_FLASH + SMS_IRATA_FLASH_SIZE)
++enum { IRATA_READ, IRATA_UNLOCK1, IRATA_UNLOCK2, IRATA_PROGRAM,
++       IRATA_ERASE1, IRATA_ERASE2, IRATA_ERASE_CONFIRM, IRATA_ID };
++
++static int irata_seeded;
++
++void sms_cart_new_content(void)
++{
++  irata_seeded = 0;
++}
++
++uint8 *sms_cart_irata_flash(void)
++{
++  return irata_seeded && system_hw && ((system_hw & SYSTEM_PBC) != SYSTEM_MD) &&
++         cart_rom.mapper == MAPPER_IRATA ? IRATA_FLASH : NULL;
++}
++
++static unsigned int irata_offset(unsigned int address)
++{
++  unsigned int base = (slot.fcr[1] & 3) << 17;
++  if (address < 0x8000)
++    return base + address;
++  return base + ((slot.fcr[2] & 7) << 14) + (address & 0x3fff);
++}
++
++static void irata_map(void)
++{
++  int i;
++  for (i = 0; i < 0x30; ++i)
++    z80_readmap[i] = IRATA_FLASH + irata_offset(i << 10);
++
++  if (slot.fcr[0] == IRATA_ID)
++  {
++    z80_readmap[0] = IRATA_ID_PAGE;
++    for (i = 1; i < 0x10; ++i)
++      z80_readmap[i] = cart.rom + 0x510400;
++  }
++}
++
++static void write_mapper_irata(unsigned int address, unsigned char data)
++{
++  unsigned int offset, command_address;
++  uint8 *phase = &slot.fcr[0];
++  if (address >= 0xc000)
++  {
++    write_mapper_none(address, data);
++    if (address >= 0xfffe)
++    {
++      unsigned int reg = (address == 0xfffe) ? 1 : 2;
++      data &= (reg == 1) ? 3 : 7;
++      if (slot.fcr[reg] != data)
++      {
++        slot.fcr[reg] = data;
++        irata_map();
++      }
++    }
++    return;
++  }
++
++  offset = irata_offset(address);
++  command_address = offset & 0x7fff;
++  switch (*phase)
++  {
++    case IRATA_READ:
++      if (command_address == 0x5555 && data == 0xaa)
++        *phase = IRATA_UNLOCK1;
++      break;
++    case IRATA_UNLOCK1:
++      *phase = (command_address == 0x2aaa && data == 0x55) ? IRATA_UNLOCK2 : IRATA_READ;
++      break;
++    case IRATA_UNLOCK2:
++      *phase = IRATA_READ;
++      if (command_address == 0x5555)
++      {
++        if (data == 0xa0) *phase = IRATA_PROGRAM;
++        else if (data == 0x80) *phase = IRATA_ERASE1;
++        else if (data == 0x90)
++        {
++          *phase = IRATA_ID;
++          irata_map();
++        }
++      }
++      break;
++    case IRATA_PROGRAM:
++      IRATA_FLASH[offset] &= data;
++      *phase = IRATA_READ;
++      break;
++    case IRATA_ERASE1:
++      *phase = (command_address == 0x5555 && data == 0xaa) ? IRATA_ERASE2 : IRATA_READ;
++      break;
++    case IRATA_ERASE2:
++      *phase = (command_address == 0x2aaa && data == 0x55) ? IRATA_ERASE_CONFIRM : IRATA_READ;
++      break;
++    case IRATA_ERASE_CONFIRM:
++      if (data == 0x30)
++        memset(IRATA_FLASH + (offset & ~0xfffu), 0xff, 0x1000);
++      else if (command_address == 0x5555 && data == 0x10)
++        memset(IRATA_FLASH, 0xff, SMS_IRATA_FLASH_SIZE);
++      *phase = IRATA_READ;
++      break;
++    case IRATA_ID:
++      if (data == 0xf0)
++      {
++        *phase = IRATA_READ;
++        irata_map();
++      }
++      break;
++    default:
++      *phase = IRATA_READ;
++      break;
++  }
++}
++
+ void sms_cart_init(void)
+ {
+   int i = sizeof(game_list) / sizeof(rominfo_t) - 1;
+@@ -565,6 +684,21 @@
+     }
+   }
+   while (i--);
++
++  /* Wee Knight's Escape Trilogy, identified on the original cartridge. */
++  if (crc == 0x49af30f8 && cart.romsize <= SMS_IRATA_FLASH_SIZE)
++  {
++    cart_rom.mapper = MAPPER_IRATA;
++    if (!irata_seeded)
++    {
++      memcpy(IRATA_FLASH, cart.rom, cart.romsize);
++      memset(IRATA_FLASH + cart.romsize, 0xff, SMS_IRATA_FLASH_SIZE - cart.romsize);
++      memset(IRATA_ID_PAGE, 0xff, 0x400);
++      IRATA_ID_PAGE[0] = 0xbf;
++      IRATA_ID_PAGE[1] = 0xb7;
++      irata_seeded = 1;
++    }
++  }
+ 
+   /* ROM paging */
+   if (cart_rom.mapper < MAPPER_SEGA)
+@@ -684,6 +818,7 @@
+       cart_rom.fcr[3] = 0;
+       break;
+ 
++    case MAPPER_IRATA:
+     case MAPPER_KOREA_8K:
+     case MAPPER_MSX_8K:
+     case MAPPER_MSX_8K_NEMESIS:
+@@ -785,7 +920,7 @@
+     if (!bios_rom.pages)
+     {
+       /* max. BIOS ROM size supported is 1MB */
+-      if (cart.romsize <= 0x100000)
++      if ((cart.romsize <= 0x100000) && (cart_rom.mapper != MAPPER_IRATA))
+       {
+         /* copy to BIOS ROM */
+         memcpy(cart.rom + 0x400000, cart.rom, cart.romsize);
+@@ -1140,6 +1275,10 @@
+   {
+     /* save Boot ROM mapper settings */
+     save_param(bios_rom.fcr, 4);
++    if (cart_rom.mapper == MAPPER_IRATA)
++    {
++      save_param(cart_rom.fcr, 4);
++    }
+   }
+   else
+   {
+@@ -1195,6 +1334,10 @@
+         cart_rom.fcr[1] = 2;
+         cart_rom.fcr[2] = 1;
+         cart_rom.fcr[3] = 0;
++        break;
++
++      case MAPPER_IRATA:
++        load_param(cart_rom.fcr, 4);
+         break;
+ 
+       case MAPPER_KOREA_8K:
+@@ -1365,7 +1508,11 @@
+     }
+ 
+     /* reset ROM paging hardware */
+-    if (slot.mapper & MAPPER_KOREA_8K)
++    if (slot.mapper == MAPPER_IRATA)
++    {
++      irata_map();
++    }
++    else if (slot.mapper & MAPPER_KOREA_8K)
+     {
+       /* 8KB pages */
+       mapper_8k_w(0,slot.fcr[0]);
+@@ -1415,6 +1562,11 @@
+   /* reset Z80 memory handlers */
+   switch (slot.mapper)
+   {
++    case MAPPER_IRATA:
++      z80_readmem = read_mapper_default;
++      z80_writemem = write_mapper_irata;
++      break;
++
+     case MAPPER_SEGA:
+     case MAPPER_SEGA_X:
+       z80_readmem = read_mapper_default;
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3883,8 +3883,15 @@
+    return 1;
+ }
+ 
++RETRO_API bool retro_kegarefusion_sms_irata_flash_active(void)
++{
++   return sms_cart_irata_flash() != NULL;
++}
++
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
++   if (sms_cart_irata_flash())
++      return "kegarefusion-recording-v3-peripherals-v1-sms-irata-v1";
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+       return "kegarefusion-recording-v3-peripherals-v1-sms-codemasters-v1";
+    if (md_cart_large_ssf_active() || (md_cart_32x_ssf && strstr(rominfo.consoletype, "SEGA SSF")))
+@@ -3914,6 +3921,8 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   if (sms_cart_irata_flash())
++      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-irata-v1-sms-pause-v1";
+    /* Pause/NMI snapshots now round-trip on SMS/SG/PBC. Native GG has no
+     * Pause NMI; keep its existing deterministic contract and all MD/CD IDs. */
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && system_hw != SYSTEM_GG)
+@@ -4508,6 +4517,7 @@
+    switch (id)
+    {
+       case RETRO_MEMORY_SAVE_RAM:
++         if (sms_cart_irata_flash()) return sms_cart_irata_flash();
+          return sram.on ? sram.sram : NULL;
+       case RETRO_MEMORY_SYSTEM_RAM:
+          return work_ram;
+@@ -4524,6 +4534,7 @@
+    {
+       case RETRO_MEMORY_SAVE_RAM:
+       {
++         if (sms_cart_irata_flash()) return SMS_IRATA_FLASH_SIZE;
+          /* return 0 if SRAM is disabled */
+          if (!sram.on)
+             return 0;

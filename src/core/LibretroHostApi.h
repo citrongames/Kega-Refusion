@@ -30,6 +30,7 @@ struct LibretroHost::Api {
     int (*ym2612_backend)() = nullptr;
     unsigned (*system_hw)() = nullptr;
     unsigned (*sms_pause_state_version)() = nullptr;
+    bool (*sms_irata_flash_active)() = nullptr;
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
     void (*debug_backdrop)(uint32_t) = nullptr;
     bool (*multitap)(unsigned, unsigned, unsigned) = nullptr;
