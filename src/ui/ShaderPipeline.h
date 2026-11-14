@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+class BlarggPass;
 class QOpenGLFramebufferObject;
 
 // RetroArch desktop GLSL presets and their per-pass inputs.
@@ -45,6 +46,7 @@ struct ShaderPreset {
     QVector<ShaderParameter> parameters;
     QVector<ShaderLut> textures;
     int feedbackPass = -1;
+    int blarggFilter = 0;
     static bool load(const QString& path, ShaderPreset& result, QString& error);
     bool usesSpriteOwnership() const {
         return path == QLatin1String(":/shaders/refusion-dither.glslp") && passes.size() == 1
@@ -62,6 +64,7 @@ public:
                 const QRect& viewport, quint64 frameCount, int frameDirection, QString& error,
                 const QImage& spriteOwnership = {}, double originalAspect = 0,
                 const QSize& presentationSize = {});
+    void releaseBlarggImages();
     void resetFrameHistory() { resetHistory_ = true; }
     bool setParameter(const QString& id, float value);
     QVector<ShaderParameter> parameters() const { return preset_.parameters; }
@@ -75,6 +78,7 @@ private:
               const QSize& output, quint64 count, int direction, bool linear, unsigned wrap,
               int hasSpriteOwnership = -1, bool mipmap = false);
     ShaderPreset preset_;
+    std::unique_ptr<BlarggPass> blargg_;
     std::vector<std::unique_ptr<Program>> programs_;
     std::unique_ptr<Program> stock_;
     std::vector<std::unique_ptr<QOpenGLFramebufferObject>> buffers_;

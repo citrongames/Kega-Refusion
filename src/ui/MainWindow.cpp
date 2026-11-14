@@ -318,7 +318,6 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
     }
     session_.setRegion(region_);
-    session_.setBlarggFilter(blarggFilter_);
     gameGearLcdEnabled_ = !blarggFilter_ && settings_.value(QStringLiteral("view/gameGearLcd"), false).toBool();
     session_.setGameGearLcd(gameGearLcdEnabled_);
     session_.setSmsFmEnabled(smsFmEnabled_);
@@ -635,7 +634,9 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         settings_.remove(shaderParameterPrefix(shader));
         shader = QStringLiteral(":/shaders/refusion-dither.glslp");
     }
-    if (!shader.isEmpty() && !applyShaderPreset(shader)) {
+    if ((!shader.isEmpty() || blarggFilter_) && !applyShaderPreset(shader, shader.isEmpty() ? blarggFilter_ : 0)) {
+        blarggFilter_ = 0;
+        settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
         settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
         updateShaderActions();
     }
@@ -1102,16 +1103,7 @@ void MainWindow::buildMenus() {
         shaderGroup->addAction(action);
         blarggActions_[filter] = action;
         connect(action, &QAction::triggered, this, [this, filter] {
-            if (!view_->setShaderPreset({})) {
-                updateShaderActions();
-                return;
-            }
-            settings_.setValue(QStringLiteral("view/shaderPreset"), QString());
-            setGameGearLcdEnabled(false);
-            blarggFilter_ = filter;
-            settings_.setValue(QStringLiteral("view/blarggFilter"), filter);
-            session_.setBlarggFilter(filter);
-            updateShaderActions();
+            applyShaderPreset({}, filter);
         });
     }
     gameGearLcdAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("LCD-шлейф")));
@@ -1495,18 +1487,18 @@ void MainWindow::showDebugAudio() {
     debugAudioDialog_->activateWindow();
 }
 
-bool MainWindow::applyShaderPreset(const QString& path) {
+bool MainWindow::applyShaderPreset(const QString& path, int blarggFilter) {
     QString error;
-    if (!view_->setShaderPreset(path, &error)) {
+    if (!view_->setShaderPreset(path, &error, blarggFilter)) {
         updateShaderActions();
         if (!smokeTest_) QMessageBox::warning(this, Localization::text(QStringLiteral("Шейдер")), error);
         return false;
     }
     settings_.setValue(QStringLiteral("view/shaderPreset"), path);
-    if (blarggFilter_) {
-        blarggFilter_ = 0;
-        settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
-        session_.setBlarggFilter(0);
+    if (blarggFilter) setGameGearLcdEnabled(false);
+    if (blarggFilter_ != blarggFilter) {
+        blarggFilter_ = blarggFilter;
+        settings_.setValue(QStringLiteral("view/blarggFilter"), blarggFilter);
     }
     const QString prefix = shaderParameterPrefix(path);
     for (const auto& parameter : view_->shaderParameters()) {
@@ -1519,10 +1511,7 @@ bool MainWindow::applyShaderPreset(const QString& path) {
 
 void MainWindow::setGameGearLcdEnabled(bool enabled) {
     if (gameGearLcdEnabled_ == enabled) return;
-    if (enabled && blarggFilter_) {
-        blarggFilter_ = 0;
-        settings_.setValue(QStringLiteral("view/blarggFilter"), 0);
-    }
+    if (enabled && blarggFilter_ && !applyShaderPreset({})) return;
     gameGearLcdEnabled_ = enabled;
     settings_.setValue(QStringLiteral("view/gameGearLcd"), enabled);
     session_.setGameGearLcd(enabled);

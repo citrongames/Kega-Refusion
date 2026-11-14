@@ -1,4 +1,6 @@
-/* Kega Refusion adaptation, 2026-11-01: retained md_ntsc 0.1.2 kernel
+/* Kega Refusion GPU adaptation, 2026-11-14: SMS 0.2.3 phase data and
+ * rescaling are selected by BLARGG_GPU_SMS; otherwise unchanged MD kernel.
+ * Kega Refusion adaptation, 2026-11-01: retained md_ntsc 0.1.2 kernel
  * generation/correction only; fixed-width unsigned packing and immutable local
  * MD phase data. Row/global bitmap coupling and output typedefs omitted.
  * Original notices follow. See PROVENANCE.txt and COPYING.LGPL-2.1. */
@@ -314,8 +316,14 @@ typedef struct pixel_info_t
 #endif
 
 static pixel_info_t const md_ntsc_pixels [alignment_count] = {
+#if defined(BLARGG_GPU_SMS) && BLARGG_GPU_SMS
+  { PIXEL_OFFSET( -4, -9 ), { 1, 1, .6667f, 0 } },
+  { PIXEL_OFFSET( -2, -7 ), { .3333f, 1, 1, .3333f } },
+  { PIXEL_OFFSET(  0, -5 ), { 0, .6667f, 1, 1 } },
+#else
   { PIXEL_OFFSET( -4, -9 ), { 0.1f, 0.9f, 0.9f, 0.1f } },
   { PIXEL_OFFSET( -2, -7 ), { 0.1f, 0.9f, 0.9f, 0.1f } },
+#endif
 };
 
 /* Generate pixel at all burst phases and column alignments */

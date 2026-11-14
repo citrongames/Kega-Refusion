@@ -4,6 +4,7 @@
 #include "input/ControllerType.h"
 #include "core/InputDisplay.h"
 
+#include <cstdint>
 #include <QElapsedTimer>
 #include <QCursor>
 #include <QImage>
@@ -30,7 +31,7 @@ public:
 
     explicit GameView(QWidget* parent = nullptr);
     ~GameView() override;
-    bool setShaderPreset(const QString& path, QString* error = nullptr);
+    bool setShaderPreset(const QString& path, QString* error = nullptr, int blarggFilter = 0);
     QString shaderPreset() const { return shaderPreset_.path; }
     QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
     bool setShaderParameter(const QString& id, float value);
@@ -117,6 +118,11 @@ private:
     QRectF gameRect() const;
     QRect openArea() const;
     void paintRaster(QPainter& painter);
+    const QImage& rasterVideo();
+    std::vector<std::uint32_t> rasterBlarggTable_;
+    QImage rasterBlarggFrame_;
+    qint64 rasterSourceKey_ = 0;
+    bool rasterH40_ = false;
     void paintCrosshairs(QPainter& painter);
     bool mouseGunAvailable() const;
     void updateMouseAim(const QPointF& position);

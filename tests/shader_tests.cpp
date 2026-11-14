@@ -1,4 +1,5 @@
 #include "ui/ShaderPipeline.h"
+#include "ui/BlarggKernel.h"
 #include "ui/GameView.h"
 
 #include <QApplication>
@@ -98,7 +99,34 @@ void memoryBudgetTests(const QString& directory) {
             error.contains(QStringLiteral("128 MiB")), "aggregate shader memory budget was not enforced before allocation");
 }
 
+// H32 and H40 can alternate within a game. Exercise the presentation pass,
+// including orientation and resource recreation after returning to the launcher.
+void blarggTests() {
+    ShaderPreset preset;
+    preset.blarggFilter = 2;
+    QString error;
+    ShaderPipeline pipeline;
+    require(pipeline.initialize(preset, error), qPrintable(error));
+    for (const int width : {160, 320, 256}) {
+        QImage input(width, 5, QImage::Format_RGB32);
+        for (int y = 0; y < input.height(); ++y)
+            for (int x = 0; x < width; ++x)
+                input.setPixel(x, y, qRgb((x*7 + y*31) % 256, (x+y)*13 % 256, (x%3)*112));
+        const bool h40 = BlarggKernel::usesH40(width);
+        const auto table = BlarggKernel::generate(preset.blarggFilter, h40);
+        QImage expected(BlarggKernel::outputWidth(width, h40), input.height(), QImage::Format_RGB32);
+        for (int y = 0; y < input.height(); ++y)
+            BlarggKernel::filterRow(table.data(), h40,
+                reinterpret_cast<const QRgb*>(input.constScanLine(y)), width,
+                reinterpret_cast<QRgb*>(expected.scanLine(y)));
+        const QImage actual = render(pipeline, input, expected.size()).convertToFormat(QImage::Format_RGB32);
+        require(actual == expected, "GPU Blargg samples differ from the reference row");
+        if (h40) pipeline.releaseBlarggImages();
+    }
+}
+
 void gpuTests(const QString& directory) {
+    blarggTests();
     QString error;
     ShaderPreset preset;
     // A final shader may draw the cabinet from framebuffer coordinates while

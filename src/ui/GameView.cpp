@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "GameView.h"
+#include "BlarggKernel.h"
 #include "InputDisplayPainter.h"
 #include "WaylandMouseCapture.h"
 #include <QCursor>
@@ -147,6 +148,12 @@ public:
         doneCurrent();
         return image;
     }
+    void releaseBlarggImages() {
+        if (!pipeline_ || !isValid()) return;
+        makeCurrent();
+        pipeline_->releaseBlarggImages();
+        doneCurrent();
+    }
     void resetFrameHistory() {
         if (pipeline_) pipeline_->resetFrameHistory();
     }
@@ -210,7 +217,9 @@ private:
     void failed(const QString& error) {
         if (failurePending_) return;
         failurePending_ = true;
-        QTimer::singleShot(0, owner_, [owner = owner_, error] { owner->gpuFailed(error); });
+        QTimer::singleShot(0, this, [this, error] {
+            if (owner_->shaderView_ == this) owner_->gpuFailed(error);
+        });
     }
     GameView* owner_;
     std::unique_ptr<ShaderPipeline> pipeline_;
@@ -273,11 +282,26 @@ QImage GameView::captureImage() {
 QImage GameView::captureGameImage() {
     if (frame_.isNull()) return {};
     const QSize native = VideoFrameGeometry::nativeSize(frame_);
-    if (shaderView_ && shaderView_->isVisible() && shaderView_->isValid() && !shaderPreset_.path.isEmpty())
+    if (shaderView_ && shaderView_->isVisible() && shaderView_->isValid() && (!shaderPreset_.path.isEmpty() || shaderPreset_.blarggFilter))
         return shaderView_->captureGameImage(native);
     // Debug masks and backdrop are already applied in the core. A core video
     // filter can produce more samples than the console raster (e.g. Blargg).
-    return frame_.size() == native ? frame_ : frame_.scaled(native, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    const QImage& video = rasterVideo();
+    if (video.size() == native) return video;
+    if (!shaderPreset_.blarggFilter)
+        return video.scaled(native, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    // Select the center sample just as the GPU does when presenting the
+    // expanded signal at native screenshot size (Qt fast scaling rounds ties down).
+    QImage capture(native, QImage::Format_RGB32);
+    if (capture.isNull()) return {};
+    for (int y = 0; y < native.height(); ++y) {
+        const int sy = ((2*y + 1) * video.height()) / (2*native.height());
+        const auto* row = reinterpret_cast<const QRgb*>(video.constScanLine(sy));
+        auto* out = reinterpret_cast<QRgb*>(capture.scanLine(y));
+        for (int x = 0; x < native.width(); ++x)
+            out[x] = row[((2*x + 1) * video.width()) / (2*native.width())];
+    }
+    return capture;
 }
 
 void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
@@ -306,6 +330,9 @@ void GameView::clearGame() {
     notices_.clear(); stateSlots_.expiresAt = 0; clearAchievementNotices(); osdTimer_.stop();
     movieMode_ = 0; movieFrame_ = movieLength_ = 0;
     videoRecording_ = false;
+    if (shaderView_ && shaderPreset_.blarggFilter) shaderView_->releaseBlarggImages();
+    std::vector<std::uint32_t>().swap(rasterBlarggTable_);
+    rasterBlarggFrame_ = {};
     runTimerReady_ = false;
     runTimerFrames_ = runTimerMicroseconds_ = 0;
     runTimerText_.clear();
@@ -1340,6 +1367,31 @@ void GameView::paintCrosshairs(QPainter& painter) {
     painter.restore();
 }
 
+// Keep the filter available with Qt's raster backend. A repaint of the same
+// game frame (e.g. for an OSD timeout) reuses the filtered image.
+const QImage& GameView::rasterVideo() {
+    if (!shaderPreset_.blarggFilter || frame_.isNull()) return frame_;
+    const bool h40 = BlarggKernel::usesH40(frame_.width());
+    if (rasterBlarggTable_.empty() || h40 != rasterH40_) {
+        rasterBlarggTable_ = BlarggKernel::generate(shaderPreset_.blarggFilter, h40);
+        rasterH40_ = h40;
+    }
+    if (rasterBlarggTable_.empty()) return frame_;
+    if (!rasterBlarggFrame_.isNull() && rasterSourceKey_ == frame_.cacheKey()) return rasterBlarggFrame_;
+    const QSize size(BlarggKernel::outputWidth(frame_.width(), h40), frame_.height());
+    if (rasterBlarggFrame_.size() != size)
+        rasterBlarggFrame_ = QImage(size, QImage::Format_RGB32);
+    if (rasterBlarggFrame_.isNull()) return frame_;
+    const QImage input = frame_.format() == QImage::Format_RGB32 ? frame_ : frame_.convertToFormat(QImage::Format_RGB32);
+    if (input.isNull()) return frame_;
+    for (int y = 0; y < input.height(); ++y)
+        BlarggKernel::filterRow(rasterBlarggTable_.data(), h40,
+            reinterpret_cast<const std::uint32_t*>(input.constScanLine(y)), input.width(),
+            reinterpret_cast<std::uint32_t*>(rasterBlarggFrame_.scanLine(y)));
+    rasterSourceKey_ = frame_.cacheKey();
+    return rasterBlarggFrame_;
+}
+
 void GameView::paintRaster(QPainter& painter) {
     painter.fillRect(rect(), frame_.isNull() ? QColor(17, 20, 27) : QColor(Qt::black));
 
@@ -1378,7 +1430,7 @@ void GameView::paintRaster(QPainter& painter) {
     } else {
         const QRectF target = gameRect();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-        painter.drawImage(target, frame_);
+        painter.drawImage(target, shaderView_ ? frame_ : rasterVideo());
     }
 }
 
@@ -1555,7 +1607,7 @@ void GameView::resizeEvent(QResizeEvent* event) {
 
 void GameView::gpuFailed(const QString& error) {
     const bool hadShader = !shaderPreset_.path.isEmpty();
-    shaderPreset_ = {};
+    if (hadShader) shaderPreset_ = {};
     spriteOwnership_ = {};
     emit spriteOwnershipRequested(false);
     gpuFailed_ = true;
@@ -1568,9 +1620,13 @@ void GameView::gpuFailed(const QString& error) {
     if (hadShader) emit shaderFailed(error);
 }
 
-bool GameView::setShaderPreset(const QString& path, QString* error) {
+bool GameView::setShaderPreset(const QString& path, QString* error, int blarggFilter) {
     QString failure;
     ShaderPreset next;
+    if (blarggFilter && (!path.isEmpty() || blarggFilter < 2 || blarggFilter > 4)) {
+        if (error) *error = QStringLiteral("Invalid built-in Blargg preset.");
+        return false;
+    }
     if (!path.isEmpty() && !ShaderPreset::load(path, next, failure)) {
         if (error) *error = failure;
         return false;
@@ -1580,11 +1636,23 @@ bool GameView::setShaderPreset(const QString& path, QString* error) {
         if (error) *error = QStringLiteral("GLSL shaders require a native OpenGL window; this platform only supports raster rendering.");
         return false;
     }
+    next.blarggFilter = blarggFilter;
     if (shaderView_ && !shaderView_->load(next, failure)) {
-        if (error) *error = failure;
-        return false;
+        if (!blarggFilter) {
+            if (error) *error = failure;
+            return false;
+        }
+        // A raster implementation is available even on drivers that support
+        // the stock display pass but cannot allocate the Blargg lookup texture.
+        shaderView_->hide();
+        shaderView_->deleteLater();
+        shaderView_ = nullptr;
+        gpuFailed_ = true;
     }
     shaderPreset_ = std::move(next);
+    std::vector<std::uint32_t>().swap(rasterBlarggTable_);
+    rasterBlarggFrame_ = {};
+    rasterSourceKey_ = 0;
     spriteOwnership_ = {};
     emit spriteOwnershipRequested(shaderPreset_.usesSpriteOwnership());
     if (!path.isEmpty() && !shaderView_) {

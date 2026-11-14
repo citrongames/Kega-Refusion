@@ -94,7 +94,7 @@ private:
     void updateGunAim(unsigned player, QPointF position, bool offscreen);
     void deliverMouseMotion(unsigned player, double dx, double dy);
     void resetAnalogMotion();
-    bool applyShaderPreset(const QString& path);
+    bool applyShaderPreset(const QString& path, int blarggFilter = 0);
     void editShaderParameters();
     void updateShaderActions();
     void setGameGearLcdEnabled(bool enabled);

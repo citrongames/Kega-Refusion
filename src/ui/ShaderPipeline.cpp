@@ -1,4 +1,6 @@
 #include "ShaderPipeline.h"
+#include "BlarggPass.h"
+#include "BlarggKernel.h"
 
 #include <QImageReader>
 #include <QMatrix4x4>
@@ -247,7 +249,9 @@ bool ShaderPipeline::compile(const QByteArray& source, std::unique_ptr<Program>&
 
 bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
     initializeOpenGLFunctions();
-    // Disabling GLSL keeps the stock display pass, also used for Blargg output.
+    if (preset.blarggFilter && (preset.blarggFilter < 2 || preset.blarggFilter > 4 ||
+                                !preset.passes.isEmpty() || !preset.path.isEmpty()))
+        return fail(error, QStringLiteral("Invalid built-in Blargg preset."));
     if ((!preset.path.isEmpty() && preset.passes.isEmpty()) || preset.passes.size() > ShaderPreset::maxPasses ||
         preset.feedbackPass < -1 || preset.feedbackPass >= preset.passes.size())
         return fail(error, QStringLiteral("Invalid GLSL pass count or feedback pass."));
@@ -270,6 +274,10 @@ bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
         buffers_.push_back(nullptr);
     }
     if (!compile(stockSource, stock_, error, -1) || !loadTextures(error)) return false;
+    if (preset.blarggFilter) {
+        blargg_ = std::make_unique<BlarggPass>();
+        if (!blargg_->initialize(error)) return false;
+    }
     // RetroArch presents an unscaled final shader in screen coordinates. Use
     // the same orientation in our final pass buffer; its blit then stays upright.
     // Explicit FBOs (including feedback) retain the intermediate texture layout.
@@ -288,6 +296,10 @@ bool ShaderPipeline::initialize(const ShaderPreset& preset, QString& error) {
     historySizes_.resize(history);
     if (history) glGenTextures(history, historyTextures_.data());
     return texture_ || fail(error, QStringLiteral("Cannot allocate the video input texture."));
+}
+
+void ShaderPipeline::releaseBlarggImages() {
+    if (blargg_) blargg_->releaseImages();
 }
 
 bool ShaderPipeline::setParameter(const QString& id, float value) {
@@ -444,6 +456,15 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     std::array<QSize, ShaderPreset::maxPasses> outputs;
     QSize input = frame.size();
     qint64 videoBytes = lutBytes_ + textureBytes(input, 4, inputMips);
+    if (blargg_) {
+        // Games can switch dot clocks. Account for both cached kernels and
+        // the single horizontal-resampling target before allocating either.
+        const bool h40 = BlarggKernel::usesH40(input.width());
+        const QSize filtered(BlarggKernel::outputWidth(input.width(), h40), input.height());
+        const int words = BlarggKernel::entrySize(false) + BlarggKernel::entrySize(true);
+        videoBytes += qint64(BlarggKernel::colors) * words * sizeof(std::uint32_t)
+                    + textureBytes(filtered, 4, false);
+    }
     for (QSize size : historySizes_) videoBytes += textureBytes(size, 4, inputMips);
     for (qsizetype i = 0; i < preset_.passes.size(); ++i) {
         const auto& pass = preset_.passes[i];
@@ -534,6 +555,12 @@ bool ShaderPipeline::render(const QImage& frame, unsigned framebuffer, const QSi
     }
     unsigned source = texture_;
     input = frame.size();
+    if (blargg_) {
+        if (!blargg_->render(source, input, preset_.blarggFilter, BlarggKernel::usesH40(input.width()), error))
+            return false;
+        source = blargg_->texture();
+        input = blargg_->size();
+    }
     glClearColor(0, 0, 0, 0);
     for (qsizetype i = 0; i < preset_.passes.size(); ++i) {
         const auto& pass = preset_.passes[i];

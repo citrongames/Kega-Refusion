@@ -22,3 +22,27 @@ composite, S-Video and RGB presets. Existing GPX filtering is not changed.
 
 The original LGPL 2.1 text is included in COPYING.LGPL-2.1. The component and
 these adaptations are provided under LGPL 2.1 or later, as the original code.
+
+GPU Blargg kernel adaptation, Kega Refusion, 2026-11-14.
+
+Source: the md_ntsc 0.1.2 and sms_ntsc 0.2.3 implementations in
+Genesis Plus GX revision f27655b592ef43f317272d79883bcaa10d3ac8ad:
+https://github.com/libretro/Genesis-Plus-GX/tree/f27655b592ef43f317272d79883bcaa10d3ac8ad/core/ntsc
+Copyright (C) 2006-2007 Shay Green; LGPL version 2.1 or later.
+GPX adaptations are identified by EkeEke in the donors.
+
+md_ntsc_kernel_impl.h derives from the retained MD kernel implementation
+and adds the upstream SMS three-alignment pixel weights. The common
+resampling logic already supports the SMS 8-composite-sample/7-output ratio.
+BlarggKernel.cpp retains the preset coefficients and MD/SMS error correction,
+using fixed uint32_t packing and all 5/6/5 input bits for mixed/native RGB.
+The GPU uses byte-packed RGBA8 lookup textures and the original six/eight
+phase contributions. It never approximates the filter with a generic blur.
+The common RGB presentation image has no core palette backdrop. Its edge
+policy intentionally differs from the donor's backdrop padding: repeat each
+row's leftmost/rightmost RGB samples, including H32 initial extra pixels and
+the final chunk. This keeps uniform backgrounds uniform to the screen edge.
+The phase order and coefficients remain upstream exact. H40 widths not
+divisible by four are extended and cropped to twice their source width.
+
+The LGPL 2.1 text is included in COPYING.LGPL-2.1.
