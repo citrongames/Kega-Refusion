@@ -669,7 +669,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         error = Localization::text(QStringLiteral("Неподдерживаемый картридж или неверный размер ROM.")); return false;
     }
     // Resolve hardware once from original bytes, before checksum/attachment options.
-    const bool firecore = CartridgeProfile::firecore(ext, QByteArrayView(content));
+    const auto sourceRomHash = digest(content);
+    const bool firecore = CartridgeProfile::firecore(ext, content, sourceRomHash);
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
     if (!initialize(error)) return false;
     if (firecore && (!api_->features || !(api_->features() & 0x80u))) {
@@ -752,7 +753,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     if (api_->set_paprium_music && api_->paprium_active && api_->paprium_active())
         papriumMusic_.configure(gamePath_);
     contentName_ = name;
-    romHash_ = digest(content_);
+    romHash_ = sourceRomHash;
     legacyGameKey_ = QString::fromLatin1(romHash_.toHex());
     gameKey_ = readableSaveStem(name);
     api_->get_system_av_info(&av_);

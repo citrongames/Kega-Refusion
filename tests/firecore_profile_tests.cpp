@@ -24,8 +24,8 @@ void setters(QByteArray& bytes) {
     require(code.size() == 60, "fixture length");
     bytes.replace(0x33b2,code.size(),code);
 }
-bool detects(const char* ext,const QByteArray& bytes) {
-    return CartridgeProfile::firecore(QString::fromLatin1(ext),QByteArrayView(bytes));
+bool detects(const char* ext,const QByteArray& bytes,QByteArrayView hash = {}) {
+    return CartridgeProfile::firecore(QString::fromLatin1(ext),QByteArrayView(bytes),hash);
 }
 }
 
@@ -57,34 +57,58 @@ int main(int argc,char** argv) {
         auto constants=ordinary;constants.replace(0x33c0,4,QByteArray::fromHex("98009801"));
         require(!detects("bin",constants),"isolated register values rejected");
         require(!detects("bin",QByteArray(511,'\0')),"short BIN rejected");
+        for (const auto* shared : {"SEGA MEGA DRIVE (C)DEVWORKS 2005", "SEGA GENESIS (C) 2004 FVRING    ",
+                                  "SEGA GENESIS    ", "SEGA MEGA DRIVE (C)TECTOY"}) {
+            auto generic=ordinary;const QByteArray header(shared);generic.replace(0x100,header.size(),header);
+            require(!detects("bin",generic),"shared publisher/copyright string must remain MD");
+        }
         if (argc>1) {
-            unsigned total=0,firecore=0;
+            unsigned total=0,firecore=0,knownDumps=0;
             QDirIterator files(QString::fromLocal8Bit(argv[1]),QDir::Files,QDirIterator::Subdirectories);
             while(files.hasNext()) {
                 const auto path=files.next();
                 if(QFileInfo(path).suffix().compare("bin",Qt::CaseInsensitive))continue;
                 QFile f(path);require(f.open(QIODevice::ReadOnly),"corpus read");
-                ++total;firecore+=detects("bin",f.readAll());
+                const auto bytes=f.readAll();const auto sha=QCryptographicHash::hash(bytes,QCryptographicHash::Sha256);
+                ++total;firecore+=detects("bin",bytes,sha);
+                require(!detects("md",bytes,sha) && !detects("gen",bytes,sha),"explicit MD extensions remain MD");
+                if (CartridgeProfile::knownFirecoreDump(bytes,sha)) {
+                    ++knownDumps;
+                    require(detects("bin",bytes) && detects("BIN",bytes,sha),"full known BIN and supplied SHA detection");
+                    require(!CartridgeProfile::knownFirecoreDump(bytes,QByteArray(32,'\0')),"wrong supplied SHA rejected");
+                    auto changed=bytes;changed[changed.size()-1]=char(changed.back()^1);
+                    require(!detects("bin",changed),"modified known dump rejected");
+                    changed=bytes;changed[0x100]=char(changed[0x100]^1);
+                    require(!detects("bin",changed),"changed known dump header rejected");
+                    require(!detects("bin",bytes.left(bytes.size()-1)),"truncated known dump rejected");
+                }
             }
             std::printf("corpus BIN profile: %u Firecore, %u ordinary, %u total\n",firecore,total-firecore,total);
-            require(total==101 && firecore==63,"corpus profile coverage changed");
+            require(total==101 && firecore==101 && knownDumps==38,"complete corpus and exact dump coverage");
         }
         if (argc>2) {
-            unsigned count=0;
+            unsigned count=0,exactDuplicates=0;
             QDirIterator files(QString::fromLocal8Bit(argv[2]),QDir::Files,QDirIterator::Subdirectories);
             while(files.hasNext()) {
                 const auto path=files.next();
                 const auto suffix=QFileInfo(path).suffix().toLower();
                 if(!QStringList{"md","gen","bin","smd","32x","68k"}.contains(suffix))continue;
                 QFile f(path);require(f.open(QIODevice::ReadOnly),"ordinary collection read");
-                const auto bytes=f.read(0x33ee);++count;
+                QByteArray bytes;
+                // Only exact-size digest candidates need complete data; code
+                // family checks need the header and both setters through $33ed.
+                if(CartridgeProfile::knownFirecoreDumpSize(f.size())) bytes=f.readAll();
+                else bytes=f.read(0x33ee);
+                ++count;
+                require(!detects("md",bytes),"ordinary MD extension overridden");
                 if(detects("bin",bytes)) {
+                    if(CartridgeProfile::knownFirecoreDump(bytes)) { ++exactDuplicates;continue; }
                     std::fprintf(stderr,"Unexpected Firecore signature: %s\n",qPrintable(path));
                     throw std::runtime_error("ordinary collection false positive");
                 }
             }
             require(count>0,"ordinary collection empty");
-            std::printf("ordinary MD signature comparison: %u files, zero false positives\n",count);
+            std::printf("ordinary MD signature comparison: %u files, %u exact known duplicates, zero false positives\n",count,exactDuplicates);
         }
         std::puts("Firecore profile routing passed");
         return 0;
