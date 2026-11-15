@@ -1,0 +1,60 @@
+--- a/core/sound/ym3438.c
++++ b/core/sound/ym3438.c
+@@ -30,6 +30,7 @@
+ 
+ #include <string.h>
+ #include "ym3438.h"
++#include "../firecore.h"
+ 
+ #define SIGN_EXTEND(bit_index, value) (((value) & ((1u << (bit_index)) - 1u)) - ((value) & (1u << (bit_index))))
+ 
+@@ -213,6 +214,18 @@
+     chip->write_busy_cnt &= 0x1f;
+ }
+ 
++static void OPN2_LatchKeyOperators(ym3438_t *chip, Bit32u chan)
++{
++    /* OP1 */
++    chip->mode_kon[chan] = chip->mode_kon_operator[0];
++    /* OP2 */
++    chip->mode_kon[chan + 12] = chip->mode_kon_operator[1];
++    /* OP3 */
++    chip->mode_kon[chan + 6] = chip->mode_kon_operator[2];
++    /* OP4 */
++    chip->mode_kon[chan + 18] = chip->mode_kon_operator[3];
++}
++
+ static void OPN2_DoRegWrite(ym3438_t *chip)
+ {
+     Bit32u i;
+@@ -384,6 +397,14 @@
+                 chip->timer_b_reset = (chip->write_data >> 5) & 0x01;
+                 break;
+             case 0x28: /* Key on/off */
++                /* Firecore software can address another channel before this
++                 * channel's 24-clock scan completes. Deliver the preceding
++                 * command before replacing the shared key register. A command
++                 * already seen by the scan simply writes the same four bits. */
++                if (kr_firecore_active && chip->mode_kon_channel < 6)
++                {
++                    OPN2_LatchKeyOperators(chip, chip->mode_kon_channel);
++                }
+                 for (i = 0; i < 4; i++)
+                 {
+                     chip->mode_kon_operator[i] = (chip->write_data >> (4 + i)) & 0x01;
+@@ -1149,14 +1170,7 @@
+     }
+     if (chip->cycles == chip->mode_kon_channel)
+     {
+-        /* OP1 */
+-        chip->mode_kon[chan] = chip->mode_kon_operator[0];
+-        /* OP2 */
+-        chip->mode_kon[chan + 12] = chip->mode_kon_operator[1];
+-        /* OP3 */
+-        chip->mode_kon[chan + 6] = chip->mode_kon_operator[2];
+-        /* OP4 */
+-        chip->mode_kon[chan + 18] = chip->mode_kon_operator[3];
++        OPN2_LatchKeyOperators(chip, chan);
+     }
+ }
+ 

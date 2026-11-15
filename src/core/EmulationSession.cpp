@@ -336,6 +336,7 @@ void EmulationSession::setRewindSpeed(bool accelerate, int fixedFactor) {
     rewindFactor_.store(accelerate ? 0 : std::clamp(fixedFactor,1,16));
 }
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
+void EmulationSession::setFirecoreDmcPcm(bool enabled) { enqueue({Type::FirecoreDmcPcm,{},enabled?1:0}); }
 void EmulationSession::setNukedYm2612(bool enabled) { enqueue({Type::NukedYm2612,{},enabled?1:0}); }
 void EmulationSession::setSmsFmEnabled(bool enabled) { enqueue({Type::SmsFm,{},enabled?1:0}); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
@@ -1334,6 +1335,7 @@ void EmulationSession::run() {
                 break;
             }
             case Type::NetSlots: networkSlots=unsigned(command.value)&0x3ff;slotStatus();break;
+            case Type::FirecoreDmcPcm: host.setFirecoreDmcPcm(command.value!=0); break;
             case Type::NukedYm2612: host.setNukedYm2612(command.value!=0); break;
             case Type::SmsFm: host.setSmsFmEnabled(command.value!=0); break;
             case Type::NetFactor: fastForwardFactor_.store(command.value==0?0:std::clamp(command.value,2,32)); break;

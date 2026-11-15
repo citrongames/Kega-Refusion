@@ -83,6 +83,7 @@ bool smsControllerHardware(unsigned system) {
 }
 const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
+constexpr auto dmcPcmKey = "kegarefusion_firecore_dmc_pcm";
 constexpr char ym2612Key[] = "genesis_plus_gx_ym2612";
 const char* ym2612Model(bool nuked) { return nuked ? "nuked (ym2612)" : "mame (ym2612)"; }
 constexpr qsizetype runClockBytes = 24;
@@ -214,6 +215,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->features = reinterpret_cast<decltype(api_->features)>(library_.resolve("retro_kegarefusion_core_features"));
     api_->input_polled = reinterpret_cast<decltype(api_->input_polled)>(library_.resolve("retro_kegarefusion_input_polled"));
     api_->rewind_video = reinterpret_cast<decltype(api_->rewind_video)>(library_.resolve("retro_kegarefusion_rewind_video"));
+    api_->set_firecore_dmc_pcm = reinterpret_cast<decltype(api_->set_firecore_dmc_pcm)>(library_.resolve("retro_kegarefusion_set_firecore_dmc_pcm"));
     api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
@@ -859,6 +861,14 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
         if (!setCoreOption("genesis_plus_gx_add_on", "none", error)) return false;
         if (variableValues_.count("genesis_plus_gx_32x_add_on") &&
             !setCoreOption("genesis_plus_gx_32x_add_on", "disconnected", error)) return false;
+    }
+    if (!movieConfigurationActive_ && applyPending)
+        activeFirecoreDmcPcm_ = contentFirecore_ && firecoreDmcPcm_;
+    if (api_->set_firecore_dmc_pcm) {
+        api_->set_firecore_dmc_pcm(contentFirecore_ && activeFirecoreDmcPcm_);
+    } else if (contentFirecore_ && activeFirecoreDmcPcm_) {
+        error = Localization::text(QStringLiteral("Для Firecore требуется обновлённое ядро."));
+        return false;
     }
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
@@ -1859,7 +1869,7 @@ QByteArray LibretroHost::networkCompatibility() const {
     return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) +
         (linkPeer_ ? (isGameGear() ? QByteArrayLiteral(":gg-link-v2") : QByteArrayLiteral(":md-link-v1")) : QByteArray()) +
         (api_->get_bram_raw ? QByteArrayLiteral(":rewind-native-v1") : QByteArray()) +
-        (contentFirecore_ ? QByteArrayLiteral(":firecore-v3") : QByteArray()));
+        (contentFirecore_ ? (api_->set_firecore_dmc_pcm ? QByteArrayLiteral(":firecore-v4") : QByteArrayLiteral(":firecore-v3")) : QByteArray()));
 }
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
     const auto identity = networkCompatibility();
@@ -2274,6 +2284,9 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
     QJsonObject options;
     for (const auto& [key,value] : variables_)
         options.insert(QString::fromUtf8(key), QString::fromUtf8(value));
+    const bool dmcPcm = forPowerReset && !movieConfigurationActive_ ? firecoreDmcPcm_ : activeFirecoreDmcPcm_;
+    if (contentFirecore_ && dmcPcm)
+        options.insert(QLatin1String(dmcPcmKey), QStringLiteral("enabled"));
     if (forPowerReset && !movieConfigurationActive_) {
         options.insert(QString::fromLatin1(ym2612Key), QString::fromLatin1(ym2612Model(nukedYm2612_)));
         options.insert(QStringLiteral("genesis_plus_gx_ym2413"), smsFmEnabled_ ? QStringLiteral("enabled") : QStringLiteral("disabled"));
@@ -2413,7 +2426,12 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     if (cd && !api_->get_bram) {
         error = Localization::text(QStringLiteral("Для записи Sega CD требуется ядро с доступом к BRAM.")); return false;
     }
-    const auto options = configuration.value(QStringLiteral("options")).toObject();
+    auto options = configuration.value(QStringLiteral("options")).toObject();
+    const auto dmcPcm = options.take(QLatin1String(dmcPcmKey));
+    if (!dmcPcm.isUndefined() && (!contentFirecore_ || dmcPcm.toString() != QLatin1String("enabled"))) {
+        error = Localization::text(QStringLiteral("Повреждено описание параметров ядра записи."));
+        return false;
+    }
     auto newOptions = variables_;
     if (!options.contains(QStringLiteral("genesis_plus_gx_32x_add_on")) &&
         newOptions.count("genesis_plus_gx_32x_add_on"))
@@ -2547,6 +2565,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     if (!movieConfigurationActive_) {
         preMovieVariables_ = variables_;
         preMovieOptionOverrides_ = optionOverrides_;
+        preMovieFirecoreDmcPcm_ = activeFirecoreDmcPcm_;
         preMovieAutoFixChecksum_ = autoFixChecksum_;
         preMovieControllerConnected_ = controllerConnected_;
         preMovieControllerSixButton_ = controllerSixButton_;
@@ -2555,6 +2574,7 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         movieConfigurationActive_ = true;
     }
     linkRequested_ = configuration.value(QStringLiteral("linkCable")).toBool(false);
+    activeFirecoreDmcPcm_ = !dmcPcm.isUndefined();
     optionOverrides_ = newOptions;
     for (const auto& [key,value] : newOptions) if (variables_[key] != value) {
         variables_[key] = value; variablesUpdated_ = true;
@@ -2612,6 +2632,11 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
                 preMovieOptionOverrides_[fm->first] = fm->second;
             }
         }
+    }
+    if (!keepRunningFm || !loaded_) {
+        activeFirecoreDmcPcm_ = preMovieFirecoreDmcPcm_;
+        if (loaded_ && api_->set_firecore_dmc_pcm)
+            api_->set_firecore_dmc_pcm(contentFirecore_ && activeFirecoreDmcPcm_);
     }
     preMovieVariables_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     preMovieOptionOverrides_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;

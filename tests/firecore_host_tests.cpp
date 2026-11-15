@@ -90,6 +90,22 @@ int main(int argc,char** argv) {
         require(host.prepareNetwork(networkConfig,error),qPrintable(error));
         require(host.restoreNetworkState(networkState,error),qPrintable(error));
         require(host.restoreMovieConfiguration(error),qPrintable(error));
+        const auto dmcKey = QStringLiteral("kegarefusion_firecore_dmc_pcm");
+        host.setFirecoreDmcPcm(true);
+        require(!host.movieConfiguration().value("options").toObject().contains(dmcKey),"pending PCM change leaves running game alone");
+        auto enhanced = host.movieConfiguration(true);
+        require(enhanced.value("options").toObject().value(dmcKey)=="enabled","next power records enhanced PCM");
+        require(host.hardReset(error),qPrintable(error));
+        require(host.movieConfiguration().value("options").toObject().contains(dmcKey),"power applies local PCM preference");
+        require(host.prepareMovie(config,error),qPrintable(error));
+        require(!host.movieConfiguration().value("options").toObject().contains(dmcKey),"old recording keeps original PCM");
+        require(host.restoreMovieConfiguration(error),qPrintable(error));
+        host.setFirecoreDmcPcm(false);
+        require(host.hardReset(error),qPrintable(error));
+        enhanced.insert("networkCompatibility",QString::fromLatin1(network.toHex()));
+        require(host.prepareNetwork(enhanced,error),qPrintable(error));
+        require(host.movieConfiguration().value("options").toObject().contains(dmcKey),"peer adopts host PCM");
+        require(host.restoreMovieConfiguration(error),qPrintable(error));
         // Changing only the declared hardware must fail before interpreting state.
         auto wrongProfile=config;wrongProfile.insert("cartridgeProfile","md");
         require(!host.prepareMovie(wrongProfile,error),"movie rejects another hardware profile");

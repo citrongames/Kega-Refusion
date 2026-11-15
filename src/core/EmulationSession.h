@@ -44,6 +44,7 @@ public:
     void setRemoveSpriteLimit(bool enabled);
     void setAutoFixChecksum(bool enabled);
     void setSmsFmEnabled(bool enabled);
+    void setFirecoreDmcPcm(bool enabled);
     void setNukedYm2612(bool enabled);
     void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
     bool takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership = nullptr);
@@ -184,7 +185,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm};
     struct Command {
         Type type;
         QString path;

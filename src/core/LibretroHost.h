@@ -63,6 +63,7 @@ public:
     void setExpansionDevices(ExpansionMode cd, ExpansionMode x32);
     void reset();
     bool hardReset(QString& error, bool applyPending = true);
+    void setFirecoreDmcPcm(bool enabled) { firecoreDmcPcm_ = enabled; }
     void setNukedYm2612(bool enabled) { nukedYm2612_ = enabled; }
     void setSmsFmEnabled(bool enabled) { smsFmEnabled_ = enabled; }
     bool isMasterSystem() const;
@@ -281,6 +282,8 @@ private:
     bool localGameGearLcd_ = false;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
+    bool firecoreDmcPcm_ = false, activeFirecoreDmcPcm_ = false;
+    bool preMovieFirecoreDmcPcm_ = false;
     bool nukedYm2612_ = false;
     bool smsFmEnabled_ = true;
     ExpansionMode cdMode_ = ExpansionMode::Auto, x32Mode_ = ExpansionMode::Auto;

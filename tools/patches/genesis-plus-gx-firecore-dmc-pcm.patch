@@ -1,0 +1,82 @@
+--- a/core/firecore.h
++++ b/core/firecore.h
+@@ -3,6 +3,7 @@
+ #define KEGA_FIRECORE_H
+ 
+ extern int kr_firecore_active;
++extern int kr_firecore_dmc_pcm;
+ void md_cart_firecore_apply_z80_clock(void);
+ void md_cart_firecore_set_m68k_base_ratio(unsigned int ratio);
+ 
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3566,6 +3566,12 @@
+  * legacy libretro polling loop visits physical slots in ascending order. */
+ extern uint8 kegarefusion_jcart_slots[2];
+ static uint32 kegarefusion_input_map = 0xffffffffu;
++/* Local audio enhancement. The frontend freezes it at power-on for replay. */
++RETRO_API void retro_kegarefusion_set_firecore_dmc_pcm(bool enabled)
++{
++   kr_firecore_dmc_pcm = enabled;
++}
++
+ RETRO_API bool retro_kegarefusion_jcart(void) { return (cart.special & HW_J_CART) != 0; }
+ RETRO_API uint32 retro_kegarefusion_input_map(void) { return kegarefusion_input_map; }
+ 
+--- a/core/genesis.c
++++ b/core/genesis.c
+@@ -498,6 +498,36 @@
+   }
+ }
+ 
++int kr_firecore_dmc_pcm;
++
++/* The 2009 DMC PCM driver copies four bytes per DAC sample, then busy-waits
++ * for the rest of each buffer. Distribute the same work over all samples.
++ * Only replace an intact upload before its first instruction, in sound RAM.
++ * ROM reads and checksums continue to see the original program. */
++static void firecore_prepare_pcm_driver(void)
++{
++  static const uint8 delay[] = {
++    0x3e, 0x09,       /* LD A,9 */
++    0x3d, 0x20, 0xfd, /* DEC A / JR NZ,-3 */
++    0xd9, 0xc9        /* EXX / RET, as in the original exit */
++  };
++  static const uint8 idle_delay[] = {0x13,0x1b,0x13,0x1b,0x13,0x1b};
++
++  if (memcmp(zram + 9, "DMC Z80 Driver Demo", 19) ||
++      crc32(0, zram, 1073) != 0x49963811u)
++    return;
++
++  zram[0x216] = 1; /* refill one byte */
++  zram[0x22a] = 1; /* subtract one from remaining length */
++  zram[0x235] = 0x2a;
++  zram[0x236] = 0; /* JP NZ,$002A into unused space before the IM 1 vector */
++  memcpy(zram + 0x2a, delay, sizeof(delay));
++  /* Replace NOPs in the idle branch with balanced INC DE / DEC DE pairs.
++   * These preserve registers and flags while matching the refill cadence. */
++  memcpy(zram + 0x24f, idle_delay, 2);
++  memcpy(zram + 0x25c, idle_delay, sizeof(idle_delay));
++}
++
+ void gen_zbusreq_w(unsigned int data, unsigned int cycles)
+ {
+   if (data)  /* !ZBUSREQ asserted */
+@@ -520,6 +550,8 @@
+     /* check if Z80 is going to be restarted */
+     if (zstate == 3)
+     {
++      if (kr_firecore_dmc_pcm && kr_firecore_active && !Z80.pc.w.l)
++        firecore_prepare_pcm_driver();
+       /* resynchronize with 68k (Z80 cycles should remain a multiple of 15 MClocks) */
+       Z80.cycles = ((cycles + 14) / 15) * 15;
+ 
+@@ -539,6 +571,8 @@
+     /* check if Z80 is going to be restarted */
+     if (zstate == 0)
+     {
++      if (kr_firecore_dmc_pcm && kr_firecore_active)
++        firecore_prepare_pcm_driver();
+       /* resynchronize with 68k (Z80 cycles should remain a multiple of 15 MClocks) */
+       Z80.cycles = ((cycles + 14) / 15) * 15;
+ 

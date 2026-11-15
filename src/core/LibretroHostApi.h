@@ -27,6 +27,7 @@ struct LibretroHost::Api {
     const char* (*recording_abi)() = nullptr;
     const char* (*network_state_abi)() = nullptr;
     unsigned (*features)() = nullptr;
+    void (*set_firecore_dmc_pcm)(bool) = nullptr;
     int (*ym2612_backend)() = nullptr;
     unsigned (*system_hw)() = nullptr;
     unsigned (*sms_pause_state_version)() = nullptr;
