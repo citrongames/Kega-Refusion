@@ -1018,7 +1018,7 @@
     "Ввод": "Input",
     "Видео": "Video",
     "Экспортировать запись ввода…": "Export Input Recording…",
-    "Остановить запись видео": "Stop Video Recording",
+    "Остановить запись": "Stop recording",
     "Откройте игру, для которой сохранена запись ввода.": "Load the game that matches the input recording.",
     "Идёт запись видео: %1": "Recording video: %1",
     "Экспорт: %1 / %2 кадров": "Export: %1 / %2 frames",

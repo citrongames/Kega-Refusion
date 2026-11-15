@@ -855,7 +855,7 @@ void MainWindow::buildMenus() {
     videoExportAction_->setToolTip(Localization::text(QStringLiteral("Откройте игру, для которой сохранена запись ввода.")));
     connect(videoExportAction_, &QAction::triggered, this, &MainWindow::exportInputVideo);
     videoMenu_->addSeparator();
-    videoStopAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Остановить запись видео")));
+    videoStopAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Остановить запись")));
     videoStopAction_->setObjectName(QStringLiteral("videoStop"));
     connect(videoStopAction_, &QAction::triggered, this, &MainWindow::stopVideoCapture);
     updateMovieActions();
