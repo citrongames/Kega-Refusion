@@ -423,3 +423,11 @@ Two independent corrected processes matched all PCM, video and full native state
 A controlled comparison using the real network snapshot API found identical emulated RAM digests before and after normalizing the unused pointers. On the old build the serialized snapshot SHA changed; on the fixed build the entire snapshot matched. GGPO does not compare that SHA between peers to detect gameplay divergence. This was a snapshot API comparison, not a two-machine session.
 
 Sonic CD (Europe, PAL) also matched with initialized graphics and when restoring an active stamp operation across core versions. In the cold native-restore then file-restore sequence, the first presented image differs from fresh power-on on both builds. PCM and native state match throughout, and subsequent images match.
+
+## Firecore release and update from 0.26.0 to 0.27.0 (2026-11-15)
+
+Both x86-64 Release packages were built from tag `v0.27.0` at `2de1dea`. The public GitHub latest redirect selected this tag. The English notes in the published update metadata matched the release body. Both public binary downloads matched the archive sizes and SHA-256 digests advertised to the updater. The Linux package retained the Debian 12 / glibc 2.36 baseline.
+
+On Linux, the released 0.26.0 application discovered the update, downloaded it and restarted into 0.27.0 on an isolated display. All 172 installed manifest entries matched. Twelve user-file markers and both settings files survived. The helper left no staging directory or error.
+
+On native Windows, the packaged 0.26.0 helper applied the staged 0.27.0 ZIP contents in an isolated installation. The installed executable reported 0.27.0, all 127 manifest entries matched, and four user files covering battery saves, quick saves, settings and BIOS survived.
