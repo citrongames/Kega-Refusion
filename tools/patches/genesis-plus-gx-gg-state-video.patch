@@ -1,0 +1,25 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -1256,12 +1256,17 @@ void vdp_sms_ctrl_w(unsigned int data)
+             parse_satb = parse_satb_m4;
+             render_obj = render_obj_m4;
+ 
+-            /* force BG cache update */
+-            bg_list_index = 0x200;
+-            for (i=0;i<0x200;i++) 
++            /* State loading replays register writes before restoring VRAM.
++             * Keep the dirty list coherent so vdp_set_all_vram can queue
++             * the patterns that differ from the restored state. */
++            if (!do_not_invalidate_tile_cache)
+             {
+-              bg_name_list[i] = i;
+-              bg_name_dirty[i] = 0xFF;
++              bg_list_index = 0x200;
++              for (i=0;i<0x200;i++)
++              {
++                bg_name_list[i] = i;
++                bg_name_dirty[i] = 0xFF;
++              }
+             }
+           }
+           else

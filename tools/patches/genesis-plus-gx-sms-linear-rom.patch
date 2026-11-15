@@ -1,0 +1,11 @@
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -1758,7 +1758,7 @@
+       for (i = 0x20; i < 0x30; i++)
+       {
+         /* $8000-$BFFF mapped to cartridge ROM upper KB (mirrored if less than 48KB) */
+-        z80_readmap[i] = &slot.rom[(0x20 + (i % (slot.pages - 0x20))) << 10];
++        z80_readmap[i] = &slot.rom[(0x20 + ((i - 0x20) % (slot.pages - 0x20))) << 10];
+         z80_writemap[i] = cart.rom + 0x510000; /* unused area */
+       }
+     }

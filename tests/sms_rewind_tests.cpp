@@ -34,6 +34,11 @@ QByteArray fixture(bool gg, bool sg) {
     // SMS and GG palettes use different colour widths; initialize both halves.
     code({0x3e,0,0xd3,0xbf,0x3e,0xc0,0xd3,0xbf});
     for(unsigned i=0;i<(gg?64u:32u);++i) code({0x3e,(i*7)&0xff,0xd3,0xbe});
+    if (!sg) {
+        // Give tile zero a visible row. A backdrop-only frame cannot detect a lost tile cache.
+        code({0x3e,0,0xd3,0xbf,0x3e,0x40,0xd3,0xbf}); // VRAM write at $0000
+        code({0x3e,0xff,0xd3,0xbe});                    // colour 1 across the row
+    }
     const int loop=pc;
     code({0xdb,0xbf,0xe6,0x80,0x28,0xfa}); // wait for next VBlank flag
     code({0x3a,0,0xc0,0x3c,0x32,0,0xc0});
