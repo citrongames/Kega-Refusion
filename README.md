@@ -13,6 +13,7 @@ Emulation is based on a modified **Genesis Plus GX** core, with integrated 32X s
 | System | Support |
 |---|---|
 | Mega Drive / Genesis | Cartridge games, including supported unlicensed mappers and J-Cart |
+| AtGames Firecore | Initial single-game cartridge support, verified with Wall Breaking. Open a recognized BIN or rename a raw Firecore BIN to `.atf`. |
 | Master System, Game Gear, SG-1000 | Cartridge games; automatic and manual region selection |
 | Sega CD / Mega-CD | CUE/BIN, ISO, CHD, M3U playlists and supported MP3 audio tracks |
 | 32X and Sega CD + 32X | Integrated, experimental support; compatibility is still being improved |

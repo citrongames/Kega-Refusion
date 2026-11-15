@@ -1,0 +1,912 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -5017,7 +5017,11 @@
+   vscroll = link_wire_get32(in + 48);
+   vint_cycle = link_wire_get32(in + 52);
+   m68k.refresh_cycles = link_wire_get_i32(in + 60);
+-  if (reg[1] & 4)
++  /* Raster timing restores im2_flag after vdp_context_load rebuilt the
++   * cache and palette. Select hardware dispatch from that restored mode. */
++  if (KR_FIRECORE_VDP_ENABLED)
++    vdp_firecore_refresh_rendering();
++  else if (reg[1] & 4)
+   {
+     parse_satb = im2_flag ? parse_satb_m5_im2 : parse_satb_m5;
+     render_bg = im2_flag ? ((reg[11] & 4) ? render_bg_m5_im2_vs : render_bg_m5_im2) :
+@@ -5052,6 +5056,7 @@
+ 
+     /* Clear color palettes */
+     memset(pixel, 0, sizeof(pixel));
++    render_firecore_reset();
+ 
+     /* Clear pattern cache */
+     memset((char *)bg_pattern_cache, 0, sizeof(bg_pattern_cache));
+@@ -5128,8 +5133,15 @@
+   }
+ }
+ 
++#include "vdp_render_firecore.inc"
++
+ void render_line(int line)
+ {
++  if (FIRECORE_RENDERING)
++  {
++    firecore_render_line(line);
++    return;
++  }
+   if (kega_sprite_hint_active)
+   {
+     /* A mid-frame switch away from Mode 5 invalidates the whole sidecar. */
+@@ -5213,6 +5225,13 @@
+ 
+ void blank_line(int line, int offset, int width)
+ {
++  if (FIRECORE_RENDERING)
++  {
++    memset(&linebuf_firecore[0][0x20 + offset], 0, width * sizeof(uint32));
++    if (kega_sprite_hint_active) memset(&kega_sprite_hint_line[0x20 + offset], 0, width);
++    firecore_remap_line(line);
++    return;
++  }
+   if (kega_sprite_hint_active)
+     memset(&kega_sprite_hint_line[0x20 + offset], 0, width);
+   memset(&linebuf[0][0x20 + offset], 0x40, width);
+@@ -5221,6 +5240,11 @@
+ 
+ void remap_line(int line)
+ {
++  if (FIRECORE_RENDERING)
++  {
++    firecore_remap_line(line);
++    return;
++  }
+ #if defined(KEGAREFUSION_32X) && defined(USE_16BPP_RENDERING)
+   const int logical_line = line;
+ #endif
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -140,6 +140,21 @@
+ extern void color_update_m4(int index, unsigned int data);
+ extern void color_update_m5(int index, unsigned int data);
+ 
++extern int render_firecore_init(void);
++extern void render_firecore_shutdown(void);
++extern void render_firecore_reset(void);
++extern void render_bg_firecore(int line);
++extern void render_bg_firecore_vs(int line);
++extern void render_bg_firecore_im2(int line);
++extern void render_bg_firecore_im2_vs(int line);
++extern void render_bg_firecore_bitmap(int line);
++extern void render_obj_firecore(int line);
++extern void render_obj_firecore_ste(int line);
++extern void render_obj_firecore_im2(int line);
++extern void render_obj_firecore_im2_ste(int line);
++extern void update_bg_pattern_cache_firecore(int index);
++extern void color_update_firecore(int index, unsigned int data);
++
+ /* Function pointers */
+ extern void (*render_bg)(int line);
+ extern void (*render_obj)(int line);
+--- /dev/null
++++ b/core/vdp_render_firecore.inc
+@@ -0,0 +1,820 @@
++/* AtGames Firecore renderer, derived from karmic64's Cyclone implementation
++ * (306cfb020cdb). Keep the shared MD cache and sprite parser. Only Firecore
++ * sessions allocate these buffers; priority is evaluated directly rather than
++ * retaining the reference's three 8 MiB mixing tables. */
++#include <stdlib.h>
++
++typedef struct
++{
++  uint32 line[2][0x200];
++  uint32 rgb[0x200];
++  PIXEL_OUT_T palette[0x200];
++} firecore_render_t;
++
++static firecore_render_t *firecore_render;
++#define linebuf_firecore (firecore_render->line)
++#define FIRECORE_RENDERING (kr_firecore_active && (reg[0x18] & 0x80) && firecore_render)
++
++static const uint16 atex_table_firecore[8] =
++{ 0x000, 0x040, 0x080, 0x0c0, 0x200, 0x240, 0x280, 0x2c0 };
++
++static PIXEL_OUT_T firecore_rgb(unsigned r, unsigned g, unsigned b)
++{
++#if defined(USE_32BPP_RENDERING)
++  return PIXEL(r, g, b);
++#elif defined(USE_16BPP_RENDERING)
++  return PIXEL(r >> 3, g >> 2, b >> 3);
++#elif defined(USE_15BPP_RENDERING)
++  return PIXEL(r >> 3, g >> 3, b >> 3);
++#else
++  return PIXEL(r >> 5, g >> 5, b >> 6);
++#endif
++}
++
++void color_update_firecore(int index, unsigned int data)
++{
++  unsigned i = (index >> 1) & 0x1ff;
++  uint32 rgb;
++  if (!firecore_render) return;
++  rgb = firecore_render->rgb[i];
++  if (index & 1) rgb = (rgb & 0xffff00) | (data & 0xff);
++  else rgb = (rgb & 0xff) | ((data & 0xff) << 16) | (data & 0xff00);
++  firecore_render->rgb[i] = rgb;
++  firecore_render->palette[i] = firecore_rgb(rgb >> 16, (rgb >> 8) & 255, rgb & 255);
++}
++
++int render_firecore_init(void)
++{
++  if (!firecore_render) firecore_render = (firecore_render_t *)calloc(1, sizeof(*firecore_render));
++  return firecore_render != NULL;
++}
++
++void render_firecore_shutdown(void)
++{
++  free(firecore_render);
++  firecore_render = NULL;
++}
++
++void render_firecore_reset(void)
++{
++  if (firecore_render) memset(firecore_render, 0, sizeof(*firecore_render));
++}
++
++static uint32 firecore_read32(unsigned address)
++{
++  uint32 value;
++  address &= 0x1ffff;
++  if (address <= 0x1fffc) memcpy(&value, &vram[address], sizeof(value));
++  else
++  {
++    uint8 bytes[4];
++    unsigned i;
++    for (i = 0; i < 4; ++i) bytes[i] = vram[(address + i) & 0x1ffff];
++    memcpy(&value, bytes, sizeof(value));
++  }
++  return value;
++}
++
++static void firecore_draw_column(uint32 *dst, uint32 attr, unsigned row, unsigned palette)
++{
++  unsigned tile, x;
++  for (tile = 0; tile < 2; ++tile)
++  {
++#ifdef LSB_FIRST
++    unsigned a = (attr >> (tile * 16)) & 0xffff;
++#else
++    unsigned a = (attr >> ((1 - tile) * 16)) & 0xffff;
++#endif
++    const uint8 *src = &bg_pattern_cache[((a & 0x1fff) << 6) | row];
++    unsigned bits = atex_table_firecore[(a >> 13) & 7] | palette;
++    for (x = 0; x < 8; ++x) *dst++ = *src++ | bits;
++  }
++}
++
++#define DRAW_COLUMN_FIRECORE(ATTR, ROW, PAL) do { \
++  firecore_draw_column(dst, ATTR, ROW, PAL); dst += 16; \
++} while (0);
++
++static void firecore_merge_background(uint32 *a, uint32 *b, uint32 *dst, unsigned width, int line)
++{
++  unsigned x;
++  int left = 0, right = bitmap.viewport.w;
++  if (((reg[18] >> 7) & 1) != (line >= ((reg[18] & 0x1f) << 3)))
++  {
++    left = clip[1].enable ? clip[1].left << 4 : 0;
++    right = clip[1].enable ? clip[1].right << 4 : 0;
++  }
++  for (x = 0; x < width; ++x)
++  {
++    unsigned ax = a[x], bx = b[x], c;
++    if (kega_debug_video_mask & (1u << (((int)x >= left && (int)x < right) ? 2 : 0))) ax = 0;
++    if (kega_debug_video_mask & 2u) bx = 0;
++    c = (ax & 0x200) ? ((ax & 0x3f) ? ax : bx) :
++        ((bx & 0x200) ? ((bx & 0x3f) ? bx : ax) : ((ax & 0x3f) ? ax : bx));
++    dst[x] = (c & 0x3f) ? (c & 0x3ff) : 0;
++  }
++}
++
++void render_bg_firecore(int line)
++{
++  int column;
++  uint32 atbuf, *dst;
++
++  /* Common data */
++  uint32 xscroll      = firecore_read32(hscb + ((line & hscroll_mask) << 2));
++  uint32 yscroll      = *(uint32 *)&vsram[0];
++  uint32 pf_col_mask  = playfield_col_mask;
++  uint32 pf_row_mask  = playfield_row_mask;
++  uint32 pf_shift     = playfield_shift;
++
++  /* Window & Plane A */
++  int a = (reg[18] & 0x1F) << 3;
++  int w = (reg[18] >> 7) & 1;
++
++  /* Plane B width */
++  int start = 0;
++  int end = bitmap.viewport.w >> 4;
++
++  /* Plane B scroll */
++#ifdef LSB_FIRST
++  uint32 shift  = (xscroll >> 16) & 0x0F;
++  uint32 index  = pf_col_mask + 1 - ((xscroll >> 20) & pf_col_mask);
++  uint32 v_line = (line + (yscroll >> 16)) & pf_row_mask;
++#else
++  uint32 shift  = (xscroll & 0x0F);
++  uint32 index  = pf_col_mask + 1 - ((xscroll >> 4) & pf_col_mask);
++  uint32 v_line = (line + yscroll) & pf_row_mask;
++#endif
++
++  /* Plane B name table */
++  uint32 nt = ntbb + (((v_line >> 3) << pf_shift) & 0x1FC0);
++
++  /* Pattern row index */
++  v_line = (v_line & 7) << 3;
++
++  if(shift)
++  {
++    /* Plane B line buffer */
++    dst = (uint32 *)&linebuf_firecore[0][0x10 + shift];
++
++    atbuf = firecore_read32(nt + (((index - 1) & pf_col_mask) << 2));
++    DRAW_COLUMN_FIRECORE(atbuf, v_line, bpalbase)
++  }
++  else
++  {
++    /* Plane B line buffer */
++    dst = (uint32 *)&linebuf_firecore[0][0x20];
++  }
++
++  for(column = 0; column < end; column++, index++)
++  {
++    atbuf = firecore_read32(nt + ((index & pf_col_mask) << 2));
++    DRAW_COLUMN_FIRECORE(atbuf, v_line, bpalbase)
++  }
++
++  if (w == (line >= a))
++  {
++    /* Window takes up entire line */
++    a = 0;
++    w = 1;
++  }
++  else
++  {
++    /* Window and Plane A share the line */
++    a = clip[0].enable;
++    w = clip[1].enable;
++  }
++
++  /* Plane A */
++  if (a)
++  {
++    /* Plane A width */
++    start = clip[0].left;
++    end   = clip[0].right;
++
++    /* Plane A scroll */
++#ifdef LSB_FIRST
++    shift   = (xscroll & 0x0F);
++    index   = pf_col_mask + start + 1 - ((xscroll >> 4) & pf_col_mask);
++    v_line  = (line + yscroll) & pf_row_mask;
++#else
++    shift   = (xscroll >> 16) & 0x0F;
++    index   = pf_col_mask + start + 1 - ((xscroll >> 20) & pf_col_mask);
++    v_line  = (line + (yscroll >> 16)) & pf_row_mask;
++#endif
++
++    /* Plane A name table */
++    nt = ntab + (((v_line >> 3) << pf_shift) & 0x1FC0);
++
++    /* Pattern row index */
++    v_line = (v_line & 7) << 3;
++
++    if(shift)
++    {
++      /* Plane A line buffer */
++      dst = (uint32 *)&linebuf_firecore[1][0x10 + shift + (start << 4)];
++
++      /* Window bug */
++      if (start)
++      {
++        atbuf = firecore_read32(nt + ((index & pf_col_mask) << 2));
++      }
++      else
++      {
++        atbuf = firecore_read32(nt + (((index - 1) & pf_col_mask) << 2));
++      }
++
++      DRAW_COLUMN_FIRECORE(atbuf, v_line, apalbase)
++    }
++    else
++    {
++      /* Plane A line buffer */
++      dst = (uint32 *)&linebuf_firecore[1][0x20 + (start << 4)];
++    }
++
++    for(column = start; column < end; column++, index++)
++    {
++      atbuf = firecore_read32(nt + ((index & pf_col_mask) << 2));
++      DRAW_COLUMN_FIRECORE(atbuf, v_line, apalbase)
++    }
++
++    /* Window width */
++    start = clip[1].left;
++    end   = clip[1].right;
++  }
++
++  /* Window */
++  if (w)
++  {
++    /* Window name table */
++    nt = ntwb | ((line >> 3) << (6 + (reg[12] & 1)));
++
++    /* Pattern row index */
++    v_line = (line & 7) << 3;
++
++    /* Plane A line buffer */
++    dst = (uint32 *)&linebuf_firecore[1][0x20 + (start << 4)];
++
++    for(column = start; column < end; column++)
++    {
++      atbuf = firecore_read32(nt + ((column) << 2));
++      DRAW_COLUMN_FIRECORE(atbuf, v_line, wpalbase)
++    }
++  }
++
++  /* Merge background layers */
++  firecore_merge_background(&linebuf_firecore[1][0x20], &linebuf_firecore[0][0x20], &linebuf_firecore[0][0x20], bitmap.viewport.w, line);
++}
++
++
++
++void render_bg_firecore_vs(int line)
++{
++  int column;
++  uint32 atbuf, *dst;
++  uint32 v_line, nt;
++
++  /* Common data */
++  uint32 xscroll      = firecore_read32(hscb + ((line & hscroll_mask) << 2));
++  uint32 yscroll      = 0;
++  uint32 pf_col_mask  = playfield_col_mask;
++  uint32 pf_row_mask  = playfield_row_mask;
++  uint32 pf_shift     = playfield_shift;
++  uint32 *vs          = (uint32 *)&vsram[0];
++
++  /* Window & Plane A */
++  int a = (reg[18] & 0x1F) << 3;
++  int w = (reg[18] >> 7) & 1;
++
++  /* Plane B width */
++  int start = 0;
++  int end = bitmap.viewport.w >> 4;
++
++  /* Plane B horizontal scroll */
++#ifdef LSB_FIRST
++  uint32 shift  = (xscroll >> 16) & 0x0F;
++  uint32 index  = pf_col_mask + 1 - ((xscroll >> 20) & pf_col_mask);
++#else
++  uint32 shift  = (xscroll & 0x0F);
++  uint32 index  = pf_col_mask + 1 - ((xscroll >> 4) & pf_col_mask);
++#endif
++
++  /* Left-most column vertical scrolling when partially shown horizontally (verified on PAL MD2)  */
++  /* TODO: check on Genesis 3 models since it apparently behaves differently  */
++  /* In H32 mode, vertical scrolling is disabled, in H40 mode, same value is used for both planes */
++  /* See Formula One / Kawasaki Superbike Challenge (H32) & Gynoug / Cutie Suzuki no Ringside Angel (H40) */
++  if (reg[12] & 1)
++  {
++    yscroll = vs[19] & (vs[19] >> 16);
++  }
++
++  if(shift)
++  {
++    /* Plane B vertical scroll */
++    v_line = (line + yscroll) & pf_row_mask;
++
++    /* Plane B name table */
++    nt = ntbb + (((v_line >> 3) << pf_shift) & 0x1FC0);
++
++    /* Pattern row index */
++    v_line = (v_line & 7) << 3;
++
++    /* Plane B line buffer */
++    dst = (uint32 *)&linebuf_firecore[0][0x10 + shift];
++
++    atbuf = firecore_read32(nt + (((index - 1) & pf_col_mask) << 2));
++    DRAW_COLUMN_FIRECORE(atbuf, v_line, bpalbase)
++  }
++  else
++  {
++    /* Plane B line buffer */
++    dst = (uint32 *)&linebuf_firecore[0][0x20];
++  }
++
++  for(column = 0; column < end; column++, index++)
++  {
++    /* Plane B vertical scroll */
++#ifdef LSB_FIRST
++    v_line = (line + (vs[column] >> 16)) & pf_row_mask;
++#else
++    v_line = (line + vs[column]) & pf_row_mask;
++#endif
++
++    /* Plane B name table */
++    nt = ntbb + (((v_line >> 3) << pf_shift) & 0x1FC0);
++
++    /* Pattern row index */
++    v_line = (v_line & 7) << 3;
++
++    atbuf = firecore_read32(nt + ((index & pf_col_mask) << 2));
++    DRAW_COLUMN_FIRECORE(atbuf, v_line, bpalbase)
++  }
++
++  if (w == (line >= a))
++  {
++    /* Window takes up entire line */
++    a = 0;
++    w = 1;
++  }
++  else
++  {
++    /* Window and Plane A share the line */
++    a = clip[0].enable;
++    w = clip[1].enable;
++  }
++
++  /* Plane A */
++  if (a)
++  {
++    /* Plane A width */
++    start = clip[0].left;
++    end   = clip[0].right;
++
++    /* Plane A horizontal scroll */
++#ifdef LSB_FIRST
++    shift = (xscroll & 0x0F);
++    index = pf_col_mask + start + 1 - ((xscroll >> 4) & pf_col_mask);
++#else
++    shift = (xscroll >> 16) & 0x0F;
++    index = pf_col_mask + start + 1 - ((xscroll >> 20) & pf_col_mask);
++#endif
++
++    if(shift)
++    {
++      /* Plane A vertical scroll */
++      v_line = (line + yscroll) & pf_row_mask;
++
++      /* Plane A name table */
++      nt = ntab + (((v_line >> 3) << pf_shift) & 0x1FC0);
++
++      /* Pattern row index */
++      v_line = (v_line & 7) << 3;
++
++      /* Plane A line buffer */
++      dst = (uint32 *)&linebuf_firecore[1][0x10 + shift + (start << 4)];
++
++      /* Window bug */
++      if (start)
++      {
++        atbuf = firecore_read32(nt + ((index & pf_col_mask) << 2));
++      }
++      else
++      {
++        atbuf = firecore_read32(nt + (((index - 1) & pf_col_mask) << 2));
++      }
++
++      DRAW_COLUMN_FIRECORE(atbuf, v_line, apalbase)
++    }
++    else
++    {
++      /* Plane A line buffer */
++      dst = (uint32 *)&linebuf_firecore[1][0x20 + (start << 4)];
++    }
++
++    for(column = start; column < end; column++, index++)
++    {
++      /* Plane A vertical scroll */
++#ifdef LSB_FIRST
++      v_line = (line + vs[column]) & pf_row_mask;
++#else
++      v_line = (line + (vs[column] >> 16)) & pf_row_mask;
++#endif
++
++      /* Plane A name table */
++      nt = ntab + (((v_line >> 3) << pf_shift) & 0x1FC0);
++
++      /* Pattern row index */
++      v_line = (v_line & 7) << 3;
++
++      atbuf = firecore_read32(nt + ((index & pf_col_mask) << 2));
++      DRAW_COLUMN_FIRECORE(atbuf, v_line, apalbase)
++    }
++
++    /* Window width */
++    start = clip[1].left;
++    end   = clip[1].right;
++  }
++
++  /* Window */
++  if (w)
++  {
++    /* Window name table */
++    nt = ntwb | ((line >> 3) << (6 + (reg[12] & 1)));
++
++    /* Pattern row index */
++    v_line = (line & 7) << 3;
++
++    /* Plane A line buffer */
++    dst = (uint32 *)&linebuf_firecore[1][0x20 + (start << 4)];
++
++    for(column = start; column < end; column++)
++    {
++      atbuf = firecore_read32(nt + ((column) << 2));
++      DRAW_COLUMN_FIRECORE(atbuf, v_line, wpalbase)
++    }
++  }
++
++  /* Merge background layers */
++  firecore_merge_background(&linebuf_firecore[1][0x20], &linebuf_firecore[0][0x20], &linebuf_firecore[0][0x20], bitmap.viewport.w, line);
++}
++
++
++/*** todo all these ***/
++void render_bg_firecore_im2(int line)
++{
++  render_bg_firecore(line);
++}
++
++void render_bg_firecore_im2_vs(int line)
++{
++  render_bg_firecore_vs(line);
++}
++
++
++/*** firecore bitmap bg ***/
++void render_bg_firecore_bitmap(int line)
++{
++  int width = bitmap.viewport.w;
++  
++  uint32 *dst = &linebuf_firecore[0][0x20];
++  
++  uint8 *src = &vram[0x4e00 + 320*(line & (~1))];
++  int row = line & 1;
++  if (kega_debug_video_mask & 1u)
++  {
++    memset(dst, 0, width * sizeof(*dst));
++    return;
++  }
++  
++  for (int column = 0; column < width; column += 2)
++  {
++#ifdef LSB_FIRST
++    uint32 box = ((uint32)src[3]<<24) | ((uint32)src[2]<<16) | ((uint32)src[1]<<8) | src[0];
++#else
++    uint32 box = ((uint32)src[2]<<24) | ((uint32)src[3]<<16) | ((uint32)src[0]<<8) | src[1];
++#endif
++    
++    uint8 y = box >> 26;
++    uint8 u = (box >> 20) & 0x3f;
++    uint8 vl;
++    uint8 vr;
++    if (!row)
++    { /*** upper ***/
++      vl = box & 0x1f;
++      vr = (box >> 5) & 0x1f;
++    }
++    else
++    { /*** lower ***/
++      vl = (box >> 10) & 0x1f;
++      vr = (box >> 15) & 0x1f;
++    }
++    
++    *(dst++) = ((y<<11)|(u<<5)|vl) + 0x800;
++    *(dst++) = ((y<<11)|(u<<5)|vr) + 0x800;
++    
++    src += 4;
++  }
++}
++
++
++
++void update_bg_pattern_cache_firecore(int index)
++{
++  int i;
++  uint8 x, y;
++  uint8 *dst;
++  uint16 name;
++  uint8 b0,b1,b2,b3,b4,b5; /*** rearranged to the more sensible order ***/
++  uint8 p[8];
++
++  for(i = 0; i < index; i++)
++  {
++    /* Get modified pattern name index */
++    name = bg_name_list[i];
++
++    /* Pattern cache base address */
++    dst = &bg_pattern_cache[name << 6];
++
++    /* Check modified lines */
++    for(y = 0; y < 8; y ++)
++    {
++      if(bg_name_dirty[name] & (1 << y))
++      {
++        uint8 *src = &vram[name*0x30 + y*6];
++        
++#ifdef LSB_FIRST
++        b0 = src[5];
++        b1 = src[4];
++        b2 = src[3];
++        b3 = src[2];
++        b4 = src[1];
++        b5 = src[0];
++#else
++        b0 = src[4];
++        b1 = src[5];
++        b2 = src[2];
++        b3 = src[3];
++        b4 = src[0];
++        b5 = src[1];
++#endif
++        
++        p[0] = b5 & 0x3f;
++        p[1] = (b5 >> 6) | ((b4 & 0x0f) << 2);
++        p[2] = (b4 >> 4) | ((b3 & 3) << 4);
++        p[3] = (b3 >> 2);
++        p[4] = b2 & 0x3f;
++        p[5] = (b2 >> 6) | ((b1 & 0x0f) << 2);
++        p[6] = (b1 >> 4) | ((b0 & 3) << 4);
++        p[7] = (b0 >> 2);
++        
++        for (x = 0; x < 8; x++)
++        {
++          dst[0x00000 | ((y) << 3) | (x)] = p[x];
++          dst[0x20000 | ((y) << 3) | (x^7)] = p[x];
++          dst[0x40000 | ((y^7) << 3) | (x)] = p[x];
++          dst[0x60000 | ((y^7) << 3) | (x^7)] = p[x];
++        }
++      }
++    }
++
++    /* Clear modified pattern flag */
++    bg_name_dirty[name] = 0;
++  }
++  
++}
++
++
++void render_obj_firecore(int line)
++{
++  int i, column;
++  int xpos, width;
++  int pixelcount = 0;
++  int masked = 0;
++  int max_pixels = MODE5_MAX_SPRITE_PIXELS;
++
++  uint8 *src, *s;
++  uint32 *lb;
++  uint32 temp, v_line;
++  uint32 attr, name, atex;
++
++  /* Sprite list for current line */
++  object_info_t *object_info = obj_info[line];
++  int count = object_count[line];
++
++  /* Draw sprites in front-to-back order */
++  while (count--)
++  {
++    /* Sprite X position */
++    xpos = object_info->xpos;
++
++    /* Sprite masking  */
++    if (xpos)
++    {
++      /* Requires at least one sprite with xpos > 0 */
++      spr_ovr = 1;
++    }
++    else if (spr_ovr)
++    {
++      /* Remaining sprites are not drawn */
++      masked = 1;
++    }
++
++    /* Display area offset */
++    xpos = xpos - 0x80;
++
++    /* Sprite size */
++    temp = object_info->size;
++
++    /* Sprite width */
++    width = 8 + ((temp & 0x0C) << 1);
++
++    /* Update pixel count (off-screen sprites are included) */
++    pixelcount += width;
++
++    /* Is sprite across visible area ? */
++    if (((xpos + width) > 0) && (xpos < bitmap.viewport.w) && !masked)
++    {
++      /* Sprite attributes */
++      attr = object_info->attr;
++
++      /* Sprite vertical offset */
++      v_line = object_info->ypos;
++
++      /* Sprite priority + palette bits */
++      atex = atex_table_firecore[(attr >> 13) & 7];
++
++      /* Pattern name base */
++      name = attr & 0x07FF;
++
++      /* Mask vflip/hflip */
++      attr &= 0x1800;
++
++      /* Pointer into pattern name offset look-up table */
++      s = &name_lut[((attr >> 3) & 0x300) | (temp << 4) | ((v_line & 0x18) >> 1)];
++
++      /* Pointer into line buffer */
++      lb = &linebuf_firecore[0][0x20 + xpos];
++
++      /* Max. number of sprite pixels rendered per line */
++      if (pixelcount > max_pixels)
++      {
++        /* Adjust number of pixels to draw */
++        width -= (pixelcount - max_pixels);
++      }
++
++      /* Number of tiles to draw */
++      width = width >> 3;
++
++      /* Pattern row index */
++      v_line = (v_line & 7) << 3;
++
++      /* Draw sprite patterns */
++      for (column = 0; column < width; column++, lb+=8)
++      {
++        temp = attr | ((name + s[column]) & 0x07FF);
++        src = &bg_pattern_cache[(temp << 6) | (v_line)];
++        for (i = 0; i < 8; ++i)
++        {
++          unsigned color = src[i];
++          unsigned background = lb[i];
++          unsigned sprite = color | atex | spalbase;
++          int visible;
++          if (!color) continue;
++          if (background & 0x400 && background < 0x800)
++          {
++            status |= 0x20;
++            continue;
++          }
++          visible = background >= 0x800 || (sprite & 0x200) || !(background & 0x200) || !(background & 0x3f);
++          if (kega_sprite_hint_active && !(kega_debug_video_mask & 8u))
++            kega_sprite_hint_line[lb - linebuf_firecore[0] + i] = 0x80 | (visible ? 1 : 0);
++          lb[i] = (visible ? (sprite & 0x1ff) : (background & 0x1ff)) | 0x400;
++        }
++      }
++    }
++
++    /* Sprite limit */
++    if (pixelcount >= max_pixels)
++    {
++      /* Sprite masking is effective on next line if max pixel width is reached */
++      spr_ovr = (pixelcount >= bitmap.viewport.w);
++
++      /* Stop sprite rendering */
++      return;
++    }
++
++    /* Next sprite entry */
++    object_info++;
++  }
++
++  /* Clear sprite masking for next line  */
++  spr_ovr = 0;
++}
++
++/*** todo all these ***/
++void render_obj_firecore_ste(int line)
++{
++  render_obj_firecore(line);
++}
++
++void render_obj_firecore_im2(int line)
++{
++  render_obj_firecore(line);
++}
++
++void render_obj_firecore_im2_ste(int line)
++{
++  render_obj_firecore(line);
++}
++
++
++
++
++
++/* Convert packed 2x2 YUV blocks using the same integer coefficients as the
++ * pinned reference. This avoids its 128K-entry color LUT and needs no cache. */
++static PIXEL_OUT_T firecore_bitmap_pixel(uint32 value)
++{
++  int c = (int)((value & 31) << 3) - 16;
++  int d = (int)(((value >> 11) & 63) << 2) - 128;
++  int e = (int)(((value >> 5) & 63) << 2) - 128;
++  int r = (298*c + 409*e + 128) >> 8;
++  int g = (298*c - 100*d - 208*e + 128) >> 8;
++  int b = (298*c + 516*d + 128) >> 8;
++  r = r < 0 ? 0 : (r > 255 ? 255 : r);
++  g = g < 0 ? 0 : (g > 255 ? 255 : g);
++  b = b < 0 ? 0 : (b > 255 ? 255 : b);
++  return firecore_rgb(r, g, b);
++}
++
++static void firecore_remap_line(int line)
++{
++  int x;
++  int width = bitmap.viewport.w + 2*bitmap.viewport.x;
++  const uint32 *src = &linebuf_firecore[0][0x20 - bitmap.viewport.x];
++  PIXEL_OUT_T *dst;
++  PIXEL_OUT_T *capture = NULL;
++  line = (line + bitmap.viewport.y) % lines_per_frame;
++  if (line < 0) return;
++  if (interlaced && config.render) line = (line * 2) + odd_frame;
++  if (line >= bitmap.height || width <= 0 || width > bitmap.width) return;
++  dst = (PIXEL_OUT_T *)&bitmap.data[line * bitmap.pitch];
++  if (kega_recording_bitmap) capture = (PIXEL_OUT_T *)(kega_recording_bitmap + line * bitmap.pitch);
++  for (x = 0; x < width; ++x)
++  {
++    uint32 value = src[x];
++    PIXEL_OUT_T color = value < 0x800 ? firecore_render->palette[value & 0x1ff] : firecore_bitmap_pixel(value - 0x800);
++    if (kega_debug_video_mask && value < 0x800 && !(value & 0x3f))
++      color = firecore_rgb((kega_debug_backdrop >> 16) & 255, (kega_debug_backdrop >> 8) & 255, kega_debug_backdrop & 255);
++    if (capture) capture[x] = color;
++    if (config.lcd && !kegarefusion_rewind_preview_active)
++    {
++      int r = GET_R(color), g = GET_G(color), b = GET_B(color);
++      int dr = GET_R(dst[x]) - r, dg = GET_G(dst[x]) - g, db = GET_B(dst[x]) - b;
++      if (dr > 0) r += (config.lcd * dr) >> 8;
++      if (dg > 0) g += (config.lcd * dg) >> 8;
++      if (db > 0) b += (config.lcd * db) >> 8;
++      color = PIXEL(r,g,b);
++    }
++    dst[x] = color;
++    if (kega_sprite_hint_active && width <= 720)
++      kega_sprite_hint_bitmap[line * 720 + x] = kega_sprite_hint_line[0x20 - bitmap.viewport.x + x] & 1;
++  }
++}
++
++static void firecore_render_line(int line)
++{
++  if (kega_sprite_hint_active) memset(kega_sprite_hint_line, 0, sizeof(kega_sprite_hint_line));
++  if (reg[1] & 0x40)
++  {
++    if (bg_list_index)
++    {
++      update_bg_pattern_cache_firecore(bg_list_index);
++      bg_list_index = 0;
++    }
++    render_bg(line);
++    if (kega_debug_video_mask & 8u)
++    {
++      uint32 background[0x200];
++      memcpy(background, linebuf_firecore[0], sizeof(background));
++      render_obj(line & 1);
++      memcpy(linebuf_firecore[0], background, sizeof(background));
++    }
++    else render_obj(line & 1);
++    if (reg[0] & 0x20)
++    {
++      memset(&linebuf_firecore[0][0x20], 0, 8 * sizeof(uint32));
++      if (kega_sprite_hint_active) memset(&kega_sprite_hint_line[0x20], 0, 8);
++    }
++    if (line < bitmap.viewport.h - 1) parse_satb(line);
++    if (bitmap.viewport.x > 0)
++    {
++      memset(&linebuf_firecore[0][0x20 - bitmap.viewport.x], 0, bitmap.viewport.x * sizeof(uint32));
++      memset(&linebuf_firecore[0][0x20 + bitmap.viewport.w], 0, bitmap.viewport.x * sizeof(uint32));
++    }
++  }
++  else memset(&linebuf_firecore[0][0x20 - bitmap.viewport.x], 0, (bitmap.viewport.w + 2*bitmap.viewport.x) * sizeof(uint32));
++  firecore_remap_line(line);
++}
++
++#undef DRAW_COLUMN_FIRECORE

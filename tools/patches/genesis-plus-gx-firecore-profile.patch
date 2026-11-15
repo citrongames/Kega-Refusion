@@ -1,0 +1,205 @@
+--- /dev/null
++++ b/core/firecore.h
+@@ -0,0 +1,7 @@
++/* AtGames Firecore cartridge profile, shared by the loader and VDP. */
++#ifndef KEGA_FIRECORE_H
++#define KEGA_FIRECORE_H
++
++extern int kr_firecore_active;
++
++#endif
+--- a/core/state.h
++++ b/core/state.h
+@@ -40,8 +40,9 @@
+ #define _STATE_H_
+ 
+ #include "kegapaprium/bridge.h"
++#include "firecore.h"
+ /* Reserve cartridge state only when it is combined with CD hardware. */
+-#define STATE_SIZE    (0xfd000u + paprium_extra_state_size())
++#define STATE_SIZE    (0xfd000u + paprium_extra_state_size() + (kr_firecore_active ? 0x11000u : 0u))
+ #define STATE_VERSION "GENPLUS-GX 1.7.6"
+ 
+ #define load_param(param, size) \
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -78,6 +78,7 @@
+ #include "libretro_core_options.h"
+ 
+ #include "shared.h"
++#include "firecore.h"
+ #include "megald/integration.h"
+ #include "scd.h"
+ #ifdef KEGAREFUSION_32X
+@@ -2148,7 +2149,7 @@
+   {
+     orig_value = config.ntsc;
+ 
+-    if (!var.value || !strcmp(var.value, "disabled"))
++    if (kr_firecore_active || !var.value || !strcmp(var.value, "disabled"))
+     {
+       config.ntsc = 0;
+ #ifdef KEGAREFUSION_32X
+@@ -3343,7 +3344,7 @@
+ #define GIT_VERSION ""
+ #endif
+    info->library_version = "v1.7.4" GIT_VERSION;
+-   info->valid_extensions = "mmi|m3u|mdx|md|smd|gen|bin|cue|iso|chd|bms|sms|gg|sg|68k|sgd|32x";
++   info->valid_extensions = "mmi|m3u|mdx|md|smd|gen|bin|atf|cue|iso|chd|bms|sms|gg|sg|68k|sgd|32x";
+    info->block_extract = false;
+    info->need_fullpath = true;
+ }
+@@ -3874,7 +3875,7 @@
+ 
+ RETRO_API unsigned retro_kegarefusion_core_features(void)
+ {
+-   return kegarefusion_32x_features() | 0x40u;
++   return kegarefusion_32x_features() | 0x40u | 0x80u;
+ }
+ 
+ RETRO_API unsigned retro_kegarefusion_megald_sides(void) { return kr_megald_sides(); }
+@@ -4165,8 +4166,21 @@
+    kr_yx5200_directory[length] = 0;
+ }
+ 
++int kr_firecore_active;
++
++static void firecore_close(void)
++{
++   if (kr_firecore_active)
++   {
++      render_firecore_shutdown();
++      vdp_firecore_shutdown();
++      kr_firecore_active = 0;
++   }
++}
++
+ bool retro_load_game(const struct retro_game_info *info)
+ {
++   firecore_close();
+    kega_sprite_hint_release();
+    int i;
+    char *dir       = NULL;
+@@ -4242,6 +4256,13 @@
+          strncpy(content_ext, ext + 1, sizeof(content_ext));
+          content_ext[sizeof(content_ext) - 1] = '\0';
+       }
++   }
++
++   if (!strcasecmp(content_ext, "atf"))
++   {
++      kr_firecore_active = 1;
++      if (!vdp_firecore_init() || !render_firecore_init())
++         goto error;
+    }
+ 
+ #ifdef FRONTEND_SUPPORTS_RGB565
+@@ -4439,7 +4460,7 @@
+       kr_yx5200_set_directory(info_ext, info ? info->path : NULL);
+    system_reset();
+ #ifdef KEGAREFUSION_32X
+-   if (!kr_megald_active && !kegarefusion_load_32x(dir, content_ext)) goto error;
++   if (!kr_megald_active && !kr_firecore_active && !kegarefusion_load_32x(dir, content_ext)) goto error;
+ #endif
+    is_running = false;
+ 
+@@ -4463,6 +4484,7 @@
+    return true;
+ 
+ error:
++   firecore_close();
+    if (kr_megald_active) cdd_unload();
+    kr_yx5200_close();
+ #ifdef KEGAREFUSION_32X
+@@ -4491,6 +4513,7 @@
+ 
+ void retro_unload_game(void) 
+ {
++   firecore_close();
+    if (kr_megald_active) cdd_unload();
+    kega_sprite_hint_release();
+    kega_recording_frame_ready = false;
+@@ -4638,6 +4661,7 @@
+ 
+ void retro_deinit(void)
+ {
++   firecore_close();
+    retro_kegarefusion_sprite_hint_enable(false);
+    retro_kegarefusion_recording_video(false);
+    kr_yx5200_close();
+--- a/core/loadrom.c
++++ b/core/loadrom.c
+@@ -39,6 +39,7 @@
+ 
+ #include <ctype.h>
+ #include "shared.h"
++#include "firecore.h"
+ #include "megald/integration.h"
+ 
+ /*** ROM Information ***/
+@@ -576,7 +577,13 @@
+     cdd.loaded = 0;
+   }
+ 
+-  /* auto-detect CD image file */
++  /* An explicit raw Firecore cartridge has no companion disc. */
++  if (kr_firecore_active)
++  {
++    cdd_unload();
++    size = 0;
++  }
++  else
+ #ifdef KEGAREFUSION_32X
+   {
+     uint8 cd_header[0x210] = {0};
+@@ -629,7 +636,11 @@
+     *(uint32 *)(extension) &= 0xdfdfdfdf;
+ 
+     /* auto-detect system hardware from ROM file extension */
+-    if (!memcmp("SMS", &extension[0], 3))
++    if (kr_firecore_active)
++    {
++      system_hw = SYSTEM_MD;
++    }
++    else if (!memcmp("SMS", &extension[0], 3))
+     {
+       /* Master System II hardware */
+       system_hw = SYSTEM_SMS2;
+@@ -680,7 +691,7 @@
+     }
+ 
+     /* auto-detect 512 byte extra header */
+-    if (memcmp((char *)(cart.rom + 0x100), "SEGA", 4) && ((size / 512) & 1) && !(size % 512))
++    if (!kr_firecore_active && memcmp((char *)(cart.rom + 0x100), "SEGA", 4) && ((size / 512) & 1) && !(size % 512))
+     {
+       /* remove header */
+       size -= 512;
+@@ -722,7 +733,7 @@
+ #endif
+ 
+   /* PICO ROM */
+-  if (strstr(rominfo.consoletype, "SEGA PICO") != NULL)
++  if (!kr_firecore_active && strstr(rominfo.consoletype, "SEGA PICO") != NULL)
+   {
+     /* PICO hardware */
+     system_hw = SYSTEM_PICO;
+@@ -749,7 +760,7 @@
+   }
+ 
+   /* 16-bit ROM cartridge (max. 8MB) with optional CD hardware add-on support enabled */
+-  else if ((system_hw == SYSTEM_MD) && (cart.romsize <= 0x800000) && (config.add_on != HW_ADDON_NONE))
++  else if (!kr_firecore_active && (system_hw == SYSTEM_MD) && (cart.romsize <= 0x800000) && (config.add_on != HW_ADDON_NONE))
+   {
+     int len;
+     char fname[256];
+@@ -850,7 +861,9 @@
+   }
+ 
+   /* Force system hardware if requested */
+-  if (config.system == SYSTEM_MD)
++  if (kr_firecore_active)
++    system_hw = SYSTEM_MD;
++  else if (config.system == SYSTEM_MD)
+   {
+     if (!(system_hw & SYSTEM_MD))
+     {

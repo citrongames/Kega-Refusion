@@ -140,10 +140,10 @@ int main(int argc, char** argv) {
               largeRom.startsWith(largeBlock) && largeRom.endsWith(largeBlock),
               "extract 128 MiB cartridge without truncation");
         QVector<Fixture> recognized;
-        for (const auto* extension : {"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k", "32x"})
+        for (const auto* extension : {"md", "gen", "bin", "atf", "smd", "sms", "gg", "sg", "68k", "32x"})
             recognized.append({QByteArray("game.") + extension, payload});
         check(RomArchive::list(save(temp.path() + "/extensions" + suffix,
-              pack(sevenZip, recognized)), &error).size() == 9, "all cartridge extensions");
+              pack(sevenZip, recognized)), &error).size() == 10, "all cartridge extensions");
     }
     rejected(save(temp.path() + "/encrypted.zip", pack(false, {{"game.md", payload}}, true)));
     auto crcBad = pack(false, {{"game.md", payload}}, false, true);

@@ -77,7 +77,7 @@ struct Reader {
 
 bool cartridge(const QString& name) {
     static const QStringList extensions = {
-        QStringLiteral("md"), QStringLiteral("gen"), QStringLiteral("bin"),
+        QStringLiteral("md"), QStringLiteral("gen"), QStringLiteral("bin"), QStringLiteral("atf"),
         QStringLiteral("smd"), QStringLiteral("sms"), QStringLiteral("gg"),
         QStringLiteral("sg"), QStringLiteral("68k"), QStringLiteral("32x")};
     return extensions.contains(QFileInfo(name).suffix().toLower());

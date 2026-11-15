@@ -8,6 +8,7 @@
 #include <rc_consoles.h>
 #include "RomArchive.h"
 #include "CartridgeLimits.h"
+#include "CartridgeProfile.h"
 #include "VideoFrameGeometry.h"
 #include "SegaCdBios.h"
 #include "SegaLdBios.h"
@@ -663,12 +664,18 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
         if (content.size() != fileSize || file.size() != fileSize) { error = Localization::text(QStringLiteral("ROM прочитан не полностью.")); return false; }
     }
     const auto ext = QFileInfo(name).suffix().toLower();
-    const QStringList supported{"md", "gen", "bin", "smd", "sms", "gg", "sg", "68k", "32x"};
+    const QStringList supported{"md", "gen", "bin", "atf", "smd", "sms", "gg", "sg", "68k", "32x"};
     if (!supported.contains(ext) || content.size() < 512 || content.size() > CartridgeLimits::MaxRomSize) {
         error = Localization::text(QStringLiteral("Неподдерживаемый картридж или неверный размер ROM.")); return false;
     }
+    // Resolve hardware once from original bytes, before checksum/attachment options.
+    const bool firecore = CartridgeProfile::firecore(ext, QByteArrayView(content));
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
     if (!initialize(error)) return false;
+    if (firecore && (!api_->features || !(api_->features() & 0x80u))) {
+        error = Localization::text(QStringLiteral("Для Firecore требуется обновлённое ядро."));
+        return false;
+    }
     // Some prototypes declare a Genesis cartridge but start with Sega's 32X
     // bootstrap. Match its reset vector and the adapter ID check together.
     const auto header32x = [&content](int layout) {
@@ -687,8 +694,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     };
     const bool smdLayout = content.size() >= 512 + 0x4000 &&
         ((content.size() / 512) & 1) && !(content.size() % 512) && !((content.size() - 512) % 0x4000);
-    const bool needs32x = ext == "32x" || header32x(0) || header32x(1) || (smdLayout && header32x(2));
-    const bool mdCartridge = ext != "sms" && ext != "gg" && ext != "sg";
+    const bool needs32x = !firecore && (ext == "32x" || header32x(0) || header32x(1) || (smdLayout && header32x(2)));
+    const bool mdCartridge = !firecore && ext != "sms" && ext != "gg" && ext != "sg";
     if (needs32x || (x32Mode_ == ExpansionMode::Connected && mdCartridge)) {
         if (!api_->features || !(api_->features() & 1u)) {
             error = Localization::text(QStringLiteral("Это ядро ещё не поддерживает 32X."));
@@ -707,10 +714,12 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     if (!selectDataFolders(error)) return false;
     content_ = std::move(content);
     contentNeeds32x_ = needs32x;
+    contentFirecore_ = firecore;
     encodedGamePath_ = encodedPath;
     contentDirectory_ = QDir::toNativeSeparators(info.absolutePath()).toUtf8();
     contentBaseName_ = QFileInfo(name).completeBaseName().toUtf8();
-    contentExtension_ = ext.toUtf8();
+    // Source path/member names stay intact; GET_GAME_INFO_EXT carries the profile.
+    contentExtension_ = firecore ? QByteArrayLiteral("atf") : ext.toUtf8();
     archiveMember_ = name.toUtf8();
     const bool archived = RomArchive::isArchive(path);
     prepareCoreContent();
@@ -784,6 +793,7 @@ void LibretroHost::unload() {
     { QString ignored; applyGameGearLcd(ignored); }
     active32xBiosFingerprints_ = {};
     contentNeeds32x_ = false;
+    contentFirecore_ = false;
     megaLd_ = false; megaLdRegion_ = 0; megaLdMediaIdentity_.clear();
     if (!linkParent_) CoreFileSystem::clearVirtualFiles();
     discs_.clear(); discIndex_ = 0; cdSavePath_.clear();
@@ -843,11 +853,17 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     // The next cartridge has not been detected yet. Never carry GG output
     // processing into another system; the local preference is applied after load.
     if (!setCoreOption("genesis_plus_gx_lcd_filter", "disabled", error)) return false;
+    // Firecore is a standalone console profile, including during movie resets.
+    if (contentFirecore_) {
+        if (!setCoreOption("genesis_plus_gx_add_on", "none", error)) return false;
+        if (variableValues_.count("genesis_plus_gx_32x_add_on") &&
+            !setCoreOption("genesis_plus_gx_32x_add_on", "disconnected", error)) return false;
+    }
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
     if (!setCoreOption(ym2612Key, ym2612Model(nukedYm2612_), error)) return false;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
-    if (megaLd_) return true; // PAC hardware is selected from MMI metadata by the core.
+    if (megaLd_ || contentFirecore_) return true; // Both profiles own their hardware selection.
     if (!setCoreOption("genesis_plus_gx_add_on", attachmentOption(cdMode_, "sega/mega cd", "none"), error)) return false;
     if (variableValues_.count("genesis_plus_gx_32x_add_on"))
         return setCoreOption("genesis_plus_gx_32x_add_on", attachmentOption(x32Mode_, "connected", "disconnected"), error);
@@ -1004,7 +1020,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
         const auto value = variables_.find(key);
         return value != variables_.end() && (value->second == "connected" || value->second == "sega/mega cd");
     };
-    const bool targetCd = wantedOption("genesis_plus_gx_add_on", cdMode_ == ExpansionMode::Connected);
+    const bool targetCd = !contentFirecore_ && wantedOption("genesis_plus_gx_add_on", cdMode_ == ExpansionMode::Connected);
     if (targetCd && mdHardware && !isCd() && !megaLd_) {
         if (content_.size() > 8 * 1024 * 1024) {
             error = Localization::text(QStringLiteral("Подключение Sega CD для этого картриджа не поддерживается: размер ROM больше 8 МиБ."));
@@ -1829,7 +1845,8 @@ QByteArray LibretroHost::networkCompatibility() const {
     if (!contract || !*contract) return {};
     return digest(QByteArrayLiteral("KegaRefusion-network-state:") + QByteArray(contract) +
         (linkPeer_ ? (isGameGear() ? QByteArrayLiteral(":gg-link-v2") : QByteArrayLiteral(":md-link-v1")) : QByteArray()) +
-        (api_->get_bram_raw ? QByteArrayLiteral(":rewind-native-v1") : QByteArray()));
+        (api_->get_bram_raw ? QByteArrayLiteral(":rewind-native-v1") : QByteArray()) +
+        (contentFirecore_ ? QByteArrayLiteral(":firecore-v1") : QByteArray()));
 }
 QByteArray LibretroHost::captureNetworkState(bool checksum) const {
     const auto identity = networkCompatibility();
@@ -1932,6 +1949,7 @@ void LibretroHost::refreshRecordingIdentity() {
     }
     // Native serialization is platform/architecture dependent. The core's explicit
     // contract covers both the state layout and deterministic execution behavior.
+    if (contentFirecore_ && !recordingAbi_.isEmpty()) recordingAbi_ += "-firecore-v1";
     if (linkRequested_ && !recordingAbi_.isEmpty()) recordingAbi_ += isGameGear() ? "-gg-link-v2" : "-md-link-v1";
     recordingCoreHash_ = recordingAbi_.isEmpty() ? exactCoreHash_
         : digest(QByteArrayLiteral("KegaRefusion-recording-contract:") + recordingAbi_ + ':'
@@ -2181,7 +2199,7 @@ bool LibretroHost::acceptsLegacyMovieCore(const QByteArray& identity) const {
 QByteArray LibretroHost::movieGameIdentity() const {
     if (!loaded_) return {};
     if (megaLd_) return megaLdMediaIdentity_;
-    if (discs_.isEmpty()) return digest(QByteArrayLiteral("KRMOV-CART1") + content_);
+    if (discs_.isEmpty()) return digest((contentFirecore_ ? QByteArrayLiteral("KRMOV-ATF1") : QByteArrayLiteral("KRMOV-CART1")) + content_);
     // CD identity samples each source file at both ends. This is bounded even
     // for multi-gigabyte CHDs; it is not a whole-disc cryptographic guarantee.
     QCryptographicHash hash(QCryptographicHash::Sha256);
@@ -2256,7 +2274,7 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
     for (const auto& entry : cheats())
         cheatsJson.append(QJsonObject{{QStringLiteral("code"),entry.code},
             {QStringLiteral("description"),entry.description},{QStringLiteral("enabled"),entry.enabled}});
-    return QJsonObject{{QStringLiteral("version"),2},
+    auto configuration = QJsonObject{{QStringLiteral("version"),2},
         {QStringLiteral("linkCable"),linkRequested_},
         {QStringLiteral("gameIdentity"),QString::fromLatin1(game.toHex())},
         {QStringLiteral("coreIdentity"),QString::fromLatin1(recordingCoreHash_.toHex())},
@@ -2274,6 +2292,8 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         {QStringLiteral("playerCount"),int(controllerPlayerCount())},
         {QStringLiteral("cheats"),cheatsJson},
         {QStringLiteral("bios"),movieBiosFingerprints()}};
+    if (contentFirecore_) configuration.insert(QStringLiteral("cartridgeProfile"),QStringLiteral("firecore"));
+    return configuration;
 }
 bool LibretroHost::prepareNetwork(const QJsonObject& configuration,QString& error) {
     const auto localAdapter = adapter_;
@@ -2333,7 +2353,10 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         }
     }
     const auto game = movieGameIdentity();
-    if (game.isEmpty() || configuration.value(QStringLiteral("gameIdentity")).toString() != QString::fromLatin1(game.toHex())) {
+    const auto profileValue = configuration.value(QStringLiteral("cartridgeProfile"));
+    const auto profile = profileValue.toString(QStringLiteral("md"));
+    if ((!profileValue.isUndefined() && !profileValue.isString()) || profile != (contentFirecore_ ? QLatin1String("firecore") : QLatin1String("md")) ||
+        game.isEmpty() || configuration.value(QStringLiteral("gameIdentity")).toString() != QString::fromLatin1(game.toHex())) {
         error = Localization::text(QStringLiteral("Запись относится к другой игре или изменённому образу диска.")); return false;
     }
     const auto identityText = configuration.value(QStringLiteral("coreIdentity")).toString().toLatin1();
@@ -2601,6 +2624,8 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     return true;
 }
 QByteArray LibretroHost::stateCoreIdentity() const {
+    if (contentFirecore_) return digest(coreHash_ + QByteArrayLiteral("kegarefusion-firecore-state-v1") +
+        (linkPeer_ ? QByteArrayLiteral(":md-link-v1") : QByteArray()));
     if (linkPeer_) return digest(coreHash_ + (isGameGear() ? QByteArrayLiteral("gg-link-state-v1") : QByteArrayLiteral("md-link-state-v1")));
     // Ordinary MD/CD retain their stable GPX state identity. The attachment
     // has its own versioned state contract, independent of executable hashes.

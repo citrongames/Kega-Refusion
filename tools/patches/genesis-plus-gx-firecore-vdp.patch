@@ -1,0 +1,1129 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -41,21 +41,24 @@
+ 
+ #include "shared.h"
+ #include "hvc.h"
++#include "firecore.h"
+ 
+ extern int8 reset_do_not_clear_buffers;
+ static int8 do_not_invalidate_tile_cache;
+ 
+ static void vdp_set_all_vram(const uint8 *src);
+ 
+-/* Mark a pattern as modified */
+-#define MARK_BG_DIRTY(addr)                         \
+-{                                                   \
+-  name = (addr >> 5) & 0x7FF;                       \
+-  if (bg_name_dirty[name] == 0)                     \
+-  {                                                 \
+-    bg_name_list[bg_list_index++] = name;           \
+-  }                                                 \
+-  bg_name_dirty[name] |= (1 << ((addr >> 2) & 7));  \
++/* Firecore patterns are six packed bitplanes, 48 bytes per 8x8 tile. */
++#define MARK_BG_DIRTY(address)                                      \
++{                                                                  \
++  unsigned int dirty_addr = (address) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff); \
++  name = KR_FIRECORE_VDP_ENABLED ? (dirty_addr / 48) : (dirty_addr >> 5); \
++  if (name < 0x800)                                                 \
++  {                                                                \
++    if (bg_name_dirty[name] == 0)                                   \
++      bg_name_list[bg_list_index++] = name;                          \
++    bg_name_dirty[name] |= 1 << (KR_FIRECORE_VDP_ENABLED ? ((dirty_addr / 6) & 7) : ((dirty_addr >> 2) & 7)); \
++  }                                                                \
+ }
+ 
+ /* VINT timings */
+@@ -70,7 +73,11 @@
+ 
+ /* VDP context */
+ uint8 ALIGNED_(4) sat[0x400];     /* Internal copy of sprite attribute table */
+-uint8 ALIGNED_(4) vram[0x10000];  /* Video RAM (64K x 8-bit) */
++static uint8 ALIGNED_(4) md_vram[0x10000]; /* Ordinary hardware keeps its existing 64 KiB store. */
++uint8 *vram = md_vram;
++uint8 *kr_firecore_vram;
++uint8 *kr_firecore_cram;
++uint16 apalbase, bpalbase, wpalbase, spalbase;
+ uint8 ALIGNED_(4) cram[0x80];     /* On-chip color RAM (64 x 9-bit) */
+ uint8 ALIGNED_(4) vsram[0x80];    /* On-chip vertical scroll RAM (40 x 11-bit) */
+ uint8 reg[0x20];                  /* Internal VDP registers (23 x 8-bit) */
+@@ -82,11 +89,11 @@
+ uint8 dma_type;                   /* DMA mode */
+ 
+ /* Global variables */
+-uint16 ntab;                      /* Name table A base address */
+-uint16 ntbb;                      /* Name table B base address */
+-uint16 ntwb;                      /* Name table W base address */
+-uint16 satb;                      /* Sprite attribute table base address */
+-uint16 hscb;                      /* Horizontal scroll table base address */
++uint32 ntab;                      /* Name table A base address */
++uint32 ntbb;                      /* Name table B base address */
++uint32 ntwb;                      /* Name table W base address */
++uint32 satb;                      /* Sprite attribute table base address */
++uint32 hscb;                      /* Horizontal scroll table base address */
+ uint8 bg_name_dirty[0x800];       /* 1= This pattern is dirty */
+ uint16 bg_name_list[0x800];       /* List of modified pattern indices */
+ uint16 bg_list_index;             /* # of modified patterns in list */
+@@ -129,6 +136,9 @@
+ static void vdp_z80_data_w_sg(unsigned int data);
+ static void vdp_bus_w(unsigned int data);
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles);
++static void vdp_update_md_rendering_mode(unsigned int cycles);
++static void vdp_firecore_palette_refresh(void);
++static void vdp_firecore_cram_w(unsigned int data);
+ static void vdp_dma_68k_ext(unsigned int length);
+ static void vdp_dma_68k_ram(unsigned int length);
+ static void vdp_dma_68k_io(unsigned int length);
+@@ -144,9 +154,9 @@
+ static uint8 border;            /* Border color index */
+ static uint8 pending;           /* Pending write flag */
+ static uint8 code;              /* Code register */
+-static uint16 addr;             /* Address register */
+-static uint16 addr_latch;       /* Latched A15, A14 of address */
+-static uint16 sat_base_mask;    /* Base bits of SAT */
++static uint32 addr;             /* Address register */
++static uint32 addr_latch;       /* Latched A15, A14 of address */
++static uint32 sat_base_mask;    /* Base bits of SAT */
+ static uint16 sat_addr_mask;    /* Index bits of SAT */
+ static uint16 dma_src;          /* DMA source address */
+ static int dmafill;             /* DMA Fill pending flag */
+@@ -238,6 +248,30 @@
+ /* Init, reset, context functions                                           */
+ /*--------------------------------------------------------------------------*/
+ 
++int vdp_firecore_init(void)
++{
++  if (kr_firecore_vram)
++    return 1;
++  kr_firecore_vram = (uint8 *)calloc(1, 0x20000);
++  kr_firecore_cram = (uint8 *)calloc(1, 0x800);
++  if (!kr_firecore_vram || !kr_firecore_cram)
++  {
++    vdp_firecore_shutdown();
++    return 0;
++  }
++  vram = kr_firecore_vram;
++  return 1;
++}
++
++void vdp_firecore_shutdown(void)
++{
++  vram = md_vram;
++  free(kr_firecore_vram);
++  free(kr_firecore_cram);
++  kr_firecore_vram = NULL;
++  kr_firecore_cram = NULL;
++}
++
+ void vdp_init(void)
+ {
+   /* PAL/NTSC timings */
+@@ -264,11 +298,14 @@
+   if (!reset_do_not_clear_buffers)
+   {
+     memset((char *)sat, 0, sizeof(sat));
+-    memset((char *)vram, 0, sizeof(vram));
++    memset((char *)vram, 0, kr_firecore_vram ? 0x20000 : 0x10000);
++    if (kr_firecore_cram)
++      memset(kr_firecore_cram, 0, 0x800);
+     memset((char *)cram, 0, sizeof(cram));
+     memset((char *)vsram, 0, sizeof(vsram));
+   }
+   memset((char *)reg, 0, sizeof(reg));
++  apalbase = bpalbase = wpalbase = spalbase = 0;
+ 
+   addr            = 0;
+   addr_latch      = 0;
+@@ -480,14 +517,15 @@
+ int vdp_context_save(uint8 *state)
+ {
+   int bufferptr = 0;
++  uint16 legacy_addr = addr, legacy_latch = addr_latch;
+ 
+   save_param(sat, sizeof(sat));
+-  save_param(vram, sizeof(vram));
++  save_param(vram, 0x10000);
+   save_param(cram, sizeof(cram));
+   save_param(vsram, sizeof(vsram));
+   save_param(reg, sizeof(reg));
+-  save_param(&addr, sizeof(addr));
+-  save_param(&addr_latch, sizeof(addr_latch));
++  save_param(&legacy_addr, sizeof(legacy_addr));
++  save_param(&legacy_latch, sizeof(legacy_latch));
+   save_param(&code, sizeof(code));
+   save_param(&pending, sizeof(pending));
+   save_param(&status, sizeof(status));
+@@ -501,6 +539,18 @@
+   save_param(&dma_type, sizeof(dma_type));
+   save_param(&dma_src, sizeof(dma_src));
+   save_param(&cached_write, sizeof(cached_write));
++  if (kr_firecore_active)
++  {
++    save_param(vram + 0x10000, 0x10000);
++    save_param(kr_firecore_cram, 0x800);
++    save_param(&addr, sizeof(addr));
++    save_param(&addr_latch, sizeof(addr_latch));
++    save_param(&ntab, sizeof(ntab));
++    save_param(&ntbb, sizeof(ntbb));
++    save_param(&ntwb, sizeof(ntwb));
++    save_param(&satb, sizeof(satb));
++    save_param(&hscb, sizeof(hscb));
++  }
+   return bufferptr;
+ }
+ 
+@@ -508,6 +558,7 @@
+ {
+   int i, bufferptr = 0;
+   uint8 temp_reg[0x20];
++  uint16 legacy_addr, legacy_latch;
+   /* Pointer to VRAM block within the savestate */
+   uint8 *state_vram_ptr;
+   /* Save number of dirty tiles before calls to register writes */
+@@ -517,7 +568,7 @@
+ 
+   load_param(sat, sizeof(sat));
+   state_vram_ptr = &state[bufferptr];
+-  bufferptr += sizeof(vram);
++  bufferptr += 0x10000;
+   load_param(cram, sizeof(cram));
+   load_param(vsram, sizeof(vsram));
+   load_param(temp_reg, sizeof(temp_reg));
+@@ -551,14 +602,18 @@
+     /* first restore VDP register #1 bit 2 value to prevent spurious Mode4->Mode5 VRAM switching */
+     reg[1] = (reg[1] & ~0x04) | (temp_reg[1] & 0x04);
+ 
++    if (kr_firecore_active)
++      vdp_reg_w(0x18, temp_reg[0x18], 0);
+     for (i=0;i<0x20;i++) 
+     {
+       vdp_reg_w(i, temp_reg[i], 0);
+     }
+   }
+ 
+-  load_param(&addr, sizeof(addr));
+-  load_param(&addr_latch, sizeof(addr_latch));
++  load_param(&legacy_addr, sizeof(legacy_addr));
++  load_param(&legacy_latch, sizeof(legacy_latch));
++  addr = legacy_addr;
++  addr_latch = legacy_latch;
+   load_param(&code, sizeof(code));
+   load_param(&pending, sizeof(pending));
+   load_param(&status, sizeof(status));
+@@ -582,13 +637,13 @@
+     status = (status & ~1) | vdp_pal;
+   }
+ 
+-  if (reg[1] & 0x04)
++  if (KR_FIRECORE_VDP_ENABLED || (reg[1] & 0x04))
+   {
+     /* Mode 5 */
+     bg_list_index = 0x800;
+ 
+     /* reinitialize palette */
+-    color_update_m5(0, *(uint16 *)&cram[border << 1]);
++    color_update_m5(0, *(uint16 *)&cram[(border & 0x3f) << 1]);
+     for(i = 1; i < 0x40; i++)
+     {
+       color_update_m5(i, *(uint16 *)&cram[i << 1]);
+@@ -642,7 +697,7 @@
+   else
+   {
+     /* Copy all vram */
+-    memcpy(vram, state_vram_ptr, sizeof(vram));
++    memcpy(vram, state_vram_ptr, 0x10000);
+     /* invalidate the tile cache */
+     for (i = 0; i < bg_list_index; i++)
+     {
+@@ -651,6 +706,22 @@
+     }
+   }
+ 
++  if (kr_firecore_active)
++  {
++    load_param(vram + 0x10000, 0x10000);
++    load_param(kr_firecore_cram, 0x800);
++    load_param(&addr, sizeof(addr));
++    load_param(&addr_latch, sizeof(addr_latch));
++    load_param(&ntab, sizeof(ntab));
++    load_param(&ntbb, sizeof(ntbb));
++    load_param(&ntwb, sizeof(ntwb));
++    load_param(&satb, sizeof(satb));
++    load_param(&hscb, sizeof(hscb));
++    vdp_update_md_rendering_mode(0);
++    /* Native table pointers are latched by writes in the current graphics mode. */
++    ntab &= 0x1ffff; ntbb &= 0x1ffff; ntwb &= 0x1ffff;
++    satb &= 0x1ffff; hscb &= 0x1ffff;
++  }
+   do_not_invalidate_tile_cache = false;
+ 
+   return bufferptr;
+@@ -842,7 +913,7 @@
+     else
+     {
+       /* Set pending flag (Mode 5 only) */
+-      pending = reg[1] & 4;
++      pending = KR_FIRECORE_VDP_ENABLED ? 4 : (reg[1] & 4);
+     }
+   }
+   else
+@@ -851,7 +922,7 @@
+     pending = 0;
+ 
+     /* Save address bits A15 and A14 */
+-    addr_latch = (data & 3) << 14;
++    addr_latch = (data & (kr_firecore_active ? 7 : 3)) << 14;
+ 
+     /* Update address and code registers */
+     addr = addr_latch | (addr & 0x3FFF);
+@@ -895,6 +966,7 @@
+             {
+               dma_length = 0x10000;
+             }
++            if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+             /* DMA source address */
+             dma_src = (reg[22] << 8) | reg[21];
+@@ -917,6 +989,7 @@
+             {
+               dma_length = 0x10000;
+             }
++            if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+             /* DMA source address */
+             dma_src = (reg[22] << 8) | reg[21];
+@@ -927,7 +1000,7 @@
+               /* source data is available with one cycle delay, i.e first word written by VDP is */
+               /* previous data being held on 68k bus at that time, then source words are written */
+               /* normally to VDP RAM, with only last source word being ignored */
+-              addr += reg[15];
++              addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+               dma_length--;
+             }
+ 
+@@ -983,7 +1056,7 @@
+       }
+ 
+       /* Set Mode 5 pending flag  */
+-      pending = (reg[1] & 4) >> 1;
++      pending = KR_FIRECORE_VDP_ENABLED ? 2 : ((reg[1] & 4) >> 1);
+ 
+       if (!pending && !(code & 0x03))
+       {
+@@ -991,7 +1064,7 @@
+         fifo[0] = vram[addr & 0x3FFF];
+ 
+         /* Increment address register */
+-        addr += (reg[15] + 1);
++        addr = (addr + (reg[15] + 1)) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+       }
+       return;
+     }
+@@ -1012,7 +1085,7 @@
+       pending = 0;
+ 
+       /* Update address and code registers */
+-      addr = ((addr_latch & 3) << 14) | (addr & 0x3FFF);
++      addr = ((addr_latch & (kr_firecore_active ? 7 : 3)) << 14) | (addr & 0x3FFF);
+       code = ((code & 0x03) | ((addr_latch >> 2) & 0x3C));
+ 
+       /* Detect DMA operation (CD5 bit set) */
+@@ -1053,6 +1126,7 @@
+               {
+                 dma_length = 0x10000;
+               }
++            if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+               /* DMA source address */
+               dma_src = (reg[22] << 8) | reg[21];
+@@ -1587,6 +1661,102 @@
+ /* VDP registers update function                                            */
+ /*--------------------------------------------------------------------------*/
+ 
++/* Rebuild derived mode and palette state without rearranging the shared VRAM. */
++static void vdp_firecore_palette_refresh(void)
++{
++  int i;
++  color_update_firecore(0, *(uint16 *)&kr_firecore_cram[border << 2]);
++  color_update_firecore(1, *(uint16 *)&kr_firecore_cram[(border << 2) + 2]);
++  for (i = 2; i < 0x400; i++)
++    color_update_firecore(i, *(uint16 *)&kr_firecore_cram[i << 1]);
++}
++
++void vdp_firecore_refresh_rendering(void)
++{
++  if (!KR_FIRECORE_VDP_ENABLED)
++    return;
++  update_bg_pattern_cache = update_bg_pattern_cache_firecore;
++  parse_satb = im2_flag ? parse_satb_m5_im2 : parse_satb_m5;
++  if (reg[0x18] & 0x40)
++    render_bg = render_bg_firecore_bitmap;
++  else if (im2_flag)
++    render_bg = (reg[11] & 4) ? render_bg_firecore_im2_vs : render_bg_firecore_im2;
++  else
++    render_bg = (reg[11] & 4) ? render_bg_firecore_vs : render_bg_firecore;
++  if (im2_flag)
++    render_obj = (reg[12] & 8) ? render_obj_firecore_im2_ste : render_obj_firecore_im2;
++  else
++    render_obj = (reg[12] & 8) ? render_obj_firecore_ste : render_obj_firecore;
++}
++
++static void vdp_update_md_rendering_mode(unsigned int cycles)
++{
++  int i;
++  if (KR_FIRECORE_VDP_ENABLED || (reg[1] & 4))
++  {
++    update_bg_pattern_cache = update_bg_pattern_cache_m5;
++    parse_satb = im2_flag ? parse_satb_m5_im2 : parse_satb_m5;
++    if (im2_flag)
++    {
++      render_bg = (reg[11] & 4) ? render_bg_m5_im2_vs : render_bg_m5_im2;
++      render_obj = (reg[12] & 8) ? render_obj_m5_im2_ste : render_obj_m5_im2;
++    }
++    else
++    {
++      render_bg = (reg[11] & 4) ? (config.enhanced_vscroll ? render_bg_m5_vs_enhanced : render_bg_m5_vs) : render_bg_m5;
++      render_obj = (reg[12] & 8) ? render_obj_m5_ste : render_obj_m5;
++    }
++    if (KR_FIRECORE_VDP_ENABLED)
++    {
++      vdp_firecore_refresh_rendering();
++      vdp_firecore_palette_refresh();
++    }
++    else
++    {
++      color_update_m5(0, *(uint16 *)&cram[border << 1]);
++      for (i = 1; i < 0x40; i++)
++        color_update_m5(i, *(uint16 *)&cram[i << 1]);
++    }
++    vdp_68k_data_w = vdp_68k_data_w_m5;
++    vdp_z80_data_w = vdp_z80_data_w_m5;
++    vdp_68k_data_r = vdp_68k_data_r_m5;
++    vdp_z80_data_r = vdp_z80_data_r_m5;
++    hvc_latch = (reg[0] & 2) ? (vdp_hvc_r(cycles) | 0x10000) : 0;
++    bg_list_index = 0x800;
++  }
++  else
++  {
++    parse_satb = parse_satb_m4;
++    update_bg_pattern_cache = update_bg_pattern_cache_m4;
++    render_bg = render_bg_m4;
++    render_obj = render_obj_m4;
++    for (i = 0; i < 0x20; i++)
++      color_update_m4(i, *(uint16 *)&cram[i << 1]);
++    color_update_m4(0x40, *(uint16 *)&cram[(0x10 | (border & 15)) << 1]);
++    vdp_68k_data_w = vdp_68k_data_w_m4;
++    vdp_z80_data_w = vdp_z80_data_w_m4;
++    vdp_68k_data_r = vdp_68k_data_r_m4;
++    vdp_z80_data_r = vdp_z80_data_r_m4;
++    hvc_latch = vdp_hvc_r(cycles) | 0x10000;
++    bg_list_index = 0x200;
++  }
++  for (i = 0; i < bg_list_index; i++)
++  {
++    bg_name_list[i] = i;
++    bg_name_dirty[i] = 0xff;
++  }
++  vc_max = vc_table[((reg[1] >> 2) | (KR_FIRECORE_VDP_ENABLED ? 1 : 0)) & 3][vdp_pal];
++  bitmap.viewport.changed |= 2;
++}
++
++/* Extended table registers latch physical 6bpp offsets at the time of a write. */
++static unsigned int vdp_firecore_table(unsigned int address)
++{
++  if (!KR_FIRECORE_VDP_ENABLED)
++    return address & 0xffff;
++  return (address + ((address >= 0xc000) ? 0x6000 : 0)) & 0x1ffff;
++}
++
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
+ {
+ #ifdef LOGVDP
+@@ -1594,13 +1764,41 @@
+ #endif
+ 
+   /* VDP registers #11 to #23 cannot be updated in Mode 4 (Captain Planet & Avengers, Bass Master Classic Pro Edition) */
+-  if (!(reg[1] & 4) && (r > 10))
++  if (!KR_FIRECORE_VDP_ENABLED && !(reg[1] & 4) && (r > 10) && !(kr_firecore_active && (r == 0x18)))
+   {
+     return;
+   }
+ 
+   switch(r)
+   {
++    case 0x18: /* Firecore graphics / bitmap enable and per-layer palette bank. */
++    {
++      unsigned int changed;
++      if (!kr_firecore_active)
++      {
++        reg[0x18] = d;
++        break;
++      }
++      changed = d ^ reg[0x18];
++      reg[0x18] = d;
++      apalbase = (d & 1) ? 0x100 : 0;
++      bpalbase = (d & 2) ? 0x100 : 0;
++      wpalbase = (d & 4) ? 0x100 : 0;
++      spalbase = (d & 8) ? 0x100 : 0;
++      if (d & 0x80)
++        sat_base_mask |= 0x10000;
++      else
++      {
++        sat_base_mask &= 0xffff;
++        ntab &= 0xffff; ntbb &= 0xffff; ntwb &= 0xffff;
++        satb &= 0xffff; hscb &= 0xffff;
++        border = reg[7] & 0x3f;
++        addr &= 0xffff;
++      }
++      if (changed & 0xc0)
++        vdp_update_md_rendering_mode(cycles);
++      break;
++    }
+     case 0: /* CTRL #1 */
+     {
+       /* Look for changed bits */
+@@ -1633,7 +1831,11 @@
+         {
+           /* Reset color palette */
+           int i;
+-          if (reg[1] & 0x04)
++          if (KR_FIRECORE_VDP_ENABLED)
++          {
++            vdp_firecore_palette_refresh();
++          }
++          else if (reg[1] & 0x04)
+           {
+             /* Mode 5 */
+             color_update_m5(0x00, *(uint16 *)&cram[border << 1]);
+@@ -1798,7 +2000,7 @@
+         if (system_hw & SYSTEM_MD)
+         {
+           /* Mode 5 only */
+-          if (d & 0x04)
++          if (KR_FIRECORE_VDP_ENABLED || (d & 0x04))
+           {
+             /* Changes should be applied on next frame */
+             bitmap.viewport.changed |= 2;
+@@ -1817,6 +2019,11 @@
+         {
+           int i, j;
+           uint8 temp[0x400];
++          if (KR_FIRECORE_VDP_ENABLED)
++          {
++            vdp_update_md_rendering_mode(cycles);
++            break;
++          }
+ 
+           if (d & 0x04)
+           {
+@@ -1943,7 +2150,7 @@
+     case 2: /* Plane A Name Table Base */
+     {
+       reg[2] = d;
+-      ntab = (d << 10) & 0xE000;
++      ntab = vdp_firecore_table((d << 10) & 0x1e000);
+ 
+       /* Plane A Name Table Base changed during HBLANK */
+       if ((v_counter < bitmap.viewport.h) && (reg[1] & 0x40) && (cycles <= (mcycles_vdp + 860)))
+@@ -1959,11 +2166,11 @@
+       reg[3] = d;
+       if (reg[12] & 0x01)
+       {
+-        ntwb = (d << 10) & 0xF000;
++        ntwb = vdp_firecore_table((d << 10) & 0x1f000);
+       }
+       else
+       {
+-        ntwb = (d << 10) & 0xF800;
++        ntwb = vdp_firecore_table((d << 10) & 0x1f800);
+       }
+ 
+       /* Window Plane Name Table Base changed during HBLANK */
+@@ -1978,7 +2185,7 @@
+     case 4: /* Plane B Name Table Base */
+     {
+       reg[4] = d;
+-      ntbb = (d << 13) & 0xE000;
++      ntbb = vdp_firecore_table((d << 13) & 0x1e000);
+ 
+       /* Plane B Name Table Base changed during HBLANK (Adventures of Batman & Robin) */
+       if ((v_counter < bitmap.viewport.h) && (reg[1] & 0x40) && (cycles <= (mcycles_vdp + 860)))
+@@ -1993,7 +2200,7 @@
+     case 5: /* Sprite Attribute Table Base */
+     {
+       reg[5] = d;
+-      satb = (d << 9) & sat_base_mask;
++      satb = vdp_firecore_table((d << 9) & sat_base_mask);
+ 
+       /* Sprite Attribute Table Base changed during HBLANK (Madoh Monogatari I) */
+       if ((v_counter < bitmap.viewport.h) && (reg[1] & 0x40) && (cycles <= (mcycles_vdp + 860)))
+@@ -2009,7 +2216,7 @@
+       reg[7] = d;
+ 
+       /* Check if backdrop color changed */
+-      d &= 0x3F;
++      if (!KR_FIRECORE_VDP_ENABLED) d &= 0x3F;
+ 
+       if (d != border)
+       {
+@@ -2017,7 +2224,12 @@
+         border = d;
+ 
+         /* Reset palette entry */
+-        if (reg[1] & 4)
++        if (KR_FIRECORE_VDP_ENABLED)
++        {
++          color_update_firecore(0, *(uint16 *)&kr_firecore_cram[d << 2]);
++          color_update_firecore(1, *(uint16 *)&kr_firecore_cram[(d << 2) + 2]);
++        }
++        else if (reg[1] & 4)
+         {
+           /* Mode 5 */
+           color_update_m5(0x00, *(uint16 *)&cram[d << 1]);
+@@ -2076,7 +2288,11 @@
+       hscroll_mask = hscroll_mask_table[d & 0x03];
+ 
+       /* Vertical Scrolling mode */
+-      if (d & 0x04)
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        vdp_firecore_refresh_rendering();
++      }
++      else if (d & 0x04)
+       {
+         render_bg = im2_flag ? render_bg_m5_im2_vs : (config.enhanced_vscroll ? render_bg_m5_vs_enhanced : render_bg_m5_vs);
+       }
+@@ -2098,10 +2314,13 @@
+       {
+         /* Reset color palette */
+         int i;
+-        color_update_m5(0x00, *(uint16 *)&cram[border << 1]);
+-        for (i = 1; i < 0x40; i++)
+-        {
+-          color_update_m5(i, *(uint16 *)&cram[i << 1]);
++        if (KR_FIRECORE_VDP_ENABLED)
++          vdp_firecore_palette_refresh();
++        else
++        {
++          color_update_m5(0x00, *(uint16 *)&cram[border << 1]);
++          for (i = 1; i < 0x40; i++)
++            color_update_m5(i, *(uint16 *)&cram[i << 1]);
+         }
+ 
+         /* Update sprite rendering function */
+@@ -2207,13 +2426,23 @@
+           bitmap.viewport.changed |= 2;
+         }
+       }
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        sat_base_mask |= 0x10000;
++        if (r & 1)
++        {
++          ntwb = vdp_firecore_table((reg[3] << 10) & ((d & 1) ? 0x1f000 : 0x1f800));
++          satb = vdp_firecore_table((reg[5] << 9) & sat_base_mask);
++        }
++        vdp_firecore_refresh_rendering();
++      }
+       break;
+     }
+ 
+     case 13: /* HScroll Base Address */
+     {
+       reg[13] = d;
+-      hscb = (d << 10) & 0xFC00;
++      hscb = vdp_firecore_table((d << 10) & 0x1fc00);
+       break;
+     }
+ 
+@@ -2244,6 +2473,22 @@
+ /*--------------------------------------------------------------------------*/
+ /* Internal 16-bit data bus access function (Mode 5 only)                   */
+ /*--------------------------------------------------------------------------*/
++static void vdp_firecore_cram_w(unsigned int data)
++{
++  uint16 *p = (uint16 *)&kr_firecore_cram[addr & 0x7fe];
++  if (*p != data)
++  {
++    int index = (addr >> 1) & 0x3ff;
++    *p = data;
++    if (index & 0x7e)
++      color_update_firecore(index, data);
++    if ((index >> 1) == border)
++      color_update_firecore(index & 1, data);
++    if ((v_counter < bitmap.viewport.h) && (m68k.cycles <= mcycles_vdp + 860) && ((reg[1] & 0x40) || ((index >> 1) == border)))
++      remap_line(v_counter);
++  }
++}
++
+ static void vdp_bus_w(unsigned int data)
+ {
+   /* write data to next FIFO entry */
+@@ -2258,7 +2503,7 @@
+     case 0x01:  /* VRAM */
+     {
+       /* VRAM address */
+-      int index = addr & 0xFFFE;
++      int index = addr & (KR_FIRECORE_VDP_ENABLED ? 0x1fffe : 0xfffe);
+ 
+       /* Pointer to VRAM */
+       uint16 *p = (uint16 *)&vram[index];
+@@ -2301,6 +2546,11 @@
+ 
+     case 0x03:  /* CRAM */
+     {
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        vdp_firecore_cram_w(data);
++        break;
++      }
+       /* Pointer to CRAM 9-bit word */
+       uint16 *p = (uint16 *)&cram[addr & 0x7E];
+ 
+@@ -2384,7 +2634,7 @@
+   }
+ 
+   /* Increment address register */
+-  addr += reg[15];
++  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ }
+ 
+ 
+@@ -2483,7 +2733,7 @@
+   }
+ 
+   /* Increment address register (TODO: check how address is incremented in Mode 4) */
+-  addr += (reg[15] + 1);
++  addr = (addr + (reg[15] + 1)) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ }
+ 
+ static void vdp_68k_data_w_m5(unsigned int data)
+@@ -2535,6 +2785,7 @@
+     {
+       dma_length = 0x10000;
+     }
++            if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+     /* Trigger DMA */
+     vdp_dma_update(m68k.cycles);
+@@ -2553,7 +2804,7 @@
+   pending = 0;
+ 
+   /* Increment address register (TODO: check how address is incremented in Mode 4) */
+-  addr += (reg[15] + 1);
++  addr = (addr + (reg[15] + 1)) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+   /* Read VRAM data */
+   return *(uint16 *) &vram[index];
+@@ -2572,7 +2823,7 @@
+     case 0x00:
+     {
+       /* read two bytes from VRAM */
+-      data = *(uint16 *)&vram[addr & 0xFFFE];
++      data = *(uint16 *)&vram[addr & (KR_FIRECORE_VDP_ENABLED ? 0x1fffe : 0xfffe)];
+ 
+ #ifdef HOOK_CPU
+       if (UNLIKELY(cpu_hook))
+@@ -2616,6 +2867,11 @@
+ 
+     case 0x08:
+     {
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        data = *(uint16 *)&kr_firecore_cram[addr & 0x7fe];
++        break;
++      }
+       /* Read 9-bit word from CRAM */
+       data = *(uint16 *)&cram[addr & 0x7E];
+ 
+@@ -2639,7 +2895,7 @@
+     case 0x0c: /* undocumented 8-bit VRAM read */
+     {
+       /* Read one byte from VRAM adjacent address */
+-      data = READ_BYTE(vram, addr ^ 1);
++      data = READ_BYTE(vram, (addr & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff)) ^ 1);
+ 
+       /* Unused bits are set using data from next available FIFO entry */
+       data |= (fifo[fifo_idx] & ~0xFF);
+@@ -2666,7 +2922,7 @@
+   }
+ 
+   /* Increment address register */
+-  addr += reg[15];
++  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+   /* Return data */
+   return data;
+@@ -2726,7 +2982,7 @@
+   }
+ 
+   /* Increment address register (TODO: check how address is incremented in Mode 4) */
+-  addr += (reg[15] + 1);
++  addr = (addr + (reg[15] + 1)) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ }
+ 
+ static void vdp_z80_data_w_m5(unsigned int data)
+@@ -2744,7 +3000,7 @@
+     case 0x01:  /* VRAM */
+     {
+       /* VRAM address (write low byte to even address & high byte to odd address) */
+-      int index = addr ^ 1;
++      int index = (addr & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff)) ^ 1;
+ 
+       /* Intercept writes to Sprite Attribute Table */
+       if ((index & sat_base_mask) == satb)
+@@ -2769,6 +3025,14 @@
+ 
+     case 0x03:  /* CRAM */
+     {
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        unsigned int previous = *(uint16 *)&kr_firecore_cram[addr & 0x7fe];
++        /* Match the native byte order of the ordinary MD Z80 data port. */
++        data = (addr & 1) ? ((previous & 0xff) | (data << 8)) : ((previous & 0xff00) | data);
++        vdp_firecore_cram_w(data);
++        break;
++      }
+       /* Pointer to CRAM word */
+       uint16 *p = (uint16 *)&cram[addr & 0x7E];
+ 
+@@ -2818,7 +3082,7 @@
+   }
+ 
+   /* Increment address register  */
+-  addr += reg[15];
++  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+   /* Check if DMA Fill is pending */
+   if (dmafill)
+@@ -2834,6 +3098,7 @@
+     {
+       dma_length = 0x10000;
+     }
++            if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+     /* Trigger DMA */
+     vdp_dma_update(Z80.cycles);
+@@ -2852,7 +3117,7 @@
+   fifo[0] = vram[addr & 0x3FFF];
+ 
+   /* Increment address register (TODO: check how address is incremented with Mega Drive VDP in Mode 4) */
+-  addr += (reg[15] + 1);
++  addr = (addr + (reg[15] + 1)) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+   /* Return data */
+   return data;
+@@ -2871,7 +3136,7 @@
+     case 0x00: /* VRAM */
+     {
+       /* Return low byte from even address & high byte from odd address */
+-      data = READ_BYTE(vram, addr ^ 1);
++      data = READ_BYTE(vram, (addr & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff)) ^ 1);
+       break;
+     }
+ 
+@@ -2884,6 +3149,11 @@
+ 
+     case 0x08: /* CRAM */
+     {
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        data = READ_BYTE(kr_firecore_cram, (addr & 0x7ff) ^ 1);
++        break;
++      }
+       /* Read CRAM data */
+       data = *(uint16 *)&cram[addr & 0x7E];
+ 
+@@ -2902,7 +3172,7 @@
+   }
+ 
+   /* Increment address register */
+-  addr += reg[15];
++  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+   /* Return data */
+   return data;
+@@ -2986,7 +3256,7 @@
+   fifo[0] = data;
+ 
+   /* Update address register */
+-  addr++;
++  addr = (addr + 1) & 0xffff;
+ }
+ 
+ static void vdp_z80_data_w_gg(unsigned int data)
+@@ -3072,7 +3342,7 @@
+   fifo[0] = data;
+ 
+   /* Update address register */
+-  addr++;
++  addr = (addr + 1) & 0xffff;
+ }
+ 
+ static void vdp_z80_data_w_sg(unsigned int data)
+@@ -3087,7 +3357,7 @@
+   vram[index] = data;
+ 
+   /* Update address register */
+-  addr++;
++  addr = (addr + 1) & 0xffff;
+ 
+ #ifdef LOGVDP
+   error("[%d(%d)][%d(%d)] VRAM 0x%x write -> 0x%x (%x)\n", v_counter, (v_counter + (Z80.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, Z80.cycles, Z80.cycles%MCYCLES_PER_LINE, index, data, Z80.pc.w.l);
+@@ -3104,7 +3374,7 @@
+   uint16 data;
+ 
+   /* 68k bus source address */
+-  uint32 source = (reg[23] << 17) | (dma_src << 1);
++  uint32 source = ((reg[23] & 0x7f) << 17) | (dma_src << 1);
+ 
+   do
+   {
+@@ -3121,8 +3391,14 @@
+     /* Increment source address */
+     source += 2;
+ 
+-    /* 128k DMA window */
+-    source = (reg[23] << 17) | (source & 0x1FFFF);
++    /* Firecore fixes the MD 128 KiB DMA source window. */
++    if (KR_FIRECORE_VDP_ENABLED)
++    {
++      source &= 0xffffff;
++      reg[23] = (reg[23] & 0x80) | ((source >> 17) & 0x7f);
++    }
++    else
++      source = (reg[23] << 17) | (source & 0x1FFFF);
+ 
+     /* Write data word to VRAM, CRAM or VSRAM */
+     vdp_bus_w(data);
+@@ -3139,7 +3415,7 @@
+   uint16 data;
+ 
+   /* 68k bus source address */
+-  uint32 source = (reg[23] << 17) | (dma_src << 1);
++  uint32 source = ((reg[23] & 0x7f) << 17) | (dma_src << 1);
+ 
+   do
+   {
+@@ -3149,8 +3425,14 @@
+     /* Increment source address */
+     source += 2;
+ 
+-    /* 128k DMA window */
+-    source = (reg[23] << 17) | (source & 0x1FFFF);
++    /* Firecore fixes the MD 128 KiB DMA source window. */
++    if (KR_FIRECORE_VDP_ENABLED)
++    {
++      source &= 0xffffff;
++      reg[23] = (reg[23] & 0x80) | ((source >> 17) & 0x7f);
++    }
++    else
++      source = (reg[23] << 17) | (source & 0x1FFFF);
+ 
+     /* Write data word to VRAM, CRAM or VSRAM */
+     vdp_bus_w(data);
+@@ -3167,7 +3449,7 @@
+   uint16 data;
+ 
+   /* 68k bus source address */
+-  uint32 source = (reg[23] << 17) | (dma_src << 1);
++  uint32 source = ((reg[23] & 0x7f) << 17) | (dma_src << 1);
+ 
+   do
+   {
+@@ -3197,8 +3479,14 @@
+     /* Increment source address */
+     source += 2;
+ 
+-    /* 128k DMA window */
+-    source = (reg[23] << 17) | (source & 0x1FFFF);
++    /* Firecore fixes the MD 128 KiB DMA source window. */
++    if (KR_FIRECORE_VDP_ENABLED)
++    {
++      source &= 0xffffff;
++      reg[23] = (reg[23] & 0x80) | ((source >> 17) & 0x7f);
++    }
++    else
++      source = (reg[23] << 17) | (source & 0x1FFFF);
+ 
+     /* Write data to VRAM, CRAM or VSRAM */
+     vdp_bus_w(data);
+@@ -3219,12 +3507,12 @@
+     uint8 data;
+     
+     /* VRAM source address */
+-    uint16 source = dma_src;
++    uint32 source = dma_src;
+ 
+     do
+     {
+       /* Read byte from adjacent VRAM source address */
+-      data = READ_BYTE(vram, source ^ 1);
++      data = READ_BYTE(vram, (source & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff)) ^ 1);
+ 
+       /* Intercept writes to Sprite Attribute Table */
+       if ((addr & sat_base_mask) == satb)
+@@ -3234,16 +3522,16 @@
+       }
+ 
+       /* Write byte to adjacent VRAM destination address */
+-      WRITE_BYTE(vram, addr ^ 1, data);
++      WRITE_BYTE(vram, (addr & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff)) ^ 1, data);
+ 
+       /* Update pattern cache */
+       MARK_BG_DIRTY(addr);
+ 
+       /* Increment VRAM source address */
+-      source++;
++      source = (source + 1) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+       /* Increment VRAM destination address */
+-      addr += reg[15];
++      addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+     }
+     while (--length);
+ 
+@@ -3275,13 +3563,13 @@
+         }
+ 
+         /* Write byte to adjacent VRAM address */
+-        WRITE_BYTE(vram, addr ^ 1, data);
++        WRITE_BYTE(vram, (addr & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff)) ^ 1, data);
+ 
+         /* Update pattern cache */
+         MARK_BG_DIRTY (addr);
+ 
+         /* Increment VRAM address */
+-        addr += reg[15];
++        addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+       }
+       while (--length);
+       break;
+@@ -3292,6 +3580,16 @@
+       /* Get source data from next available FIFO entry */
+       uint16 data = fifo[fifo_idx];
+ 
++      if (KR_FIRECORE_VDP_ENABLED)
++      {
++        do
++        {
++          vdp_firecore_cram_w(data);
++          addr = (addr + reg[15]) & 0x1ffff;
++        }
++        while (--length);
++        break;
++      }
+       /* Pack 16-bit bus data (BBB0GGG0RRR0) to 9-bit CRAM data (BBBGGGRRR) */
+       data = ((data & 0xE00) >> 3) | ((data & 0x0E0) >> 2) | ((data & 0x00E) >> 1);
+ 
+@@ -3324,7 +3622,7 @@
+         }
+           
+         /* Increment CRAM address */
+-        addr += reg[15];
++        addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+       }
+       while (--length);
+       break;
+@@ -3341,7 +3639,7 @@
+         *(uint16 *)&vsram[addr & 0x7E] = data;
+           
+         /* Increment VSRAM address */
+-        addr += reg[15];
++        addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+       }
+       while (--length);
+       break;
+@@ -3352,7 +3650,7 @@
+       /* invalid destination does nothing (Williams Greatest Hits after soft reset) */
+ 
+       /* address is still incremented */
+-      addr += reg[15] * length;
++      addr = (addr + reg[15] * length) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+     }
+   }
+ }
+@@ -3363,7 +3661,7 @@
+   int name = 0;
+   int addr = 0;
+ 
+-  for (addr = 0; addr < sizeof(vram); addr += 32)
++  for (addr = 0; addr < 0x10000; addr += 32)
+   {
+     if (0 != memcmp(vram + addr, src + addr, 32))
+     {
+--- a/core/vdp_ctrl.h
++++ b/core/vdp_ctrl.h
+@@ -42,10 +42,16 @@
+ #ifndef _VDP_H_
+ #define _VDP_H_
+ 
++#include "firecore.h"
++#define KR_FIRECORE_VDP_ENABLED (kr_firecore_active && (reg[0x18] & 0x80))
++
+ /* VDP context */
+ extern uint8 reg[0x20];
+ extern uint8 sat[0x400];
+-extern uint8 vram[0x10000];
++extern uint8 *vram;
++extern uint8 *kr_firecore_vram;
++extern uint8 *kr_firecore_cram;
++extern uint16 apalbase, bpalbase, wpalbase, spalbase;
+ extern uint8 cram[0x80];
+ extern uint8 vsram[0x80];
+ extern uint8 hint_pending;
+@@ -56,11 +62,11 @@
+ extern uint8 dma_type;
+ 
+ /* Global variables */
+-extern uint16 ntab;
+-extern uint16 ntbb;
+-extern uint16 ntwb;
+-extern uint16 satb;
+-extern uint16 hscb;
++extern uint32 ntab;
++extern uint32 ntbb;
++extern uint32 ntwb;
++extern uint32 satb;
++extern uint32 hscb;
+ extern uint8 bg_name_dirty[0x800];
+ extern uint16 bg_name_list[0x800];
+ extern uint16 bg_list_index;
+@@ -90,6 +96,9 @@
+ extern unsigned int (*vdp_z80_data_r)(void);
+ 
+ /* Function prototypes */
++extern int vdp_firecore_init(void);
++extern void vdp_firecore_shutdown(void);
++extern void vdp_firecore_refresh_rendering(void);
+ extern void vdp_init(void);
+ extern void vdp_reset(void);
+ extern int vdp_context_save(uint8 *state);
+--- a/core/system.c
++++ b/core/system.c
+@@ -556,7 +556,7 @@
+       bitmap.viewport.changed = 5;
+ 
+       /* update rendering mode (Mode 5 only) */
+-      if (reg[1] & 0x04)
++      if (KR_FIRECORE_VDP_ENABLED || (reg[1] & 0x04))
+       {
+         if (im2_flag)
+         {
+@@ -571,6 +571,7 @@
+           render_obj = (reg[12] & 0x08) ? render_obj_m5_ste : render_obj_m5;
+         }
+       }
++      vdp_firecore_refresh_rendering();
+     }
+     else
+     {
+@@ -579,7 +580,7 @@
+     }
+ 
+     /* active screen height */
+-    if (reg[1] & 0x04)
++    if (KR_FIRECORE_VDP_ENABLED || (reg[1] & 0x04))
+     {
+       /* Mode 5 */
+       if (reg[1] & 0x08)

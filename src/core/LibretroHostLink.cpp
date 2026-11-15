@@ -173,6 +173,7 @@ bool LibretroHost::startLinkedPair(QString& error) {
                 peer->content_=content_;peer->coreContent_=coreContent_;
                 peer->encodedGamePath_=encodedGamePath_;peer->gamePath_=gamePath_;
                 peer->contentExtension_=contentExtension_;peer->contentName_=contentName_;
+                peer->contentFirecore_=contentFirecore_;
                 peer->romHash_=romHash_;peer->gameKey_=gameKey_;peer->legacyGameKey_=legacyGameKey_;
                 peer->contentInfo_=contentInfo_;
                 peer->contentInfo_.data=peer->coreContent_.constData();

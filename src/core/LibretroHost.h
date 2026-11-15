@@ -33,6 +33,7 @@ public:
     void unload();
     bool isCd() const { return loaded_ && !discs_.isEmpty(); }
     bool isMegaLd() const { return loaded_ && megaLd_; }
+    bool isFirecore() const { return loaded_ && contentFirecore_; }
     // A loaded game keeps one storage snapshot through resets and settings edits.
     QString dataFolder(const QString& category) const;
     // MMI sides repeat the same original path; they are not replaceable CD images.
@@ -283,6 +284,7 @@ private:
     bool smsFmEnabled_ = true;
     ExpansionMode cdMode_ = ExpansionMode::Auto, x32Mode_ = ExpansionMode::Auto;
     bool contentNeeds32x_ = false;
+    bool contentFirecore_ = false;
     std::array<unsigned,MaxControllerPlayers> buttons_{};
     std::array<bool,MaxControllerPlayers> controllerConnected_{{true,false,false}};
     std::array<bool,MaxControllerPlayers> controllerSixButton_{{true,true,true,true,true,true,true,true}};

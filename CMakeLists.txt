@@ -37,6 +37,7 @@ set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
+    src/core/CartridgeProfile.h
     src/core/Cheats.cpp src/core/Cheats.h
     src/core/CheatImport.cpp src/core/CheatImport.h
     src/core/CheatSearch.cpp src/core/CheatSearch.h
@@ -282,6 +283,12 @@ if(BUILD_TESTING)
     target_link_libraries(mp3_tests PRIVATE core_host)
     add_executable(cd_tests tests/cd_tests.cpp)
     target_link_libraries(cd_tests PRIVATE core_host)
+    add_executable(firecore_profile_tests tests/firecore_profile_tests.cpp)
+    target_include_directories(firecore_profile_tests PRIVATE src)
+    target_link_libraries(firecore_profile_tests PRIVATE Qt6::Core)
+    add_test(NAME firecore_profile COMMAND firecore_profile_tests)
+    add_executable(firecore_host_tests tests/firecore_host_tests.cpp)
+    target_link_libraries(firecore_host_tests PRIVATE core_host kega_archive)
     add_executable(archive_tests tests/archive_tests.cpp)
     target_link_libraries(archive_tests PRIVATE rom_archive kega_archive)
     add_test(NAME archive_tests COMMAND archive_tests)
@@ -378,6 +385,7 @@ if(BUILD_TESTING)
         add_test(NAME netplay_rewind COMMAND netplay_rewind_tests "${KEGA_TEST_CORE}")
         add_test(NAME netplay_achievement_rollback COMMAND netplay_achievement_rollback_tests "${KEGA_TEST_CORE}")
         add_test(NAME core_integration COMMAND core_integration_tests "${KEGA_TEST_CORE}")
+        add_test(NAME firecore_host COMMAND firecore_host_tests "${KEGA_TEST_CORE}")
         add_test(NAME multitap_hardware COMMAND multitap_tests "${KEGA_TEST_CORE}")
         add_test(NAME controller_devices_hardware COMMAND controller_devices_tests "${KEGA_TEST_CORE}")
         add_test(NAME sms_rewind_hardware COMMAND sms_rewind_tests "${KEGA_TEST_CORE}")

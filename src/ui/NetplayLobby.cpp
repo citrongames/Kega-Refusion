@@ -279,7 +279,7 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     connect(selectRom_, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getOpenFileName(
             this, t("Выбрать ROM для сетевой игры"), {},
-            t("Игры (*.md *.gen *.bin *.smd *.sms *.gg *.sg *.68k *.zip *.7z *.cue *.iso *.chd *.m3u);;Все файлы (*)"));
+            t("Игры (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.zip *.7z *.cue *.iso *.chd *.m3u);;Все файлы (*)"));
         if (!path.isEmpty()) emit selectRomRequested(path);
     });
     connect(downloadRom_, &QPushButton::clicked, this, &NetplayLobby::downloadRomRequested);
