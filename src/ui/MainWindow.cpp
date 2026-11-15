@@ -1334,6 +1334,7 @@ void MainWindow::buildMenus() {
             "Поддерживаются архивы ZIP и 7z.")) +
             QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Версия: %1"))
                 .arg(QApplication::applicationVersion().toHtmlEscaped()) +
+            QStringLiteral("<br><a href='https://github.com/citrongames/Kega-Refusion'>GitHub</a>") +
             QStringLiteral("<br><br>") + Localization::text(QStringLiteral("Авторы:")) +
             QStringLiteral("<br>vova791 — Салата Владимир<br>Codex ChatGPT<br><br>") +
             Localization::text(QStringLiteral("Оригинальный код: GPLv3+ с исключением для ядра. Без гарантий.")) +
@@ -1343,6 +1344,7 @@ void MainWindow::buildMenus() {
         about.setObjectName(QStringLiteral("aboutDialog"));
         about.setIconPixmap(windowIcon().pixmap(64,64));
         about.setTextFormat(Qt::RichText);
+        about.setTextInteractionFlags(Qt::TextBrowserInteraction);
         about.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                              Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint);
         about.exec();
