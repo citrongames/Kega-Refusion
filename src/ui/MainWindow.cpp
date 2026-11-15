@@ -1716,7 +1716,7 @@ void MainWindow::openGameDialog() {
     const QString path = QFileDialog::getOpenFileName(
         this, Localization::text(QStringLiteral("Открыть игру")),
         settings_.value(QStringLiteral("files/lastDirectory"), QDir::homePath()).toString(),
-        Localization::text(QStringLiteral("Игры Sega (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)")));
+        Localization::text(QStringLiteral("Игры Sega (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;AtGames Firecore (*.atf *.bin);;Архивы (*.zip *.7z);;Все файлы (*)")));
     if (!path.isEmpty()) openRom(path);
     else view_->setFocus();
 }

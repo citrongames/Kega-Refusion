@@ -16,7 +16,9 @@ Hardcore, and enabling Hardcore restores the video layers.
 
 Video: Mega Drive/CD/Pico expose planes A and B, window and sprites; the 32X
 attachment adds its composed layer. SMS/Mark III/GG/SG-1000/PBC expose background
-and sprites. Original sprite evaluation still updates collision/overflow flags.
+and sprites. Firecore exposes A, B, window and sprites in tile mode. In its
+bitmap mode, the A checkbox hides the bitmap; B and window have no image to hide.
+Original sprite evaluation still updates collision/overflow flags.
 Background masking happens before priority mixing; hiding the window does not
 reveal plane A where hardware substitutes the window. IM2 clipping uses original
 scanline coordinates. The temporary output palette never changes CRAM.
@@ -30,7 +32,8 @@ history may differ between listeners with different local masks, as expected;
 these are not gameplay memory differences.
 
 Normal rendering has no additional row copy. Sprite hiding uses one bounded
-512-byte row copy, and the replacement palette is bounded. Additional audio
+512-byte row copy, or a 2048-byte row copy in Firecore mode, and the replacement
+palette is bounded. Additional audio
 output caches are fixed-size and outside serialized hardware structs.
 
 See [debug-controls-verification.json](debug-controls-verification.json) for executed checks,

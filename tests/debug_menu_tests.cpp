@@ -1079,6 +1079,27 @@ int main(int argc, char** argv) {
             child<QPushButton>(*audio, "debugRestoreAudio")->click();
             require(planeA->isChecked() && psgTone->isChecked(),
                     "restore controls did not enable channels");
+            session.debugControlsChanged(15, mdAudio);
+            QApplication::processEvents();
+            quint32 lastVideoMask = ~quint32(0);
+            const auto videoMaskConnection = QObject::connect(
+                graphics, &DebugGraphicsDialog::maskChanged, graphics,
+                [&](quint32 mask) { lastVideoMask = mask; });
+            for (unsigned index = 0; index < 4; ++index) {
+                auto* layer = child<QCheckBox>(*graphics,
+                                              QStringLiteral("debugVideo%1").arg(index).toLatin1().constData());
+                require(layer->isVisible() && layer->isChecked(),
+                        "Firecore graphic layer is missing from the dialog");
+                layer->click();
+                require(!layer->isChecked() && lastVideoMask == (quint32(1) << index),
+                        "Firecore graphic checkbox disabled the wrong layer");
+                layer->click();
+                require(layer->isChecked() && lastVideoMask == 0,
+                        "Firecore graphic checkbox did not restore its layer");
+            }
+            QObject::disconnect(videoMaskConnection);
+            session.debugControlsChanged(mdVideo, mdAudio);
+            QApplication::processEvents();
             gain0->setValue(45);
             require(percent0->value() == 45, "gain slider did not update percentage");
             percent0->setValue(25);

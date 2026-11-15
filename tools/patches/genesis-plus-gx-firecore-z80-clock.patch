@@ -1,0 +1,135 @@
+--- a/core/firecore.h
++++ b/core/firecore.h
+@@ -3,5 +3,6 @@
+ #define KEGA_FIRECORE_H
+ 
+ extern int kr_firecore_active;
++void md_cart_firecore_apply_z80_clock(void);
+ 
+ #endif
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -727,6 +727,24 @@
+ static uint32 firecore_offset;
+ static uint32 firecore_chip_mask;
+ static uint16 firecore_gpio;
++static uint16 firecore_z80_clock;
++
++void md_cart_firecore_apply_z80_clock(void)
++{
++#ifdef Z80_OVERCLOCK_SHIFT
++  /* RedKid mode 4 drives the Z80 PCM loop faster. This ratio is calibrated
++   * against the 12 kHz source samples in DMC games; other divider modes
++   * have not been measured. The FM and PSG oscillators are independent. */
++  const uint32 normal = 1u << Z80_OVERCLOCK_SHIFT;
++  z80_cycle_ratio = (firecore_z80_clock == 4) ? normal * 17 / 30 : normal;
++#endif
++}
++
++static void firecore_set_z80_clock(unsigned int value)
++{
++  firecore_z80_clock = value;
++  md_cart_firecore_apply_z80_clock();
++}
+ 
+ /* Two 8 MiB flash chips share the window on RedKid boards. The ROM dump
+  * concatenates them; each chip begins with its own executable image. */
+@@ -798,8 +816,23 @@
+ 
+ static unsigned int firecore_io_read(unsigned int address)
+ {
+-  (void)address;
+-  return 0;
++  return ((address & 0xffff) == 0x12) ? firecore_z80_clock : 0;
++}
++
++static unsigned int firecore_io_read_byte(unsigned int address)
++{
++  const unsigned word = firecore_io_read(address & ~1u);
++  return (address & 1) ? (word & 0xff) : (word >> 8);
++}
++
++static void firecore_io_write_byte(unsigned int address, unsigned int data)
++{
++  switch (address & 0xffff)
++  {
++    case 0x12: firecore_set_z80_clock((firecore_z80_clock & 0xff) | (data << 8)); break;
++    case 0x13: firecore_set_z80_clock((firecore_z80_clock & 0xff00) | data); break;
++    default: m68k_unused_8_w(address, data); break;
++  }
+ }
+ 
+ static void firecore_bank_write(unsigned int address, unsigned int data)
+@@ -807,6 +840,7 @@
+   uint32 offset;
+   switch (address & 0xffffff)
+   {
++    case 0xb00012: firecore_set_z80_clock(data); return;
+     case 0xb01028: offset = (firecore_offset & 0xffff0000u) | (data & 0xfffe); break;
+     case 0xb0102a: offset = ((uint32)data << 16) | (firecore_offset & 0xffff); break;
+     default: return;
+@@ -824,11 +858,12 @@
+ void md_cart_firecore_state_save(uint8 *out)
+ {
+   memset(out, 0, MD_CART_COMPAT_STATE_SIZE);
+-  if (firecore_offset || firecore_gpio != 0x20)
++  if (firecore_offset || firecore_gpio != 0x20 || firecore_z80_clock)
+   {
+     memcpy(out, "KRFCBNK1", 8);
+     link_wire_put32(out + 8, firecore_offset);
+     link_wire_put32(out + 12, firecore_gpio);
++    link_wire_put32(out + 16, firecore_z80_clock);
+   }
+ }
+ 
+@@ -838,10 +873,12 @@
+   if (!memcmp(in, "KRFCBNK1", 8))
+   {
+     firecore_gpio = link_wire_get32(in + 12);
++    firecore_set_z80_clock(link_wire_get32(in + 16));
+     firecore_map(link_wire_get32(in + 8));
+   }
+   else
+   {
++    firecore_set_z80_clock(0);
+     firecore_gpio = 0x20;
+     firecore_map(0);
+   }
+@@ -1629,12 +1666,13 @@
+   md_cart_umkt_tracks_map();
+   if (kr_firecore_active)
+   {
++    firecore_set_z80_clock(0);
+     firecore_offset = 0;
+     firecore_gpio = 0x20;
+     firecore_chip_mask = firecore_has_second_chip() ? 0x7fffff : cart.mask;
+-    m68k.memory_map[0xb0].read8 = firecore_io_read;
++    m68k.memory_map[0xb0].read8 = firecore_io_read_byte;
+     m68k.memory_map[0xb0].read16 = firecore_io_read;
+-    m68k.memory_map[0xb0].write8 = m68k_unused_8_w;
++    m68k.memory_map[0xb0].write8 = firecore_io_write_byte;
+     m68k.memory_map[0xb0].write16 = firecore_bank_write;
+   }
+ }
+@@ -1646,6 +1684,7 @@
+   if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
+   if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
+   md_cart_sonic6_reset();
++  if (kr_firecore_active && hard_reset) firecore_set_z80_clock(0);
+   if (kr_firecore_active && hard_reset && (firecore_offset || firecore_gpio != 0x20))
+   {
+     firecore_gpio = 0x20;
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -1485,7 +1485,10 @@
+     m68k.cycle_ratio = 1 << M68K_OVERCLOCK_SHIFT;
+ #endif
+ #ifdef Z80_OVERCLOCK_SHIFT
+-    z80_cycle_ratio = 1 << Z80_OVERCLOCK_SHIFT;
++    if (kr_firecore_active)
++        md_cart_firecore_apply_z80_clock();
++    else
++        z80_cycle_ratio = 1 << Z80_OVERCLOCK_SHIFT;
+ #endif
+     if (overclock_delay == 0)
+     {
