@@ -2306,6 +2306,7 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
         {QStringLiteral("coreIdentity"),QString::fromLatin1(recordingCoreHash_.toHex())},
         {QStringLiteral("coreBuild"),QString::fromLatin1(exactCoreHash_.toHex())},
         {QStringLiteral("coreVersion"),QStringLiteral(KEGA_VERSION)},
+        {QStringLiteral("emulatorVersion"),QStringLiteral(KEGA_VERSION)},
         {QStringLiteral("coreCompatibility"),QString::fromUtf8(recordingAbi_)},
         {QStringLiteral("options"),options},
         {QStringLiteral("autoFixChecksum"),autoFixChecksum_},
@@ -2390,9 +2391,16 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     if (identity.size() != 32 || identity.toHex() != identityText) {
         error = Localization::text(QStringLiteral("Повреждено описание версии ядра в записи.")); return false;
     }
-    if (version == 1 ? !acceptsLegacyMovieCore(identity) : identity != recordingCoreHash_) {
-        const auto requiredVersion = configuration.value(QStringLiteral("coreVersion")).toString(
-            version == 1 ? QStringLiteral("0.10.0") : Localization::text(QStringLiteral("неизвестной версии")));
+    // Older recordings stored the emulator release under coreVersion, and the
+    // earliest recordings had no release field at all.
+    QString recordedVersion = configuration.value(QStringLiteral("emulatorVersion")).toString();
+    if (recordedVersion.isEmpty())
+        recordedVersion = configuration.value(QStringLiteral("coreVersion")).toString();
+    const bool coreMismatch = version == 1 ? !acceptsLegacyMovieCore(identity) : identity != recordingCoreHash_;
+    if (coreMismatch || (!recordedVersion.isEmpty() && recordedVersion != QStringLiteral(KEGA_VERSION))) {
+        const auto requiredVersion = recordedVersion.isEmpty()
+            ? (version == 1 ? QStringLiteral("0.10.0") : Localization::text(QStringLiteral("неизвестной версии")))
+            : recordedVersion;
         const auto requiredBuild = configuration.value(QStringLiteral("coreBuild")).toString(
             QString::fromLatin1(identityText));
         movieCompatibilityWarning_ = Localization::text(QStringLiteral(

@@ -403,6 +403,25 @@ void integration(const QString& core) {
     require(readFile(moviePath)==originalBytes,"takeover overwrote original movie");
     require(readFile(normalState)==normalBytes,"movie work changed normal quick state");
 
+    // The same core can be shipped in two emulator releases.
+    auto metadata = originalTape.metadata();
+    const auto release = metadata.value("emulatorVersion").toString();
+    require(!release.isEmpty(), "missing emulator release in a new recording");
+    for (const bool legacy : {false, true}) {
+        if (legacy) metadata.remove("emulatorVersion");
+        metadata.insert(legacy ? "coreVersion" : "emulatorVersion", QStringLiteral("0.0.1"));
+        const auto path = temp.filePath(legacy ? "older-format.krm" : "other-release.krm");
+        MovieTape differentRelease;
+        require(differentRelease.create(metadata, originalTape.initialState(), error) &&
+                differentRelease.append(inputFor(0), error) && differentRelease.save(path, error),
+                qPrintable(error));
+        require(movie.play(path, false, error), qPrintable(error));
+        const auto warning = host.movieCompatibilityWarning();
+        require(warning.contains("0.0.1") && warning.contains(release), "missing release mismatch warning");
+        step(movie, host, memory, {}, error);
+        require(movie.mode() == MovieSession::Finished && movie.finish(false, error), qPrintable(error));
+    }
+
     // A valid movie envelope can still contain a corrupt native snapshot.
     // Preparation has already reset the core when that snapshot is rejected;
     // the failed start must put the former live game back exactly.
@@ -618,6 +637,7 @@ void compatibility(const QString& currentCore, const QString& legacyCore) {
         oldMetadata.insert(QStringLiteral("version"),1);
         oldMetadata.insert(QStringLiteral("coreIdentity"),QString::fromLatin1(legacyHash.toHex()));
         oldMetadata.remove(QStringLiteral("coreBuild"));
+        oldMetadata.remove(QStringLiteral("emulatorVersion"));
         oldMetadata.remove(QStringLiteral("coreVersion"));
         oldMetadata.remove(QStringLiteral("coreCompatibility"));
         oldMetadata.remove(QStringLiteral("frameRate"));
