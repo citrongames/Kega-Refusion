@@ -338,7 +338,9 @@ static int parse_cue(megald_media *m,const media_entry *cue,unsigned side) {
       len=slash?(size_t)(slash-cue->name)+1:0;
       if(len+strlen(image)>=sizeof(name))goto done;
       memcpy(name,cue->name,len);strcpy(name+len,image);img=find_entry(m,name);
-      if(!img || !img->size || img->size%2352)goto done;
+      /* Captures may have a partial final raw sector (Space Berserker has
+         332 trailing bytes). Only complete sectors enter the TOC/read API. */
+      if(!img || img->size<2352)goto done;
     } else if(!strcmp(command,"TRACK")) {
       int no;char extra;
       if(!img || sscanf(p,"%d %31s %c",&no,arg,&extra)!=2 || no!=si->track_count+1 || no>99)goto done;

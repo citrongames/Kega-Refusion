@@ -206,6 +206,23 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(LIB.megald_media_read_sector(handle, 0, 5, sector), 1)
         self.assertEqual(bytes(sector), DIGITAL[-2352:])
 
+    def test_digital_partial_tail_excluded_from_toc_and_reads(self):
+        entries = fixture()
+        entries["Disc1Side1/DigitalAudio.img"] += bytes(332)
+        handle = self.open(entries)
+        side = LIB.megald_media_get_side(handle, 0).contents
+        self.assertEqual((side.digital_sectors, side.tracks[1].end_lba), (6, 6))
+        out = (U8 * 2352)(*([0xcd] * 2352))
+        self.assertEqual(LIB.megald_media_read_sector(handle, 0, 5, out), 1)
+        self.assertEqual(bytes(out), DIGITAL[-2352:])
+        self.assertEqual(LIB.megald_media_read_sector(handle, 0, 6, out), 0)
+        self.assertEqual(bytes(out), DIGITAL[-2352:])
+
+        # A fragment must not make a track beginning beyond the full sectors valid.
+        self.fail_open(fixture(cue=CUE.replace(b"00:00:03", b"00:00:06")) |
+                       {"Disc1Side1/DigitalAudio.img": DIGITAL + bytes(332)})
+        self.fail_open(fixture() | {"Disc1Side1/DigitalAudio.img": bytes(332)})
+
     def test_random_interframe_seek_and_stride(self):
         handle = self.open()
         for frame in [2, 0, 1, 2, 2, 0]:

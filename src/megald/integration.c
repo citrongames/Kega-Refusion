@@ -220,6 +220,7 @@ void kr_megald_advance(void)
 {
   int next = cdd.lba + kr_ld_player_advance_delta(&player);
   if (next >= cdd.toc.end) {
+    kr_ld_player_end_of_disc(&player);
     cdd.status = CD_END;
     return;
   }
@@ -307,7 +308,9 @@ int kr_megald_scanline(int y, int output_y, const uint8_t *indices, const uint16
     }
     table_width=width; table_h40=h40; table_border=border;
   }
-  int row = y + 30 + (view.even_field ? 263 : 0);
+  /* The core numbers the top overscan lines at the end of its 262-line
+   * NTSC frame. Wrap into the captured field before selecting odd/even. */
+  int row = (y + 30) % 262 + (view.even_field ? 263 : 0);
   const uint8_t *line = rgb && !view.blanked && row >= 0 && row < (int)side->height ?
     rgb + (size_t)row * side->width * 3 : NULL;
   uint16_t *out = (uint16_t *)(bitmap.data + output_y*bitmap.pitch);

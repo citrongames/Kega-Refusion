@@ -36,7 +36,9 @@ typedef struct kr_ld_player {
   uint8_t inputRegs[32], inputFrozenRegs[32], outputRegs[32], outputFrozenRegs[32];
   uint8_t outputRegsWrittenData[32], outputRegsWrittenCooldownTimer[32];
   uint8_t areInputRegsFrozen, areOutputRegsFrozen;
-  uint8_t operationErrorFlag1, operationErrorFlag2, operationErrorFlag3;
+  /* Middle byte encodes output register 9 bits 1-2 in its low two bits.
+   * Older snapshots only set bit 0 here (output bit 1). */
+  uint8_t operationErrorFlag1, operationErrorBits12, operationErrorFlag3;
   uint8_t seekEnabled, currentSeekMode, currentSeekModeTimeFormat, currentSeekModeRepeat;
   uint8_t analogAudioAttenuationLeft, analogAudioAttenuationRight;
   uint8_t analogAudioFadeToMutedLeft, analogAudioFadeToMutedRight;
@@ -60,6 +62,7 @@ void kr_ld_player_init(kr_ld_player *p);
 void kr_ld_player_reset(kr_ld_player *p, int gate_array_reset);
 void kr_ld_player_set_hooks(kr_ld_player *p, kr_ld_event_fn event, void *opaque);
 void kr_ld_player_set_disc(kr_ld_player *p, const kr_ld_disc_info *disc);
+void kr_ld_player_end_of_disc(kr_ld_player *p);
 void kr_ld_player_disc_ejected(kr_ld_player *p);
 /* Host synchronizes after CDD operations and before register accesses. sample_byte
  * is 0..2351, Redbook LBA is ABA-150. Seek completion must invoke sector_advanced

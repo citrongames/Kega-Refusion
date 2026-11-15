@@ -299,7 +299,7 @@ static uint8_t ld_getOutputRegisterValue(kr_ld_player *p, int regNum)
     break;
   case 0x09:
     ld_setbits(&data, 4, 4, p->operationErrorFlag1);
-    ld_setbits(&data, 1, 1, p->operationErrorFlag2);
+    ld_setbits(&data, 1, 2, p->operationErrorBits12);
     ld_setbits(&data, 0, 0, p->operationErrorFlag3);
     break;
   case 0x0A:
@@ -477,7 +477,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
   case 0x00:
     if (ld_bits(previousData, 0, 0) != ld_bits(data, 0, 0)) {
       p->operationErrorFlag1 = 0;
-      p->operationErrorFlag2 = 0;
+      p->operationErrorBits12 = 0;
       p->operationErrorFlag3 = 0;
       p->reachedStopPoint = 0;
       if (p->seekEnabled) {
@@ -514,7 +514,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
     }
     p->seekEnabled = ld_bits(data, 5, 5);
     p->operationErrorFlag1 = 0;
-    p->operationErrorFlag2 = 0;
+    p->operationErrorBits12 = 0;
     p->operationErrorFlag3 = 0;
     int newDriveState = ld_bits(data, 0, 3);
     int pauseFlag = ld_bits(data, 4, 4);
@@ -545,7 +545,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
     case 0x04:
       if (!(p->disc.loaded)) {
         p->operationErrorFlag1 = 1;
-        p->operationErrorFlag2 = 1;
+        p->operationErrorBits12 = 1;
         break;
       }
       if (p->currentDriveState <= 3) {
@@ -564,7 +564,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
     case 0x05: {
       if (!(p->disc.loaded)) {
         p->operationErrorFlag1 = 1;
-        p->operationErrorFlag2 = 1;
+        p->operationErrorBits12 = 1;
         break;
       }
       if (p->seekEnabled) {
@@ -601,7 +601,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
       if (!(p->disc.loaded)) {
         if (p->targetDriveState == 0x07) {
           p->operationErrorFlag1 = 1;
-          p->operationErrorFlag2 = 1;
+          p->operationErrorBits12 = 1;
         }
         break;
       }
@@ -616,7 +616,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
     default:
       p->operationErrorFlag1 = 1;
       if (!(p->disc.loaded)) {
-        p->operationErrorFlag2 = 1;
+        p->operationErrorBits12 = 1;
       }
       break;
     }
@@ -626,7 +626,7 @@ static void ld_processInputRegisterWrite(kr_ld_player *p, int regNum, uint8_t da
       break;
     }
     p->operationErrorFlag1 = 0;
-    p->operationErrorFlag2 = 0;
+    p->operationErrorBits12 = 0;
     p->operationErrorFlag3 = 0;
     int newPlaybackMode = ld_bits(data, 4, 7);
     if (newPlaybackMode >= 0x04) {
@@ -854,12 +854,12 @@ static int ld_latchSeekTargetFromCurrentState(kr_ld_player *p) {
   p->currentSeekModeTimeFormat = targetSeekModeTimeFormat;
   if (!p->reachedStopPoint) {
     p->operationErrorFlag1 = 0;
-    p->operationErrorFlag2 = 0;
+    p->operationErrorBits12 = 0;
     p->operationErrorFlag3 = 0;
   }
   if (!(p->disc.loaded) || (p->currentDriveState <= 0x04) || (p->targetDriveState != 0x05)) {
     p->operationErrorFlag1 = 1;
-    p->operationErrorFlag2 = 0;
+    p->operationErrorBits12 = 0;
     p->operationErrorFlag3 = 1;
     return 0;
   }
@@ -868,7 +868,7 @@ static int ld_latchSeekTargetFromCurrentState(kr_ld_player *p) {
     int targetTrackAsInt = ((p->disc.laserdisc) && (targetTrack == 0x00)) ? (uint8_t)(p->disc.first_track) : (uint8_t)ld_bcd_decode(targetTrack);
     if ((targetTrack > 0x99) || (targetTrackAsInt < (p->disc.first_track)) || (targetTrackAsInt > (p->disc.last_track))) {
       p->operationErrorFlag1 = 1;
-      p->operationErrorFlag2 = 0;
+      p->operationErrorBits12 = 0;
       p->operationErrorFlag3 = 1;
       p->reachedStopPoint = 0;
       return 0;
@@ -989,7 +989,7 @@ static void ld_handleStopPointReached(kr_ld_player *p, int32_t aba) {
     p->outputRegs[0x1F] = 0x00;
     p->reachedStopPointPreviously = 1;
     p->operationErrorFlag1 = 0;
-    p->operationErrorFlag2 = 1;
+    p->operationErrorBits12 = 1;
     p->operationErrorFlag3 = 1;
     p->reachedStopPoint = 1;
     ld_pause(p);
@@ -1106,10 +1106,18 @@ void kr_ld_player_reset(kr_ld_player *p,int gate_array_reset) {
   }
 }
 void kr_ld_player_set_disc(kr_ld_player *p,const kr_ld_disc_info *disc) {
+  p->operationErrorFlag1=p->operationErrorBits12=p->operationErrorFlag3=0;
   p->disc=*disc;p->currentDriveState=p->targetDriveState=2;
   p->video.currentVideoFrameIndex=-99999999;p->video.latched_file_frame=-1;
   p->video.digitalMemoryFrameLatched=p->video.pendingFrame=0;
   p->stopPointEnabled=0;p->cdd_status=disc->loaded?KR_LD_STOPPED:KR_LD_NODISC;
+}
+/* The last Redbook track has run out during forward playback. The player
+ * latches bits 4, 2, 1 and 0 of its operation status on this transition. */
+void kr_ld_player_end_of_disc(kr_ld_player *p) {
+  p->operationErrorFlag1 = 1;
+  p->operationErrorBits12 = 3;
+  p->operationErrorFlag3 = 1;
 }
 void kr_ld_player_disc_ejected(kr_ld_player *p) {
   memset(&p->disc,0,sizeof(p->disc));p->currentDriveState=p->targetDriveState=1;
@@ -1158,7 +1166,7 @@ kr_ld_video_view kr_ld_player_video(const kr_ld_player *p) {
 void kr_ld_player_picture_stop(kr_ld_player *p,uint32_t a,uint32_t b) {
   if(p->disc.clv || (p->inputRegs[12]&128) || (p->currentPlaybackMode==2 && p->currentPlaybackSpeed<=1)) return;
   if(a==0x82cfff || b==0x82cfff) {
-    p->reachedStopPointPreviously=1;p->operationErrorFlag1=0;p->operationErrorFlag2=0;p->operationErrorFlag3=1;
+    p->reachedStopPointPreviously=1;p->operationErrorFlag1=0;p->operationErrorBits12=0;p->operationErrorFlag3=1;
     p->reachedStopPoint=1;p->stopPointEnabled=0;ld_pause(p);
   }
 }

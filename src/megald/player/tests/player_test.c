@@ -46,5 +46,10 @@ int main(void) {
   kr_ld_player_reset(&p,1);assert(p.inputRegs[1]==0 && p.inputRegs[15]==255 && p.inputRegs[26]==255 && p.analogAudioAttenuationLeft==128);
   wr(&p,0,128);wr(&p,3,0);kr_ld_player_picture_stop(&p,0x82cfff,0);assert(p.reachedStopPoint && p.cdd_status==KR_LD_PAUSED && pauses);
   assert(kr_ld_player_frame_from_aba(0,0)==0);assert(kr_ld_player_aba_from_frame(30000)==75075);
+  /* A frozen status snapshot stays stable until the host unfreezes it. */
+  wr(&p,0,192);i=rd(&p,9);kr_ld_player_end_of_disc(&p);assert(rd(&p,9)==i);
+  wr(&p,0,128);assert((rd(&p,9)&0x17)==0x17);
+  wr(&p,0,129);assert((rd(&p,9)&0x17)==0);
+  kr_ld_player_end_of_disc(&p);kr_ld_player_set_disc(&p,&d);assert((rd(&p,9)&0x17)==0);
   puts("PD6103A register/seek/timeline/hold/step/mix tests passed");return 0;
 }
