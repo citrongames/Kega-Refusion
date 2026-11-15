@@ -2,7 +2,7 @@
   "code": "ru",
   "name": "Русский",
   "translations": {
-    "Игры Sega (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;AtGames Firecore (*.atf *.bin);;Архивы (*.zip *.7z);;Все файлы (*)": "Игры Sega (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;AtGames Firecore (*.atf *.bin);;Архивы (*.zip *.7z);;Все файлы (*)",
+    "Игры Sega (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)": "Игры Sega (*.md *.gen *.bin *.atf *.smd *.sms *.gg *.sg *.68k *.32x *.cue *.iso *.chd *.m3u *.mmi *.zip *.7z);;Диски Sega CD (*.cue *.iso *.chd *.m3u);;MegaLD (*.mmi);;Архивы (*.zip *.7z);;Все файлы (*)",
     "Для Firecore требуется обновлённое ядро.": "Для Firecore требуется обновлённое ядро.",
     "Не удалось обновить изображение сохранения.": "Не удалось обновить изображение сохранения.",
     "Не удалось создать папку: %1": "Не удалось создать папку: %1",
