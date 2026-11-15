@@ -1969,7 +1969,7 @@ void MainWindow::editSettings(int initialPage) {
     cdHelp->setWordWrap(true);
     games->addRow(cdHelp);
     const bool perGameCdBackup = settings_.value(QStringLiteral("emulation/perGameCdBackup"), true).toBool();
-    auto* cdBackup = new QCheckBox(Localization::text(QStringLiteral("Отдельная память сохранений Sega CD для каждой игры")), &dialog);
+    auto* cdBackup = new QCheckBox(Localization::text(QStringLiteral("Отдельная память сохранений Sega CD и MegaLD для каждой игры")), &dialog);
     cdBackup->setObjectName(QStringLiteral("perGameCdBackup"));
     cdBackup->setChecked(perGameCdBackup);
     games->addRow(cdBackup);

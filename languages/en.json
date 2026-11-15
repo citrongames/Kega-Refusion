@@ -30,7 +30,7 @@
     "Проверьте клавиши команд: есть повтор или зарезервированное сочетание.": "Check command shortcuts for duplicate or reserved combinations.",
     "Клавиша команды также назначена кнопке игры.": "The command shortcut is also assigned to a game button.",
     "Не удалось создать папку сохранений: %1": "Could not create the save folder: %1",
-    "Отдельная память сохранений Sega CD для каждой игры": "Separate Sega CD backup memory for each game",
+    "Отдельная память сохранений Sega CD и MegaLD для каждой игры": "Separate backup memory for each Sega CD and MegaLD game",
     "Если выключено, используется общая память. Применится при следующем открытии игры.": "When off, games use shared backup memory. Takes effect the next time a game is opened.",
     "Предыдущее обновление завершилось с ошибкой.": "The previous update encountered an error.",
     "Некорректное описание релиза на GitHub.": "GitHub returned invalid release information.",
