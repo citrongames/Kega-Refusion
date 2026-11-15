@@ -1426,7 +1426,7 @@ void GameView::paintRaster(QPainter& painter) {
                          Localization::text(QStringLiteral("Нажмите + или Ctrl+O · перетащите игру сюда")));
         painter.drawText(QRect(24, center.y() + 51, width() - 48, height() - center.y() - 51),
                          Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,
-                         Localization::text(QStringLiteral("Поддержка: MD, GEN, BIN, SMD, 32X, SMS, GG, SG, 68K, CUE, ISO, CHD, M3U, MegaLD (MMI)")));
+                         Localization::text(QStringLiteral("Поддержка: MD, GEN, BIN, SMD, 32X, SMS, GG, SG, 68K, CUE, ISO, CHD, M3U, MegaLD (MMI), Firecore (ATF, BIN)")));
     } else {
         const QRectF target = gameRect();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
