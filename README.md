@@ -8,6 +8,10 @@ Emulation is based on a modified **Genesis Plus GX** core, with integrated 32X s
 
 [Build from source](docs/building.md) · [Documentation](docs/README.md) · [Translations](languages/README.md) · [Third-party credits](THIRD_PARTY.md)
 
+| The Lion King · first level, Dither blending enabled | Controls · Mega Drive six-button pad |
+|:---:|:---:|
+| [![Simba in The Pridelands with the built-in dither filter](https://raw.githubusercontent.com/citrongames/Kega-Refusion/master/docs/images/lion-king.png)](https://github.com/citrongames/Kega-Refusion/blob/master/docs/images/lion-king.png) | [![English controller settings with the illustrated six-button pad and its bindings](https://raw.githubusercontent.com/citrongames/Kega-Refusion/master/docs/images/controller-settings.png)](https://github.com/citrongames/Kega-Refusion/blob/master/docs/images/controller-settings.png) |
+
 ## Supported systems
 
 | System | Support |
