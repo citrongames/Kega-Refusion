@@ -321,7 +321,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     gameGearLcdEnabled_ = !blarggFilter_ && settings_.value(QStringLiteral("view/gameGearLcd"), false).toBool();
     session_.setGameGearLcd(gameGearLcdEnabled_);
     session_.setSmsFmEnabled(smsFmEnabled_);
-    session_.setFirecoreDmcPcm(settings_.value(QStringLiteral("audio/firecoreDmcPcm"), false).toBool());
+    session_.setFirecoreDmcPcm(settings_.value(QStringLiteral("audio/firecoreDmcPcm"), true).toBool());
     session_.setNukedYm2612(settings_.value(QStringLiteral("audio/ym2612Core"),
         QStringLiteral("mame")).toString() == QLatin1String("nuked"));
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
@@ -2287,16 +2287,16 @@ void MainWindow::editSettings(int initialPage) {
     sound->addRow(Localization::text(QStringLiteral("FM-синтезатор (Mega Drive):")), ym2612Core);
     ym2612Core->setToolTip(Localization::text(QStringLiteral(
         "Применяется при следующей загрузке игры или перезапуске питания.")));
-    auto* dmcPcmBox = new QCheckBox(Localization::text(QStringLiteral("Выровнять музыку DMC (Firecore)")), &dialog);
-    dmcPcmBox->setObjectName(QStringLiteral("firecoreDmcPcm"));
-    const bool selectedDmcPcm = settings_.value(QStringLiteral("audio/firecoreDmcPcm"), false).toBool();
-    dmcPcmBox->setChecked(selectedDmcPcm);
-    dmcPcmBox->setToolTip(ym2612Core->toolTip());
-    sound->addRow(dmcPcmBox);
     auto* smsFmBox = new QCheckBox(Localization::text(QStringLiteral("FM-синтезатор (Master System)")), &dialog);
     smsFmBox->setObjectName(QStringLiteral("smsFmEnabled"));
     smsFmBox->setChecked(smsFmEnabled_);
     sound->addRow(smsFmBox);
+    auto* dmcPcmBox = new QCheckBox(Localization::text(QStringLiteral("Выровнять музыку DMC (Firecore)")), &dialog);
+    dmcPcmBox->setObjectName(QStringLiteral("firecoreDmcPcm"));
+    const bool selectedDmcPcm = settings_.value(QStringLiteral("audio/firecoreDmcPcm"), true).toBool();
+    dmcPcmBox->setChecked(selectedDmcPcm);
+    dmcPcmBox->setToolTip(ym2612Core->toolTip());
+    sound->addRow(dmcPcmBox);
     auto* smsFmHelp = new QLabel(Localization::text(QStringLiteral(
         "Применяется при следующей загрузке игры или перезапуске питания.")), &dialog);
     smsFmHelp->setWordWrap(true);

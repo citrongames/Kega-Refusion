@@ -282,7 +282,7 @@ private:
     bool localGameGearLcd_ = false;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
-    bool firecoreDmcPcm_ = false, activeFirecoreDmcPcm_ = false;
+    bool firecoreDmcPcm_ = true, activeFirecoreDmcPcm_ = false;
     bool preMovieFirecoreDmcPcm_ = false;
     bool nukedYm2612_ = false;
     bool smsFmEnabled_ = true;

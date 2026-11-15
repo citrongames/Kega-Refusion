@@ -67,6 +67,10 @@ int main(int argc,char** argv) {
         require(host.load(bin,error),qPrintable(error));
         require(host.isFirecore() && !host.isCd(),"BIN Firecore route");
         require(host.contentName()=="original.bin" && host.gamePath()==bin,"original source identity preserved");
+        const auto dmcKey = QStringLiteral("kegarefusion_firecore_dmc_pcm");
+        require(host.movieConfiguration().value("options").toObject().value(dmcKey)=="enabled","Firecore PCM enabled by default");
+        host.setFirecoreDmcPcm(false);
+        require(host.hardReset(error),qPrintable(error));
         const auto config=host.movieConfiguration();
         const auto options=config.value("options").toObject();
         require(options.value("genesis_plus_gx_add_on")=="none","CD preference overridden");
@@ -90,7 +94,6 @@ int main(int argc,char** argv) {
         require(host.prepareNetwork(networkConfig,error),qPrintable(error));
         require(host.restoreNetworkState(networkState,error),qPrintable(error));
         require(host.restoreMovieConfiguration(error),qPrintable(error));
-        const auto dmcKey = QStringLiteral("kegarefusion_firecore_dmc_pcm");
         host.setFirecoreDmcPcm(true);
         require(!host.movieConfiguration().value("options").toObject().contains(dmcKey),"pending PCM change leaves running game alone");
         auto enhanced = host.movieConfiguration(true);
