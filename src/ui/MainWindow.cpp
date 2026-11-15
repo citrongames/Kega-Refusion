@@ -847,7 +847,7 @@ void MainWindow::buildMenus() {
     });
     videoMenu_ = fileMenu->addMenu(Localization::text(QStringLiteral("Видео")));
     videoMenu_->setObjectName(QStringLiteral("videoMenu"));
-    videoStartAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Начать запись видео…")));
+    videoStartAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Начать запись…")));
     videoStartAction_->setObjectName(QStringLiteral("videoRecord"));
     connect(videoStartAction_, &QAction::triggered, this, &MainWindow::startVideoCapture);
     videoExportAction_ = videoMenu_->addAction(Localization::text(QStringLiteral("Экспортировать запись ввода…")));
@@ -3131,7 +3131,7 @@ void MainWindow::updateVideoActions() {
     videoStartAction_->setEnabled(game && !busy);
     videoStartAction_->setText(videoActive_ && !videoExporting_
         ? Localization::text(QStringLiteral("Идёт запись видео"))
-        : Localization::text(QStringLiteral("Начать запись видео…")));
+        : Localization::text(QStringLiteral("Начать запись…")));
     videoStartAction_->setToolTip(Localization::text(QStringLiteral(
         "MOV: видео PNG без потерь в исходном разрешении, звук AAC 256 кбит/с; без OSD.")));
     videoExportAction_->setEnabled(game && !busy && movieMode_ == 0 && !moviePending_ &&
