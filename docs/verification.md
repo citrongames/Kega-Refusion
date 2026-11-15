@@ -431,3 +431,11 @@ Both x86-64 Release packages were built from tag `v0.27.0` at `2de1dea`. The pub
 On Linux, the released 0.26.0 application discovered the update, downloaded it and restarted into 0.27.0 on an isolated display. All 172 installed manifest entries matched. Twelve user-file markers and both settings files survived. The helper left no staging directory or error.
 
 On native Windows, the packaged 0.26.0 helper applied the staged 0.27.0 ZIP contents in an isolated installation. The installed executable reported 0.27.0, all 127 manifest entries matched, and four user files covering battery saves, quick saves, settings and BIOS survived.
+
+## Game Gear M2 Collection cartridge profile (2026-11-15)
+
+The 1 MiB Aleste Collection release of GG Aleste 3 (CRC32 `5AE64731`) produced one black image and silent PCM over 720 frames with the previous core. Its Sega bank registers worked. The M2 profile supplies a sparse CPU-visible ROM view for this release. Its 113 byte differences occupy eight 1 KiB pages. This models the observed software requirements; the internal implementation of M2's emulator is undocumented here. The reference is the [RetroAchievements playability patch](https://retroachievements.org/forums/topic/24600) with the [later PSG channel 3 correction](https://www.dreamcast-talk.com/forum/viewtopic.php?t=16716&start=10), retaining the nine original FE bytes described there.
+
+With Start on frames 480–494 and 650–664, then fire from frame 750, the original reached Wave 1. All 1200 visible frames and stereo PCM blocks matched the corrected reference (CRC32 `2D746EA4`), including 300 first-wave frames. The 100 frames following a state restore also matched between the two images in video, PCM and RAM. Within either image separately, restored pixels differed from uninterrupted playback in the raw-core probe; PCM and RAM matched. The same video discrepancy occurred on the ordinary Sega-mapped reference.
+
+Selecting bank 3 via FFFD kept the first KiB fixed and switched the rest of its window. Both upper windows mapped the expected instructions after writes to FFFE and FFFF. Restoring a state restored the bank map, and the underlying cartridge bytes retained CRC32 `5AE64731`. Both installed Windows core DLLs matched the packaged files.
