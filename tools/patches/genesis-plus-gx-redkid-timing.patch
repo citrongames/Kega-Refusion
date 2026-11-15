@@ -1,0 +1,172 @@
+--- a/core/firecore.h
++++ b/core/firecore.h
+@@ -4,5 +4,6 @@
+ 
+ extern int kr_firecore_active;
+ void md_cart_firecore_apply_z80_clock(void);
++void md_cart_firecore_set_m68k_base_ratio(unsigned int ratio);
+ 
+ #endif
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -728,6 +728,30 @@
+ static uint32 firecore_chip_mask;
+ static uint16 firecore_gpio;
+ static uint16 firecore_z80_clock;
++static uint16 firecore_m68k_divider;
++#ifdef M68K_OVERCLOCK_SHIFT
++static unsigned int firecore_m68k_base_ratio = 1u << M68K_OVERCLOCK_SHIFT;
++#endif
++
++void md_cart_firecore_set_m68k_base_ratio(unsigned int ratio)
++{
++#ifdef M68K_OVERCLOCK_SHIFT
++  /* The RedKid clock source is 27 MHz. The console firmware and games use
++   * divider 3 (9 MHz) and 2 (13.5 MHz). Preserve the frontend multiplier. */
++  firecore_m68k_base_ratio = ratio;
++  if (firecore_m68k_divider == 2 || firecore_m68k_divider == 3)
++    ratio = (uint32)(((uint64_t)ratio * system_clock * firecore_m68k_divider) / (7u * 27000000u));
++  m68k.cycle_ratio = ratio;
++#endif
++}
++
++static void firecore_set_m68k_divider(uint16 value)
++{
++  firecore_m68k_divider = value;
++#ifdef M68K_OVERCLOCK_SHIFT
++  md_cart_firecore_set_m68k_base_ratio(firecore_m68k_base_ratio);
++#endif
++}
+ 
+ void md_cart_firecore_apply_z80_clock(void)
+ {
+@@ -816,7 +840,12 @@
+ 
+ static unsigned int firecore_io_read(unsigned int address)
+ {
+-  return ((address & 0xffff) == 0x12) ? firecore_z80_clock : 0;
++  switch (address & 0xffff)
++  {
++    case 0x12: return firecore_z80_clock;
++    case 0x1a: return firecore_m68k_divider;
++    default: return 0;
++  }
+ }
+ 
+ static unsigned int firecore_io_read_byte(unsigned int address)
+@@ -831,6 +860,8 @@
+   {
+     case 0x12: firecore_set_z80_clock((firecore_z80_clock & 0xff) | (data << 8)); break;
+     case 0x13: firecore_set_z80_clock((firecore_z80_clock & 0xff00) | data); break;
++    case 0x1a: firecore_set_m68k_divider((firecore_m68k_divider & 0xff) | (data << 8)); break;
++    case 0x1b: firecore_set_m68k_divider((firecore_m68k_divider & 0xff00) | data); break;
+     default: m68k_unused_8_w(address, data); break;
+   }
+ }
+@@ -841,6 +872,7 @@
+   switch (address & 0xffffff)
+   {
+     case 0xb00012: firecore_set_z80_clock(data); return;
++    case 0xb0001a: firecore_set_m68k_divider(data); return;
+     case 0xb01028: offset = (firecore_offset & 0xffff0000u) | (data & 0xfffe); break;
+     case 0xb0102a: offset = ((uint32)data << 16) | (firecore_offset & 0xffff); break;
+     default: return;
+@@ -858,12 +890,13 @@
+ void md_cart_firecore_state_save(uint8 *out)
+ {
+   memset(out, 0, MD_CART_COMPAT_STATE_SIZE);
+-  if (firecore_offset || firecore_gpio != 0x20 || firecore_z80_clock)
++  if (firecore_offset || firecore_gpio != 0x20 || firecore_z80_clock || firecore_m68k_divider)
+   {
+     memcpy(out, "KRFCBNK1", 8);
+     link_wire_put32(out + 8, firecore_offset);
+     link_wire_put32(out + 12, firecore_gpio);
+     link_wire_put32(out + 16, firecore_z80_clock);
++    link_wire_put32(out + 20, firecore_m68k_divider);
+   }
+ }
+ 
+@@ -874,11 +907,13 @@
+   {
+     firecore_gpio = link_wire_get32(in + 12);
+     firecore_set_z80_clock(link_wire_get32(in + 16));
++    firecore_set_m68k_divider(link_wire_get32(in + 20));
+     firecore_map(link_wire_get32(in + 8));
+   }
+   else
+   {
+     firecore_set_z80_clock(0);
++    firecore_set_m68k_divider(0);
+     firecore_gpio = 0x20;
+     firecore_map(0);
+   }
+@@ -1667,6 +1702,7 @@
+   if (kr_firecore_active)
+   {
+     firecore_set_z80_clock(0);
++    firecore_set_m68k_divider(0);
+     firecore_offset = 0;
+     firecore_gpio = 0x20;
+     firecore_chip_mask = firecore_has_second_chip() ? 0x7fffff : cart.mask;
+@@ -1684,7 +1720,11 @@
+   if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD) cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG] = 0;
+   if (hard_reset && md_cart_aq93c_active) eeprom_93c_init();
+   md_cart_sonic6_reset();
+-  if (kr_firecore_active && hard_reset) firecore_set_z80_clock(0);
++  if (kr_firecore_active && hard_reset)
++  {
++    firecore_set_z80_clock(0);
++    firecore_set_m68k_divider(0);
++  }
+   if (kr_firecore_active && hard_reset && (firecore_offset || firecore_gpio != 0x20))
+   {
+     firecore_gpio = 0x20;
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -1503,6 +1503,10 @@
+         z80_cycle_ratio = (100 << Z80_OVERCLOCK_SHIFT) / config.overclock;
+ #endif
+     }
++#ifdef M68K_OVERCLOCK_SHIFT
++    if (kr_firecore_active)
++        md_cart_firecore_set_m68k_base_ratio(m68k.cycle_ratio);
++#endif
+ }
+ #endif
+ 
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -629,7 +629,8 @@
+   load_param(&cached_write, sizeof(cached_write));
+ 
+   /* restore FIFO byte access flag */
+-  fifo_byte_access = ((code & 0x0F) < 0x03);
++  fifo_byte_access = ((code & 0x0F) < 0x03) &&
++                    !(KR_FIRECORE_VDP_ENABLED && (code & 0x0F) == 0x01);
+ 
+   /* restore current NTSC/PAL mode */
+   if (system_hw & SYSTEM_MD)
+@@ -777,6 +778,12 @@
+     cycles += (2 * (MCYCLES_PER_LINE / rate));
+   }
+ 
++  /* Extended VRAM uploads use 32-bit units. The scheduler counts 16-bit
++   * words, while the original VRAM rate above counts one byte per slot.
++   * Model one longword per slot for this path. */
++  if (dma_type == 1 && KR_FIRECORE_VDP_ENABLED)
++    rate *= 4;
++
+   /* Available DMA cycles */
+   if (status & 8)
+   {
+@@ -1021,7 +1028,9 @@
+      NOTE: Invalid codes 0x00, 0x08 and 0x09 behaves the same as VRAM access (0x01) i.e,
+      although no data is written, two access slots are required to empty the FIFO entry. 
+   */ 
+-  fifo_byte_access = (code & 0x06) ? 0 : 1;
++  /* A 16-bit CPU write fits in one extended VRAM access slot. */
++  fifo_byte_access = !(code & 0x06) &&
++                    !(KR_FIRECORE_VDP_ENABLED && (code & 0x0F) == 0x01);
+ }
+ 
+ /* Mega Drive VDP control port specific (MS compatibility mode) */
