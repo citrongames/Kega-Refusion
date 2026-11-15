@@ -906,6 +906,18 @@ bool LibretroHost::rewindPreviewNeedsPair() const {
     const bool woven = loaded_ && (api_->rewind_video ? (api_->rewind_video(0) & 1u) != 0 : frame_.height() > 288);
     return woven || (linkPeer_ && linkPeer_->rewindPreviewNeedsPair());
 }
+bool LibretroHost::previewLoadedState() {
+    // KRS stores the machine at a frame boundary, without a framebuffer.
+    // Draw the first displayable frame silently, then put the machine, clock
+    // and battery memory back at the loaded boundary before play or net sync.
+    const auto boundary = captureRewindState();
+    if (boundary.isEmpty()) return false;
+    beginRewindPreview();
+    runRewindPreviewFrame(true, rewindPreviewNeedsPair());
+    const bool restored = restoreRewindState(boundary);
+    endRewindPreview();
+    return restored;
+}
 void LibretroHost::beginRewindPreview() {
     if (rewindPreviewDepth_++ == 0) {
         rewindPreviewBeforeScope_ = rewindPreview_;

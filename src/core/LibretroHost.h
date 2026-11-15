@@ -54,6 +54,7 @@ public:
     // The scope preserves transient fields through canonical restore and bypasses
     // recursive LCD ghosting. A warmup frame may render without publication.
     bool rewindPreviewNeedsPair() const;
+    bool previewLoadedState();
     void beginRewindPreview();
     void endRewindPreview();
     void runRewindPreviewFrame(bool renderVideo = true, bool singleFieldFallback = false, bool publishVideo = true);

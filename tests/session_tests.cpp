@@ -79,7 +79,7 @@ int main(int argc,char** argv){
  require(argc==2 || rewindResetsOnly || spriteOnly || fastOnly || checksumOnly || portsOnly || achievementsOnly || achievementLoadingOnly || frameBackOnly || inputDisplayOnly || timerOnly || speedOnly,"core argument required");QTemporaryDir temp;require(temp.isValid(),"temporary directory");
  QByteArray rom(32768,'\0');qToBigEndian<quint32>(0xffff00,rom.data());qToBigEndian<quint32>(0x200,rom.data()+4);
  rom.replace(0x100,16,QByteArray("SEGA MEGA DRIVE ",16));rom.replace(0x1f0,3,"USA");rom[0x200]=char(0x60);rom[0x201]=char(0xfe);
- if(frameBackOnly || inputDisplayOnly || rewindResetsOnly)rom=frameBackRom();
+ if(frameBackOnly || inputDisplayOnly || rewindResetsOnly || timerOnly)rom=frameBackRom();
  if(spriteOnly){
   const auto program=QByteArray::fromHex("33fc800400c0000433fc814400c0000460fe");
   rom.replace(0x200,program.size(),program);
@@ -379,12 +379,18 @@ int main(int argc,char** argv){
   step(true,3);step(true,2);
   require(timerUs==savedUs,"backward step did not restore elapsed time");
   step(false,3);
+  QImage nextFrame, oldScreen;
+  require(session.takeVideoFrame(nextFrame,aspect),"missing reference frame after saved boundary");
+  step(false,4);
+  require(session.takeVideoFrame(oldScreen,aspect) && oldScreen!=nextFrame,"indistinct load preview fixture");
   const int restored=actions+1,beforeRestore=timerEvents;
   session.loadStateFromFile(savedPath);
   waitFor([&]{return actions>=restored && timerEvents>beforeRestore && timerFrames==2;},
           "timer state restore");
   require(timerUs==savedUs && paused,"state restore did not restore timer and pause");
+  require(session.takeVideoFrame(image,aspect) && image==nextFrame,"paused load kept stale framebuffer");
   step(false,3);
+  require(session.takeVideoFrame(image,aspect) && image==nextFrame,"preview advanced the live timeline");
   reset(false);step(false,1);
   reset(true);
   require(errors==0,"timer session reported a core error");

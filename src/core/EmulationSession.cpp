@@ -1756,11 +1756,24 @@ void EmulationSession::run() {
                     } else emit actionNotice(error);
                 } else {
                     LibretroHost::StateLoadError failure;
-                    const bool restored = named ? host.loadStateFromFile(command.path,error,&failure)
-                                                : host.loadState(command.value,error,&failure);
-                    if (restored) {
+                    const auto loadState = [&] {
+                        return named ? host.loadStateFromFile(command.path,error,&failure)
+                                     : host.loadState(command.value,error,&failure);
+                    };
+                    if (loadState()) {
                         if (inputDisplayEnabled) { frameInput = host.inputDisplay(false); publishInput(); }
                         clearHistory(); clearAudio(); resetMetrics();
+                        if (paused || backgroundPaused_.load() || networkMode == 1) {
+                            networkRewindImage = {};
+                            networkRewindLinkPreview.clear();
+                            if (host.previewLoadedState()) {
+                                presentFrame(host.frame(), host.aspectRatio(), host.spriteOwnership());
+                            } else {
+                                // A failed preview restore must not become the live timeline.
+                                if (!loadState()) { emit errorOccurred(error); break; }
+                                emit actionNotice(Localization::text(QStringLiteral("Не удалось обновить изображение сохранения.")));
+                            }
+                        }
                         if (networkMode==1) networkDirty=true;
                         emit actionCompleted(named ? Localization::text(QStringLiteral("Загружено из файла: %1")).arg(QFileInfo(command.path).fileName())
                                                    : Localization::text(QStringLiteral("Загружено: слот %1")).arg(command.value));
