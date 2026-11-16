@@ -1,0 +1,431 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -117,16 +117,16 @@
+ const uint8 *hctab;               /* pointer to H Counter table */
+ 
+ /* Function pointers */
+-void (*vdp_68k_data_w)(unsigned int data);
++void (*vdp_68k_data_w)(unsigned int data, int z80_bus);
+ void (*vdp_z80_data_w)(unsigned int data);
+-unsigned int (*vdp_68k_data_r)(void);
++unsigned int (*vdp_68k_data_r)(int z80_bus);
+ unsigned int (*vdp_z80_data_r)(void);
+ 
+ /* Function prototypes */
+-static void vdp_68k_data_w_m4(unsigned int data);
+-static void vdp_68k_data_w_m5(unsigned int data);
+-static unsigned int vdp_68k_data_r_m4(void);
+-static unsigned int vdp_68k_data_r_m5(void);
++static void vdp_68k_data_w_m4(unsigned int data, int z80_bus);
++static void vdp_68k_data_w_m5(unsigned int data, int z80_bus);
++static unsigned int vdp_68k_data_r_m4(int z80_bus);
++static unsigned int vdp_68k_data_r_m5(int z80_bus);
+ static void vdp_z80_data_w_m4(unsigned int data);
+ static void vdp_z80_data_w_m5(unsigned int data);
+ static unsigned int vdp_z80_data_r_m4(void);
+@@ -733,6 +733,61 @@
+ /* DMA update function (Mega Drive VDP only)                                */
+ /*--------------------------------------------------------------------------*/
+ 
++/* The interpreter charges the current instruction after calling the VDP.
++ * Use the same instruction-end approximation for FIFO writes and status reads. */
++INLINE unsigned int fifo_68k_access_offset(unsigned int instruction)
++{
++#ifdef M68K_OVERCLOCK_SHIFT
++  return ((uint64)instruction * m68k.cycle_ratio) >> M68K_OVERCLOCK_SHIFT;
++#else
++  return instruction;
++#endif
++}
++
++/* During active display a 68k DMA competes for the same four entries as CPU
++ * writes. Release the 68k when the last source word has entered the FIFO,
++ * leaving the outstanding video-side writes visible to status reads.
++ * Advance the slot cursor once per available VDP access, only on DMA lines. */
++static int fifo_dma_active(unsigned int start, int *duration)
++{
++  unsigned int line = mcycles_vdp;
++  const unsigned int limit = line + MCYCLES_PER_LINE;
++  const unsigned int slots = dma_timing[0][reg[12] & 1];
++  const unsigned int fetch_period = (reg[12] & 1) ? 16 : 20; /* two pixels */
++  unsigned int issue = start;
++  unsigned int tail = fifo_cycles[(fifo_idx + 3) & 3];
++  unsigned int count = 0, slot = 0;
++
++  while (count < dma_length)
++  {
++    unsigned int index = (fifo_idx + count) & 3;
++    if (issue < fifo_cycles[index])
++      issue = fifo_cycles[index];
++    if (issue >= limit)
++      break;
++    if (tail < issue)
++      tail = issue;
++    while (line + fifo_timing[slot] <= tail)
++    {
++      if (++slot == slots)
++      {
++        slot = 0;
++        line += MCYCLES_PER_LINE;
++      }
++    }
++    /* VRAM takes two byte slots. The tables include the first slots of
++     * the next line for a word which straddles the line boundary. */
++    tail = line + fifo_timing[slot + dma_type];
++    fifo_cycles[index] = tail;
++    ++count;
++    issue += fetch_period;
++  }
++  if (count < dma_length)
++    issue = (start < limit) ? limit : start;
++  *duration = issue - start;
++  return count;
++}
++
+ void vdp_dma_update(unsigned int cycles)
+ {
+   int dma_cycles, dma_bytes;
+@@ -811,6 +866,10 @@
+   {
+     dma_bytes = dma_length;
+     dma_cycles = MCYCLES_PER_LINE / rate;
++  }
++  else if (dma_type < 2 && !(status & 8) && (reg[1] & 0x44) == 0x44 && !kr_firecore_active)
++  {
++    dma_bytes = fifo_dma_active(cycles, &dma_cycles);
+   }
+   else if (dma_length < dma_bytes)
+   {
+@@ -1355,12 +1414,16 @@
+    * 9  Write FIFO empty
+    * 10 - 15  Open Bus
+    */
+-unsigned int vdp_68k_ctrl_r(unsigned int cycles)
++unsigned int vdp_68k_ctrl_r(unsigned int cycles, int z80_bus)
+ {
+   unsigned int temp;
+ 
+   /* Cycle-accurate VDP status read (adjust CPU time with current instruction execution time) */
+-  cycles += m68k_cycles();
++  unsigned int instruction = m68k_cycles();
++  unsigned int fifo_at = cycles + instruction;
++  if (!kr_firecore_active && (reg[1] & 4))
++    fifo_at = z80_bus ? cycles : cycles + fifo_68k_access_offset(instruction);
++  cycles += instruction;
+ 
+   /* Check if DMA Busy flag is set */
+   if (status & 2)
+@@ -1383,14 +1446,14 @@
+   status &= 0xFF9F;
+ 
+   /* Check if FIFO last entry read-out cycle has been reached */
+-  if (cycles >= fifo_cycles[(fifo_idx + 3) & 3])
++  if (fifo_at >= fifo_cycles[(fifo_idx + 3) & 3])
+   {
+     /* FIFO is empty */
+     temp |= 0x200;
+   }
+ 
+   /* Check if FIFO oldest entry read-out cycle is not yet reached */
+-  else if (cycles < fifo_cycles[fifo_idx])
++  else if (fifo_at < fifo_cycles[fifo_idx])
+   {
+     /* FIFO is full */
+     temp |= 0x100;
+@@ -2656,7 +2719,7 @@
+ /* 68k bus interface (Mega Drive VDP only)                                     */
+ /*--------------------------------------------------------------------------*/
+ 
+-static void vdp_68k_data_w_m4(unsigned int data)
++static void vdp_68k_data_w_m4(unsigned int data, int z80_bus)
+ {
+   /* Clear pending flag */
+   pending = 0;
+@@ -2750,7 +2813,7 @@
+   addr = (addr + (reg[15] + 1)) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ }
+ 
+-static void vdp_68k_data_w_m5(unsigned int data)
++static void vdp_68k_data_w_m5(unsigned int data, int z80_bus)
+ {
+   /* Clear pending flag */
+   pending = 0;
+@@ -2760,8 +2823,11 @@
+   {
+     int slot = 0;
+ 
+-    /* Cycle-accurate VDP data port access */
+-    int cycles = m68k.cycles;
++    /* Timestamp the bus access on the issuing CPU. */
++    int md_z80 = z80_bus && !kr_firecore_active;
++    int cycles = md_z80 ? Z80.cycles : m68k.cycles;
++    if (!kr_firecore_active && !md_z80)
++      cycles += fifo_68k_access_offset(m68k_cycles());
+ 
+     /* Check against last FIFO entry read-out cycle */
+     if (cycles < fifo_cycles[(fifo_idx + 3) & 3])
+@@ -2770,19 +2836,25 @@
+       if (cycles < fifo_cycles[fifo_idx])
+       {
+         /* FIFO is full, 68k waits until oldest FIFO entry is processed (Chaos Engine / Soldiers of Fortune, Double Clutch, Titan Overdrive Demo) */
+-        m68k.cycles = (((fifo_cycles[fifo_idx] + 6) / 7) * 7);
++        if (kr_firecore_active)
++          m68k.cycles = ((fifo_cycles[fifo_idx] + 6) / 7) * 7;
++        else if (md_z80)
++          Z80.cycles += ((fifo_cycles[fifo_idx] - cycles + 14) / 15) * 15;
++        else
++          m68k.cycles += ((fifo_cycles[fifo_idx] - cycles + 6) / 7) * 7;
+       }
+ 
+       /* FIFO is not empty, next FIFO entry will be processed after last FIFO entry */
+       cycles = fifo_cycles[(fifo_idx + 3) & 3];
+     }
+ 
+-    /* Determine next FIFO entry processing slot */
+-    cycles -= mcycles_vdp;
++    /* Account for a stalled multi-access instruction crossing a line. */
++    unsigned int line = mcycles_vdp;
++    if (cycles >= (int)(line + MCYCLES_PER_LINE))
++      line += ((cycles - line) / MCYCLES_PER_LINE) * MCYCLES_PER_LINE;
++    cycles -= line;
+     while (cycles >= fifo_timing[slot]) slot++;
+-
+-    /* Update last FIFO entry read-out cycle */
+-    fifo_cycles[fifo_idx] = mcycles_vdp + fifo_timing[slot + fifo_byte_access];
++    fifo_cycles[fifo_idx] = line + fifo_timing[slot + fifo_byte_access];
+   }
+ 
+   /* Write data */
+@@ -2809,7 +2881,7 @@
+   }
+ }
+ 
+-static unsigned int vdp_68k_data_r_m4(void)
++static unsigned int vdp_68k_data_r_m4(int z80_bus)
+ {
+   /* VRAM address */
+   int index = addr & 0x3FFE;
+@@ -2824,9 +2896,25 @@
+   return *(uint16 *) &vram[index];
+ }
+ 
+-static unsigned int vdp_68k_data_r_m5(void)
++static unsigned int vdp_68k_data_r_m5(int z80_bus)
+ {
+   uint16 data = 0;
++  unsigned int tail = fifo_cycles[(fifo_idx + 3) & 3];
++  /* A data read waits for queued writes. Control-port polling must not. */
++  if (!kr_firecore_active)
++  {
++    if (z80_bus)
++    {
++      if (Z80.cycles < tail)
++        Z80.cycles += ((tail - Z80.cycles + 14) / 15) * 15;
++    }
++    else if (m68k.cycles < tail)
++    {
++      unsigned int at = m68k.cycles + fifo_68k_access_offset(m68k_cycles());
++      if (at < tail)
++        m68k.cycles += ((tail - at + 6) / 7) * 7;
++    }
++  }
+ 
+   /* Clear pending flag */
+   pending = 0;
+--- a/core/vdp_ctrl.h
++++ b/core/vdp_ctrl.h
+@@ -90,9 +90,10 @@
+ extern const uint8 *hctab;
+ 
+ /* Function pointers */
+-extern void (*vdp_68k_data_w)(unsigned int data);
++enum { VDP_BUS_68K, VDP_BUS_Z80 };
++extern void (*vdp_68k_data_w)(unsigned int data, int z80_bus);
+ extern void (*vdp_z80_data_w)(unsigned int data);
+-extern unsigned int (*vdp_68k_data_r)(void);
++extern unsigned int (*vdp_68k_data_r)(int z80_bus);
+ extern unsigned int (*vdp_z80_data_r)(void);
+ 
+ /* Function prototypes */
+@@ -108,7 +109,7 @@
+ extern void vdp_z80_ctrl_w(unsigned int data);
+ extern void vdp_sms_ctrl_w(unsigned int data);
+ extern void vdp_tms_ctrl_w(unsigned int data);
+-extern unsigned int vdp_68k_ctrl_r(unsigned int cycles);
++extern unsigned int vdp_68k_ctrl_r(unsigned int cycles, int z80_bus);
+ extern unsigned int vdp_z80_ctrl_r(unsigned int cycles);
+ extern unsigned int vdp_hvc_r(unsigned int cycles);
+ extern void vdp_test_w(unsigned int data);
+--- a/core/mem68k.c
++++ b/core/mem68k.c
+@@ -1399,17 +1399,17 @@
+   {
+     case 0x00:  /* DATA */
+     {
+-      return (vdp_68k_data_r() >> 8);
++      return (vdp_68k_data_r(VDP_BUS_68K) >> 8);
+     }
+ 
+     case 0x01:  /* DATA */
+     {
+-      return (vdp_68k_data_r() & 0xFF);
++      return (vdp_68k_data_r(VDP_BUS_68K) & 0xFF);
+     }
+ 
+     case 0x04:  /* CTRL */
+     {
+-      unsigned int data = (vdp_68k_ctrl_r(m68k.cycles) >> 8) & 3;
++      unsigned int data = (vdp_68k_ctrl_r(m68k.cycles, VDP_BUS_68K) >> 8) & 3;
+ 
+       /* Unused bits return prefetched bus data */
+       address = m68k.pc;
+@@ -1420,7 +1420,7 @@
+ 
+     case 0x05:  /* CTRL */
+     {
+-      return (vdp_68k_ctrl_r(m68k.cycles) & 0xFF);
++      return (vdp_68k_ctrl_r(m68k.cycles, VDP_BUS_68K) & 0xFF);
+     }
+ 
+     case 0x08:  /* HVC */
+@@ -1456,12 +1456,12 @@
+   {
+     case 0x00:  /* DATA */
+     {
+-      return vdp_68k_data_r();
++      return vdp_68k_data_r(VDP_BUS_68K);
+     }
+ 
+     case 0x04:  /* CTRL */
+     {
+-      unsigned int data = vdp_68k_ctrl_r(m68k.cycles) & 0x3FF;
++      unsigned int data = vdp_68k_ctrl_r(m68k.cycles, VDP_BUS_68K) & 0x3FF;
+ 
+       /* Unused bits return prefetched bus data */
+       address = m68k.pc;
+@@ -1495,7 +1495,7 @@
+   {
+     case 0x00:  /* Data port */
+     {
+-      vdp_68k_data_w(data << 8 | data);
++      vdp_68k_data_w(data << 8 | data, VDP_BUS_68K);
+       return;
+     }
+ 
+@@ -1543,7 +1543,7 @@
+   {
+     case 0x00:  /* DATA */
+     {
+-      vdp_68k_data_w(data);
++      vdp_68k_data_w(data, VDP_BUS_68K);
+       return;
+     }
+ 
+--- a/core/membnk.c
++++ b/core/membnk.c
+@@ -231,22 +231,22 @@
+   {
+     case 0x00:    /* DATA */
+     {
+-      return (vdp_68k_data_r() >> 8);
++      return (vdp_68k_data_r(VDP_BUS_Z80) >> 8);
+     }
+       
+     case 0x01:    /* DATA */
+     {
+-      return (vdp_68k_data_r() & 0xFF);
++      return (vdp_68k_data_r(VDP_BUS_Z80) & 0xFF);
+     }
+       
+     case 0x04:    /* CTRL */
+     {
+-      return (((vdp_68k_ctrl_r(Z80.cycles) >> 8) & 3) | 0xFC);
++      return (((vdp_68k_ctrl_r(Z80.cycles, VDP_BUS_Z80) >> 8) & 3) | 0xFC);
+     }
+ 
+     case 0x05:    /* CTRL */
+     {
+-      return (vdp_68k_ctrl_r(Z80.cycles) & 0xFF);
++      return (vdp_68k_ctrl_r(Z80.cycles, VDP_BUS_Z80) & 0xFF);
+     }
+       
+     case 0x08:    /* HVC */
+@@ -282,7 +282,7 @@
+   {
+     case 0x00:  /* Data port */
+     {
+-      vdp_68k_data_w(data << 8 | data);
++      vdp_68k_data_w(data << 8 | data, VDP_BUS_Z80);
+       return;
+     }
+ 
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3912,6 +3912,9 @@
+    return sms_cart_irata_flash() != NULL;
+ }
+ 
++/* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-fifo-v1" : id)
++
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+    if (sms_cart_m2_collection_active())
+@@ -3925,15 +3928,15 @@
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+       return "kegarefusion-recording-v3-peripherals-v1-sms-codemasters-v1";
+    if (md_cart_large_ssf_active() || (md_cart_32x_ssf && strstr(rominfo.consoletype, "SEGA SSF")))
+-      return "kegarefusion-recording-v3-peripherals-v1-ssf-v1";
+-   if (md_cart_sonic6_active) return "kegarefusion-recording-v3-peripherals-v1-sonic6-v1";
+-   if (md_cart_sdk99_compat_active) return "kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1";
+-   if (md_cart_poker_compat_active) return "kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1";
+-   if (md_cart_barver_compat_active) return "kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1";
+-   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200)) return "kegarefusion-recording-v3-peripherals-v1-kaiserwave-v1";
+-   if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return "kegarefusion-recording-v3-peripherals-v1-umkt-packed-v1";
+-   if (md_cart_umkt_tracks_active) return "kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v4";
+-   return md_cart_aq93c_active ? "kegarefusion-recording-v3-peripherals-v1-aq93c-v1" : "kegarefusion-recording-v3-peripherals-v1";
++      return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-ssf-v1");
++   if (md_cart_sonic6_active) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-sonic6-v1");
++   if (md_cart_sdk99_compat_active) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-sdk99-hardware-v1");
++   if (md_cart_poker_compat_active) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-poker-hardware-v1");
++   if (md_cart_barver_compat_active) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-barver-hardware-v1");
++   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200)) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-kaiserwave-v1");
++   if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-umkt-packed-v1");
++   if (md_cart_umkt_tracks_active) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-umkt-tracks-v4");
++   return md_cart_aq93c_active ? MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-aq93c-v1") : MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1");
+ }
+ 
+ /* Network snapshots use the native GPX state, so restrict the contract to the
+@@ -3968,20 +3971,22 @@
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+       return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1";
+    if (md_cart_large_ssf_active() || (md_cart_32x_ssf && strstr(rominfo.consoletype, "SEGA SSF")))
+-      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-ssf-v1";
+-   if (md_cart_sonic6_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1";
+-   if (md_cart_sdk99_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1";
+-   if (md_cart_poker_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1";
+-   if (md_cart_barver_compat_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1";
+-   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200)) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-kaiserwave-v1";
+-   if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-packed-v1";
+-   if (md_cart_umkt_tracks_active) return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v4";
+-   return md_cart_aq93c_active ? "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1" :
+-          "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1";
++      return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-ssf-v1");
++   if (md_cart_sonic6_active) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1");
++   if (md_cart_sdk99_compat_active) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sdk99-hardware-v1");
++   if (md_cart_poker_compat_active) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-poker-hardware-v1");
++   if (md_cart_barver_compat_active) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-barver-hardware-v1");
++   if (((system_hw & SYSTEM_PBC) == SYSTEM_MD) && (cart.special & HW_YX5200)) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-kaiserwave-v1");
++   if (md_cart_umkt_tracks_active == MD_CART_UMKT_PACKED_ONLY) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-packed-v1");
++   if (md_cart_umkt_tracks_active) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-umkt-tracks-v4");
++   return md_cart_aq93c_active ? MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-aq93c-v1") :
++          MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1");
+ #else
+    return NULL;
+ #endif
+ }
++
++#undef MD_FIFO_ABI
+ 
+ /* Hardware identification and cached decoded CD header for achievements.
+  * Header retrieval never seeks the running drive or decodes audio. */
