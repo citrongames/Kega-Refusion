@@ -1,0 +1,251 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -155,7 +155,9 @@
+ static uint8 pending;           /* Pending write flag */
+ static uint8 code;              /* Code register */
+ static uint32 addr;             /* Address register */
+-static uint32 addr_latch;       /* Latched A15, A14 of address */
++static unsigned int vdp_addr_mask; /* Mode 5 control-port counter */
++uint16 kega_vdp_test;           /* Mode 5 test register, output selection bits 6-8 */
++static uint32 addr_latch;       /* Second control word latches A16-A14 */
+ static uint32 sat_base_mask;    /* Base bits of SAT */
+ static uint16 sat_addr_mask;    /* Index bits of SAT */
+ static uint16 dma_src;          /* DMA source address */
+@@ -308,6 +310,8 @@
+   apalbase = bpalbase = wpalbase = spalbase = 0;
+ 
+   addr            = 0;
++  vdp_addr_mask   = kr_firecore_active ? 0xffff : 0x1ffff;
++  kega_vdp_test   = 0;
+   addr_latch      = 0;
+   code            = 0;
+   pending         = 0;
+@@ -518,6 +522,11 @@
+ {
+   int bufferptr = 0;
+   uint16 legacy_addr = addr, legacy_latch = addr_latch;
++  /* A split port write holds one byte or A16-A14. Bits 8-13 in the old
++   * latch field were always zero, including when a Z80 command was pending. */
++  if ((system_hw & SYSTEM_PBC) == SYSTEM_MD && !kr_firecore_active)
++    legacy_latch |= ((addr >> 4) & 0x1000) | ((addr_latch >> 3) & 0x2000)
++                  | ((kega_vdp_test & 0x1c0) << 2);
+ 
+   save_param(sat, sizeof(sat));
+   save_param(vram, 0x10000);
+@@ -614,6 +623,12 @@
+   load_param(&legacy_latch, sizeof(legacy_latch));
+   addr = legacy_addr;
+   addr_latch = legacy_latch;
++  if ((system_hw & SYSTEM_PBC) == SYSTEM_MD && !kr_firecore_active)
++  {
++    addr |= (legacy_latch & 0x1000) << 4;
++    addr_latch = (legacy_latch & 0xc0ff) | ((legacy_latch & 0x2000) << 3);
++    kega_vdp_test = (legacy_latch >> 2) & 0x1c0;
++  }
+   load_param(&code, sizeof(code));
+   load_param(&pending, sizeof(pending));
+   load_param(&status, sizeof(status));
+@@ -1005,8 +1020,8 @@
+     /* Clear pending flag */
+     pending = 0;
+ 
+-    /* Save address bits A15 and A14 */
+-    addr_latch = (data & (kr_firecore_active ? 7 : 3)) << 14;
++    /* Second word of the Mode 5 command includes A16 even on a 64 KiB board. */
++    addr_latch = (data & 7) << 14;
+ 
+     /* Update address and code registers */
+     addr = addr_latch | (addr & 0x3FFF);
+@@ -1084,7 +1099,7 @@
+               /* source data is available with one cycle delay, i.e first word written by VDP is */
+               /* previous data being held on 68k bus at that time, then source words are written */
+               /* normally to VDP RAM, with only last source word being ignored */
+-              addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++              addr = (addr + reg[15]) & vdp_addr_mask;
+               dma_length--;
+             }
+ 
+@@ -1171,7 +1186,7 @@
+       pending = 0;
+ 
+       /* Update address and code registers */
+-      addr = ((addr_latch & (kr_firecore_active ? 7 : 3)) << 14) | (addr & 0x3FFF);
++      addr = ((addr_latch & 7) << 14) | (addr & 0x3FFF);
+       code = ((code & 0x03) | ((addr_latch >> 2) & 0x3C));
+ 
+       /* Detect DMA operation (CD5 bit set) */
+@@ -1892,6 +1907,7 @@
+         reg[0x18] = d;
+         break;
+       }
++      vdp_addr_mask = (d & 0x80) ? 0x1ffff : 0xffff;
+       changed = d ^ reg[0x18];
+       reg[0x18] = d;
+       apalbase = (d & 1) ? 0x100 : 0;
+@@ -2602,6 +2618,14 @@
+   }
+ }
+ 
++/* On a stock board the 128 KiB VRAM mode addresses two byte-wide chips,
++ * but only the low data lane is populated. A0 is disconnected. */
++static inline unsigned int vram_wide_index(unsigned int address)
++{
++  return (((address & 2) ^ 2) >> 1) | ((address & 0x400) >> 9)
++       | (address & 0x3fc) | ((address & 0x1f800) >> 1);
++}
++
+ static void vdp_bus_w(unsigned int data)
+ {
+   /* write data to next FIFO entry */
+@@ -2615,6 +2639,27 @@
+   {
+     case 0x01:  /* VRAM */
+     {
++      if (UNLIKELY((reg[1] & 0x84) == 0x84 && !kr_firecore_active))
++      {
++        unsigned int index = vram_wide_index(addr);
++        /* The on-chip sprite cache sees both lanes before the external RAM. */
++        if ((index & sat_base_mask) == satb && !(reg[5] & 0x80))
++        {
++          WRITE_BYTE(sat, index & sat_addr_mask, data);
++          WRITE_BYTE(sat, (index & sat_addr_mask) ^ 1, data >> 8);
++        }
++        if ((data & 0xff) != READ_BYTE(vram, index))
++        {
++          int name;
++          WRITE_BYTE(vram, index, data);
++          MARK_BG_DIRTY(index);
++        }
++#ifdef HOOK_CPU
++        if (UNLIKELY(cpu_hook))
++          cpu_hook(HOOK_VRAM_W, 1, index, data & 0xff);
++#endif
++        break;
++      }
+       /* VRAM address */
+       int index = addr & (KR_FIRECORE_VDP_ENABLED ? 0x1fffe : 0xfffe);
+ 
+@@ -2628,7 +2673,8 @@
+       }
+ 
+       /* Intercept writes to Sprite Attribute Table */
+-      if ((index & sat_base_mask) == satb)
++      if ((index & sat_base_mask) == satb &&
++          (kr_firecore_active || !((addr ^ ((unsigned)reg[5] << 9)) & 0x10000)))
+       {
+         /* Update internal SAT */
+         *(uint16 *) &sat[index & sat_addr_mask] = data;
+@@ -2752,7 +2798,7 @@
+   }
+ 
+   /* Increment address register */
+-  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++  addr = (addr + reg[15]) & vdp_addr_mask;
+ }
+ 
+ 
+@@ -2965,8 +3011,10 @@
+   {
+     case 0x00:
+     {
+-      /* read two bytes from VRAM */
+-      data = *(uint16 *)&vram[addr & (KR_FIRECORE_VDP_ENABLED ? 0x1fffe : 0xfffe)];
++      if (UNLIKELY((reg[1] & 0x84) == 0x84 && !kr_firecore_active))
++        data = READ_BYTE(vram, vram_wide_index(addr)) * 0x101;
++      else
++        data = *(uint16 *)&vram[addr & (KR_FIRECORE_VDP_ENABLED ? 0x1fffe : 0xfffe)];
+ 
+ #ifdef HOOK_CPU
+       if (UNLIKELY(cpu_hook))
+@@ -3065,7 +3113,7 @@
+   }
+ 
+   /* Increment address register */
+-  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++  addr = (addr + reg[15]) & vdp_addr_mask;
+ 
+   /* Return data */
+   return data;
+@@ -3225,7 +3273,7 @@
+   }
+ 
+   /* Increment address register  */
+-  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++  addr = (addr + reg[15]) & vdp_addr_mask;
+ 
+   /* Check if DMA Fill is pending */
+   if (dmafill)
+@@ -3315,7 +3363,7 @@
+   }
+ 
+   /* Increment address register */
+-  addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++  addr = (addr + reg[15]) & vdp_addr_mask;
+ 
+   /* Return data */
+   return data;
+@@ -3674,7 +3722,7 @@
+       source = (source + 1) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
+ 
+       /* Increment VRAM destination address */
+-      addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++      addr = (addr + reg[15]) & vdp_addr_mask;
+     }
+     while (--length);
+ 
+@@ -3712,7 +3760,7 @@
+         MARK_BG_DIRTY (addr);
+ 
+         /* Increment VRAM address */
+-        addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++        addr = (addr + reg[15]) & vdp_addr_mask;
+       }
+       while (--length);
+       break;
+@@ -3728,7 +3776,7 @@
+         do
+         {
+           vdp_firecore_cram_w(data);
+-          addr = (addr + reg[15]) & 0x1ffff;
++          addr = (addr + reg[15]) & vdp_addr_mask;
+         }
+         while (--length);
+         break;
+@@ -3765,7 +3813,7 @@
+         }
+           
+         /* Increment CRAM address */
+-        addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++        addr = (addr + reg[15]) & vdp_addr_mask;
+       }
+       while (--length);
+       break;
+@@ -3782,7 +3830,7 @@
+         *(uint16 *)&vsram[addr & 0x7E] = data;
+           
+         /* Increment VSRAM address */
+-        addr = (addr + reg[15]) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++        addr = (addr + reg[15]) & vdp_addr_mask;
+       }
+       while (--length);
+       break;
+@@ -3793,7 +3841,7 @@
+       /* invalid destination does nothing (Williams Greatest Hits after soft reset) */
+ 
+       /* address is still incremented */
+-      addr = (addr + reg[15] * length) & (KR_FIRECORE_VDP_ENABLED ? 0x1ffff : 0xffff);
++      addr = (addr + reg[15] * length) & vdp_addr_mask;
+     }
+   }
+ }
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3913,7 +3913,7 @@
+ }
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-fifo-v3" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v4" : id)
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {

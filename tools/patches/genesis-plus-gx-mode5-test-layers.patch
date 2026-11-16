@@ -1,0 +1,178 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -1709,9 +1709,8 @@
+ 
+ void vdp_test_w(unsigned int data)
+ {
+-#ifdef LOGERROR
+-  error("Unused VDP Write 0x%x (%08x)\n", data, m68k_get_reg(M68K_REG_PC));
+-#endif
++  if (!kr_firecore_active)
++    kega_vdp_test = data & 0x1c0;
+ }
+ 
+ 
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -58,6 +58,7 @@
+ extern uint8_t *kega_sprite_hint_bitmap;
+ extern int kega_sprite_hint_active;
+ extern uint32_t kega_debug_backdrop;
++extern uint16 kega_vdp_test;
+ 
+ #ifndef HAVE_NO_SPRITE_LIMIT
+ #define MAX_SPRITES_PER_LINE 20
+@@ -280,6 +281,11 @@
+ #endif
+ #endif /* ALIGN_LONG */
+ 
++/* The debug output selector operates on palette indices before the DAC.
++ * Keep the unmerged selected plane, including transparent pixels' palette. */
++static uint8 test_plane_line[0x200];
++static unsigned int test_plane_select;
++
+ #ifdef ALT_RENDERER
+ /* Draw background tiles directly using priority look-up table */
+ /* SRC_A = layer A rendered pixel line (4 bytes = 4 pixels at once) */
+@@ -290,12 +296,14 @@
+ 
+ #ifdef LSB_FIRST
+ #define DRAW_BG_TILE(SRC_A, SRC_B) \
++  test_capture_bg(lb, SRC_A, SRC_B); \
+   *lb++ = table[((SRC_B << 8) & 0xff00) | (SRC_A & 0xff)]; \
+   *lb++ = table[(SRC_B & 0xff00) | ((SRC_A >> 8) & 0xff)]; \
+   *lb++ = table[((SRC_B >> 8) & 0xff00) | ((SRC_A >> 16) & 0xff)]; \
+   *lb++ = table[((SRC_B >> 16) & 0xff00) | ((SRC_A >> 24) & 0xff)];
+ #else
+ #define DRAW_BG_TILE(SRC_A, SRC_B) \
++  test_capture_bg(lb, SRC_A, SRC_B); \
+   *lb++ = table[((SRC_B >> 16) & 0xff00) | ((SRC_A >> 24) & 0xff)]; \
+   *lb++ = table[((SRC_B >> 8) & 0xff00) | ((SRC_A >> 16) & 0xff)]; \
+   *lb++ = table[(SRC_B & 0xff00) | ((SRC_A >> 8) & 0xff)]; \
+@@ -596,6 +604,17 @@
+ /* Background & Sprite line buffers */
+ static uint8 linebuf[2][0x200];
+ 
++#ifdef ALT_RENDERER
++INLINE void test_capture_bg(uint8 *dst, uint32 a, uint32 b)
++{
++  if (test_plane_select >= 2)
++  {
++    uint32 data = test_plane_select == 2 ? a : b;
++    memcpy(&test_plane_line[dst - &linebuf[0][0]], &data, sizeof(data));
++  }
++}
++#endif
++
+ /* Sprite limit flag */
+ static uint8 spr_ovr;
+ 
+@@ -969,6 +988,8 @@
+ 
+ INLINE void merge(uint8 *srca, uint8 *srcb, uint8 *dst, uint8 *table, int width)
+ {
++  if (test_plane_select >= 2 && (table == lut[0] || table == lut[2]))
++    memcpy(&test_plane_line[0x20], test_plane_select == 2 ? srca : srcb, width);
+   do
+   {
+     *dst++ = table[(*srcb++ << 8) | (*srca++)];
+@@ -5208,7 +5229,7 @@
+  * as the native sprite renderer, without writing emulated VDP state. */
+ static uint8 kega_sprite_hint_line[0x200];
+ 
+-static void kega_sprite_hint_objects(int line)
++static void capture_sprite_line(int line, int hints, int select_sprite)
+ {
+   int column, i, pixelcount = 0, masked = 0, sprite_ovr = spr_ovr;
+   const int max_pixels = MODE5_MAX_SPRITE_PIXELS;
+@@ -5248,7 +5269,12 @@
+           const uint32 sprite = pattern[i] | atex;
+           uint8 background;
+           int visible;
+-          if (x < 0 || x >= bitmap.viewport.w || !(sprite & 15) ||
++          if (x < 0 || x >= bitmap.viewport.w) continue;
++          /* Opaque sprites stop subsequent ones. Transparent pixels still
++           * drive the palette address lines of the selected sprite layer. */
++          if (select_sprite && !(test_plane_line[0x20 + x] & 15))
++            test_plane_line[0x20 + x] = sprite;
++          if (!hints || !(sprite & 15) ||
+               (kega_sprite_hint_line[0x20 + x] & 0x80)) continue;
+           background = linebuf[0][0x20 + x];
+           visible = (sprite & 0x40) || !(background & 0x40) || !(background & 15);
+@@ -5280,6 +5306,12 @@
+     else memset(kega_sprite_hint_line, 0, sizeof(kega_sprite_hint_line));
+   }
+ 
++  test_plane_select = (reg[1] & 4) ? ((kega_vdp_test >> 7) & 3) : 0;
++  if (test_plane_select)
++  {
++    memset(test_plane_line, 0, sizeof(test_plane_line));
++  }
++
+   /* Check display status */
+   if (reg[1] & 0x40)
+   {
+@@ -5297,8 +5329,8 @@
+         (kega_debug_video_mask & (((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 1u : 16u)))
+       memset(&linebuf[0][0x20], 0, bitmap.viewport.w);
+ 
+-    if (kega_sprite_hint_active && !(kega_debug_video_mask & 8u))
+-      kega_sprite_hint_objects(line & 1);
++    if ((kega_sprite_hint_active || test_plane_select == 1) && !(kega_debug_video_mask & 8u))
++      capture_sprite_line(line & 1, kega_sprite_hint_active, test_plane_select == 1);
+ 
+     /* Preserve sprite collision/overflow. Copy only with sprites hidden. */
+     if (kega_debug_video_mask & 8u)
+@@ -5348,6 +5380,29 @@
+ 
+     /* Blanked line */
+     memset(&linebuf[0][0x20 - bitmap.viewport.x], 0x40, bitmap.viewport.w + 2*bitmap.viewport.x);
++  }
++
++  if ((reg[1] & 4) && (kega_vdp_test & 0x1c0))
++  {
++    int x;
++    const int begin = 0x20 - bitmap.viewport.x;
++    const int end = 0x20 + bitmap.viewport.w + bitmap.viewport.x;
++    for (x = begin; x < end; x++)
++    {
++      unsigned int normal = linebuf[0][x];
++      const unsigned int forced = test_plane_line[x];
++      if (kega_vdp_test & 0x40)
++        linebuf[0][x] = test_plane_select ? ((forced & 0x3f) | 0x40) : 0x40;
++      else
++      {
++        /* With a forced plane there is never a backdrop contribution. */
++        const unsigned int color = (normal & 15) ? (normal & 0x3f) : 0x3f;
++        if ((reg[12] & 8) && test_plane_select == 1 &&
++            !(forced & 15) && (forced & 0x40) && !(normal & 0xc0))
++          normal |= 0x40;
++        linebuf[0][x] = (normal & 0xc0) | (color & forced & 0x3f);
++      }
++    }
+   }
+ 
+   /* Pixel color remapping */
+@@ -5404,6 +5459,22 @@
+     output_palette = debug_palette;
+   }
+ 
++  if ((reg[1] & 4) && (kega_vdp_test & 0x180))
++  {
++    unsigned int i;
++    if (output_palette != debug_palette)
++      memcpy(debug_palette, output_palette, sizeof(debug_palette));
++    for (i = 0; i < 0x40; i += 16)
++    {
++      unsigned int data = *(uint16 *)&cram[i << 1];
++      if (!(reg[0] & 4)) data &= 0x49;
++      debug_palette[i] = pixel_lut[(reg[12] & 8) ? 0 : 1][data];
++      debug_palette[0x40 | i] = pixel_lut[1][data];
++      debug_palette[0x80 | i] = pixel_lut[(reg[12] & 8) ? 2 : 1][data];
++    }
++    output_palette = debug_palette;
++  }
++
+   /* Preserve layer ownership for expansion mixers and sprite hints. */
+   const PIXEL_OUT_T *raster_rgb = NULL;
+   if (backdrop_video && line >= 0 && raster_rows[line & 1].line == line && !kega_debug_video_mask)
