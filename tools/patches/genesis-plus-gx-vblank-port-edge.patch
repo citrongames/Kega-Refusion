@@ -1,0 +1,45 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -1426,6 +1426,7 @@
+   unsigned int temp;
+ 
+   /* Cycle-accurate VDP status read (adjust CPU time with current instruction execution time) */
++  const unsigned int access_start = cycles;
+   unsigned int instruction = m68k_cycles();
+   unsigned int fifo_at = cycles + instruction;
+   if (!kr_firecore_active && (reg[1] & 4))
+@@ -1464,6 +1465,23 @@
+   {
+     /* FIFO is full */
+     temp |= 0x100;
++  }
++
++  /* An instruction can cross the next raster edge before the scheduler
++   * commits it. Project only the returned VBlank bit. For the 68000 the
++   * first four-clock data bus cycle is a lower bound: later operand beats
++   * are not individually timed. Banked Z80 reads supply their own time. */
++  const unsigned int next_line = mcycles_vdp + MCYCLES_PER_LINE;
++  if (fifo_at >= next_line && !kr_firecore_active && (reg[1] & 4))
++  {
++    const unsigned int read_at = z80_bus ? access_start : access_start + fifo_68k_access_offset(4 * 7);
++    if (read_at >= next_line)
++    {
++      if (v_counter == lines_per_frame - 2)
++        temp &= ~0x08;
++      else if (v_counter == bitmap.viewport.h - 1)
++        temp |= 0x08;
++    }
+   }
+ 
+   /* RedKid software times peripheral setup against retrace with the display blanked. */
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3913,7 +3913,7 @@
+ }
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-fifo-v2" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-fifo-v3" : id)
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
