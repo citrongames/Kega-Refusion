@@ -1,0 +1,61 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -748,7 +748,7 @@
+  * writes. Release the 68k when the last source word has entered the FIFO,
+  * leaving the outstanding video-side writes visible to status reads.
+  * Advance the slot cursor once per available VDP access, only on DMA lines. */
+-static int fifo_dma_active(unsigned int start, int *duration)
++static int fifo_dma_active(unsigned int start, unsigned int extra_slot, int *duration)
+ {
+   unsigned int line = mcycles_vdp;
+   const unsigned int limit = line + MCYCLES_PER_LINE;
+@@ -777,7 +777,7 @@
+     }
+     /* VRAM takes two byte slots. The tables include the first slots of
+      * the next line for a word which straddles the line boundary. */
+-    tail = line + fifo_timing[slot + dma_type];
++    tail = line + fifo_timing[slot + extra_slot];
+     fifo_cycles[index] = tail;
+     ++count;
+     issue += fetch_period;
+@@ -817,11 +817,18 @@
+   */
+   unsigned int rate = dma_timing[(status & 8) || !(reg[1] & 0x40)][reg[12] & 1];
+ 
++  /* In Mode 5 128K VRAM mode the two byte lanes operate in parallel.
++   * A memory-to-VRAM word uses one slot, including the refresh penalty
++   * for word-wide transfers in blanking. Keep the saved DMA type intact. */
++  unsigned int timing_type = dma_type;
++  if (dma_type == 1 && (reg[1] & 0x84) == 0x84 && (code & 0x0f) == 1 && !kr_firecore_active)
++    timing_type = 0;
++
+   /* Adjust for 68k bus DMA to VRAM (one word = 2 access) or DMA Copy (one read + one write = 2 access) */
+-  rate = rate >> (dma_type & 1);
++  rate = rate >> (timing_type & 1);
+   
+   /* Adjust for 68k bus DMA to CRAM or VSRAM when display is off (one additional access slot is lost for each refresh slot) */
+-  if (dma_type == 0)
++  if (timing_type == 0)
+   {
+     if (rate == 166) rate = 161;      /* 5 refresh slots per line in H32 mode when display is off */
+     else if (rate == 204) rate = 198; /* 6 refresh slots per line in H40 mode when display is off */
+@@ -869,7 +876,7 @@
+   }
+   else if (dma_type < 2 && !(status & 8) && (reg[1] & 0x44) == 0x44 && !kr_firecore_active)
+   {
+-    dma_bytes = fifo_dma_active(cycles, &dma_cycles);
++    dma_bytes = fifo_dma_active(cycles, timing_type, &dma_cycles);
+   }
+   else if (dma_length < dma_bytes)
+   {
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3913,7 +3913,7 @@
+ }
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-fifo-v1" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-fifo-v2" : id)
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
