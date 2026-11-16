@@ -49,6 +49,9 @@ typedef struct Kega32xVideoLine {
     unsigned priority_invert; /* Nonzero is 32X VDP PRI: invert bit15. */
     unsigned pixel_shift; /* Nonzero is SFT: skip one decoded pixel, except
                           * when the line-table offset has low byte 0xff. */
+    /* Optional pre-resolved MD colors, one per native MD x (md_width).
+     * Overrides only the palette lookup, never indices or /YS decisions. */
+    const uint16_t *md_rgb565;
 } Kega32xVideoLine;
 
 /* One immutable line sampled by the caller at the hardware latch boundary.
@@ -77,6 +80,7 @@ Kega32xVideoResult kega32x_decode_line(Kega32xDecodedLine *decoded,
  * frozen decoded row. No framebuffer, 32X palette, mode or live PRI is read.
  * MD transparent OR (decoded bit15 XOR frozen PRI) selects 32X. Disabled rows
  * need no MD transparency pointer. H32 sampling retains the policy above.
+ * md_rgb565, when present, replaces MD palette lookups with per-pixel colors.
  * Invalid arguments return before output writes; buffers must not overlap. */
 Kega32xVideoResult kega32x_mix_rgb565(uint16_t *dst, size_t dst_pixels,
                                      const Kega32xDecodedLine *decoded,

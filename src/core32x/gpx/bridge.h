@@ -34,6 +34,10 @@ void kegarefusion_32x_line(int vdp_line, unsigned int master_clock);
    both horizontal borders, logical_line remains the original VDP line. */
 int kegarefusion_32x_render(int logical_line, int output_line, const uint8_t *indices,
                            const uint16_t *md_pixels, unsigned int width);
+/* Optional resolved MD RGB565 row, including both borders. Original indices
+   still determine /YS; the borrowed row is copied before returning. */
+int kegarefusion_32x_render_rgb(int logical_line, int output_line, const uint8_t *indices,
+                               const uint16_t *md_pixels, unsigned int width, const uint16_t *rgb);
 size_t kegarefusion_32x_state_size(void);
 int kegarefusion_32x_state_save(void *, size_t);
 int kegarefusion_32x_save_gpx(void *);

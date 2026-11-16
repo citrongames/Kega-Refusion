@@ -293,6 +293,11 @@ void kr_megald_begin_field(void)
 
 int kr_megald_scanline(int y, int output_y, const uint8_t *indices, const uint16_t *palette, int width)
 {
+  return kr_megald_scanline_rgb(y, output_y, indices, palette, width, NULL);
+}
+
+int kr_megald_scanline_rgb(int y, int output_y, const uint8_t *indices, const uint16_t *palette, int width, const uint16_t *md_rgb)
+{
   if (!(player.inputRegs[1] & 0xc0) || width < 1 || width > 720 || output_y < 0 ||
       output_y >= bitmap.height) return 0;
   const int h40 = reg[12] & 1, border = bitmap.viewport.x;
@@ -317,7 +322,7 @@ int kr_megald_scanline(int y, int output_y, const uint8_t *indices, const uint16
   for (int x=0; x<width; ++x) {
     unsigned fade = player.inputRegs[(indices[x] & 15) ? 26 : 27] >> 2;
     if (fade == 63) {
-      out[x] = palette[indices[x]];
+      out[x] = md_rgb ? md_rgb[x] : palette[indices[x]];
       continue;
     }
     const uint8_t *s = line ? line + x_table[x] * 3 : NULL;
@@ -325,7 +330,7 @@ int kr_megald_scanline(int y, int output_y, const uint8_t *indices, const uint16
       out[x] = s ? (uint16_t)((s[0] >> 3) << 11 | (s[1] >> 2) << 5 | s[2] >> 3) : 0;
       continue;
     }
-    const uint16_t px = palette[indices[x]];
+    const uint16_t px = md_rgb ? md_rgb[x] : palette[indices[x]];
     uint32_t vdp = (((px>>11)*255/31)<<16) | ((((px>>5)&63)*255/63)<<8) | ((px&31)*255/31);
     uint32_t analog = s ? ((uint32_t)s[0]<<16 | s[1]<<8 | s[2]) : 0;
     uint32_t c = kr_ld_player_mix_pixel(&player, vdp, !(indices[x]&15), analog);

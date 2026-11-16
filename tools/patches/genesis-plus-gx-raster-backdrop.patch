@@ -1,0 +1,403 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -923,7 +923,18 @@
+     dma_length -= dma_bytes;
+ 
+     /* Process DMA operation */
+-    dma_func[reg[23] >> 4](dma_bytes);
++    /* With the layers blanked the DAC still outputs the backdrop. Preserve
++     * the individual CRAM writes before the line renderer sees the final palette. */
++    if (dma_type < 2 && (code & 15) == 3 && (reg[1] & 0x44) == 4 &&
++        !(status & 8) && !kr_firecore_active && backdrop_video &&
++        v_counter < bitmap.viewport.h && dma_bytes <= 198)
++    {
++      backdrop_dma_begin(cycles - mcycles_vdp);
++      dma_func[reg[23] >> 4](dma_bytes);
++      backdrop_dma_end();
++    }
++    else
++      dma_func[reg[23] >> 4](dma_bytes);
+ 
+     /* Check if DMA is finished */
+     if (!dma_length)
+@@ -2682,12 +2693,17 @@
+         }
+ 
+         /* CRAM modified during HBLANK (Striker, Zero the Kamikaze, Yuu Yuu Hakusho, etc) */
+-        if ((v_counter < bitmap.viewport.h) && (m68k.cycles <= (mcycles_vdp + 860)) && ((reg[1] & 0x40) || (index == border)))
++        if (!backdrop_dma_active && (v_counter < bitmap.viewport.h) && (m68k.cycles <= (mcycles_vdp + 860)) && ((reg[1] & 0x40) || (index == border)))
+         {
+           /* Remap current line */
+           remap_line(v_counter);
+         }
+       }
++
++      /* Advance a slot even if this word rewrote the same colour or
++       * targeted another CRAM entry. The DAC always sees register 7's colour. */
++      if (backdrop_dma_active)
++        backdrop_dma_sample();
+ 
+ #ifdef HOOK_CPU
+       if (UNLIKELY(cpu_hook))
+--- a/core/system.c
++++ b/core/system.c
+@@ -528,6 +528,8 @@
+   /* line counters */
+   int start, end, line;
+ 
++  backdrop_frame(!do_skip);
++
+   /* reset frame cycle counter */
+   mcycles_vdp = 0;
+ 
+@@ -923,6 +925,8 @@
+ {
+   /* line counters */
+   int start, end, line;
++
++  backdrop_frame(!do_skip);
+ 
+   /* reset frame cycle counter */
+   mcycles_vdp = 0;
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -105,6 +105,11 @@
+ /* Function prototypes */
+ extern void render_init(void);
+ extern void render_reset(void);
++extern int backdrop_video, backdrop_dma_active;
++extern void backdrop_frame(int draw);
++extern void backdrop_dma_begin(unsigned int cycle);
++extern void backdrop_dma_sample(void);
++extern void backdrop_dma_end(void);
+ #define KR_REWIND_RASTER_BYTES 4096u
+ extern void render_rewind_save(uint8 *out, unsigned int capacity);
+ extern void render_rewind_load(const uint8 *in, unsigned int capacity);
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -1164,6 +1164,136 @@
+ }
+ 
+ 
++/* Blanked Mode 5 still drives the DAC from CRAM. The transfer engine owns
++ * the actual reads and CRAM writes; this small side buffer only describes
++ * what was on the wire while those writes took place. */
++enum { BACKDROP_WORDS = 198, BACKDROP_WIDTH = 320 + 2 * 32 };
++static struct {
++  int line;
++  PIXEL_OUT_T pixels[BACKDROP_WIDTH];
++} raster_rows[2];
++static PIXEL_OUT_T raster_output[BACKDROP_WIDTH];
++static PIXEL_OUT_T raster_words[BACKDROP_WORDS + 1];
++static unsigned short raster_slot[2][BACKDROP_WORDS];
++static int raster_slot_count[2];
++static int raster_first, raster_count, raster_last_line;
++int backdrop_video, backdrop_dma_active;
++
++void backdrop_frame(int draw)
++{
++  backdrop_video = draw;
++  backdrop_dma_active = 0;
++  raster_last_line = raster_rows[0].line = raster_rows[1].line = -1;
++}
++
++/* Build once from the actual horizontal counter, including the longer H40
++ * sync clocks. A refresh costs both the refresh slot and its source read.
++ * H40 positions follow hardware measurements; H32 blank refresh phases
++ * are approximate (five refreshes per line). */
++static void backdrop_slots(int h40)
++{
++  int n = 0, t;
++  for (t = 0; t < MCYCLES_PER_LINE; ++t)
++  {
++    int h = hctab[t];
++    if (t && h == hctab[t - 1]) continue;
++    /* H40 jumps from dot $16C to $1C9 halfway through one slot. */
++    if (h40 && h == 0xe4) continue;
++    int refresh_pair = h40 ?
++      ((h >= 26 && h <= 155 && ((h - 26) & 31) <= 1) || h == 250 || h == 251) :
++      ((h >= 19 && h <= 116 && ((h - 19) & 31) <= 1) || h == 243 || h == 244);
++    if (!refresh_pair && n < BACKDROP_WORDS) raster_slot[h40][n++] = t;
++  }
++  raster_slot_count[h40] = n;
++}
++
++void backdrop_dma_begin(unsigned int cycle)
++{
++  int h40 = reg[12] & 1;
++  if (!raster_slot_count[h40]) backdrop_slots(h40);
++  raster_first = 0;
++  while (raster_first < raster_slot_count[h40] && raster_slot[h40][raster_first] < cycle)
++    ++raster_first;
++  raster_count = 0;
++  backdrop_dma_active = 1;
++  raster_words[0] = pixel[0x40];
++}
++
++void backdrop_dma_sample(void)
++{
++  raster_words[++raster_count] = pixel[0x40];
++}
++
++/* A scheduler line starts in the right edge of the preceding picture row.
++ * Join that tail to its own row, including the optional horizontal border. */
++static void paint_backdrop(int line, int origin, int period, int slots, const unsigned short *at)
++{
++  int x, i = 0;
++  int border_x = bitmap.viewport.x;
++  int width = bitmap.viewport.w;
++  if (line < 0 || line >= bitmap.viewport.h || width > 320 || border_x < 0 || border_x > 32) return;
++  int bank = line & 1;
++  int left = -border_x;
++  int end = width + border_x;
++  if (origin < 0)
++  {
++    if (at[0] > origin + (end - 1) * period) return;
++    int first = (-origin + period - 1) / period;
++    if (first > left) left = first;
++  }
++  if (left >= end) return;
++  if (raster_rows[bank].line != line)
++  {
++    raster_rows[bank].line = line;
++    for (x = 0; x < BACKDROP_WIDTH; ++x) raster_rows[bank].pixels[x] = raster_words[0];
++  }
++  else if (raster_first > 0)
++  {
++    /* Keep the already painted prefix when a second DMA starts mid-row. */
++    int first = (at[0] - origin + period - 1) / period;
++    if (first > left) left = first;
++  }
++  for (x = left; x < end; ++x)
++  {
++    int sample = origin + x * period;
++    while (i < slots && at[i] <= sample) ++i;
++    raster_rows[bank].pixels[x + 32] = raster_words[i];
++  }
++  if (raster_last_line == line) remap_line(line);
++}
++
++void backdrop_dma_end(void)
++{
++  int h40 = reg[12] & 1;
++  int slots = raster_slot_count[h40] - raster_first;
++  backdrop_dma_active = 0;
++  if (slots > raster_count) slots = raster_count;
++  if (!slots) return;
++  int changed = 0;
++  while (changed < slots && raster_words[changed + 1] == raster_words[0]) ++changed;
++  /* A palette upload that never changes the backdrop needs no raster row,
++   * unless an earlier burst on that row already recorded another colour. */
++  if (changed == slots && raster_rows[v_counter & 1].line != v_counter &&
++      !(v_counter > 0 && raster_rows[(v_counter - 1) & 1].line == v_counter - 1)) return;
++  const unsigned short *at = raster_slot[h40] + raster_first;
++  /* Start of active output in hvc.h (MCLK from HINT). */
++  int origin = h40 ? 988 : 1000;
++  int period = h40 ? 8 : 10;
++  paint_backdrop(v_counter - 1, origin - MCYCLES_PER_LINE, period, slots, at);
++  paint_backdrop(v_counter, origin, period, slots, at);
++}
++
++static const PIXEL_OUT_T *resolve_backdrop(int line, const uint8 *src,
++                                          const PIXEL_OUT_T *palette, int width)
++{
++  if (width < 1 || width > BACKDROP_WIDTH || bitmap.viewport.x < 0 || bitmap.viewport.x > 32) return NULL;
++  const PIXEL_OUT_T *backdrop = raster_rows[line & 1].pixels + 32 - bitmap.viewport.x;
++  for (int x = 0; x < width; ++x)
++    raster_output[x] = (src[x] & 15) ? palette[src[x]] : backdrop[x];
++  return raster_output;
++}
++
++
+ /*--------------------------------------------------------------------------*/
+ /* Background layers rendering functions                                    */
+ /*--------------------------------------------------------------------------*/
+@@ -5040,6 +5170,7 @@
+ 
+ void render_reset(void)
+ {
++  backdrop_frame(0);
+   if (!reset_do_not_clear_buffers)
+   {
+     /* A rewind preview retains its reconstructed fields through the final
+@@ -5240,6 +5371,7 @@
+ 
+ void remap_line(int line)
+ {
++  raster_last_line = line;
+   if (FIRECORE_RENDERING)
+   {
+     firecore_remap_line(line);
+@@ -5272,6 +5404,11 @@
+     output_palette = debug_palette;
+   }
+ 
++  /* Preserve layer ownership for expansion mixers and sprite hints. */
++  const PIXEL_OUT_T *raster_rgb = NULL;
++  if (backdrop_video && line >= 0 && raster_rows[line & 1].line == line && !kega_debug_video_mask)
++    raster_rgb = resolve_backdrop(line, src, output_palette, width);
++
+   /* Adjust line offset in framebuffer */
+   line = (line + bitmap.viewport.y) % lines_per_frame;
+ 
+@@ -5286,7 +5423,7 @@
+ 
+ #if defined(KEGAREFUSION_32X) && defined(USE_16BPP_RENDERING)
+   if (kegarefusion_32x_attached &&
+-      kegarefusion_32x_render(logical_line, line, src, (uint16 *)output_palette, width))
++      kegarefusion_32x_render_rgb(logical_line, line, src, (uint16 *)output_palette, width, raster_rgb))
+   {
+     return;
+   }
+@@ -5304,8 +5441,25 @@
+   }
+ 
+ #if defined(KEGAREFUSION_32X) && defined(USE_16BPP_RENDERING)
+-  if (kr_megald_active && kr_megald_scanline(logical_line, line, src, (const uint16 *)output_palette, width)) return;
+-#endif
++  if (kr_megald_active && kr_megald_scanline_rgb(logical_line, line, src, (const uint16 *)output_palette, width, raster_rgb)) return;
++#endif
++
++  if (raster_rgb)
++  {
++    const size_t bytes = width * sizeof(*raster_rgb);
++    if (kega_recording_bitmap)
++      memcpy(kega_recording_bitmap + line * bitmap.pitch, raster_rgb, bytes);
++#if defined(USE_15BPP_RENDERING) || defined(USE_16BPP_RENDERING)
++    if (config.ntsc)
++    {
++      if (reg[12] & 1) md_ntsc_blit(md_ntsc, raster_rgb, NULL, width, line);
++      else sms_ntsc_blit(sms_ntsc, raster_rgb, NULL, width, line);
++      return;
++    }
++#endif
++    memcpy(bitmap.data + line * bitmap.pitch, raster_rgb, bytes);
++    return;
++  }
+ 
+   /* Capture native palette pixels before NTSC or LCD processing only when
+      requested. The ordinary rendering path owns no capture buffer. */
+--- a/core/ntsc/sms_ntsc.c
++++ b/core/ntsc/sms_ntsc.c
+@@ -85,8 +85,8 @@
+ }
+ 
+ #ifndef CUSTOM_BLITTER
+-void sms_ntsc_blit( sms_ntsc_t const* ntsc, SMS_NTSC_IN_T const* table, unsigned char* input,
+-                    int in_width, int vline)
++static inline void sms_ntsc_blit_row( sms_ntsc_t const* ntsc, SMS_NTSC_IN_T const* table, unsigned char* input,
++                    int in_width, int vline, const SMS_NTSC_IN_T *raw)
+ {
+   int n;
+   int const chunk_count = in_width / sms_ntsc_in_chunk;
+@@ -100,25 +100,25 @@
+   SMS_NTSC_IN_T border = table[0];
+ 
+   SMS_NTSC_BEGIN_ROW( ntsc, border,
+-      (SMS_NTSC_ADJ_IN( table[input[0]] )) & extra2,
+-      (SMS_NTSC_ADJ_IN( table[input[extra2 & 1]] )) & extra1 );
++      (SMS_NTSC_ADJ_IN( (input ? table[input[0]] : raw[0]) )) & extra2,
++      (SMS_NTSC_ADJ_IN( (input ? table[input[extra2 & 1]] : raw[extra2 & 1]) )) & extra1 );
+ 
+   sms_ntsc_out_t* line_out  = (sms_ntsc_out_t*)(&bitmap.data[(vline * bitmap.pitch)]);
+ 
+-  input += in_extra;
++  if (input) input += in_extra; else raw += in_extra;
+ 
+   for ( n = chunk_count; n; --n )
+   {
+     /* order of input and output pixels must not be altered */
+-    SMS_NTSC_COLOR_IN( 0, ntsc, SMS_NTSC_ADJ_IN( table[*input++] ) );
++    SMS_NTSC_COLOR_IN( 0, ntsc, SMS_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     SMS_NTSC_RGB_OUT( 0, *line_out++ );
+     SMS_NTSC_RGB_OUT( 1, *line_out++ );
+     
+-    SMS_NTSC_COLOR_IN( 1, ntsc, SMS_NTSC_ADJ_IN( table[*input++] ) );
++    SMS_NTSC_COLOR_IN( 1, ntsc, SMS_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     SMS_NTSC_RGB_OUT( 2, *line_out++ );
+     SMS_NTSC_RGB_OUT( 3, *line_out++ );
+       
+-    SMS_NTSC_COLOR_IN( 2, ntsc, SMS_NTSC_ADJ_IN( table[*input++] ) );
++    SMS_NTSC_COLOR_IN( 2, ntsc, SMS_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     SMS_NTSC_RGB_OUT( 4, *line_out++ );
+     SMS_NTSC_RGB_OUT( 5, *line_out++ );
+     SMS_NTSC_RGB_OUT( 6, *line_out++ );
+@@ -138,4 +138,10 @@
+   SMS_NTSC_RGB_OUT( 5, *line_out++ );
+   SMS_NTSC_RGB_OUT( 6, *line_out++ );
+ }
++void sms_ntsc_blit(sms_ntsc_t const *ntsc, SMS_NTSC_IN_T const *table, unsigned char *indices, int width, int line)
++{
++  if (indices) sms_ntsc_blit_row(ntsc, table, indices, width, line, NULL);
++  else sms_ntsc_blit_row(ntsc, table, NULL, width, line, table);
++}
++
+ #endif
+--- a/core/ntsc/md_ntsc.c
++++ b/core/ntsc/md_ntsc.c
+@@ -86,8 +86,8 @@
+ }
+ 
+ #ifndef CUSTOM_BLITTER
+-void md_ntsc_blit( md_ntsc_t const* ntsc, MD_NTSC_IN_T const* table, unsigned char* input,
+-                   int in_width, int vline)
++static inline void md_ntsc_blit_row( md_ntsc_t const* ntsc, MD_NTSC_IN_T const* table, unsigned char* input,
++                   int in_width, int vline, const MD_NTSC_IN_T *raw)
+ {
+   int const chunk_count = in_width / md_ntsc_in_chunk - 1;
+ 
+@@ -95,9 +95,9 @@
+   MD_NTSC_IN_T border = table[0];
+ 
+   MD_NTSC_BEGIN_ROW( ntsc, border,
+-        MD_NTSC_ADJ_IN( table[*input++] ),
+-        MD_NTSC_ADJ_IN( table[*input++] ),
+-        MD_NTSC_ADJ_IN( table[*input++] ) );
++        MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ),
++        MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ),
++        MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+ 
+   md_ntsc_out_t* restrict line_out  = (md_ntsc_out_t*)(&bitmap.data[(vline * bitmap.pitch)]);
+ 
+@@ -106,25 +106,25 @@
+   for ( n = chunk_count; n; --n )
+   {
+     /* order of input and output pixels must not be altered */
+-    MD_NTSC_COLOR_IN( 0, ntsc, MD_NTSC_ADJ_IN( table[*input++] ) );
++    MD_NTSC_COLOR_IN( 0, ntsc, MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     MD_NTSC_RGB_OUT( 0, *line_out++ );
+     MD_NTSC_RGB_OUT( 1, *line_out++ );
+ 
+-    MD_NTSC_COLOR_IN( 1, ntsc, MD_NTSC_ADJ_IN( table[*input++] ) );
++    MD_NTSC_COLOR_IN( 1, ntsc, MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     MD_NTSC_RGB_OUT( 2, *line_out++ );
+     MD_NTSC_RGB_OUT( 3, *line_out++ );
+ 
+-    MD_NTSC_COLOR_IN( 2, ntsc, MD_NTSC_ADJ_IN( table[*input++] ) );
++    MD_NTSC_COLOR_IN( 2, ntsc, MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     MD_NTSC_RGB_OUT( 4, *line_out++ );
+     MD_NTSC_RGB_OUT( 5, *line_out++ );
+ 
+-    MD_NTSC_COLOR_IN( 3, ntsc, MD_NTSC_ADJ_IN( table[*input++] ) );
++    MD_NTSC_COLOR_IN( 3, ntsc, MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+     MD_NTSC_RGB_OUT( 6, *line_out++ );
+     MD_NTSC_RGB_OUT( 7, *line_out++ );
+   }
+ 
+   /* finish final pixels */
+-  MD_NTSC_COLOR_IN( 0, ntsc, MD_NTSC_ADJ_IN( table[*input++] ) );
++  MD_NTSC_COLOR_IN( 0, ntsc, MD_NTSC_ADJ_IN( (input ? table[*input++] : *raw++) ) );
+   MD_NTSC_RGB_OUT( 0, *line_out++ );
+   MD_NTSC_RGB_OUT( 1, *line_out++ );
+ 
+@@ -140,4 +140,10 @@
+   MD_NTSC_RGB_OUT( 6, *line_out++ );
+   MD_NTSC_RGB_OUT( 7, *line_out++ );
+ }
++void md_ntsc_blit(md_ntsc_t const *ntsc, MD_NTSC_IN_T const *table, unsigned char *indices, int width, int line)
++{
++  if (indices) md_ntsc_blit_row(ntsc, table, indices, width, line, NULL);
++  else md_ntsc_blit_row(ntsc, table, NULL, width, line, table);
++}
++
+ #endif

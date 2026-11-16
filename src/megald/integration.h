@@ -18,6 +18,9 @@ void kr_megald_advance(void);
 void kr_megald_audio(unsigned samples, int *previous, int left_gain, int right_gain);
 void kr_megald_begin_field(void);
 int kr_megald_scanline(int y, int output_y, const uint8_t *indices, const uint16_t *palette, int width);
+/* Optional native RGB565 row includes borders; original indices retain the
+ * foreground/background fade selection. Consumed before returning. */
+int kr_megald_scanline_rgb(int y, int output_y, const uint8_t *indices, const uint16_t *palette, int width, const uint16_t *rgb);
 unsigned kr_megald_save(uint8_t *out);
 unsigned kr_megald_restore(const uint8_t *in);
 #endif

@@ -80,21 +80,18 @@ Kega32xVideoResult kega32x_decode_line(Kega32xDecodedLine *decoded,
     return KEGA32X_VIDEO_OK;
 }
 
-Kega32xVideoResult kega32x_mix_rgb565(uint16_t *dst, size_t dst_pixels,
-                                     const Kega32xDecodedLine *decoded,
-                                     const Kega32xVideoLine *line)
+/* Inlining with a constant NULL keeps the ordinary indexed path specialized;
+ * resolved rows replace only the color source, sharing all priority rules. */
+static inline void mix_md_rgb565(uint16_t *dst, const Kega32xDecodedLine *decoded,
+                                 const Kega32xVideoLine *line, const uint16_t *rgb)
 {
     unsigned x;
-    if (!dst || !decoded || !line || dst_pixels < KEGA32X_VIDEO_WIDTH ||
-        decoded->enabled > 1u || decoded->priority_invert > 1u ||
-        !line->md_indices || !line->md_palette_rgb565 ||
-        (line->md_width != 256u && line->md_width != KEGA32X_VIDEO_WIDTH) ||
-        (decoded->enabled && !line->md_transparent))
-        return KEGA32X_VIDEO_INVALID_ARGUMENT;
     if (!decoded->enabled) {
-        for (x = 0; x < KEGA32X_VIDEO_WIDTH; ++x)
-            dst[x] = line->md_palette_rgb565[line->md_indices[md_position(line, x)]];
-        return KEGA32X_VIDEO_OK;
+        for (x = 0; x < KEGA32X_VIDEO_WIDTH; ++x) {
+            const unsigned md_x = md_position(line, x);
+            dst[x] = rgb ? rgb[md_x] : line->md_palette_rgb565[line->md_indices[md_x]];
+        }
+        return;
     }
     for (x = 0; x < KEGA32X_VIDEO_WIDTH; ++x) {
         const unsigned md_x = md_position(line, x);
@@ -106,16 +103,34 @@ Kega32xVideoResult kega32x_mix_rgb565(uint16_t *dst, size_t dst_pixels,
              * origin is 13 units after MD; guard before unsigned subtraction. */
             const unsigned sample = 4u * x + 2u;
             if (sample < 13u) {
-                dst[x] = line->md_palette_rgb565[line->md_indices[md_x]];
+                dst[x] = rgb ? rgb[md_x] : line->md_palette_rgb565[line->md_indices[md_x]];
                 continue;
             }
             x32 = (sample - 13u) / 4u;
         }
         color = decoded->colors[x32];
         priority = ((color >> 15) & 1u) ^ decoded->priority_invert;
-        dst[x] = line->md_transparent[md_x] || priority ? bgr555_to_rgb565(color) :
-            line->md_palette_rgb565[line->md_indices[md_x]];
+        if (line->md_transparent[md_x] || priority)
+            dst[x] = bgr555_to_rgb565(color);
+        else
+            dst[x] = rgb ? rgb[md_x] : line->md_palette_rgb565[line->md_indices[md_x]];
     }
+}
+
+Kega32xVideoResult kega32x_mix_rgb565(uint16_t *dst, size_t dst_pixels,
+                                     const Kega32xDecodedLine *decoded,
+                                     const Kega32xVideoLine *line)
+{
+    if (!dst || !decoded || !line || dst_pixels < KEGA32X_VIDEO_WIDTH ||
+        decoded->enabled > 1u || decoded->priority_invert > 1u ||
+        !line->md_indices || !line->md_palette_rgb565 ||
+        (line->md_width != 256u && line->md_width != KEGA32X_VIDEO_WIDTH) ||
+        (decoded->enabled && !line->md_transparent))
+        return KEGA32X_VIDEO_INVALID_ARGUMENT;
+    if (line->md_rgb565)
+        mix_md_rgb565(dst, decoded, line, line->md_rgb565);
+    else
+        mix_md_rgb565(dst, decoded, line, NULL);
     return KEGA32X_VIDEO_OK;
 }
 

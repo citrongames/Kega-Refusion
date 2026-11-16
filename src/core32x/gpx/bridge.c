@@ -29,8 +29,9 @@ typedef struct Gpx32xVideoRow {
     int logical, output;
     unsigned valid, md_ready, latched, decoded_ready, border, md_width;
     uint16_t control, shift;
-    unsigned bank, enabled;
+    unsigned bank, enabled, md_rgb_ready;
     uint8_t indices[384];
+    uint16_t md_rgb[384];
     uint16_t palette[256];
     Kega32xDecodedLine decoded;
 } Gpx32xVideoRow;
@@ -551,8 +552,14 @@ static int video_mix(Gpx32xVideoRow *row)
     for(i=0;i<row->md_width;i++)ys[i]=(row->indices[row->border+i]&15)==0;
     line.md_indices=row->indices+row->border;line.md_palette_rgb565=row->palette;
     line.md_transparent=ys;line.md_width=row->md_width;
+    line.md_rgb565=row->md_rgb_ready?row->md_rgb+row->border:NULL;
     if(kega32x_mix_rgb565(mixed+row->border,320,&row->decoded,&line)!=KEGA32X_VIDEO_OK)return 0;
-    for(i=0;i<row->border;i++)mixed[i]=mixed[row->border+320+i]=row->palette[0x40];
+    if(row->md_rgb_ready) {
+        for(i=0;i<row->border;i++) {
+            mixed[i]=row->md_rgb[i];
+            mixed[row->border+320+i]=row->md_rgb[row->border+row->md_width+i];
+        }
+    } else for(i=0;i<row->border;i++)mixed[i]=mixed[row->border+320+i]=row->palette[0x40];
     if(kega_recording_bitmap)
         memcpy(kega_recording_bitmap+(size_t)row->output*bitmap.pitch,mixed,total*sizeof(uint16_t));
     if(config.ntsc) {
@@ -603,6 +610,10 @@ static void video_sync(uint64_t t)
 }
 int kegarefusion_32x_render(int logical,int output,const uint8_t *indices,const uint16_t *palette,unsigned width)
 {
+    return kegarefusion_32x_render_rgb(logical,output,indices,palette,width,NULL);
+}
+int kegarefusion_32x_render_rgb(int logical,int output,const uint8_t *indices,const uint16_t *palette,unsigned width,const uint16_t *rgb)
+{
     Gpx32xVideoRow *row;unsigned border,active;int delta;uint64_t start,offset;
     if(ctx && ctx->skip_video)return 1;
     if(!ctx || !indices || !palette || !bitmap.data || bitmap.pitch<=0 ||
@@ -619,6 +630,8 @@ int kegarefusion_32x_render(int logical,int output,const uint8_t *indices,const 
     row->output=output;row->border=border;row->md_width=active;
     memcpy(row->indices,indices,active+2*border);
     memcpy(row->palette,palette,sizeof(row->palette));
+    row->md_rgb_ready=rgb!=NULL;
+    if(rgb)memcpy(row->md_rgb,rgb,(active+2*border)*sizeof(*rgb));
     row->md_ready=1;
     /* Most remaps occur in HBlank before the latch. Later MD partial blanking
        must use the frozen 32X row, never newly written next-line registers. */
