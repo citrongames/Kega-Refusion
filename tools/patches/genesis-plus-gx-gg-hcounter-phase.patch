@@ -1,0 +1,32 @@
+--- a/core/system.h
++++ b/core/system.h
+@@ -67,6 +67,8 @@
+ 
+ /* Horizontal timing offsets when running in Z80 mode */
+ #define SMS_CYCLE_OFFSET  530
++/* Game Gear 2-ASIC HCounter/TH latch phase, two Z80 clocks after SMS. */
++#define GG_CYCLE_OFFSET   560
+ #define PBC_CYCLE_OFFSET  560
+ 
+ typedef struct
+--- a/core/memz80.c
++++ b/core/memz80.c
+@@ -377,7 +377,7 @@
+       /* full address range is decoded by Game Gear I/O chip (fixes G-LOC Air Battle) */
+       else if ((port == 0x3E) || (port == 0x3F))
+       {
+-        io_z80_write(port & 1, data, Z80.cycles + SMS_CYCLE_OFFSET);
++        io_z80_write(port & 1, data, Z80.cycles + GG_CYCLE_OFFSET);
+         return;
+       }
+ 
+@@ -434,7 +434,8 @@
+ 
+     case 0x40:
+     {
+-      return ((vdp_hvc_r(Z80.cycles) >> 8) & 0xFF);
++      /* 2-ASIC GG: VCounter changes one Z80 clock after the SMS edge. */
++      return ((vdp_hvc_r(Z80.cycles - 15) >> 8) & 0xFF);
+     }
+ 
+     case 0x41:

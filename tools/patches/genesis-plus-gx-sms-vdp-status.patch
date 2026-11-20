@@ -1,0 +1,140 @@
+--- a/core/system.c
++++ b/core/system.c
+@@ -1724,7 +1724,7 @@
+     if ((line < end) || (line >= start))
+     {
+       /* Master System & Game Gear VDP specific */
+-      if ((system_hw < SYSTEM_MD) && (line > (lines_per_frame - 16)))
++      if ((system_hw < SYSTEM_MD) && !(reg[0] & 0x04) && (line > (lines_per_frame - 16)))
+       {
+         /* Sprites are still processed during top border */
+         if (reg[1] & 0x40)
+@@ -1757,7 +1757,7 @@
+   if (bitmap.viewport.y > 0)
+   {
+     /* Master System & Game Gear VDP specific */
+-    if (system_hw < SYSTEM_MD)
++    if ((system_hw < SYSTEM_MD) && !(reg[0] & 0x04))
+     {
+       /* Sprites are still processed during top border */
+       if (reg[1] & 0x40)
+@@ -1854,6 +1854,13 @@
+       if (!do_skip)
+       {
+         render_line(line);
++      }
++      else if (system_hw >= SYSTEM_MARKIII && system_hw < SYSTEM_MD && (reg[0] & 0x04))
++      {
++        /* Display suppression must not suppress VDP status or sprite selection. */
++        render_sms_sprite_line(line);
++        if (!(reg[1] & 0x40) || line < bitmap.viewport.h - 1)
++          parse_satb(line);
+       }
+     }
+ 
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -5497,6 +5497,25 @@
+   }
+ }
+ 
++/* Mode 4 status path when the frontend skips pixels. Reuse sprite decoding,
++ * without drawing the background or converting a framebuffer scanline. */
++void render_sms_sprite_line(int line)
++{
++  status |= spr_ovr;
++  spr_ovr = 0;
++  /* A latched collision stays set until a status read. One sprite cannot
++   * collide with itself; neither case needs decoded pixels on a hidden row. */
++  if (!(reg[1] & 0x40) || object_count[line & 1] < 2 || (status & 0x20))
++    return;
++  if (bg_list_index)
++  {
++    update_bg_pattern_cache(bg_list_index);
++    bg_list_index = 0;
++  }
++  memset(&linebuf[0][0x20], 0, 256);
++  render_obj(line & 1);
++}
++
+ void render_line(int line)
+ {
+   if (FIRECORE_RENDERING)
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -114,6 +114,7 @@
+ extern void render_rewind_save(uint8 *out, unsigned int capacity);
+ extern void render_rewind_load(const uint8 *in, unsigned int capacity);
+ extern void render_line(int line);
++extern void render_sms_sprite_line(int line);
+ extern uint32 kega_vdp_sat_revision;
+ extern void render_sprite_phase2(void);
+ extern int render_sprite_bus_step(int physical_line);
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3913,20 +3913,21 @@
+ }
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v6" : id)
++#define SMS_VDP_ABI(id) ((system_hw >= SYSTEM_MARKIII && system_hw < SYSTEM_MD) ? id "-sms-vdp-v1" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v6" : SMS_VDP_ABI(id))
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+    if (sms_cart_m2_collection_active())
+-      return "kegarefusion-recording-v3-peripherals-v1-gg-m2-collection-v1";
++      return SMS_VDP_ABI("kegarefusion-recording-v3-peripherals-v1-gg-m2-collection-v1");
+    if (sms_cart_korean_alias_active())
+-      return "kegarefusion-recording-v3-peripherals-v1-sms-korean-alias-v1";
++      return SMS_VDP_ABI("kegarefusion-recording-v3-peripherals-v1-sms-korean-alias-v1");
+    if (sms_cart_korean_window_active())
+-      return "kegarefusion-recording-v3-peripherals-v1-sms-korean-window-v1";
++      return SMS_VDP_ABI("kegarefusion-recording-v3-peripherals-v1-sms-korean-window-v1");
+    if (sms_cart_irata_flash())
+-      return "kegarefusion-recording-v3-peripherals-v1-sms-irata-v1";
++      return SMS_VDP_ABI("kegarefusion-recording-v3-peripherals-v1-sms-irata-v1");
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+-      return "kegarefusion-recording-v3-peripherals-v1-sms-codemasters-v1";
++      return SMS_VDP_ABI("kegarefusion-recording-v3-peripherals-v1-sms-codemasters-v1");
+    if (md_cart_large_ssf_active() || (md_cart_32x_ssf && strstr(rominfo.consoletype, "SEGA SSF")))
+       return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-ssf-v1");
+    if (md_cart_sonic6_active) return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-sonic6-v1");
+@@ -3955,21 +3956,21 @@
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
+    if (sms_cart_m2_collection_active())
+-      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-gg-m2-collection-v1";
++      return SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-gg-m2-collection-v1");
+    if (sms_cart_korean_alias_active())
+-      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-korean-alias-v1-sms-pause-v1";
++      return SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-korean-alias-v1-sms-pause-v1");
+    if (sms_cart_korean_window_active())
+-      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-korean-window-v1-sms-pause-v1";
++      return SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-korean-window-v1-sms-pause-v1");
+    if (sms_cart_irata_flash())
+-      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-irata-v1-sms-pause-v1";
++      return SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-irata-v1-sms-pause-v1");
+    /* Pause/NMI snapshots now round-trip on SMS/SG/PBC. Native GG has no
+-    * Pause NMI; keep its existing deterministic contract and all MD/CD IDs. */
++    * Pause NMI. The VDP suffix applies only to SMS/GG, leaving SG and MD/CD IDs. */
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && system_hw != SYSTEM_GG)
+       return sms_cart_codies_active() ?
+-         "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1-sms-pause-v1" :
+-         "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-pause-v1";
++         SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1-sms-pause-v1") :
++         SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-pause-v1");
+    if (((system_hw & SYSTEM_PBC) != SYSTEM_MD) && sms_cart_codies_active())
+-      return "kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1";
++      return SMS_VDP_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-codemasters-v1");
+    if (md_cart_large_ssf_active() || (md_cart_32x_ssf && strstr(rominfo.consoletype, "SEGA SSF")))
+       return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-ssf-v1");
+    if (md_cart_sonic6_active) return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sonic6-v1");
+@@ -3987,6 +3988,7 @@
+ }
+ 
+ #undef MD_FIFO_ABI
++#undef SMS_VDP_ABI
+ 
+ /* Hardware identification and cached decoded CD header for achievements.
+  * Header retrieval never seeks the running drive or decodes audio. */

@@ -438,11 +438,13 @@ def compatibility(corepath, directory):
         network = None if network_bytes is None else network_bytes.decode()
         cases.append({'label':label,'recording_abi':recording,'network_abi':network})
         core.close()
-    passed = (cases[0]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1-sms-irata-v1'
-        and cases[1]['recording_abi']==cases[2]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1'
-        and cases[0]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-irata-v1-sms-pause-v1'
-        and cases[1]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-pause-v1'
-        and cases[2]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1')
+    passed = (
+        cases[0]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1-sms-irata-v1-sms-vdp-v1'
+        and cases[1]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1-sms-vdp-v1'
+        and cases[2]['recording_abi']=='kegarefusion-recording-v3-peripherals-v1-md-vdp-v6'
+        and cases[0]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-irata-v1-sms-pause-v1-sms-vdp-v1'
+        and cases[1]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-sms-pause-v1-sms-vdp-v1'
+        and cases[2]['network_abi']=='kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-md-vdp-v6')
     return {'pass':passed,'cases':cases}
 
 def main():
