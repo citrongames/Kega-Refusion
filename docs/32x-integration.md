@@ -68,6 +68,14 @@ VINT supports one late enable per SH2 during the current VBlank. Its per-CPU gat
 
 The synchronous SH2 bus accounts for documented lower-bound register transactions and blocking framebuffer reads. A 32-bit bus access consumes two 16-bit transfers. IRQ entry adds the serial SDRAM stack-transfer cost in both execution backends; local data-array stacks do not. Ordinary buffered SDRAM/framebuffer store issue remains unchanged. SDRAM instruction/data reads, caching, write-buffer visibility/pressure and contention remain approximate. Testpico CMD/VINT #53/#54 pass, raising the pinned test ROM from 46 to 48/57 with one skip. The deterministic recording/network ID gains `32x-irq-v1` only when 32X is attached. See [accuracy evidence](mega-drive-accuracy.md) for scene, speed and state checks.
 
+## HINT latch and framebuffer ownership — 2026-11-20
+
+The writable 68000 HINT vector at $70–$73 starts at zero with either a supplied G BIOS or the built-in loader. Power reinitialization clears it; soft reset and ADEN remapping retain it, and state loading restores the serialized value, including legacy nonzero values. BIOS vector bytes are not its hardware power-on state. The pinned testpico #50 now passes.
+
+FM ownership already applied to VDP/palette registers and now also gates framebuffer writes from the MD/Z80 and both SH2s, including overwrite aliases and DMA through the SH2 write path. Unauthorized writes do not mutate memory or flush the renderer. The check uses the existing synchronization; no per-store peer synchronization, wait loop, allocation or extra buffer is added. SH2 framebuffer stores now calculate their timestamp only when a watched-bank render callback needs it; the conversion is read-only and the callback still runs before the mutation. The register descriptions and independent ares implementation support the functional gate; the manual's bus-timing sections also describe waiting, so exact blocked-access timing still needs a physical trace. Undefined reads are unchanged.
+
+Only attached 32X/CD32X receives the `32x-irq-v2` deterministic compatibility suffix. Native-state layouts and readers are unchanged; older recordings retain the advisory mismatch policy. See [accuracy evidence](mega-drive-accuracy.md) for the complete measured scope.
+
 ## Remaining limits
 
 - Support is experimental. The small set of real-game checks does not establish every game's compatibility.

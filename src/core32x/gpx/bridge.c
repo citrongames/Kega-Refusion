@@ -304,7 +304,9 @@ static void zfb_write8(unsigned a,unsigned v)
 {
     const uint64_t t=z80_time();Kega32xBus *b;
     kega32x_machine_run_until(ctx->machine,t);
-    b=kega32x_machine_bus(ctx->machine);kega32x_fb_sync(b,t);
+    b=kega32x_machine_bus(ctx->machine);
+    if (!kega32x_owns_video(b,KEGA32X_M68K)) return;
+    kega32x_fb_sync(b,t);
     kega32x_fb_write8(b,a,(uint8_t)v);
 }
 static unsigned fb_read8(unsigned a)
@@ -314,11 +316,13 @@ static unsigned fb_read16(unsigned a)
 static void fb_write8(unsigned a,unsigned v)
 {
     Kega32xBus *b;sync_device();b=kega32x_machine_bus(ctx->machine);
+    if (!kega32x_owns_video(b,KEGA32X_M68K)) return;
     kega32x_fb_sync(b,current_time());kega32x_fb_write8(b,a,(uint8_t)v);
 }
 static void fb_write16(unsigned a,unsigned v)
 {
     Kega32xBus *b;sync_device();b=kega32x_machine_bus(ctx->machine);
+    if (!kega32x_owns_video(b,KEGA32X_M68K)) return;
     kega32x_fb_sync(b,current_time());kega32x_fb_write16(b,a,(uint16_t)v);
 }
 static unsigned rom_address(unsigned a)
@@ -334,6 +338,9 @@ static unsigned zrom_window8(unsigned a) {return zmap_read8(rom_address(a));}
 static void zrom_window_write8(unsigned a,unsigned v) {zmap_write8(rom_address(a),v);}
 static void hint_write8(unsigned a,unsigned v) {if((a&0xfffc)==0x70)WRITE_BYTE(ctx->boot_page,a&65535,v);}
 static void hint_write16(unsigned a,unsigned v) {if((a&0xfffc)==0x70)*(uint16 *)(ctx->boot_page+(a&65534))=(uint16)v;}
+/* $70-$73 are a writable hardware latch, not bytes from the G BIOS.
+   Power clears it; map rebuilds, VRES and state loading preserve/restore it. */
+static void hint_vector_power(void) { memset(ctx->boot_page+0x70,0,4); }
 static void map_apply(void)
 {
     Kega32xBus *b=kega32x_machine_bus(ctx->machine);
@@ -403,6 +410,7 @@ int kegarefusion_32x_attach(const uint8_t *g,const uint8_t *m,const uint8_t *s)
     if (!m) { builtin_boot_sh2(builtin_m, 0, ctx->has_cart_rom); m = builtin_m; }
     if (!s) { builtin_boot_sh2(builtin_s, 1, ctx->has_cart_rom); s = builtin_s; }
     for(i=0;i<256;i++)WRITE_BYTE(ctx->boot_page,i,g[i]);
+    hint_vector_power();
     host.rom_pages=ctx->rom_pages;host.rom_read16=rom_read;host.rom_fetch_is_pure=rom_fetch_is_pure;host.changed=changed;host.render_sync=render_sync;host.audio_delta=audio_delta;
     ctx->machine=kega32x_machine_create(&host,m,2048,s,1024,vdp_pal,!ctx->has_cart_rom);
     if(!ctx->machine){free(ctx);ctx=NULL;return 0;}
@@ -426,6 +434,7 @@ void kegarefusion_32x_reinit(void)
     maps_capture();
     ctx->frame_base=0;ctx->now=0;ctx->hint_due=UINT64_MAX;ctx->hint_count=0;ctx->line=-1;
     ctx->line_start=0;video_reset();
+    hint_vector_power();
     kega32x_machine_power_reset(ctx->machine,vdp_pal,!ctx->has_cart_rom);
     map_apply();
 }

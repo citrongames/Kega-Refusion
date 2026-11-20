@@ -65,6 +65,98 @@ static unsigned run_until_budget(KegaSh2 *cpu,unsigned budget)
     return elapsed;
 }
 
+enum { FRAMEBUFFER_WATCH_OFFSET = 0x10 };
+typedef struct {
+    Kega32xBus *bus;
+    uint64_t time;
+    uint32_t before;
+    unsigned calls;
+} FramebufferWatch;
+
+static void watch_framebuffer(void *data,uint64_t time)
+{
+    FramebufferWatch *watch=data;
+    watch->time=time;
+    watch->before=((uint32_t)kega32x_fb_read16(watch->bus,FRAMEBUFFER_WATCH_OFFSET)<<16)|
+        kega32x_fb_read16(watch->bus,FRAMEBUFFER_WATCH_OFFSET+2);
+    watch->calls++;
+}
+
+static int test_framebuffer_ownership(bool drc)
+{
+    uint8_t mb[2048]={0},sb[1024]={0};
+    const uint16_t stores[]={
+        0x2100,0x2201,0x2302, /* MOV.B/W/L R0,@R1/R2/R3 (normal) */
+        0x2400,0x2501,0x2602, /* MOV.B/W/L R0,@R4/R5/R6 (overwrite) */
+        0x7701,0xaffe,0x0009  /* ADD #1,R7; loop */
+    };
+    const uint16_t owned_words[]={
+        0xb234,0x00b2,0xa100,0x00b2,0x12b2,0x12b2,0xa134,0x12b2
+    };
+    for (unsigned i=0;i<sizeof(stores)/sizeof(stores[0]);i++) {
+        put16(mb,0x100+2*i,stores[i]);
+        put16(sb,0x100+2*i,stores[i]);
+    }
+    FramebufferWatch watch={0};
+    Kega32xMachineHost host={.userdata=&watch,.render_sync=watch_framebuffer};
+    Kega32xMachine *m=kega32x_machine_create(&host,mb,sizeof(mb),sb,sizeof(sb),0,0);
+    CHECK(m);
+    Kega32xBus *b=kega32x_machine_bus(m);
+    watch.bus=b;
+    kega32x_bus_write16(b,KEGA32X_M68K,0,3,0);
+    watch.calls=0; /* Begin after the adapter-enable notification. */
+#ifdef KEGA_SH2_DRC
+    if(drc) CHECK(kega_sh2_drc_enable(kega32x_machine_cpu(m,KEGA32X_MASTER),
+                                     kega32x_machine_cpu(m,KEGA32X_SLAVE)));
+    else kega_sh2_drc_disable();
+#else
+    CHECK(!drc);
+#endif
+    for (unsigned c=KEGA32X_MASTER;c<=KEGA32X_SLAVE;c++) {
+        KegaSh2 *cpu=kega32x_machine_cpu(m,c);
+        for (unsigned own=0;own<2;own++) {
+            KegaSh2State state;
+            kega32x_bus_write16(b,KEGA32X_M68K,0,own?0x8003:3,kega32x_machine_cpu_mclk(m,c));
+            for (unsigned i=0;i<sizeof(owned_words)/sizeof(owned_words[0]);i++)
+                kega32x_fb_write16(b,2*i,0x1234);
+
+            CHECK(kega_sh2_get_state(cpu,&state));
+            state.pc=0x100;state.delay=0;
+            state.r[0]=0xa10000b2;state.r[1]=0x24000000;state.r[2]=0x24000002;
+            state.r[3]=0x24000004;state.r[4]=0x24020009;state.r[5]=0x2402000a;
+            state.r[6]=0x2402000c;state.r[7]=0;
+            CHECK(kega_sh2_set_state(cpu,&state));
+            CHECK(run_until_budget(cpu,32)>=32);
+            CHECK(kega_sh2_get_state(cpu,&state) && state.r[7]==1);
+            for (unsigned i=0;i<sizeof(owned_words)/sizeof(owned_words[0]);i++)
+                CHECK(kega32x_fb_read16(b,2*i)==(own?owned_words[i]:0x1234));
+        }
+    }
+
+    /* The writable bank is 1. A watched bank 0 cannot observe these stores. */
+    const uint32_t address=0x24000000+FRAMEBUFFER_WATCH_OFFSET;
+    const uint64_t time=kega32x_machine_cpu_mclk(m,KEGA32X_SLAVE);
+    CHECK(time>0);
+    b->video_watch_banks=1;
+    kega32x_machine_write(m,KEGA32X_SLAVE,address,0x43218765,4);
+    CHECK(watch.calls==0);
+    b->video_watch_banks=2;
+    kega32x_machine_write(m,KEGA32X_SLAVE,address,0xabcdfedc,4);
+    CHECK(watch.calls==1 && watch.time==time && watch.before==0x43218765);
+    CHECK(kega32x_fb_read16(b,FRAMEBUFFER_WATCH_OFFSET)==0xabcd);
+    CHECK(kega32x_fb_read16(b,FRAMEBUFFER_WATCH_OFFSET+2)==0xfedc);
+#ifdef KEGA_SH2_DRC
+    if(drc) {
+        KegaSh2DrcStats stats;
+        kega_sh2_drc_get_stats(&stats);
+        CHECK(stats.jit_calls[KEGA32X_MASTER]>0 && stats.jit_calls[KEGA32X_SLAVE]>0);
+        kega_sh2_drc_disable();
+    }
+#endif
+    kega32x_machine_destroy(m);
+    return 0;
+}
+
 static int test_bus_access_timing(bool drc)
 {
     uint8_t mb[2048]={0},sb[1024]={0};
@@ -92,7 +184,7 @@ static int test_bus_access_timing(bool drc)
     CHECK(m);
     Kega32xBus *b=kega32x_machine_bus(m);
     KegaSh2 *cpu=kega32x_machine_cpu(m,KEGA32X_SLAVE);
-    kega32x_bus_write16(b,KEGA32X_M68K,0,3,0);
+    kega32x_bus_write16(b,KEGA32X_M68K,0,0x8003,0); /* SH-2 owns the framebuffer. */
 #ifdef KEGA_SH2_DRC
     if(drc) CHECK(kega_sh2_drc_enable(kega32x_machine_cpu(m,KEGA32X_MASTER),cpu));
     else kega_sh2_drc_disable();
@@ -164,8 +256,10 @@ static int test_bus_access_timing(bool drc)
 int main(void)
 {
     CHECK(cart_boot_checksum() == 0);
+    CHECK(test_framebuffer_ownership(false)==0);
     CHECK(test_bus_access_timing(false)==0);
 #ifdef KEGA_SH2_DRC
+    CHECK(test_framebuffer_ownership(true)==0);
     CHECK(test_bus_access_timing(true)==0);
 #endif
     uint8_t mb[2048]={0},sb[1024]={0};

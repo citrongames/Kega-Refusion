@@ -147,10 +147,6 @@ static void dreq_push(Kega32xBus *b, uint16_t v, uint64_t t)
         if (b->host.dreq) b->host.dreq(b->host.userdata,t);
     }
 }
-static int owns_video(const Kega32xBus *b, unsigned cpu)
-{
-    return !!(b->s.regs[0]&FM) == (cpu!=KEGA32X_M68K);
-}
 static uint16_t sys_read(Kega32xBus *b, unsigned cpu, unsigned a, uint64_t t)
 {
     if (a>=0x30) return b->host.pwm_read ? b->host.pwm_read(b->host.userdata,a,t):0;
@@ -218,7 +214,7 @@ static void adapter_write(Kega32xBus *b, unsigned cpu, uint16_t v, uint64_t t)
 static void vdp_write(Kega32xBus *b, unsigned cpu, unsigned a, uint16_t v, uint64_t t)
 {
     unsigned old;
-    if (!owns_video(b,cpu)) return;
+    if (!kega32x_owns_video(b,cpu)) return;
     switch (a) {
     case 0:
         render_sync(b,t);
@@ -265,7 +261,7 @@ void kega32x_bus_write16(Kega32xBus *b, unsigned cpu, uint32_t a, uint16_t v, ui
     a&=~1u;
     if (!(b->s.regs[0]&ADEN) && a>=0x30) return;
     if (a>=0x200 && a<0x400) {
-        if (owns_video(b,cpu)) {
+        if (kega32x_owns_video(b,cpu)) {
             render_sync(b,t);
             b->s.palette[(a&511)/2]=v;
         }

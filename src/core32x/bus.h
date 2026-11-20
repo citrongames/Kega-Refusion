@@ -51,12 +51,22 @@ typedef struct Kega32xBus {
        the raster timing owner and reconstructed on state load. */
     uint64_t dram_refresh_start;
 } Kega32xBus;
+/* FM selects the CPU side permitted to change VDP/palette/framebuffer.
+   Check after the caller's existing synchronization, before a mutation. */
+static inline int kega32x_owns_video(const Kega32xBus *b, unsigned cpu)
+{
+    return !!(b->s.regs[0] & 0x8000) == (cpu != KEGA32X_M68K);
+}
 /* Call once before a timestamped CPU/DMA framebuffer mutation. A normal
    backbuffer write needs no renderer callback; only a watched bank can require
    sampling old pixels before an instruction's write crosses its deadline. */
+static inline int kega32x_fb_sync_needed(const Kega32xBus *b)
+{
+    return (b->video_watch_banks & (1u << ((b->s.vdp[5] & 1u) ^ 1u))) && b->host.render_sync;
+}
 static inline void kega32x_fb_sync(Kega32xBus *b, uint64_t mclk)
 {
-    if ((b->video_watch_banks & (1u << ((b->s.vdp[5] & 1u) ^ 1u))) && b->host.render_sync)
+    if (kega32x_fb_sync_needed(b))
         b->host.render_sync(b->host.userdata, mclk);
 }
 void kega32x_bus_power(Kega32xBus *, Kega32xMemory *, const Kega32xBusHost *, int pal, int no_cart);
