@@ -51,5 +51,6 @@ bool kega_sh2_host_fetch_is_pure(SH2 *, u32, size_t);
 bool kega_sh2_is_running(const KegaSh2 *);
 int kega_drc_execute(SH2 *, int);
 int kega_sh2_service_irq(SH2 *, int);
+void kega_sh2_irq_stack_wait(SH2 *s);
 void kega_drc_cpu_destroyed(KegaSh2 *);
 #endif

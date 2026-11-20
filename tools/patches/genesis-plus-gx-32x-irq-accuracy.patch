@@ -1,0 +1,20 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3915,7 +3915,8 @@
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+ #define SMS_VDP_ABI(id) ((system_hw >= SYSTEM_MARKIII && system_hw < SYSTEM_MD) ? id "-sms-vdp-v1" : id)
+ /* CD IRQ ordering changes execution, not the serialized state layout. */
+-#define SCD_IRQ_ABI(id) ((system_hw == SYSTEM_MCD) ? id "-scd-irq-v1" : id)
++#define X32_IRQ_ABI(id) (kegarefusion_32x_attached ? id "-32x-irq-v1" : id)
++#define SCD_IRQ_ABI(id) ((system_hw == SYSTEM_MCD) ? X32_IRQ_ABI(id "-scd-irq-v1") : X32_IRQ_ABI(id))
+ #define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? SCD_IRQ_ABI(id "-md-vdp-v6") : SMS_VDP_ABI(id))
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+@@ -3991,6 +3992,7 @@
+ 
+ #undef MD_FIFO_ABI
+ #undef SCD_IRQ_ABI
++#undef X32_IRQ_ABI
+ #undef SMS_VDP_ABI
+ 
+ /* Hardware identification and cached decoded CD header for achievements.

@@ -10,7 +10,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define KEGA32X_MACHINE_STATE_VERSION 1u
+#define KEGA32X_MACHINE_STATE_VERSION 2u
 /* Keep metadata separate so decoding can validate on a small stack object
  * before writing any caller snapshot or copying its 512 KiB RAM payload. */
 typedef struct Kega32xControlState {
@@ -32,7 +32,9 @@ int kega32x_state_validate(const Kega32xMachineState *);
  * numeric arrays are LE too. No C padding, native pointers or unsigned long. */
 size_t kega32x_state_encoded_size(void);
 /* Buffers must not overlap. Invalid input/capacity is rejected before writing.
- * Decode requires the exact encoded size; trailing bytes/version/reserved bits
+ * Wire v2 stores the VBlank enable gates in a formerly reserved header word;
+ * wire v1 loads with gates closed until the next VBlank. Size is unchanged.
+ * Decode requires the exact encoded size; trailing bytes/unknown versions/reserved bits
  * are rejected. RAM bytes have no extra checksum: the enclosing save/rewind
  * container provides its integrity protection. No heap allocation occurs. */
 int kega32x_state_encode(const Kega32xMachineState *, void *output, size_t capacity);

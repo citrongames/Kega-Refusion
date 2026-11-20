@@ -62,6 +62,48 @@ static void test_video_watch(Kega32xMemory *memory)
     kega32x_bus_restore(&bus,220);
     assert(!bus.video_watch_banks && watch.calls==2);
 }
+static void test_vint_latch(void)
+{
+    Kega32xBus bus;
+    Kega32xBusHost host={0};
+    host.irq=irq;
+    kega32x_bus_power(&bus,NULL,&host,0,0);
+    kega32x_bus_write16(&bus,KEGA32X_M68K,0,3,0);
+    kega32x_bus_blank(&bus,0,0,1);
+    kega32x_bus_blank(&bus,1,0,2);
+    assert(irq_level[0]==0 && irq_level[1]==0);
+
+    /* A clear with VINT masked leaves this CPU's VBlank opportunity intact. */
+    kega32x_bus_write16(&bus,KEGA32X_MASTER,0x16,0,3);
+    kega32x_bus_write8(&bus,KEGA32X_SLAVE,1,8,4);
+    assert(irq_level[0]==0 && irq_level[1]==12);
+    kega32x_bus_write16(&bus,KEGA32X_SLAVE,0,0,5);
+    assert(irq_level[0]==0 && irq_level[1]==12);
+
+    kega32x_bus_write16(&bus,KEGA32X_SLAVE,0,8,6);
+    kega32x_bus_write16(&bus,KEGA32X_SLAVE,0x16,0,7);
+    kega32x_bus_write16(&bus,KEGA32X_SLAVE,0,0,8);
+    kega32x_bus_blank(&bus,1,1,9);
+    kega32x_bus_write16(&bus,KEGA32X_SLAVE,0,8,10);
+    assert(irq_level[0]==0 && irq_level[1]==0);
+
+    /* Master can still take its own first VINT. An asserted request persists
+       beyond VBlank, while an unused window closes when VBlank ends. */
+    kega32x_bus_write16(&bus,KEGA32X_MASTER,0,8,11);
+    assert(irq_level[0]==12 && irq_level[1]==0);
+    kega32x_bus_blank(&bus,0,0,12);
+    assert(irq_level[0]==12 && irq_level[1]==0);
+    kega32x_bus_write16(&bus,KEGA32X_MASTER,0x16,0,13);
+    kega32x_bus_write16(&bus,KEGA32X_MASTER,0,0,14);
+    kega32x_bus_blank(&bus,1,0,15);
+    assert(irq_level[0]==0 && irq_level[1]==12);
+    kega32x_bus_blank(&bus,0,0,16);
+    kega32x_bus_write16(&bus,KEGA32X_SLAVE,0x16,0,17);
+    kega32x_bus_write16(&bus,KEGA32X_MASTER,0,8,18);
+    assert(irq_level[0]==0 && irq_level[1]==0);
+    kega32x_bus_blank(&bus,1,0,19);
+    assert(irq_level[0]==12 && irq_level[1]==12);
+}
 int main(void)
 {
     Kega32xBus b;
@@ -155,6 +197,7 @@ int main(void)
     assert(kega32x_fb_read16(&b,0)==0x1256);
     kega32x_fb_write16(&b,0,0);
     assert(kega32x_fb_read16(&b,0)==0);
+    test_vint_latch();
     test_video_watch(m);
     free(m); puts("32X bus: FIFO, IRQ, byte lanes, fill/swap and watched-bank pre-write order passed");
     return 0;

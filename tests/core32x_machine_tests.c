@@ -1,5 +1,8 @@
 #include "core32x/machine.h"
 #include "core32x/gpx/bootrom.h"
+#ifdef KEGA_SH2_DRC
+#include "core32x/sh2/drc.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,9 +54,120 @@ static int cart_boot_checksum(void)
     kega32x_machine_destroy(m);
     return 0;
 }
+static unsigned run_until_budget(KegaSh2 *cpu,unsigned budget)
+{
+    unsigned elapsed=0;
+    while (elapsed<budget) {
+        unsigned step=kega_sh2_run(cpu,budget-elapsed);
+        if (!step) break;
+        elapsed+=step;
+    }
+    return elapsed;
+}
+
+static int test_bus_access_timing(bool drc)
+{
+    uint8_t mb[2048]={0},sb[1024]={0};
+    enum { SYSTEM_REGS, FRAMEBUFFER, SDRAM, LOCAL_RAM, REGION_COUNT };
+    const uint32_t sources[]={0x20004020,0x24000000,0x06001000,0xc0000100};
+    unsigned read_cost[REGION_COUNT][3],write_cost[REGION_COUNT][3];
+    program(mb,0x20004026,0x12);
+    program(sb,0x20004026,0x34);
+    put32(sb,0x110,0x180); /* IRL8 vector */
+    put16(sb,0x180,0x6211); /* MOV.W @R1,R2 (framebuffer count) */
+    put16(sb,0x182,0x7201); /* ADD #1,R2 */
+    put16(sb,0x184,0x2121); /* MOV.W R2,@R1 */
+    put16(sb,0x186,0x2431); /* MOV.W R3,@R4 (clear CMD) */
+    put16(sb,0x188,0x002b); /* RTE */
+    put16(sb,0x18a,0x0009);
+    for (unsigned i=0;i<3;i++) {
+        /* MOV.B/W/L @R1,R2 and MOV.B/W/L R2,@R3 */
+        put16(sb,0x1a0+8*i,(uint16_t)(0x6210+i));
+        put16(sb,0x1a2+8*i,(uint16_t)(0x2320+i));
+        put16(sb,0x1a4+8*i,0xaffe);
+        put16(sb,0x1a6+8*i,0x0009);
+    }
+    Kega32xMachineHost host={0};
+    Kega32xMachine *m=kega32x_machine_create(&host,mb,sizeof(mb),sb,sizeof(sb),0,0);
+    CHECK(m);
+    Kega32xBus *b=kega32x_machine_bus(m);
+    KegaSh2 *cpu=kega32x_machine_cpu(m,KEGA32X_SLAVE);
+    kega32x_bus_write16(b,KEGA32X_M68K,0,3,0);
+#ifdef KEGA_SH2_DRC
+    if(drc) CHECK(kega_sh2_drc_enable(kega32x_machine_cpu(m,KEGA32X_MASTER),cpu));
+    else kega_sh2_drc_disable();
+#else
+    CHECK(!drc);
+#endif
+    KegaSh2State state;
+    const uint32_t stack_tops[]={0xc0000200,0x0603f000};
+    const unsigned irq_read_cycles[]={20,26};
+    kega32x_bus_write8(b,KEGA32X_SLAVE,1,2,0);
+    for (unsigned i=0;i<2;i++) {
+        const uint32_t stack=stack_tops[i];
+        CHECK(kega_sh2_get_state(cpu,&state));
+        state.pc=0x106;state.sr=1;state.r[1]=sources[FRAMEBUFFER];
+        state.r[3]=0;state.r[4]=0x2000401a;state.r[15]=stack;
+        CHECK(kega_sh2_set_state(cpu,&state));
+        kega32x_fb_write16(b,0,0);
+        kega32x_bus_write16(b,KEGA32X_M68K,2,2,0);
+
+        /* The SDRAM pushes add six clocks over a local stack. The count and
+           CMD latch remain untouched through entry and the framebuffer read. */
+        CHECK(run_until_budget(cpu,irq_read_cycles[i])==irq_read_cycles[i]);
+        CHECK(kega32x_machine_read(m,KEGA32X_SLAVE,stack-8,4)==0x106);
+        CHECK(kega32x_machine_read(m,KEGA32X_SLAVE,stack-4,4)==1);
+        CHECK(kega32x_fb_read16(b,0)==0 && b->s.regs[1]==2);
+        CHECK(run_until_budget(cpu,2)==2);
+        CHECK(kega32x_fb_read16(b,0)==1 && b->s.regs[1]==2);
+        CHECK(kega_sh2_run(cpu,1)>1 && b->s.regs[1]==0);
+    }
+
+    for (unsigned region=0;region<REGION_COUNT;region++) {
+        kega32x_machine_write(m,KEGA32X_SLAVE,sources[region],0xa1b2c3d4,4);
+        for (unsigned i=0;i<3;i++) {
+            CHECK(kega_sh2_get_state(cpu,&state));
+            state.pc=0x1a0+8*i;state.delay=0;
+            state.r[1]=sources[region];state.r[3]=sources[region]+4;
+            CHECK(kega_sh2_set_state(cpu,&state));
+            read_cost[region][i]=kega_sh2_run(cpu,1);
+            write_cost[region][i]=kega_sh2_run(cpu,1);
+            const unsigned size=1u<<i;
+            CHECK(kega32x_machine_read(m,KEGA32X_SLAVE,state.r[3],size)==
+                  kega32x_machine_read(m,KEGA32X_SLAVE,state.r[1],size));
+        }
+        CHECK(read_cost[region][0]==read_cost[region][1]);
+        CHECK(write_cost[region][0]==write_cost[region][1]);
+        if (region<=FRAMEBUFFER)
+            CHECK(read_cost[region][2]==2*read_cost[region][1]);
+        if (region==SYSTEM_REGS) {
+            CHECK(write_cost[region][2]==2*write_cost[region][1]);
+        } else {
+            /* Ordinary stores keep their one-cycle issue cost at every width. */
+            CHECK(write_cost[region][1]==1 && write_cost[region][2]==1);
+        }
+    }
+    CHECK(read_cost[FRAMEBUFFER][1]>read_cost[SYSTEM_REGS][1]);
+    CHECK(read_cost[FRAMEBUFFER][1]>write_cost[FRAMEBUFFER][1]);
+#ifdef KEGA_SH2_DRC
+    if(drc) {
+        KegaSh2DrcStats stats;
+        kega_sh2_drc_get_stats(&stats);
+        CHECK(kega_sh2_drc_active(cpu) && stats.jit_calls[KEGA32X_SLAVE]>0);
+        kega_sh2_drc_disable();
+    }
+#endif
+    kega32x_machine_destroy(m);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(cart_boot_checksum() == 0);
+    CHECK(test_bus_access_timing(false)==0);
+#ifdef KEGA_SH2_DRC
+    CHECK(test_bus_access_timing(true)==0);
+#endif
     uint8_t mb[2048]={0},sb[1024]={0};
     Kega32xMachineHost h={0};Kega32xMachine *m;Kega32xBus *b;
     program(mb,0x20004020,0x42);program(sb,0x20004022,0x24);

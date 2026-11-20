@@ -110,6 +110,17 @@ static void peripheral_write(Kega32xMachine *m,unsigned c,uint32_t a,uint32_t v,
     else if(size==2)kega_sh2_soc_write16(m->soc[c],a,(uint16_t)v);
     else kega_sh2_soc_write32(m->soc[c],a,v);
 }
+/* Sega 32X hardware manual 4.4: an SH2 bus cycle takes two clocks,
+ * plus one wait for system-register accesses, or at least five waits for
+ * framebuffer reads and VDP/palette accesses. This synchronous bus uses
+ * those lower bounds; video/FIFO contention may lengthen them on hardware.
+ * The opcode already pays one clock. A longword uses two 16-bit bus cycles.
+ * DMA owns its own timeline and must not debit a suspended CPU here. */
+static void bus_wait(Kega32xMachine *m,unsigned c,unsigned size,unsigned clocks)
+{
+    if (!(m->soc_running & (1u<<c)))
+        kega_sh2_add_wait_cycles(m->cpu[c],clocks*(size==4?2u:1u)-1u);
+}
 static uint8_t read_byte(const uint8_t *p,uint32_t a) { return p[a]; }
 static uint32_t read_words(const uint16_t *p,uint32_t a,unsigned size)
 {
@@ -147,7 +158,7 @@ uint32_t kega32x_machine_read(Kega32xMachine *m,unsigned c,uint32_t address,unsi
         if ((off>=0x4000 && off<0x4040) || (off>=0x4100 && off<0x4110) || (off>=0x4200 && off<0x4400)) {
             t=kega32x_machine_cpu_mclk(m,c);
             sync_peer(m,c,t);
-            kega_sh2_add_wait_cycles(m->cpu[c],2);
+            bus_wait(m,c,size,off<0x4100?3:7);
             off-=0x4000;
             if(size==1)return kega32x_bus_read8(&m->bus,c,off,t);
             if(size==2)return kega32x_bus_read16(&m->bus,c,off,t);
@@ -162,6 +173,7 @@ uint32_t kega32x_machine_read(Kega32xMachine *m,unsigned c,uint32_t address,unsi
         if(size==4)v=(v<<16)|m->host.rom_read16(m->host.userdata,(off+2)&0x3ffffe);
         return v;
     case 0x04000000:
+        bus_wait(m,c,size,7);
         if(size==1) {v=kega32x_fb_read16(&m->bus,a);return (v>>((a&1)?0:8))&255;}
         v=kega32x_fb_read16(&m->bus,a);
         return size==2?v:(v<<16)|kega32x_fb_read16(&m->bus,a+2);
@@ -190,12 +202,16 @@ void kega32x_machine_write(Kega32xMachine *m,unsigned c,uint32_t address,uint32_
         if(!((off>=0x4000 && off<0x4040)||(off>=0x4100 && off<0x4110)||(off>=0x4200 && off<0x4400)))return;
         t=kega32x_machine_cpu_mclk(m,c);
         sync_peer(m,c,t);
+        bus_wait(m,c,size,off<0x4100?3:7);
         off-=0x4000;
         if(size==1)kega32x_bus_write8(&m->bus,c,off,(uint8_t)value,t);
         else if(size==2)kega32x_bus_write16(&m->bus,c,off,(uint16_t)value,t);
         else {kega32x_bus_write16(&m->bus,c,off,(uint16_t)(value>>16),t);kega32x_bus_write16(&m->bus,c,off+2,(uint16_t)value,t);}
         break;
     case 0x04000000:
+        /* Buffered stores keep their existing issue cost. Charging the entire
+         * external transaction here would stall independent instructions;
+         * modelling buffer pressure/commit visibility is a separate concern. */
         t=kega32x_machine_cpu_mclk(m,c);
         kega32x_fb_sync(&m->bus,t);
         if(size==1)kega32x_fb_write8(&m->bus,a,(uint8_t)value);

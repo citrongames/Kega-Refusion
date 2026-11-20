@@ -72,7 +72,7 @@ int main(void)
     kega32x_bus_write16(bus,KEGA32X_M68K,0x36,8,1000);
     CHECK(kega32x_machine_get_state(m,saved));CHECK(kega32x_state_validate(saved));
     CHECK(kega32x_state_encode(saved,wire,bytes));
-    CHECK(!memcmp(wire,"K32XST01",8) && wire[8]==1 && !wire[9] && !wire[10] && !wire[11]);
+    CHECK(!memcmp(wire,"K32XST01",8) && wire[8]==2 && !wire[9] && !wire[10] && !wire[11]);
     CHECK(wire[bytes-2]==0xb2 && wire[bytes-1]==0xa1);
     CHECK(wire[24+11431+262144-2]==0xd4 && wire[24+11431+262144-1]==0xc3);
     CHECK(kega32x_state_decode(decoded,wire,bytes));
@@ -80,8 +80,9 @@ int main(void)
     memset(before,0x5a,sizeof(*before));memcpy(decoded,before,sizeof(*decoded));
     CHECK(decode_rejects(decoded,wire,bytes-1,before));CHECK(decode_rejects(decoded,wire,bytes+1,before));
     memcpy(other,wire,bytes);other[0]^=1;CHECK(decode_rejects(decoded,other,bytes,before));
-    memcpy(other,wire,bytes);other[8]=2;CHECK(decode_rejects(decoded,other,bytes,before));
+    memcpy(other,wire,bytes);other[8]=3;CHECK(decode_rejects(decoded,other,bytes,before));
     memcpy(other,wire,bytes);other[16]=1;CHECK(decode_rejects(decoded,other,bytes,before));
+    memcpy(other,wire,bytes);other[20]=1;CHECK(decode_rejects(decoded,other,bytes,before));
     memcpy(other,wire,bytes);other[24+614]=9;CHECK(decode_rejects(decoded,other,bytes,before));
     memcpy(other,wire,bytes);other[24+628+34]=4;CHECK(decode_rejects(decoded,other,bytes,before));
     memcpy(other,wire,bytes);other[24+628+45]=0;CHECK(decode_rejects(decoded,other,bytes,before));
@@ -107,7 +108,48 @@ int main(void)
     CHECK(!memcmp(expected,other,bytes));CHECK(actual.count==baseline.count && actual.count>0);
     for(i=0;i<actual.count;i++)CHECK(actual.events[i].t==baseline.events[i].t &&
         actual.events[i].l==baseline.events[i].l && actual.events[i].r==baseline.events[i].r);
+
+    /* Save mid-VBlank with only the master's opportunity still armed. */
+    kega32x_bus_blank(bus,0,0,1600);
+    kega32x_bus_write16(bus,KEGA32X_SLAVE,0,8,1600);
+    kega32x_bus_blank(bus,1,0,1600);
+    CHECK(bus->s.vint_armed==1 && bus->s.irq_pending[0]==0 &&
+          bus->s.irq_pending[1]==KEGA32X_IRQ_VINT);
+    CHECK(kega32x_machine_get_state(m,saved) && kega32x_state_encode(saved,wire,bytes));
+    CHECK(wire[16]==1 && !wire[17] && !wire[18] && !wire[19]);
+    memcpy(other,wire,bytes);other[16]=4;
+    memcpy(decoded,before,sizeof(*decoded));
+    CHECK(decode_rejects(decoded,other,bytes,before));
+    CHECK(kega32x_state_decode(decoded,wire,bytes) && decoded->control.bus.vint_armed==1 &&
+          decoded->control.bus.irq_pending[1]==KEGA32X_IRQ_VINT);
+    kega32x_bus_blank(bus,0,0,1600);
+    kega32x_bus_write16(bus,KEGA32X_SLAVE,0x16,0,1600);
+    CHECK(kega32x_machine_set_state(m,decoded));
+    kega32x_bus_write16(bus,KEGA32X_SLAVE,0x16,0,1600);
+    kega32x_bus_write16(bus,KEGA32X_SLAVE,0,0,1600);
+    kega32x_bus_write16(bus,KEGA32X_SLAVE,0,8,1600);
+    kega32x_bus_write16(bus,KEGA32X_MASTER,0,8,1600);
+    CHECK(bus->s.vint_armed==0 && bus->s.irq_pending[1]==0 &&
+          bus->s.irq_pending[0]==KEGA32X_IRQ_VINT);
+
+    /* Version 1 kept the same payload with the VINT header word reserved.
+       Restore the already asserted signal and wait for the next real edge. */
+    memcpy(other,wire,bytes);other[8]=1;other[16]=0;
+    CHECK(kega32x_state_decode(decoded,other,bytes) &&
+          decoded->control.version==KEGA32X_MACHINE_STATE_VERSION &&
+          decoded->control.bus.vint_armed==0 &&
+          decoded->control.bus.irq_pending[1]==KEGA32X_IRQ_VINT);
+    CHECK(kega32x_machine_set_state(m,decoded));
+    kega32x_bus_write16(bus,KEGA32X_MASTER,0,8,1600);
+    CHECK(!bus->s.irq_pending[0] && bus->s.irq_pending[1]==KEGA32X_IRQ_VINT);
+    kega32x_bus_blank(bus,0,0,1600);
+    kega32x_bus_blank(bus,1,0,1600);
+    CHECK(bus->s.irq_pending[0]==KEGA32X_IRQ_VINT);
+    other[16]=1;
+    memcpy(decoded,before,sizeof(*decoded));
+    CHECK(decode_rejects(decoded,other,bytes,before));
+
     kega32x_machine_destroy(m);free(saved);free(decoded);free(before);free(wire);free(other);free(expected);
-    puts("32X states: LE roundtrip, atomic rejection and replayed dual-CPU/RAM/FIFO/PWM timeline passed");
+    puts("32X states: LE roundtrip, VINT state migration, atomic rejection and replayed timeline passed");
     return 0;
 }

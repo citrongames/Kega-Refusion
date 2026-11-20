@@ -31,6 +31,19 @@ static void irqs(Kega32xBus *b, uint64_t t)
         if (b->host.irq) b->host.irq(b->host.userdata,cpu,level,t);
     }
 }
+/* Each SH2 may enable VINT once within the current VBlank, even if masked
+ * when blanking began. Consuming that gate is distinct from acknowledging
+ * an asserted interrupt; masking an asserted source does not clear it. */
+static void latch_vint(Kega32xBus *b)
+{
+    unsigned cpu;
+    for (cpu=0;cpu<2;cpu++) {
+        if ((b->s.vint_armed & (1u<<cpu)) && (b->s.irq_mask[cpu]&8)) {
+            b->s.vint_armed &= (uint8_t)~(1u<<cpu);
+            b->s.irq_pending[cpu] |= KEGA32X_IRQ_VINT;
+        }
+    }
+}
 static void command_irq(Kega32xBus *b, uint64_t t)
 {
     unsigned cpu;
@@ -79,8 +92,11 @@ void kega32x_bus_blank(Kega32xBus *b, int vb, int hb, uint64_t t)
     if (vb || hb || !(b->s.vdp[0]&1)) b->s.vdp[5]|=PEN;
     if (vb && !(old&VBLANK)) {
         b->s.vdp[5]=(uint16_t)((b->s.vdp[5]&~1)|b->s.pending_fb);
-        kega32x_bus_irq(b,KEGA32X_IRQ_VINT,t);
+        b->s.vint_armed=3;
+        latch_vint(b);
+        irqs(b,t);
     }
+    if (!vb) b->s.vint_armed=0;
     if (old!=b->s.vdp[5]) changed(b,KEGA32X_M68K,KEGA32X_COMM_CHANGED|(((old^b->s.vdp[5])&1)?KEGA32X_MAP_CHANGED:0),0x10a,t);
 }
 void kega32x_bus_restore(Kega32xBus *b, uint64_t t)
@@ -191,6 +207,7 @@ static void adapter_write(Kega32xBus *b, unsigned cpu, uint16_t v, uint64_t t)
     } else {
         b->s.regs[0]=(uint16_t)((old&~FM)|(v&FM));
         b->s.irq_mask[cpu]=(uint8_t)(v&15);
+        latch_vint(b);
         b->s.sh2_control=(uint16_t)((b->s.sh2_control&~0x80)|(v&0x80));
         flags|=KEGA32X_HINT_CHANGED;
     }

@@ -34,6 +34,9 @@ u32 p32x_sh2_poll_memory32(u32 a, u32 v, SH2 *s) { (void)v; return p32x_sh2_read
 static int (*original_ack[2])(SH2 *, int);
 int kega_drc_ack(SH2 *s, int level) {
     DRC_SAVE_SR(s);
+    /* Translated IRQ entry has already stacked PC/SR. A C fallback uses
+     * take_irq, which charges its own stack transfers after its pushes. */
+    if (s->state & SH2_IN_DRC) kega_sh2_irq_stack_wait(s);
     int vector = original_ack[!!s->is_slave](s, level);
     DRC_RESTORE_SR(s);
     return vector;

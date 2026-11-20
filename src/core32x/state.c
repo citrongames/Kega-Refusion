@@ -29,6 +29,7 @@ static int valid_bus(const Kega32xBusState *s)
        (s->vdp[0]&~0x80ffu) || s->vdp[1]>1 || s->vdp[2]>255 ||
        (s->vdp[5]&~0xe003u) || s->vdp[6] || s->vdp[7] ||
        s->fifo_read>7 || s->fifo_write>7 || s->fifo_ready>3 || s->fifo_count>8 ||
+       s->vint_armed>3 || (s->vint_armed && !(s->vdp[5]&0x8000)) ||
        s->pending_fb>1 || (!(s->vdp[5]&2) && s->fill_end_mclk))return 0;
     for(i=0;i<2;i++) {
         unsigned command=(s->regs[1]&(1u<<i)) && (s->irq_mask[i]&2);
@@ -201,11 +202,12 @@ static void memory_read(Wire *w,Kega32xMemory *m)
 }
 int kega32x_state_encode(const Kega32xMachineState *s,void *output,size_t capacity)
 {
-    Kega32xControlState control;Wire w;uint32_t version=1,length=WIRE_BYTES-WIRE_HEADER,zero=0;
+    Kega32xControlState control;Wire w;uint32_t version=2,length=WIRE_BYTES-WIRE_HEADER,vint,zero=0;
     if(!s || !output || capacity<WIRE_BYTES || !kega32x_control_state_validate(&s->control) ||
        overlap(s,sizeof(*s),output,WIRE_BYTES))return 0;
-    control=s->control;memcpy(output,magic,8);
-    w=(Wire){output,NULL,8,WIRE_BYTES,0};u32(&w,&version);u32(&w,&length);u32(&w,&zero);u32(&w,&zero);
+    control=s->control;vint=control.bus.vint_armed;memcpy(output,magic,8);
+    /* V2 uses one reserved header word without shifting the existing payload. */
+    w=(Wire){output,NULL,8,WIRE_BYTES,0};u32(&w,&version);u32(&w,&length);u32(&w,&vint);u32(&w,&zero);
     control_wire(&w,&control);memory_write(&w,&s->memory);assert(w.position==WIRE_BYTES);return 1;
 }
 int kega32x_state_decode(Kega32xMachineState *s,const void *input,size_t size)
@@ -213,8 +215,10 @@ int kega32x_state_decode(Kega32xMachineState *s,const void *input,size_t size)
     Kega32xControlState control={0};Wire w;uint32_t version=0,length=0,zero1=0,zero2=0;
     if(!s || !input || size!=WIRE_BYTES || memcmp(input,magic,8) || overlap(s,sizeof(*s),input,size))return 0;
     w=(Wire){NULL,input,8,size,1};u32(&w,&version);u32(&w,&length);u32(&w,&zero1);u32(&w,&zero2);
-    if(version!=1 || length!=WIRE_BYTES-WIRE_HEADER || zero1 || zero2)return 0;
+    if((version!=1 && version!=2) || length!=WIRE_BYTES-WIRE_HEADER || zero2 ||
+       (version==1 ? zero1!=0 : zero1>3))return 0;
     control.version=KEGA32X_MACHINE_STATE_VERSION;control_wire(&w,&control);
+    control.bus.vint_armed=(uint8_t)zero1;
     if(!kega32x_control_state_validate(&control))return 0;
     /* All rejection paths precede the first destination write. */
     s->control=control;memory_read(&w,&s->memory);assert(w.position==WIRE_BYTES);return 1;

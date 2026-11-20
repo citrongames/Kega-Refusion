@@ -62,6 +62,12 @@ The 32X machine codec is explicit little-endian and pointer-free: 535743 bytes i
 
 Component checks cover SH2 instructions, IRQ/delay slots, wait/end-run behavior, self-modifying code, bounded cache eviction, safe interpreter fallback, side-effectful fetch rejection, FRT bulk-vs-step timing, DMA, bus/FIFO, PWM, rendering and state replay. Linux/Windows focused checks passed; new timer/idle cases also passed ASan/UBSan. This is not a claim of cycle-exact hardware validation.
 
+## IRQ and bus minimum timing update — 2026-11-20
+
+VINT supports one late enable per SH2 during the current VBlank. Its per-CPU gate is saved separately from pending IRQs: masking does not acknowledge an asserted interrupt, and repeated enable/clear cannot manufacture another event. The wire codec is now v2, using a formerly reserved header word; its size is unchanged and v1 still loads with the missing gate closed until the next VBlank.
+
+The synchronous SH2 bus accounts for documented lower-bound register transactions and blocking framebuffer reads. A 32-bit bus access consumes two 16-bit transfers. IRQ entry adds the serial SDRAM stack-transfer cost in both execution backends; local data-array stacks do not. Ordinary buffered SDRAM/framebuffer store issue remains unchanged. SDRAM instruction/data reads, caching, write-buffer visibility/pressure and contention remain approximate. Testpico CMD/VINT #53/#54 pass, raising the pinned test ROM from 46 to 48/57 with one skip. The deterministic recording/network ID gains `32x-irq-v1` only when 32X is attached. See [accuracy evidence](mega-drive-accuracy.md) for scene, speed and state checks.
+
 ## Remaining limits
 
 - Support is experimental. The small set of real-game checks does not establish every game's compatibility.

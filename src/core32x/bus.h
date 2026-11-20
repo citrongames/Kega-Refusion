@@ -20,6 +20,7 @@ typedef struct Kega32xBusState {
     uint16_t palette[256];
     uint16_t dreq_fifo[8];
     uint8_t irq_mask[2], irq_pending[2];
+    uint8_t vint_armed; /* Per-SH2 unconsumed enable opportunity in this VBlank. */
     uint8_t fifo_read, fifo_write, fifo_ready, fifo_count, pending_fb, hcount;
     uint64_t fill_end_mclk;
 } Kega32xBusState;

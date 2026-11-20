@@ -202,6 +202,21 @@ static int REGPARM(2) acknowledge_irq(SH2 *s, int level) {
     return (int)(vector & 255u);
 }
 
+/* SH7604 5.5: the 13-clock IRQ minimum assumes one clock for each
+ * stacked longword. Unlike ordinary buffered stores (5.7), these two
+ * exception-entry transfers are serial dependencies. 32X SDRAM needs
+ * two clocks per 16-bit word (Sega 4.4); local data-array storage does not.
+ * Called after the two pushes, with SP pointing at the saved PC. */
+void kega_sh2_irq_stack_wait(SH2 *s) {
+    if (!s->p_sdram) return;
+    unsigned extra=0;
+    for (unsigned i=0;i<2;i++) {
+        uint32_t address=s->r[15]+i*4u;
+        if ((address & 0xc6000000u)==0x06000000u) extra+=3;
+    }
+    if (extra) kega_sh2_add_wait_cycles(owner(s),extra);
+}
+
 static void take_irq(SH2 *s) {
     int level = s->pending_level;
     s->test_irq = 0;
@@ -210,6 +225,7 @@ static void take_irq(SH2 *s) {
         s->sr &= FLAGS;
         s->r[15] -= 4; write32(s, s->r[15], s->sr);
         s->r[15] -= 4; write32(s, s->r[15], s->pc);
+        kega_sh2_irq_stack_wait(s);
         s->sr = (s->sr & ~I) | ((uint32_t)level << 4);
         s->pc = read32(s, s->vbr + vector * 4);
         s->icount -= 13;
