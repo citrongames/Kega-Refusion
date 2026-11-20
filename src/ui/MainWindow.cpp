@@ -320,7 +320,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRegion(region_);
     gameGearLcdEnabled_ = !blarggFilter_ && settings_.value(QStringLiteral("view/gameGearLcd"), false).toBool();
     session_.setGameGearLcd(gameGearLcdEnabled_);
-    session_.setScreenBorders(settings_.value(QStringLiteral("view/showBorders"), false).toBool());
+    settings_.remove(QStringLiteral("view/showBorders"));
     session_.setSmsFmEnabled(smsFmEnabled_);
     session_.setFirecoreDmcPcm(settings_.value(QStringLiteral("audio/firecoreDmcPcm"), true).toBool());
     session_.setNukedYm2612(settings_.value(QStringLiteral("audio/ym2612Core"),
@@ -1089,20 +1089,6 @@ void MainWindow::buildMenus() {
     connect(integerAction, &QAction::toggled, this, [this](bool enabled) {
         view_->setIntegerScaling(enabled);
         settings_.setValue(QStringLiteral("view/integer"), enabled);
-    });
-    QAction* showBordersAction = viewMenu->addAction(Localization::text(QStringLiteral("Показывать края экрана")));
-    showBordersAction->setObjectName(QStringLiteral("showScreenBorders"));
-    showBordersAction->setCheckable(true);
-    showBordersAction->setEnabled(false);
-    connect(&session_, &EmulationSession::screenBordersAvailableChanged,
-            showBordersAction, &QAction::setEnabled);
-    connect(&session_, &EmulationSession::gameClosed, showBordersAction, [showBordersAction] {
-        showBordersAction->setEnabled(false);
-    });
-    showBordersAction->setChecked(settings_.value(QStringLiteral("view/showBorders"), false).toBool());
-    connect(showBordersAction, &QAction::toggled, this, [this](bool enabled) {
-        settings_.setValue(QStringLiteral("view/showBorders"), enabled);
-        session_.setScreenBorders(enabled);
     });
     QMenu* shaderMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Шейдер")));
     shaderMenu->setObjectName(QStringLiteral("shaderMenu"));

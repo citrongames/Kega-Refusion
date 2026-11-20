@@ -191,7 +191,6 @@ void EmulationSession::setDebugAudioGain(unsigned channel, unsigned percent) {
 void EmulationSession::setDebugBackdrop(quint32 rgb) { enqueue({Type::DebugBackdrop,{},int(rgb & 0xffffff)}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
 void EmulationSession::setGameGearLcd(bool enabled) { enqueue({Type::GameGearLcd,{},enabled ? 1 : 0}); }
-void EmulationSession::setScreenBorders(bool enabled) { enqueue({Type::ScreenBorders,{},int(enabled)}); }
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
 void EmulationSession::setPerGameCdBackup(bool enabled) { enqueue({Type::PerGameCdBackup,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
@@ -1092,7 +1091,7 @@ void EmulationSession::run() {
             // Export is a read-only pass over a fixed recording. GUI changes,
             // background pauses and input must not alter its deterministic timeline.
             if (videoExport && command.type != Type::VideoStop && command.type != Type::RunTimer &&
-                command.type != Type::InputDisplay && command.type != Type::ScreenBorders &&
+                command.type != Type::InputDisplay &&
                 command.type != Type::AchievementsResponse && command.type != Type::AchievementsRefresh)
                 continue;
             if ((command.type==Type::Load || command.type==Type::Close) && videoRecorder.accepting())
@@ -1494,7 +1493,6 @@ void EmulationSession::run() {
                     clearAudio();
                     resetMetrics();
                     emit gameLoaded(host.gamePath(),host.fps(),host.contentName(),host.controllerProfile());
-                    emit screenBordersAvailableChanged(host.screenBordersSupported());
                     emit stateSlotsChanged(-1,host.occupiedStateSlots());
                     emit pausedChanged(false);
                     pacer.reset(nowNs());
@@ -1729,9 +1727,6 @@ void EmulationSession::run() {
                 } else emit errorOccurred(error);
                 break;
             }
-            case Type::ScreenBorders:
-                if (!host.setScreenBorders(command.value != 0,error)) emit errorOccurred(error);
-                break;
             case Type::GameGearLcd:
                 if (!host.setGameGearLcd(command.value!=0,error)) emit errorOccurred(error);
                 break;
