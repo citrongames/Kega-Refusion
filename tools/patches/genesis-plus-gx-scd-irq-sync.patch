@@ -1,0 +1,119 @@
+Sega CD interrupt synchronization, shared by CD and CD+32X.
+Backports upstream 37b8bbd807f2b05a903664b958102319b4ec43ac and
+939ce4f045f981f89965f24780cef045cc5e52d7 (ekeeke, Genesis Plus GX).
+Extend the same IFL2 behavior to word access; do not release hardware stops.
+No state layout changes. CD-only deterministic execution ABI suffix.
+
+--- a/core/mem68k.c
++++ b/core/mem68k.c
+@@ -407,6 +407,13 @@
+           return scd.regs[0x0f>>1].byte.l;
+         }
+ 
++        /* SUB-CPU interrupt acknowledge can clear IFL2 between MAIN-CPU reads. */
++        if (index == 0x00)
++        {
++          s68k_sync();
++          return scd.regs[0x00>>1].byte.h;
++        }
++
+         /* default registers */
+         if (index < 0x30)
+         {
+@@ -582,6 +589,13 @@
+         if (index == 0x04)
+         {
+           return (scd.regs[index >> 1].byte.h << 8);
++        }
++
++        /* SUB-CPU interrupt acknowledge can clear IFL2 between MAIN-CPU reads. */
++        if (index == 0x00)
++        {
++          s68k_sync();
++          return scd.regs[0x00>>1].w;
+         }
+ 
+         /* default registers */
+@@ -714,8 +728,9 @@
+               /* level 2 interrupt enabled ? */
+               if (scd.regs[0x32>>1].byte.l & 0x04)
+               {
+-                /* sync SUB-CPU with MAIN-CPU (fixes Earnest Evans, Fhey Area) */
+-                s68k_sync();
++                /* Wake register-poll idle on IRQ, but preserve hardware bus/reset stops. */
++                if (!(s68k.stopped & 7))
++                  m68k_poll_sync(0xfffffff8);
+ 
+                 /* set IFL2 flag */
+                 scd.regs[0x00].byte.h |= 0x01;
+@@ -1174,6 +1189,10 @@
+               /* level 2 interrupt enabled ? */
+               if (scd.regs[0x32>>1].byte.l & 0x04)
+               {
++                /* Word access raises the same IFL2 line after control bits settle. */
++                if (!(s68k.stopped & 7))
++                  m68k_poll_sync(0xfffffff8);
++
+                 /* set IFL2 flag */
+                 scd.regs[0x00].byte.h |= 0x01;
+ 
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3914,7 +3914,9 @@
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+ #define SMS_VDP_ABI(id) ((system_hw >= SYSTEM_MARKIII && system_hw < SYSTEM_MD) ? id "-sms-vdp-v1" : id)
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v6" : SMS_VDP_ABI(id))
++/* CD IRQ ordering changes execution, not the serialized state layout. */
++#define SCD_IRQ_ABI(id) ((system_hw == SYSTEM_MCD) ? id "-scd-irq-v1" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? SCD_IRQ_ABI(id "-md-vdp-v6") : SMS_VDP_ABI(id))
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
+@@ -3988,6 +3990,7 @@
+ }
+ 
+ #undef MD_FIFO_ABI
++#undef SCD_IRQ_ABI
+ #undef SMS_VDP_ABI
+ 
+ /* Hardware identification and cached decoded CD header for achievements.
+--- a/core/m68k/s68kcpu.c
++++ b/core/m68k/s68kcpu.c
+@@ -6,6 +6,7 @@
+ 
+ #define m68ki_cpu s68k
+ #define MUL (4)
++#define S68K_IRQ_AT_INSTRUCTION_END
+ 
+ /* ======================================================================== */
+ /* ================================ INCLUDES ============================== */
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -1204,7 +1204,25 @@
+   m68ki_set_ccr(value);
+   m68ki_set_s_flag((value >> 11) & 4);
+ 
+-  /* Check current IRQ status */
++  /* A lowered mask takes effect after the SR-writing instruction completes,
++   * not at its first cycle. Keep this on the rare SR/IRQ path: ordinary
++   * instructions need no additional polling or bookkeeping. */
++#ifdef S68K_IRQ_AT_INSTRUCTION_END
++  if (m68ki_cpu.cycle_end && (CPU_INT_LEVEL > FLAG_INT_MASK))
++  {
++    uint start = m68ki_cpu.cycles;
++    uint elapsed;
++    USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
++    elapsed = m68ki_cpu.cycles - start;
++    if (m68ki_cpu.cycles < m68ki_cpu.cycle_end)
++      m68ki_check_interrupts();
++    /* The runner accounts for the opcode once, after its handler returns.
++     * Preserve any exception cycles added by the IRQ above. A request past
++     * the run boundary remains pending for the next runner entry. */
++    m68ki_cpu.cycles -= elapsed;
++    return;
++  }
++#endif
+   m68ki_check_interrupts();
+ }
+ 
