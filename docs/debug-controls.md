@@ -53,3 +53,6 @@ Master volume is independent of diagnostic channel gains: `+`/`=` and `-`
 These keys are reserved from controller bindings. The normal master-volume
 preference is saved after a 400 ms quiet period or on exit; diagnostic masks,
 gains and backdrop are never written to settings.
+
+The agreed roadmap for future CPU debugging, memory and graphics viewers, and
+tracing is in [debugger-plan.md](debugger-plan.md). These are planned features.
