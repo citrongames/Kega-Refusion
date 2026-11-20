@@ -1,0 +1,14 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -623,6 +623,11 @@
+         reg[i] = temp_reg[i];
+       }
+ 
++      /* Match the live R7 write latch without replaying register side effects.
++       * Otherwise a subsequent write of zero skips the palette update after
++       * reset left border at zero, retaining the restored nonzero backdrop. */
++      border = reg[7] & 0x3f;
++
+       /* Rendering mode */
+       render_bg = render_bg_modes[((reg[0] & 0x02) | (reg[1] & 0x18)) >> 1];
+     }
