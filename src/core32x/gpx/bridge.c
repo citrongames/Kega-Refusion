@@ -457,13 +457,14 @@ static void blank_at(unsigned local)
 {
     unsigned phase=local%MCYCLES_PER_LINE;
     int hb=phase>=hblank_start() && phase<(unsigned)((reg[12]&1)?872:860);
-    int vb=ctx->line>=bitmap.viewport.h && ctx->line<lines_per_frame-1;
+    int vb=vdp_variable_raster ? (status&8)!=0 :
+        ctx->line>=bitmap.viewport.h && ctx->line<lines_per_frame-1;
     kega32x_bus_blank(kega32x_machine_bus(ctx->machine),vb,hb,ctx->frame_base+local);
 }
 void kegarefusion_32x_frame_start(int skip)
 {
     if(!ctx)return;
-    ctx->now=0;ctx->line=bitmap.viewport.h;ctx->line_start=0;
+    ctx->now=0;ctx->line=vdp_variable_raster ? v_counter : bitmap.viewport.h;ctx->line_start=0;
     ctx->skip_video=skip!=0;video_reset();
     /* Normally prepared at load/option change, outside scanline rendering.
        The fallback also covers an attachment whose caller omitted load setup. */
@@ -492,7 +493,8 @@ void kegarefusion_32x_line(int line,unsigned cycles)
     set_refresh_line(cycles);
     b=kega32x_machine_bus(ctx->machine);blank_at(cycles);
     if(line==lines_per_frame-1)ctx->hint_count=b->s.hcount;
-    if(line<bitmap.viewport.h || (b->s.sh2_control&0x80)) {
+    if((vdp_variable_raster ? !(status&8) && line<lines_per_frame-1 : line<bitmap.viewport.h) ||
+       (b->s.sh2_control&0x80)) {
         if(!ctx->hint_count) {ctx->hint_count=b->s.hcount;ctx->hint_due=ctx->frame_base+cycles+((reg[12]&1)?436:540);}
         else --ctx->hint_count;
     }

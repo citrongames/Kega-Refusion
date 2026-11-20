@@ -1,0 +1,217 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -166,7 +166,8 @@
+ static uint16 fifo[4];          /* FIFO ring-buffer */
+ static int fifo_idx;            /* FIFO write index */
+ static int fifo_byte_access;    /* FIFO byte access flag */
+-static int *fifo_timing;        /* FIFO slots timing table */
++static unsigned int fifo_first_byte[4]; /* Pending first lane of a two-slot write, or zero. */
++static const unsigned short *fifo_timing;        /* FIFO slots timing table */
+ static int hblank_start_cycle;  /* HBLANK flag set cycle */
+ static int hblank_end_cycle;    /* HBLANK flag clear cycle */
+ 
+@@ -185,7 +186,7 @@
+ };
+ 
+ /* FIFO access slots timings */
+-static const int fifo_timing_h32[] = 
++static const unsigned short fifo_timing_h32[] = 
+ {
+   230, 510, 810, 970, 1130, 1450, 1610, 1770, 2090, 2250, 2410, 2730, 2890, 3050, 3350, 3370,
+   MCYCLES_PER_LINE + 230, MCYCLES_PER_LINE + 510, MCYCLES_PER_LINE + 810, MCYCLES_PER_LINE + 970, 
+@@ -193,7 +194,7 @@
+   MCYCLES_PER_LINE + 2090, MCYCLES_PER_LINE + 2250, MCYCLES_PER_LINE + 2410, MCYCLES_PER_LINE + 2730 
+ };
+ 
+-static const int fifo_timing_h40[] = 
++static const unsigned short fifo_timing_h40[] = 
+ {
+   352, 820, 948, 1076, 1332, 1460, 1588, 1844, 1972, 2100, 2356, 2484, 2612, 2868, 2996, 3124, 3364, 3380,
+   MCYCLES_PER_LINE + 352, MCYCLES_PER_LINE + 820, MCYCLES_PER_LINE + 948, MCYCLES_PER_LINE + 1076, 
+@@ -383,7 +384,7 @@
+   max_sprite_pixels = 256;
+ 
+   /* default FIFO access slots timings */
+-  fifo_timing = (int *)fifo_timing_h32;
++  fifo_timing = fifo_timing_h32;
+ 
+   /* default VINT timing */
+   vint_cycle = VINT_H32_MCYCLE;
+@@ -759,6 +760,67 @@
+ #endif
+ }
+ 
++/* Slot starts from the VDP horizontal counter. A refresh reserves one
++ * slot on the RAM side; bus DMA also loses the following source read.
++ * H32 refresh phases are approximate (five refreshes per scanline). */
++unsigned int vdp_blank_slots(int h40, int dma, unsigned short *times)
++{
++  const uint8 *counter = h40 ? cycle2hc40 : cycle2hc32;
++  unsigned int n = 0;
++  int t;
++  for (t = 0; t < MCYCLES_PER_LINE; ++t)
++  {
++    int h = counter[t];
++    if (t && h == counter[t - 1]) continue;
++    if (h40 && h == 0xe4) continue; /* mid-slot H counter discontinuity */
++    int offset = h - (h40 ? 26 : 19);
++    int extra = h - (h40 ? 250 : 243);
++    if ((offset >= 0 && offset < (h40 ? 130 : 98) && (offset & 31) <= dma) ||
++        (extra >= 0 && extra <= dma)) continue;
++    times[n++] = t;
++  }
++  return n;
++}
++
++/* A display-enable edge changes the bandwidth available to entries already
++ * queued. Retain their order and only move byte lanes still outstanding. */
++static void fifo_display_edge(unsigned int cycles, int enabled)
++{
++  static unsigned short blank_slots[2][204];
++  static unsigned int blank_count[2];
++  const int h40 = reg[12] & 1;
++  const unsigned short *slots = fifo_timing;
++  unsigned int count = dma_timing[0][h40];
++  unsigned int line = cycles - cycles % MCYCLES_PER_LINE;
++  unsigned int at = cycles - line;
++  if (!enabled)
++  {
++    if (!blank_count[h40])
++      blank_count[h40] = vdp_blank_slots(h40, 0, blank_slots[h40]);
++    slots = blank_slots[h40];
++    count = blank_count[h40];
++  }
++  unsigned int lo = 0, hi = count;
++  while (lo < hi)
++  {
++    unsigned int mid = (lo + hi) >> 1;
++    if (slots[mid] <= at) lo = mid + 1;
++    else hi = mid;
++  }
++  for (unsigned int j = 0; j < 4; ++j)
++  {
++    unsigned int i = (fifo_idx + j) & 3;
++    if (fifo_cycles[i] <= cycles) continue;
++    if (lo == count) { line += MCYCLES_PER_LINE; lo = 0; }
++    if (fifo_first_byte[i] > cycles)
++    {
++      fifo_first_byte[i] = line + slots[lo++];
++      if (lo == count) { line += MCYCLES_PER_LINE; lo = 0; }
++    }
++    fifo_cycles[i] = line + slots[lo++];
++  }
++}
++
+ /* During active display a 68k DMA competes for the same four entries as CPU
+  * writes. Release the 68k when the last source word has entered the FIFO,
+  * leaving the outstanding video-side writes visible to status reads.
+@@ -792,6 +854,7 @@
+     }
+     /* VRAM takes two byte slots. The tables include the first slots of
+      * the next line for a word which straddles the line boundary. */
++    fifo_first_byte[index] = extra_slot ? line + fifo_timing[slot] : 0;
+     tail = line + fifo_timing[slot + extra_slot];
+     fifo_cycles[index] = tail;
+     ++count;
+@@ -2046,6 +2109,10 @@
+         }
+       }
+ 
++      if ((r & 0x40) && (d & 4) && !(status & 8) && !kr_firecore_active &&
++          !do_not_invalidate_tile_cache && fifo_cycles[(fifo_idx + 3) & 3] > cycles)
++        fifo_display_edge(cycles, d & 0x40);
++
+       /* Display status (modified during active display) */
+       if ((r & 0x40) && (v_counter < bitmap.viewport.h))
+       {
+@@ -2490,7 +2557,7 @@
+           max_sprite_pixels = 320;
+ 
+           /* FIFO access slots timings */
+-          fifo_timing = (int *)fifo_timing_h40;
++          fifo_timing = fifo_timing_h40;
+ 
+           /* VINT timing */
+           vint_cycle = VINT_H40_MCYCLE;
+@@ -2517,7 +2584,7 @@
+           max_sprite_pixels = 256;
+ 
+           /* FIFO access slots timings */
+-          fifo_timing = (int *)fifo_timing_h32;
++          fifo_timing = fifo_timing_h32;
+ 
+           /* VINT timing */
+           vint_cycle = VINT_H32_MCYCLE;
+@@ -2837,6 +2904,7 @@
+     while (cycles >= fifo_timing[slot]) slot++;
+ 
+     /* Update last FIFO entry read-out cycle */
++    fifo_first_byte[fifo_idx] = fifo_byte_access ? mcycles_vdp + fifo_timing[slot] : 0;
+     fifo_cycles[fifo_idx] = mcycles_vdp + fifo_timing[slot + fifo_byte_access];
+   }
+ 
+@@ -2940,6 +3008,7 @@
+       line += ((cycles - line) / MCYCLES_PER_LINE) * MCYCLES_PER_LINE;
+     cycles -= line;
+     while (cycles >= fifo_timing[slot]) slot++;
++    fifo_first_byte[fifo_idx] = fifo_byte_access ? line + fifo_timing[slot] : 0;
+     fifo_cycles[fifo_idx] = line + fifo_timing[slot + fifo_byte_access];
+   }
+ 
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -1207,31 +1207,11 @@
+   raster_last_line = raster_rows[0].line = raster_rows[1].line = -1;
+ }
+ 
+-/* Build once from the actual horizontal counter, including the longer H40
+- * sync clocks. A refresh costs both the refresh slot and its source read.
+- * H40 positions follow hardware measurements; H32 blank refresh phases
+- * are approximate (five refreshes per line). */
+-static void backdrop_slots(int h40)
+-{
+-  int n = 0, t;
+-  for (t = 0; t < MCYCLES_PER_LINE; ++t)
+-  {
+-    int h = hctab[t];
+-    if (t && h == hctab[t - 1]) continue;
+-    /* H40 jumps from dot $16C to $1C9 halfway through one slot. */
+-    if (h40 && h == 0xe4) continue;
+-    int refresh_pair = h40 ?
+-      ((h >= 26 && h <= 155 && ((h - 26) & 31) <= 1) || h == 250 || h == 251) :
+-      ((h >= 19 && h <= 116 && ((h - 19) & 31) <= 1) || h == 243 || h == 244);
+-    if (!refresh_pair && n < BACKDROP_WORDS) raster_slot[h40][n++] = t;
+-  }
+-  raster_slot_count[h40] = n;
+-}
+-
+ void backdrop_dma_begin(unsigned int cycle)
+ {
+   int h40 = reg[12] & 1;
+-  if (!raster_slot_count[h40]) backdrop_slots(h40);
++  if (!raster_slot_count[h40])
++    raster_slot_count[h40] = vdp_blank_slots(h40, 1, raster_slot[h40]);
+   raster_first = 0;
+   while (raster_first < raster_slot_count[h40] && raster_slot[h40][raster_first] < cycle)
+     ++raster_first;
+--- a/core/vdp_ctrl.h
++++ b/core/vdp_ctrl.h
+@@ -112,6 +112,7 @@
+ extern unsigned int vdp_68k_ctrl_r(unsigned int cycles, int z80_bus);
+ extern unsigned int vdp_z80_ctrl_r(unsigned int cycles);
+ extern unsigned int vdp_hvc_r(unsigned int cycles);
++extern unsigned int vdp_blank_slots(int h40, int dma, unsigned short *times);
+ extern void vdp_test_w(unsigned int data);
+ extern int vdp_68k_irq_ack(int int_level);
+ 
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3913,7 +3913,7 @@
+ }
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v4" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v5" : id)
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {

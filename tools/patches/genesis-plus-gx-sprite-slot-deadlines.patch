@@ -1,0 +1,423 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -638,6 +638,7 @@
+ static uint32 sprite_phase_revision[2];
+ static uint16 sprite_phase_link[2][MAX_SPRITES_PER_LINE];
+ static uint8 sprite_phase_pending;
++static uint8 sprite_phase_next[2];
+ 
+ 
+ /* Sprite Collision Info */
+@@ -4790,6 +4791,7 @@
+   /* Update sprite count for next line (line value already incremented) */
+   object_count[line & 1] = count;
+   sprite_phase_revision[phase_bank] = kega_vdp_sat_revision;
++  sprite_phase_next[phase_bank] = 0;
+   sprite_phase_pending |= 1u << phase_bank;
+ }
+ 
+@@ -4884,20 +4886,24 @@
+   /* Update sprite count for next line (line value already incremented) */
+   object_count[(line >> 1) & 1] = count;
+   sprite_phase_revision[phase_bank] = kega_vdp_sat_revision;
++  sprite_phase_next[phase_bank] = 0;
+   sprite_phase_pending |= 1u << phase_bank;
+ }
+ 
+ 
+-/* Phase 1 already built the common, unchanged-SAT result. Re-fetch only
+- * after an intervening SAT/cache write or base-register change. No CPU slice
+- * is added: this completes immediately after the existing line execution. */
+-void render_sprite_phase2(void)
+-{
+-  int i, line = v_counter + 1;
++/* The horizontal counter places the sprite attribute fetch four bus slots
++ * after the first active external slot, then every eight slots. Visible
++ * sprites occupy the last slots of the twenty-entry (H40) or sixteen-entry
++ * (H32) shift register. */
++#define PHASE2_H40_LAST 3316
++#define PHASE2_H32_LAST 3290
++#define PHASE2_H40_STEP 128
++#define PHASE2_H32_STEP 160
++
++static void render_sprite_phase2_until(int cycles)
++{
++  int i, count, end, line = v_counter + 1;
+   unsigned int bank, pending;
+-  object_info_t *objects;
+-  uint16 *q = (uint16 *)&sat[0];
+-  uint16 *p = (uint16 *)&vram[satb];
+   if (!(reg[1] & 4) || kr_firecore_active)
+   {
+     sprite_phase_pending = 0;
+@@ -4909,19 +4915,55 @@
+   bank = line & 1;
+   pending = 1u << bank;
+   if (!(sprite_phase_pending & pending)) return;
+-  sprite_phase_pending &= ~pending;
++  count = object_count[bank];
++  i = sprite_phase_next[bank];
++  end = count;
++  if (cycles < MCYCLES_PER_LINE)
++  {
++    const int h40 = reg[12] & 1;
++    const int slots = h40 ? 20 : 16;
++    const int used = count < slots ? count : slots;
++    const int last = h40 ? PHASE2_H40_LAST : PHASE2_H32_LAST;
++    const int step = h40 ? PHASE2_H40_STEP : PHASE2_H32_STEP;
++    const int first = last - (used - 1) * step;
++    if (cycles < first) return;
++    end = 1 + (cycles - first) / step;
++    if (end > used) end = used;
++  }
++  if (end == count) sprite_phase_pending &= ~pending;
++  if (i >= end) return;
++  sprite_phase_next[bank] = end;
++
++  /* The initial list already contains the attributes for an unmodified SAT.
++   * Fetch only the outstanding entries whose slots have now elapsed. */
+   if (sprite_phase_revision[bank] == kega_vdp_sat_revision) return;
+-  objects = obj_info[bank];
+-  for (i = 0; i < object_count[bank]; i++)
++
++  const uint16 *q = (uint16 *)&sat[0];
++  const uint16 *p = (uint16 *)&vram[satb];
++  const unsigned int target = im2_flag ? ((line + 0x80) << 1) + odd_frame : line + 0x80;
++  for (; i < end; i++)
+   {
+     const unsigned int link = sprite_phase_link[bank][i];
+-    const unsigned int target = im2_flag ? ((line + 0x80) << 1) + odd_frame : line + 0x80;
+-    object_info_t *object = &objects[i];
++    object_info_t *object = &obj_info[bank][i];
+     object->ypos = (target - q[link]) & (im2_flag ? 0x3f : 0x1f);
+     object->size = (q[link + 1] >> 8) & 15;
+     object->attr = p[link + 2];
+     object->xpos = p[link + 3] & 0x1ff;
+   }
++}
++
++/* Slot order matters only when a port is about to mutate the SAT. Finalize
++ * the elapsed slots against the pre-write state, leaving later ones pending. */
++void render_sprite_phase2_before(unsigned int cycles)
++{
++  if (sprite_phase_pending && (int)(cycles - mcycles_vdp) >= 884)
++    render_sprite_phase2_until((int)(cycles - mcycles_vdp));
++}
++
++void render_sprite_phase2(void)
++{
++  if (sprite_phase_pending)
++    render_sprite_phase2_until(MCYCLES_PER_LINE);
+ }
+ 
+ /*--------------------------------------------------------------------------*/
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -116,6 +116,7 @@
+ extern void render_line(int line);
+ extern uint32 kega_vdp_sat_revision;
+ extern void render_sprite_phase2(void);
++extern void render_sprite_phase2_before(unsigned int cycles);
+ extern void blank_line(int line, int offset, int width);
+ extern void remap_line(int line);
+ extern void window_clip(unsigned int data, unsigned int sw);
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -138,16 +138,16 @@
+ static void vdp_z80_data_w_ms(unsigned int data);
+ static void vdp_z80_data_w_gg(unsigned int data);
+ static void vdp_z80_data_w_sg(unsigned int data);
+-static void vdp_bus_w(unsigned int data);
++static void vdp_bus_w(unsigned int data, unsigned int cycles);
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles);
+ static void vdp_update_md_rendering_mode(unsigned int cycles);
+ static void vdp_firecore_palette_refresh(void);
+ static void vdp_firecore_cram_w(unsigned int data);
+-static void vdp_dma_68k_ext(unsigned int length);
+-static void vdp_dma_68k_ram(unsigned int length);
+-static void vdp_dma_68k_io(unsigned int length);
+-static void vdp_dma_copy(unsigned int length);
+-static void vdp_dma_fill(unsigned int length);
++static void vdp_dma_68k_ext(unsigned int length, unsigned int cycles);
++static void vdp_dma_68k_ram(unsigned int length, unsigned int cycles);
++static void vdp_dma_68k_io(unsigned int length, unsigned int cycles);
++static void vdp_dma_copy(unsigned int length, unsigned int cycles);
++static void vdp_dma_fill(unsigned int length, unsigned int cycles);
+ 
+ /* Tables that define the playfield layout */
+ static const uint8 hscroll_mask_table[] = { 0x00, 0x07, 0xF8, 0xFF };
+@@ -215,7 +215,7 @@
+ };
+ 
+ /* DMA processing functions (set by VDP register 23 high nibble) */
+-static void (*const dma_func[16])(unsigned int length) =
++static void (*const dma_func[16])(unsigned int length, unsigned int cycles) =
+ {
+   /* 0x0-0x3 : DMA from 68k bus $000000-$7FFFFF (external area) */
+   vdp_dma_68k_ext,vdp_dma_68k_ext,vdp_dma_68k_ext,vdp_dma_68k_ext,
+@@ -1050,11 +1050,11 @@
+         v_counter < bitmap.viewport.h && dma_bytes <= 198)
+     {
+       backdrop_dma_begin(cycles - mcycles_vdp);
+-      dma_func[reg[23] >> 4](dma_bytes);
++      dma_func[reg[23] >> 4](dma_bytes, cycles);
+       backdrop_dma_end();
+     }
+     else
+-      dma_func[reg[23] >> 4](dma_bytes);
++      dma_func[reg[23] >> 4](dma_bytes, cycles);
+ 
+     /* Check if DMA is finished */
+     if (!dma_length)
+@@ -1085,7 +1085,7 @@
+ /* Control port access functions                                            */
+ /*--------------------------------------------------------------------------*/
+ 
+-void vdp_68k_ctrl_w(unsigned int data)
++static void vdp_68k_ctrl_w_at(unsigned int data, unsigned int cycles)
+ {
+   /* Check pending flag */
+   if (pending == 0)
+@@ -1112,7 +1112,10 @@
+     if ((data & 0xC000) == 0x8000)
+     {
+       /* VDP register write */
+-      vdp_reg_w((data >> 8) & 0x1F, data & 0xFF, m68k.cycles);
++      /* Only sprite phase-2 registers need the issuing Z80 timestamp here.
++         Other control/DMA scheduling retains its existing clock. */
++      const unsigned int r = (data >> 8) & 0x1F;
++      vdp_reg_w(r, data & 0xFF, (r == 5 || r == 12) ? cycles : m68k.cycles);
+     }
+     else
+     {
+@@ -1231,6 +1234,17 @@
+ }
+ 
+ /* Mega Drive VDP control port specific (MS compatibility mode) */
++void vdp_68k_ctrl_w(unsigned int data)
++{
++  vdp_68k_ctrl_w_at(data, m68k.cycles);
++}
++
++void vdp_zbank_ctrl_w(unsigned int data)
++{
++  vdp_68k_ctrl_w_at(data, kr_firecore_active ? m68k.cycles : Z80.cycles);
++}
++
++
+ void vdp_z80_ctrl_w(unsigned int data)
+ {
+   switch (pending)
+@@ -2440,7 +2454,11 @@
+ 
+     case 5: /* Sprite Attribute Table Base */
+     {
+-      if (reg[5] != d) ++kega_vdp_sat_revision;
++      if (reg[5] != d)
++      {
++        render_sprite_phase2_before(cycles);
++        ++kega_vdp_sat_revision;
++      }
+       reg[5] = d;
+       satb = vdp_firecore_table((d << 9) & sat_base_mask);
+ 
+@@ -2549,6 +2567,8 @@
+     {
+       /* Look for changed bits */
+       r = d ^ reg[12];
++      if (r & 0x01)
++        render_sprite_phase2_before(cycles);
+       reg[12] = d;
+ 
+       /* Shadow & Highlight mode */
+@@ -2740,7 +2760,7 @@
+        | (address & 0x3fc) | ((address & 0x1f800) >> 1);
+ }
+ 
+-static void vdp_bus_w(unsigned int data)
++static void vdp_bus_w(unsigned int data, unsigned int cycles)
+ {
+   /* write data to next FIFO entry */
+   fifo[fifo_idx] = data;
+@@ -2759,6 +2779,7 @@
+         /* The on-chip sprite cache sees both lanes before the external RAM. */
+         if ((index & sat_base_mask) == satb && !(reg[5] & 0x80))
+         {
++          render_sprite_phase2_before(cycles);
+           ++kega_vdp_sat_revision;
+           WRITE_BYTE(sat, index & sat_addr_mask, data);
+           WRITE_BYTE(sat, (index & sat_addr_mask) ^ 1, data >> 8);
+@@ -2791,6 +2812,7 @@
+       if ((index & sat_base_mask) == satb &&
+           (kr_firecore_active || !((addr ^ ((unsigned)reg[5] << 9)) & 0x10000)))
+       {
++        render_sprite_phase2_before(cycles);
+         ++kega_vdp_sat_revision;
+         /* Update internal SAT */
+         *(uint16 *) &sat[index & sat_addr_mask] = data;
+@@ -3022,16 +3044,18 @@
+   /* Clear pending flag */
+   pending = 0;
+ 
++  const int md_z80 = z80_bus && !kr_firecore_active;
++  unsigned int bus_cycles = md_z80 ? Z80.cycles : m68k.cycles;
++
+   /* Restricted VDP writes during active display */
+   if (!(status & 8) && (reg[1] & 0x40))
+   {
+     int slot = 0;
+ 
+     /* Timestamp the bus access on the issuing CPU. */
+-    int md_z80 = z80_bus && !kr_firecore_active;
+-    int cycles = md_z80 ? Z80.cycles : m68k.cycles;
+     if (!kr_firecore_active && !md_z80)
+-      cycles += fifo_68k_access_offset(m68k_cycles());
++      bus_cycles += fifo_68k_access_offset(m68k_cycles());
++    int cycles = bus_cycles;
+ 
+     /* Check against last FIFO entry read-out cycle */
+     if (cycles < fifo_cycles[(fifo_idx + 3) & 3])
+@@ -3042,10 +3066,14 @@
+         /* FIFO is full, 68k waits until oldest FIFO entry is processed (Chaos Engine / Soldiers of Fortune, Double Clutch, Titan Overdrive Demo) */
+         if (kr_firecore_active)
+           m68k.cycles = ((fifo_cycles[fifo_idx] + 6) / 7) * 7;
+-        else if (md_z80)
+-          Z80.cycles += ((fifo_cycles[fifo_idx] - cycles + 14) / 15) * 15;
+         else
+-          m68k.cycles += ((fifo_cycles[fifo_idx] - cycles + 6) / 7) * 7;
++        {
++          const int quantum = md_z80 ? 15 : 7;
++          const int stall = ((fifo_cycles[fifo_idx] - cycles + quantum - 1) / quantum) * quantum;
++          if (md_z80) Z80.cycles += stall;
++          else m68k.cycles += stall;
++          bus_cycles += stall;
++        }
+       }
+ 
+       /* FIFO is not empty, next FIFO entry will be processed after last FIFO entry */
+@@ -3063,7 +3091,7 @@
+   }
+ 
+   /* Write data */
+-  vdp_bus_w(data);
++  vdp_bus_w(data, bus_cycles);
+ 
+   /* Check if DMA Fill is pending */
+   if (dmafill)
+@@ -3314,6 +3342,7 @@
+       /* Intercept writes to Sprite Attribute Table */
+       if ((index & sat_base_mask) == satb)
+       {
++        render_sprite_phase2_before(Z80.cycles);
+         ++kega_vdp_sat_revision;
+         /* Update internal SAT */
+         WRITE_BYTE(sat, index & sat_addr_mask, data);
+@@ -3679,7 +3708,7 @@
+ /*--------------------------------------------------------------------------*/
+ 
+ /* DMA from 68K bus: $000000-$7FFFFF (external area) */
+-static void vdp_dma_68k_ext(unsigned int length)
++static void vdp_dma_68k_ext(unsigned int length, unsigned int cycles)
+ {
+   uint16 data;
+ 
+@@ -3711,7 +3740,7 @@
+       source = (reg[23] << 17) | (source & 0x1FFFF);
+ 
+     /* Write data word to VRAM, CRAM or VSRAM */
+-    vdp_bus_w(data);
++    vdp_bus_w(data, cycles);
+   }
+   while (--length);
+ 
+@@ -3720,7 +3749,7 @@
+ }
+ 
+ /* DMA from 68K bus: $800000-$FFFFFF (internal area) except I/O area */
+-static void vdp_dma_68k_ram(unsigned int length)
++static void vdp_dma_68k_ram(unsigned int length, unsigned int cycles)
+ {
+   uint16 data;
+ 
+@@ -3745,7 +3774,7 @@
+       source = (reg[23] << 17) | (source & 0x1FFFF);
+ 
+     /* Write data word to VRAM, CRAM or VSRAM */
+-    vdp_bus_w(data);
++    vdp_bus_w(data, cycles);
+   }
+   while (--length);
+ 
+@@ -3754,7 +3783,7 @@
+ }
+ 
+ /* DMA from 68K bus: $A00000-$A1FFFF (I/O area) specific */
+-static void vdp_dma_68k_io(unsigned int length)
++static void vdp_dma_68k_io(unsigned int length, unsigned int cycles)
+ {
+   uint16 data;
+ 
+@@ -3799,7 +3828,7 @@
+       source = (reg[23] << 17) | (source & 0x1FFFF);
+ 
+     /* Write data to VRAM, CRAM or VSRAM */
+-    vdp_bus_w(data);
++    vdp_bus_w(data, cycles);
+   }
+   while (--length);
+ 
+@@ -3808,7 +3837,7 @@
+ }
+ 
+ /*  VRAM Copy */
+-static void vdp_dma_copy(unsigned int length)
++static void vdp_dma_copy(unsigned int length, unsigned int cycles)
+ {
+   /* CD4 should be set (CD0-CD3 ignored) otherwise VDP locks (hard reset needed) */
+   if (code & 0x10)
+@@ -3827,6 +3856,7 @@
+       /* Intercept writes to Sprite Attribute Table */
+       if ((addr & sat_base_mask) == satb)
+       {
++        render_sprite_phase2_before(cycles);
+         ++kega_vdp_sat_revision;
+         /* Update internal SAT */
+         WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
+@@ -3852,7 +3882,7 @@
+ }
+ 
+ /* DMA Fill */
+-static void vdp_dma_fill(unsigned int length)
++static void vdp_dma_fill(unsigned int length, unsigned int cycles)
+ {
+   /* Check destination code (CD0-CD3) */
+   switch (code & 0x0F)
+@@ -3869,6 +3899,7 @@
+         /* Intercept writes to Sprite Attribute Table */
+         if ((addr & sat_base_mask) == satb)
+         {
++          render_sprite_phase2_before(cycles);
+           ++kega_vdp_sat_revision;
+           /* Update internal SAT */
+           WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
+--- a/core/vdp_ctrl.h
++++ b/core/vdp_ctrl.h
+@@ -115,6 +115,7 @@
+ extern int vdp_context_load(uint8 *state);
+ extern void vdp_dma_update(unsigned int cycles);
+ extern void vdp_68k_ctrl_w(unsigned int data);
++extern void vdp_zbank_ctrl_w(unsigned int data);
+ extern void vdp_z80_ctrl_w(unsigned int data);
+ extern void vdp_sms_ctrl_w(unsigned int data);
+ extern void vdp_tms_ctrl_w(unsigned int data);
+--- a/core/membnk.c
++++ b/core/membnk.c
+@@ -288,7 +288,7 @@
+ 
+     case 0x04:  /* Control port */
+     {
+-      vdp_68k_ctrl_w(data << 8 | data);
++      vdp_zbank_ctrl_w(data << 8 | data);
+       return;
+     }
+ 

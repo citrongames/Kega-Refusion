@@ -1,0 +1,260 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -633,6 +633,14 @@
+ /* Sprite Counter */
+ static uint8 object_count[2];
+ 
++/* Transient per-line phase 1 selection; completed object lists retain the
++ * existing native layout. Ordinary rows need no second attribute fetch. */
++uint32 kega_vdp_sat_revision;
++static uint32 sprite_phase_revision[2];
++static uint16 sprite_phase_link[2][MAX_SPRITES_PER_LINE];
++static uint8 sprite_phase_pending;
++
++
+ /* Sprite Collision Info */
+ uint16 spr_col;
+ 
+@@ -664,7 +672,7 @@
+     flipx  = (i >> 8) & 1;
+     flipy  = (i >> 9) & 1;
+ 
+-    if ((vrow > height) || vcol > width)
++    if (vcol > width)
+     {
+       /* Invalid settings (unused) */
+       name_lut[i] = -1;
+@@ -673,7 +681,7 @@
+     {
+       /* Adjust column & row index if sprite is flipped */
+       if(flipx) vcol = (width - vcol);
+-      if(flipy) vrow = (height - vrow);
++      if(flipy) vrow = (height - vrow) & 3;
+ 
+       /* Pattern offset (pattern order is up->down->left->right) */
+       name_lut[i] = vrow + (vcol * (height + 1));
+@@ -4744,6 +4752,8 @@
+   /* Sprite list for next line */
+   object_info_t *object_info = obj_info[(line + 1) & 1];
+ 
++  const int phase_bank = (line + 1) & 1;
++
+   /* Adjust line offset */
+   line += 0x81;
+ 
+@@ -4780,6 +4790,8 @@
+         object_info->ypos  = ypos;
+         object_info->size  = size & 0x0f;
+ 
++        sprite_phase_link[phase_bank][count] = link;
++
+         /* Increment Sprite count */
+         ++count;
+ 
+@@ -4798,6 +4810,8 @@
+ 
+   /* Update sprite count for next line (line value already incremented) */
+   object_count[line & 1] = count;
++  sprite_phase_revision[phase_bank] = kega_vdp_sat_revision;
++  sprite_phase_pending |= 1u << phase_bank;
+ }
+ 
+ void parse_satb_m5_im2(int line)
+@@ -4831,6 +4845,8 @@
+ 
+   /* Sprite list for next line */
+   object_info_t *object_info = obj_info[(line + 1) & 1];
++
++  const int phase_bank = (line + 1) & 1;
+ 
+   /* Adjust line offset */
+   line = ((line + 0x81) << 1) + odd_frame;
+@@ -4868,6 +4884,8 @@
+         object_info->ypos  = ypos;
+         object_info->size  = size & 0x0f;
+ 
++        sprite_phase_link[phase_bank][count] = link;
++
+         /* Increment Sprite count */
+         ++count;
+ 
+@@ -4886,8 +4904,45 @@
+ 
+   /* Update sprite count for next line (line value already incremented) */
+   object_count[(line >> 1) & 1] = count;
+-}
+-
++  sprite_phase_revision[phase_bank] = kega_vdp_sat_revision;
++  sprite_phase_pending |= 1u << phase_bank;
++}
++
++
++/* Phase 1 already built the common, unchanged-SAT result. Re-fetch only
++ * after an intervening SAT/cache write or base-register change. No CPU slice
++ * is added: this completes immediately after the existing line execution. */
++void render_sprite_phase2(void)
++{
++  int i, line = v_counter + 1;
++  unsigned int bank, pending;
++  object_info_t *objects;
++  uint16 *q = (uint16 *)&sat[0];
++  uint16 *p = (uint16 *)&vram[satb];
++  if (!(reg[1] & 4) || kr_firecore_active)
++  {
++    sprite_phase_pending = 0;
++    return;
++  }
++  if (v_counter == lines_per_frame - 1) line = 0;
++  if (line >= bitmap.viewport.h) return;
++  bank = line & 1;
++  pending = 1u << bank;
++  if (!(sprite_phase_pending & pending)) return;
++  sprite_phase_pending &= ~pending;
++  if (sprite_phase_revision[bank] == kega_vdp_sat_revision) return;
++  objects = obj_info[bank];
++  for (i = 0; i < object_count[bank]; i++)
++  {
++    const unsigned int link = sprite_phase_link[bank][i];
++    const unsigned int target = im2_flag ? ((line + 0x80) << 1) + odd_frame : line + 0x80;
++    object_info_t *object = &objects[i];
++    object->ypos = (target - q[link]) & (im2_flag ? 0x3f : 0x1f);
++    object->size = (q[link + 1] >> 8) & 15;
++    object->attr = p[link + 2];
++    object->xpos = p[link + 3] & 0x1ff;
++  }
++}
+ 
+ /*--------------------------------------------------------------------------*/
+ /* Pattern cache update function                                            */
+@@ -5151,12 +5206,13 @@
+     unsigned int attr = link_wire_get32(in + i + 8), size = link_wire_get32(in + i + 12);
+     if (mode == 5)
+     {
+-      /* name_lut is indexed by size<<4; the row is relative to a live sprite. */
++      /* Phase 2 may re-fetch a row outside the height used by phase 1. */
+       if (size > 15 || xpos > 511 || attr > 0xffff ||
+-          ypos >= ((link_wire_get32(in + 40) ? 16u : 8u) * ((size & 3) + 1))) return;
++          ypos >= (link_wire_get32(in + 40) ? 64u : 32u)) return;
+     }
+     else if (xpos > 255 || attr > 255 || ypos > 15 || size > (mode == 4 ? 0u : 255u)) return;
+   }
++  sprite_phase_pending = 0;
+   object_count[0] = counts[0]; object_count[1] = counts[1];
+   spr_ovr = link_wire_get32(in + 16);
+   spr_col = link_wire_get32(in + 20);
+@@ -5192,6 +5248,8 @@
+ 
+ void render_reset(void)
+ {
++  sprite_phase_pending = 0;
++  kega_vdp_sat_revision = 0;
+   backdrop_frame(0);
+   if (!reset_do_not_clear_buffers)
+   {
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -2332,6 +2332,7 @@
+ 
+     case 5: /* Sprite Attribute Table Base */
+     {
++      if (reg[5] != d) ++kega_vdp_sat_revision;
+       reg[5] = d;
+       satb = vdp_firecore_table((d << 9) & sat_base_mask);
+ 
+@@ -2477,6 +2478,7 @@
+       /* Active display width */
+       if (r & 0x01)
+       {
++        ++kega_vdp_sat_revision;
+         if (d & 0x01)
+         {
+           /* Update display-dependant registers */
+@@ -2649,6 +2651,7 @@
+         /* The on-chip sprite cache sees both lanes before the external RAM. */
+         if ((index & sat_base_mask) == satb && !(reg[5] & 0x80))
+         {
++          ++kega_vdp_sat_revision;
+           WRITE_BYTE(sat, index & sat_addr_mask, data);
+           WRITE_BYTE(sat, (index & sat_addr_mask) ^ 1, data >> 8);
+         }
+@@ -2680,6 +2683,7 @@
+       if ((index & sat_base_mask) == satb &&
+           (kr_firecore_active || !((addr ^ ((unsigned)reg[5] << 9)) & 0x10000)))
+       {
++        ++kega_vdp_sat_revision;
+         /* Update internal SAT */
+         *(uint16 *) &sat[index & sat_addr_mask] = data;
+       }
+@@ -3201,6 +3205,7 @@
+       /* Intercept writes to Sprite Attribute Table */
+       if ((index & sat_base_mask) == satb)
+       {
++        ++kega_vdp_sat_revision;
+         /* Update internal SAT */
+         WRITE_BYTE(sat, index & sat_addr_mask, data);
+       }
+@@ -3713,6 +3718,7 @@
+       /* Intercept writes to Sprite Attribute Table */
+       if ((addr & sat_base_mask) == satb)
+       {
++        ++kega_vdp_sat_revision;
+         /* Update internal SAT */
+         WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
+       }
+@@ -3754,6 +3760,7 @@
+         /* Intercept writes to Sprite Attribute Table */
+         if ((addr & sat_base_mask) == satb)
+         {
++          ++kega_vdp_sat_revision;
+           /* Update internal SAT */
+           WRITE_BYTE(sat, (addr & sat_addr_mask) ^ 1, data);
+         }
+--- a/core/system.c
++++ b/core/system.c
+@@ -827,6 +827,8 @@
+     ssp1601_run(SVP_cycles);
+   }
+ 
++  render_sprite_phase2();
++
+   /* update VDP cycle count */
+   mcycles_vdp += MCYCLES_PER_LINE;
+ 
+@@ -895,6 +897,8 @@
+     {
+       ssp1601_run(SVP_cycles);
+     }
++
++    render_sprite_phase2();
+ 
+     /* update VDP cycle count */
+     mcycles_vdp += MCYCLES_PER_LINE;
+@@ -1213,6 +1217,8 @@
+     z80_run(mcycles_vdp + MCYCLES_PER_LINE);
+   }
+ 
++  render_sprite_phase2();
++
+   /* update VDP cycle count */
+   mcycles_vdp += MCYCLES_PER_LINE;
+ 
+@@ -1277,6 +1283,8 @@
+     {
+       z80_run(mcycles_vdp + MCYCLES_PER_LINE);
+     }
++
++    render_sprite_phase2();
+ 
+     /* update VDP cycle count */
+     mcycles_vdp += MCYCLES_PER_LINE;
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -114,6 +114,8 @@
+ extern void render_rewind_save(uint8 *out, unsigned int capacity);
+ extern void render_rewind_load(const uint8 *in, unsigned int capacity);
+ extern void render_line(int line);
++extern uint32 kega_vdp_sat_revision;
++extern void render_sprite_phase2(void);
+ extern void blank_line(int line, int offset, int width);
+ extern void remap_line(int line);
+ extern void window_clip(unsigned int data, unsigned int sw);

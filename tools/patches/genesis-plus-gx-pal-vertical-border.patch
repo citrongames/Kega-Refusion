@@ -1,0 +1,393 @@
+--- a/core/vdp_ctrl.h
++++ b/core/vdp_ctrl.h
+@@ -80,6 +80,10 @@
+ extern uint8 vdp_pal;
+ extern uint8 h_counter;
+ extern uint16 v_counter;
++extern uint16 vdp_frame_line;     /* Physical line at the next host frame boundary */
++extern uint8 vdp_variable_raster; /* PAL height transition scheduler is running */
++extern uint8 vdp_forgotten_border; /* Rendering and HINT continue during transfer blanking */
++extern uint8 vdp_vint_armed;      /* VINT comparator matched on this line */
+ extern uint16 vc_max;
+ extern uint16 vscroll;
+ extern uint16 lines_per_frame;
+@@ -88,6 +92,11 @@
+ extern uint32 hvc_latch;
+ extern uint32 vint_cycle;
+ extern const uint8 *hctab;
++
++static inline unsigned int vdp_live_height(void)
++{
++  return (reg[1] & 4) ? ((reg[1] & 8) ? 240 : 224) : 192;
++}
+ 
+ /* Function pointers */
+ enum { VDP_BUS_68K, VDP_BUS_Z80 };
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -108,6 +108,10 @@
+ uint8 vdp_pal;                    /* 1: PAL , 0: NTSC (default) */
+ uint8 h_counter;                  /* Horizontal counter */
+ uint16 v_counter;                 /* Vertical counter */
++uint16 vdp_frame_line;
++uint8 vdp_variable_raster;
++uint8 vdp_forgotten_border;
++uint8 vdp_vint_armed;
+ uint16 vc_max;                    /* Vertical counter overflow value */
+ uint16 lines_per_frame;           /* PAL: 313 lines, NTSC: 262 lines */
+ uint16 max_sprite_pixels;         /* Max. sprites pixels per line (parsing & rendering) */
+@@ -378,6 +382,10 @@
+   hctab = cycle2hc32;
+   vc_max = vc_table[0][vdp_pal];
+   v_counter = bitmap.viewport.h;
++  vdp_frame_line = 0;
++  vdp_variable_raster = 0;
++  vdp_vint_armed = 0;
++  vdp_forgotten_border = 0;
+   h_counter = 0xff;
+ 
+   /* default sprite pixel width */
+@@ -523,11 +531,23 @@
+ {
+   int bufferptr = 0;
+   uint16 legacy_addr = addr, legacy_latch = addr_latch;
++  uint8 state_code = code;
++  /* Mode 5 commands use bits 0-5. Record the next physical line in the
++   * reserved high bits, leaving the size and layout of native states intact.
++   * Code zero in the high bits denotes a reset or an older state. */
++  if (vdp_pal && (system_hw & SYSTEM_PBC) == SYSTEM_MD && !kr_firecore_active)
++  {
++    if (vdp_frame_line == 192) state_code |= 0x40;
++    if (vdp_frame_line == 224) state_code |= 0x80;
++    if (vdp_frame_line == 240) state_code |= 0xc0;
++  }
+   /* A split port write holds one byte or A16-A14. Bits 8-13 in the old
+-   * latch field were always zero, including when a Z80 command was pending. */
++   * latch field were always zero, including when a Z80 command was pending.
++   * Bit 11 stores the forgotten border independently of VBlank. */
+   if ((system_hw & SYSTEM_PBC) == SYSTEM_MD && !kr_firecore_active)
+     legacy_latch |= ((addr >> 4) & 0x1000) | ((addr_latch >> 3) & 0x2000)
+-                  | ((kega_vdp_test & 0x1c0) << 2);
++                  | ((kega_vdp_test & 0x1c0) << 2)
++                  | ((vdp_pal && vdp_forgotten_border) ? 0x0800 : 0);
+ 
+   save_param(sat, sizeof(sat));
+   save_param(vram, 0x10000);
+@@ -536,7 +556,7 @@
+   save_param(reg, sizeof(reg));
+   save_param(&legacy_addr, sizeof(legacy_addr));
+   save_param(&legacy_latch, sizeof(legacy_latch));
+-  save_param(&code, sizeof(code));
++  save_param(&state_code, sizeof(state_code));
+   save_param(&pending, sizeof(pending));
+   save_param(&status, sizeof(status));
+   save_param(&dmafill, sizeof(dmafill));
+@@ -631,6 +651,22 @@
+     kega_vdp_test = (legacy_latch >> 2) & 0x1c0;
+   }
+   load_param(&code, sizeof(code));
++  vdp_frame_line = 0;
++  vdp_variable_raster = 0;
++  vdp_vint_armed = 0;
++  vdp_forgotten_border = 0;
++  if (vdp_pal && (system_hw & SYSTEM_PBC) == SYSTEM_MD && !kr_firecore_active)
++  {
++    static const uint16 frame_line[4] = {0, 192, 224, 240};
++    vdp_frame_line = frame_line[code >> 6];
++    if (vdp_frame_line)
++    {
++      v_counter = vdp_frame_line - 1;
++      bitmap.viewport.changed |= 2;
++    }
++  }
++  if (vdp_frame_line) vdp_forgotten_border = (legacy_latch >> 11) & 1;
++  code &= 0x3f;
+   load_param(&pending, sizeof(pending));
+   load_param(&status, sizeof(status));
+   load_param(&dmafill, sizeof(dmafill));
+@@ -931,7 +967,13 @@
+     /* NOTE: DMA timings can not change during VBLANK because active display width cannot be modified. */
+     /* Indeed, writing VDP registers during DMA is either impossible (when doing DMA from 68k bus, CPU */
+     /* is locked) or will abort DMA operation (in case of DMA Fill or Copy). */
+-    dma_cycles = ((lines_per_frame - bitmap.viewport.h - 1) * MCYCLES_PER_LINE) - cycles;
++    if (vdp_variable_raster)
++    {
++      unsigned int blank_end = mcycles_vdp + (lines_per_frame - v_counter - 1) * MCYCLES_PER_LINE;
++      dma_cycles = (cycles < blank_end) ? blank_end - cycles : 0;
++    }
++    else
++      dma_cycles = ((lines_per_frame - bitmap.viewport.h - 1) * MCYCLES_PER_LINE) - cycles;
+   }
+   else
+   {
+@@ -1568,7 +1610,7 @@
+     {
+       if (v_counter == lines_per_frame - 2)
+         temp &= ~0x08;
+-      else if (v_counter == bitmap.viewport.h - 1)
++      else if (v_counter + 1 == (vdp_variable_raster || (vdp_pal && (reg[1] & 8)) ? vdp_live_height() : bitmap.viewport.h))
+         temp |= 0x08;
+     }
+   }
+@@ -1584,7 +1626,8 @@
+ 
+   /* Cycle-accurate VINT flag (Ex-Mutants, Tyrant / Mega-Lo-Mania, Marvel Land, Pacman 2 - New Adventures / Pac-Jr minigame) */
+   /* this allows VINT flag to be read just before vertical interrupt is being triggered */
+-  if ((v_counter == bitmap.viewport.h) && (cycles >= vint_cycle))
++  if ((vdp_variable_raster ? vdp_vint_armed : v_counter == bitmap.viewport.h) &&
++      (cycles >= vint_cycle))
+   {
+     /* check Z80 interrupt state to assure VINT has not already been triggered (and flag cleared) */
+     if (Z80.irq_state != ASSERT_LINE)
+@@ -2076,6 +2119,9 @@
+     {
+       /* Look for changed bits */
+       r = d ^ reg[1];
++      if (vdp_variable_raster && !(status & 8) && (d & reg[1] & 4) &&
++          (r & reg[1] & 8) && v_counter >= 224 && v_counter < 240)
++        vdp_forgotten_border = 1;
+       reg[1] = d;
+ 
+       /* 4K/16K address decoding */
+--- a/core/system.c
++++ b/core/system.c
+@@ -523,6 +523,164 @@
+   audio_reset();
+ }
+ 
++/* V28/V30 moves the VBlank comparator independently of the output
++ * viewport. When a write moves it behind the beam, VBlank is skipped and
++ * HINT keeps counting through the bottom border. Walk physical scanlines
++ * until the next output frame boundary, even if the two boundaries differ. */
++static void system_frame_variable(int do_skip, int cd)
++{
++  int line = vdp_frame_line ? vdp_frame_line : bitmap.viewport.h;
++  int active_end = bitmap.viewport.h;
++  int start = lines_per_frame - bitmap.viewport.y;
++  int end = active_end + bitmap.viewport.y;
++  int first = 1, wrapped = 0;
++  const int reset_line = v_counter == line;
++
++  vdp_variable_raster = 1;
++  status &= 0xFEED;
++  if (interlaced)
++  {
++    odd_frame ^= 1;
++    status |= odd_frame << 4;
++  }
++
++  do
++  {
++    const int last = line == lines_per_frame - 1;
++    const int height = vdp_live_height();
++    int blank, active, vblank_start;
++
++    if (line == 0)
++    {
++      /* A write during the preceding border can change the next viewport. */
++      vdp_forgotten_border = 0;
++      active_end = height;
++      if (bitmap.viewport.h != active_end)
++      {
++        bitmap.viewport.h = active_end;
++        bitmap.viewport.y = (config.overscan & 1) *
++          (height == 192 ? 24 * (vdp_pal + 1) :
++           height == 224 ? 8 + 24 * vdp_pal : 24 * vdp_pal);
++        bitmap.viewport.oh = active_end;
++        bitmap.viewport.changed |= 1;
++        start = lines_per_frame - bitmap.viewport.y;
++        end = active_end + bitmap.viewport.y;
++      }
++    }
++
++    v_counter = line;
++    vblank_start = !(status & 8) && line == height;
++    /* A forgotten border still blanks the video memory bus at the V30
++     * boundary. HINT and border rendering continue independently. */
++    if (vblank_start || (line == 240 && vdp_forgotten_border))
++      status |= 8;
++    blank = (status & 8) != 0;
++    active = !blank || vdp_forgotten_border;
++    vdp_vint_armed = line == height && !(first && reset_line);
++
++    if (last)
++    {
++      if (!active) h_counter = reg[10];
++      status &= ~8;
++    }
++#ifdef KEGAREFUSION_32X
++    if (kegarefusion_32x_attached)
++    {
++      if (first) kegarefusion_32x_frame_start(do_skip);
++      kegarefusion_32x_line(line, mcycles_vdp);
++    }
++#endif
++
++    if ((!blank || last || vblank_start || first ||
++         (line == 240 && vdp_forgotten_border)) && dma_length)
++      vdp_dma_update(mcycles_vdp);
++
++    if (line < end || line >= start)
++    {
++      if (!active)
++        blank_line(line, -bitmap.viewport.x, bitmap.viewport.w + 2 * bitmap.viewport.x);
++      else if (!do_skip)
++        render_line(line);
++    }
++    else if (active && !last && !do_skip && (reg[1] & 0x40))
++    {
++      /* Only overscan rows reach the framebuffer, but sprite evaluation
++       * continues through the open border. */
++      parse_satb(line);
++    }
++    if (last && (reg[1] & 0x40)) parse_satb(-1);
++
++    input_refresh();
++    if (active || vblank_start)
++    {
++      if (h_counter == 0)
++      {
++        if (active) h_counter = reg[10];
++        hint_pending = 0x10;
++        if (reg[0] & 0x10) m68k_update_irq(4);
++      }
++      else if (active)
++        --h_counter;
++    }
++    if (first) osd_input_update();
++
++    if (vdp_vint_armed)
++    {
++      unsigned int vint_at = mcycles_vdp + vint_cycle;
++#ifdef KEGAREFUSION_32X
++      if (kegarefusion_32x_attached)
++        kegarefusion_32x_run(vint_at);
++      else
++#endif
++        m68k_run(vint_at);
++      if (zstate == 1) z80_run(vint_at);
++      status |= 0x80;
++      vint_pending = 0x20;
++      if (reg[1] & 0x20) m68k_set_irq(6);
++      Z80.irq_state = ASSERT_LINE;
++    }
++
++    unsigned int line_end = mcycles_vdp + MCYCLES_PER_LINE;
++#ifdef KEGAREFUSION_32X
++    if (kegarefusion_32x_attached)
++      kegarefusion_32x_run(line_end);
++    else
++#endif
++    if (cd)
++      scd_update(line_end);
++    else
++      m68k_run(line_end);
++    if (zstate == 1) z80_run(line_end);
++    if (vdp_vint_armed || first) Z80.irq_state = CLEAR_LINE;
++    if (!cd && svp) ssp1601_run(SVP_cycles);
++    render_sprite_phase2();
++
++    mcycles_vdp = line_end;
++    first = 0;
++    if (++line == lines_per_frame)
++    {
++      line = 0;
++      wrapped = 1;
++    }
++  }
++  while (!wrapped || line != active_end);
++
++  vdp_frame_line = line;
++  vdp_vint_armed = 0;
++  vdp_variable_raster = 0;
++}
++
++static int vdp_variable_frame_required(void)
++{
++  if (!vdp_pal || kr_firecore_active || bitmap.viewport.h == 192) return 0;
++
++  /* The fixed path is valid for V28/Mode 4 at their usual boundary. V30
++   * must watch the live comparator because a write can move it to V28
++   * before or after line 224 has passed. */
++  return bitmap.viewport.h == 240 || vdp_forgotten_border ||
++    (vdp_frame_line && (vdp_frame_line != bitmap.viewport.h || (status & 8)));
++}
++
+ void system_frame_gen(int do_skip)
+ {
+   /* line counters */
+@@ -616,6 +774,12 @@
+     }
+   }
+ 
++  if (vdp_variable_frame_required())
++  {
++    system_frame_variable(do_skip, 0);
++    goto gen_frame_complete;
++  }
++
+ #ifdef KEGAREFUSION_32X
+   if (kegarefusion_32x_attached)
+     kegarefusion_32x_frame_start(do_skip);
+@@ -905,6 +1069,13 @@
+   }
+   while (++line < bitmap.viewport.h);
+ 
++  if (vdp_pal && !kr_firecore_active && bitmap.viewport.h == 224 && vdp_live_height() == 240)
++    vdp_frame_line = 224;
++  else
++    vdp_frame_line = 0;
++  vdp_forgotten_border = 0;
++
++gen_frame_complete:
+   /* check viewport changes */
+   if (bitmap.viewport.w != bitmap.viewport.ow)
+   {
+@@ -1018,6 +1189,12 @@
+     }
+   }
+ 
++  if (vdp_variable_frame_required())
++  {
++    system_frame_variable(do_skip, 1);
++    goto scd_frame_complete;
++  }
++
+ #ifdef KEGAREFUSION_32X
+   if (kegarefusion_32x_attached)
+     kegarefusion_32x_frame_start(do_skip);
+@@ -1291,6 +1468,13 @@
+   }
+   while (++line < bitmap.viewport.h);
+ 
++  if (vdp_pal && !kr_firecore_active && bitmap.viewport.h == 224 && vdp_live_height() == 240)
++    vdp_frame_line = 224;
++  else
++    vdp_frame_line = 0;
++  vdp_forgotten_border = 0;
++
++scd_frame_complete:
+   /* check viewport changes */
+   if (bitmap.viewport.w != bitmap.viewport.ow)
+   {
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -4904,7 +4904,8 @@
+     return;
+   }
+   if (v_counter == lines_per_frame - 1) line = 0;
+-  if (line >= bitmap.viewport.h) return;
++  if (line >= bitmap.viewport.h &&
++      (!vdp_variable_raster || ((status & 8) && !vdp_forgotten_border))) return;
+   bank = line & 1;
+   pending = 1u << bank;
+   if (!(sprite_phase_pending & pending)) return;
+@@ -5391,7 +5392,7 @@
+     }
+ 
+     /* Parse sprites for next line */
+-    if (line < (bitmap.viewport.h - 1))
++    if (vdp_variable_raster ? line < lines_per_frame - 1 : line < bitmap.viewport.h - 1)
+     {
+       parse_satb(line);
+     }
