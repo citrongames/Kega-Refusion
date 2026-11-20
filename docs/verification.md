@@ -445,3 +445,25 @@ Selecting bank 3 via FFFD kept the first KiB fixed and switched the rest of its 
 In Wave 1 of GG Aleste 3, replaying the SMS VDP registers during a restore marked 512 patterns dirty without keeping their queue. VRAM survived, but the renderer had no patterns to draw. Loading a pre-fix frame-1099 KRS now shows the correct paused preview. The next 100 images and PCM blocks match uninterrupted play. Rebuilding the seventh frame from the rewind checkpoint also matches. The SMS/GG rewind fixture now draws an actual tile so it can detect this failure.
 
 BOoM 1.1 (44,920 bytes, CRC32 `143AB50B`) needs a linear ROM window. The old core mapped CPU address $8000 to ROM offset $A000. Mirroring from the start of the upper window restores the title and arena. With Master Tap on port 1, two Right presses and button 1 select 4P MODE. From the same arena checkpoint, 12 frames of movement from each frontend slot changed only that player's sprite area: top left, top right, bottom left and bottom right respectively. The game also reads four independent input bytes at $DFA4–$DFA7.
+
+
+## Release 0.28.0 — 2026-11-20
+
+Published stable tag `v0.28.0` at `0dbd88b105e952ff90541fa423b6e6a883c82afc`, with English Added/Improved/Fixed/Changed notes. Windows and Linux application/core binaries were built in Release from `2468f907e6d09a51233bc1bea971adad7de6080d`; the final commit changes only Linux packaging. The final Linux package differs from the first candidate only in `run.sh` and its ownership manifest. Windows is unchanged. The corresponding-source archive records both build and packaging provenance.
+
+- Linux: Debian 12, GCC 12, Qt 6.4.2; package symbol audit passed the glibc 2.36 ceiling. Packaged application reports 0.28.0. Windows: MinGW/Qt 6.10.2 Release; packaged EXE contains the new application version. No Windows executable or UI was launched during this release check.
+- Prepublication testing found that the old Linux launcher invoked host `env`/`dirname` with inherited portable libraries. On Ubuntu 26.04, `/usr/bin/env` required `LIBSYSTEMD_254` unavailable in the bundled Debian library, so replacement completed but restart failed. The launcher now uses `/bin/sh` and shell builtins before directly executing the application. The actual unmodified 0.27.1 helper successfully restarts the fixed package under the same inherited environment.
+- The 0.27.1 archive engine extracted, preflighted and applied both actual release archives in isolated directories: all 69 Windows and 172 Linux manifest entries matched; 12 sentinel user files per platform remained byte-identical. Windows installation logic was exercised under Linux, not as a native Windows process.
+- After publication, the real UpdateService/UpdateInstaller code from tag 0.27.1 discovered 0.28.0 through the anonymous latest-release redirect and public update.json, displayed the exact English notes, downloaded and verified all 58,066,689 Linux archive bytes, and handed off to the stock old helper. Restart as 0.28.0 was observed, all 172 installed manifest entries and 12 user sentinels passed, and temporary update staging was removed. No test processes were left running.
+- The Windows archive was separately streamed from the public release URL and matched its 38,198,178-byte size and SHA-256. Public update.json and SHA256SUMS.txt matched the authored local files. All five published assets had matching GitHub SHA-256 digests. The release is stable, non-draft and latest.
+- Corresponding sources: 580 exact committed project files, 781 prepared-core files shared by both platforms, 87 managed patches and 30 dependency source artifacts; all 1,726 listed file checksums verified after archive creation. No fresh rebuild from the completed source archive is claimed.
+
+Final archive SHA-256:
+
+| Asset | SHA-256 |
+| --- | --- |
+| Windows x86-64 | `f0a2ab0404724cbd238fd04510b0758715d31cbef812b2cc239bd9f01e6f28c3` |
+| Linux x86-64 | `87b38dd16ef2edb9153e45729ca2d43c2a239be05ed02b2df454b60193f0851a` |
+| Corresponding source | `88d58da024f8d06ff65a7a37cabfcd9846690a61786601082c5a96f16e3a2fbc` |
+
+Evidence and final assets are retained under ignored `build/release-0.28.0/`, including updater-check-evidence.zip, source-verification.json, draft-verification.json and public-verification.json. The actual hardware/game checks preceding this packaging-only step are recorded in [the platform audit](platform-accuracy.md) and [accuracy investigation history](mega-drive-accuracy.md).
