@@ -180,12 +180,18 @@ def main() -> None:
         copy(source.resolve(), stage / "lib" / name)
 
     launcher = stage / "run.sh"
-    launcher.write_text("""#!/usr/bin/env bash
+    # The updater inherits the portable library path. Use only shell builtins
+    # before exec: host env/dirname can require newer bundled-library symbols.
+    launcher.write_text("""#!/bin/sh
 set -e
-here="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec env LD_LIBRARY_PATH="$here/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \\
-  QT_PLUGIN_PATH="$here/plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$here/plugins/platforms" \\
-  "$here/KegaRefusion" "$@"
+case "$0" in
+  */*) here=${0%/*} ;;
+  *) here=. ;;
+esac
+here="$(CDPATH= cd -- "$here" && pwd)"
+export LD_LIBRARY_PATH="$here/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="$here/plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$here/plugins/platforms"
+exec "$here/KegaRefusion" "$@"
 """, encoding="utf-8")
     launcher.chmod(0o755)
 
