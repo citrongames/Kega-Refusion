@@ -197,6 +197,7 @@ private:
     std::array<unsigned,MaxControllerPlayers> padMasks_{};
     std::array<unsigned,3> gunMasks_{};
     std::array<QPointF,3> gunAims_{{QPointF(.5,.5),QPointF(.5,.5),QPointF(.5,.5)}};
+    std::array<bool,3> gunAimOffscreen_{{true,true,true}};
     std::array<QPointF,3> mouseMotionRemainder_{};
     std::array<ControllerType,3> presentedControllerKinds_{};
     std::array<bool,3> presentedControllerConnected_{};

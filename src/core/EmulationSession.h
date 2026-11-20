@@ -8,6 +8,7 @@
 #include "../input/ControllerTopology.h"
 #include <QThread>
 #include <QImage>
+#include <QRectF>
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
@@ -36,6 +37,7 @@ public:
     void setRegion(int region);
     void setBlarggFilter(int filter);
     void setGameGearLcd(bool enabled);
+    void setScreenBorders(bool enabled);
     void setDebugMasks(quint32 video, quint64 audio);
     void setDebugBackdrop(quint32 rgb);
     void setDebugAudioGain(unsigned channel, unsigned percent);
@@ -47,7 +49,8 @@ public:
     void setFirecoreDmcPcm(bool enabled);
     void setNukedYm2612(bool enabled);
     void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
-    bool takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership = nullptr);
+    bool takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership = nullptr,
+                        QRectF* inputViewport = nullptr);
     void setSpriteOwnershipEnabled(bool enabled) { spriteOwnershipEnabled_.store(enabled); }
     void saveState(int slot);
     void loadState(int slot);
@@ -169,6 +172,7 @@ signals:
     void gameClosed();
     void masterSystemChanged(bool masterSystem);
     void gameGearChanged(bool gameGear);
+    void screenBordersAvailableChanged(bool available);
     void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
     void discStateChanged(const QStringList& paths, int index, bool ejected, bool megaLd);
     void pausedChanged(bool paused);
@@ -185,7 +189,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, ScreenBorders};
     struct Command {
         Type type;
         QString path;
@@ -207,10 +211,12 @@ private:
     std::atomic_bool networkWaiting_{false}, networkLinkCableDesired_{false};
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);
-    void publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {});
+    void publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {},
+                      const QRectF& inputViewport = {});
     QString corePath_, dataPath_;
     std::mutex mutex_, videoMutex_;
     QImage latestFrame_, latestSpriteOwnership_;
+    QRectF latestInputViewport_;
     std::atomic_bool spriteOwnershipEnabled_{false};
     double latestAspect_ = 4.0 / 3.0;
     bool videoPending_ = false, inputDisplayPending_ = false;

@@ -320,6 +320,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRegion(region_);
     gameGearLcdEnabled_ = !blarggFilter_ && settings_.value(QStringLiteral("view/gameGearLcd"), false).toBool();
     session_.setGameGearLcd(gameGearLcdEnabled_);
+    session_.setScreenBorders(settings_.value(QStringLiteral("view/showBorders"), false).toBool());
     session_.setSmsFmEnabled(smsFmEnabled_);
     session_.setFirecoreDmcPcm(settings_.value(QStringLiteral("audio/firecoreDmcPcm"), true).toBool());
     session_.setNukedYm2612(settings_.value(QStringLiteral("audio/ym2612Core"),
@@ -650,8 +651,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 
     connect(&session_, &EmulationSession::videoFrameReady, view_, [this] {
         QImage image, spriteOwnership; double ratio = 4.0 / 3.0;
-        if (session_.takeVideoFrame(image, ratio, &spriteOwnership))
-            view_->setFrame(image, ratio, spriteOwnership);
+        QRectF inputViewport;
+        if (session_.takeVideoFrame(image, ratio, &spriteOwnership, &inputViewport)) {
+            const QRectF previousViewport = view_->inputViewport();
+            view_->setFrame(image, ratio, spriteOwnership, inputViewport);
+            if (previousViewport != view_->inputViewport())
+                for (unsigned player = 0; player < MaxGunPlayers; ++player)
+                    updateGunAim(player,gunAims_[player],gunAimOffscreen_[player]);
+        }
     });
     connect(&session_, &EmulationSession::audioSamples, audio_, [this](const QByteArray& pcm, int rate) {
         audio_->play(pcm, rate);
@@ -1082,6 +1089,20 @@ void MainWindow::buildMenus() {
     connect(integerAction, &QAction::toggled, this, [this](bool enabled) {
         view_->setIntegerScaling(enabled);
         settings_.setValue(QStringLiteral("view/integer"), enabled);
+    });
+    QAction* showBordersAction = viewMenu->addAction(Localization::text(QStringLiteral("Показывать края экрана")));
+    showBordersAction->setObjectName(QStringLiteral("showScreenBorders"));
+    showBordersAction->setCheckable(true);
+    showBordersAction->setEnabled(false);
+    connect(&session_, &EmulationSession::screenBordersAvailableChanged,
+            showBordersAction, &QAction::setEnabled);
+    connect(&session_, &EmulationSession::gameClosed, showBordersAction, [showBordersAction] {
+        showBordersAction->setEnabled(false);
+    });
+    showBordersAction->setChecked(settings_.value(QStringLiteral("view/showBorders"), false).toBool());
+    connect(showBordersAction, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("view/showBorders"), enabled);
+        session_.setScreenBorders(enabled);
     });
     QMenu* shaderMenu = viewMenu->addMenu(Localization::text(QStringLiteral("Шейдер")));
     shaderMenu->setObjectName(QStringLiteral("shaderMenu"));
@@ -2901,9 +2922,16 @@ void MainWindow::updateGunAim(unsigned player, QPointF position, bool offscreen)
     position.setX(qBound(0.0,position.x(),1.0));
     position.setY(qBound(0.0,position.y(),1.0));
     gunAims_[player] = position;
+    gunAimOffscreen_[player] = offscreen;
+    const QRectF active = view_->inputViewport();
+    offscreen = offscreen || !active.contains(position);
+    // The cursor is in presentation coordinates. Record and send only aim
+    // relative to the active raster so every peer uses the same coordinates.
+    const double x = qBound(0.0,(position.x()-active.left())/active.width(),1.0);
+    const double y = qBound(0.0,(position.y()-active.top())/active.height(),1.0);
     view_->setLightgunAim(player,position,offscreen);
-    session_.setGunAim(player,int(std::lround(position.x()*65534-32767)),
-                       int(std::lround(position.y()*65534-32767)),offscreen);
+    session_.setGunAim(player,int(std::lround(x*65534-32767)),
+                       int(std::lround(y*65534-32767)),offscreen);
 }
 
 void MainWindow::updateGunConfiguration() {

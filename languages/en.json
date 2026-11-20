@@ -924,6 +924,7 @@
     "Формат скриншотов:": "Screenshot format:",
     "Формат счётчика записи и воспроизведения на экране игры.": "Format of the recording and playback counter over the game screen.",
     "Хост закрыл игру": "The host closed the game",
+    "Показывать края экрана": "Show screen borders",
     "Целочисленный масштаб": "Integer scaling",
     "Частые паузы: Hardcore отключён для этой сессии.": "Frequent pauses: Hardcore disabled for this session.",
     "Число без префикса — FPS эмуляции, с ~ — оценка FPS игры. Оценка учитывает кадры, в которых игра читает управление; частота игровой логики может отличаться. Оценка приведена к нормальной скорости игры. Счётчики включаются независимо от OSD.": "The plain number is emulation FPS; ~ marks the game FPS estimate. It counts frames in which the game polls input; the game logic rate may differ. The estimate is normalized to normal game speed. These counters work independently of OSD.",

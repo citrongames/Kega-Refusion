@@ -85,6 +85,7 @@ const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
 constexpr auto dmcPcmKey = "kegarefusion_firecore_dmc_pcm";
 constexpr char ym2612Key[] = "genesis_plus_gx_ym2612";
+constexpr char screenBordersKey[] = "genesis_plus_gx_overscan";
 const char* ym2612Model(bool nuked) { return nuked ? "nuked (ym2612)" : "mame (ym2612)"; }
 constexpr qsizetype runClockBytes = 24;
 constexpr char runClockMagic[] = "KRTIMER1";
@@ -227,6 +228,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->debug_gain = reinterpret_cast<decltype(api_->debug_gain)>(library_.resolve("retro_kegarefusion_debug_gain"));
     api_->debug_capabilities = reinterpret_cast<decltype(api_->debug_capabilities)>(library_.resolve("retro_kegarefusion_debug_capabilities"));
     api_->native_video_size = reinterpret_cast<decltype(api_->native_video_size)>(library_.resolve("retro_kegarefusion_native_video_size"));
+    api_->input_viewport = reinterpret_cast<decltype(api_->input_viewport)>(library_.resolve("retro_kegarefusion_input_viewport"));
     api_->sprite_hint_enable = reinterpret_cast<decltype(api_->sprite_hint_enable)>(library_.resolve("retro_kegarefusion_sprite_hint_enable"));
     api_->sprite_hint = reinterpret_cast<decltype(api_->sprite_hint)>(library_.resolve("retro_kegarefusion_sprite_hint"));
     api_->recording_video = reinterpret_cast<decltype(api_->recording_video)>(library_.resolve("retro_kegarefusion_recording_video"));
@@ -427,7 +429,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
         unload(); return false;
     }
     loaded_ = true;
-    if (!applyGameGearLcd(error)) { unload(); return false; }
+    if (!applyGameGearLcd(error) || !applyScreenBorders(error)) { unload(); return false; }
     snapshot32xBios();
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
@@ -526,7 +528,7 @@ bool LibretroHost::loadMegaLd(const QString& path, QString& error) {
         unload(); return false;
     }
     loaded_ = true;
-    if (!applyGameGearLcd(error)) { unload(); return false; }
+    if (!applyGameGearLcd(error) || !applyScreenBorders(error)) { unload(); return false; }
     setDebugBackdrop(debugBackdrop_); refreshRecordingIdentity();
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_)) {
@@ -747,7 +749,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     contentInfoActive_ = false;
     if (!accepted) { error = Localization::text(QStringLiteral("Genesis Plus GX не смог загрузить ROM.")); contentInfo_ = {}; coreContent_.clear(); content_.clear(); return false; }
     loaded_ = true;
-    if (!applyGameGearLcd(error)) { unload(); return false; }
+    if (!applyGameGearLcd(error) || !applyScreenBorders(error)) { unload(); return false; }
     snapshot32xBios();
     setDebugBackdrop(debugBackdrop_);
     refreshRecordingIdentity();
@@ -856,6 +858,9 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     // The next cartridge has not been detected yet. Never carry GG output
     // processing into another system; the local preference is applied after load.
     if (!setCoreOption("genesis_plus_gx_lcd_filter", "disabled", error)) return false;
+    // Apply the border preference only after identifying the next system.
+    if (variableValues_.count(screenBordersKey) &&
+        !setCoreOption(screenBordersKey, "disabled", error)) return false;
     // Firecore is a standalone console profile, including during movie resets.
     if (contentFirecore_) {
         if (!setCoreOption("genesis_plus_gx_add_on", "none", error)) return false;
@@ -1087,7 +1092,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
             unload(); return false;
         }
     }
-    if (!applyGameGearLcd(error)) { unload(); return false; }
+    if (!applyGameGearLcd(error) || !applyScreenBorders(error)) { unload(); return false; }
     snapshot32xBios();
     runClock_ = {};
     setDebugBackdrop(debugBackdrop_);
@@ -1309,6 +1314,25 @@ bool LibretroHost::setGameGearLcd(bool enabled, QString& error, bool* changed) {
     if (!applyGameGearLcd(error,&lcdChanged)) { localGameGearLcd_=previous; return false; }
     if (changed) *changed|=lcdChanged;
     return true;
+}
+bool LibretroHost::screenBordersSupported() const {
+    if (!loaded_ || contentFirecore_ || megaLd_ || !api_->system_hw || !api_->input_viewport)
+        return false;
+    const auto values = variableValues_.find(screenBordersKey);
+    return mdControllerHardware(api_->system_hw()) &&
+        values != variableValues_.end() && values->second.contains("full");
+}
+bool LibretroHost::applyScreenBorders(QString& error) {
+    error.clear();
+    return !variableValues_.count(screenBordersKey) ||
+        setCoreOption(screenBordersKey, screenBordersEnabled() ? "full" : "disabled", error);
+}
+bool LibretroHost::setScreenBorders(bool enabled, QString& error) {
+    const bool previous = localScreenBorders_;
+    localScreenBorders_ = enabled;
+    if (applyScreenBorders(error)) return true;
+    localScreenBorders_ = previous;
+    return false;
 }
 bool LibretroHost::setBlarggFilter(int filter, QString& error, bool* changed) {
     if (changed) *changed = false;
@@ -1594,6 +1618,20 @@ double LibretroHost::aspectRatio() const {
     return av_.geometry.base_height ? double(av_.geometry.base_width) / av_.geometry.base_height : 4.0 / 3.0;
 }
 QSize LibretroHost::nativeVideoSize() const { return VideoFrameGeometry::nativeSize(frame()); }
+QRectF LibretroHost::inputViewport() const {
+    const auto* h = linkPeer_ && linkPresentationRole_ == 2 ? linkPeer_.get() : this;
+    if (!screenBordersEnabled() || !h->loaded_ || !h->api_->input_viewport) return {};
+    const QSize raster = nativeVideoSize();
+    int x = 0, y = 0;
+    unsigned width = 0, height = 0;
+    if (!VideoFrameGeometry::validSize(raster) ||
+        !h->api_->input_viewport(&x,&y,&width,&height) ||
+        !width || !height || width > 4096 || height > 4096) return {};
+    const QRectF pixels(x,y,width,height);
+    if (!pixels.intersects(QRectF(0,0,raster.width(),raster.height()))) return {};
+    return QRectF(double(x)/raster.width(), double(y)/raster.height(),
+                 double(width)/raster.width(), double(height)/raster.height());
+}
 bool LibretroHost::setRecordingVideoEnabled(bool enabled) {
     if (enabled && !loaded_) return false;
     if (initialized_ && api_->recording_video && api_->recording_frame) {
@@ -2463,6 +2501,8 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     // hardware and of the remote host's display settings.
     newOptions["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     newOptions["genesis_plus_gx_lcd_filter"] = gameGearLcdEnabled() ? "enabled" : "disabled";
+    if (const auto borders = newOptions.find(screenBordersKey); borders != newOptions.end())
+        borders->second = screenBordersEnabled() ? "full" : "disabled";
     if (changedOptions) {
         if (!movieCompatibilityWarning_.isEmpty()) movieCompatibilityWarning_ += QLatin1Char('\n');
         movieCompatibilityWarning_ += Localization::text(QStringLiteral(
@@ -2650,6 +2690,10 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm)
     preMovieOptionOverrides_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     preMovieVariables_["genesis_plus_gx_lcd_filter"] = gameGearLcdEnabled() ? "enabled" : "disabled";
     preMovieOptionOverrides_["genesis_plus_gx_lcd_filter"] = preMovieVariables_["genesis_plus_gx_lcd_filter"];
+    if (const auto borders = preMovieVariables_.find(screenBordersKey); borders != preMovieVariables_.end()) {
+        borders->second = screenBordersEnabled() ? "full" : "disabled";
+        preMovieOptionOverrides_[screenBordersKey] = borders->second;
+    }
     const bool optionChanged = variables_ != preMovieVariables_;
     variables_ = std::move(preMovieVariables_);
     optionOverrides_ = std::move(preMovieOptionOverrides_);

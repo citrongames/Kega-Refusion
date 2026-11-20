@@ -5,6 +5,7 @@
 #include <QImage>
 #include <QJsonObject>
 #include <QLibrary>
+#include <QRectF>
 #include <QString>
 #include <QList>
 #include <QMap>
@@ -82,6 +83,8 @@ public:
     bool setRegion(int region, QString& error, bool* changed = nullptr);
     bool setBlarggFilter(int filter, QString& error, bool* changed = nullptr);
     bool setGameGearLcd(bool enabled, QString& error, bool* changed = nullptr);
+    bool setScreenBorders(bool enabled, QString& error);
+    bool screenBordersSupported() const;
     bool setFastCdLoading(bool enabled, QString& error, bool* changed = nullptr);
     bool setRemoveSpriteLimit(bool enabled, QString& error, bool* changed = nullptr);
     // Applies to the core's ROM copy at load/power cycle, never to source bytes.
@@ -167,6 +170,7 @@ public:
     int sampleRate() const { return int(av_.timing.sample_rate); }
     double aspectRatio() const;
     QSize nativeVideoSize() const;
+    QRectF inputViewport() const;
     const QImage& frame() const;
     void restoreFramePreview(const QImage& frame, double aspect);
     // Presentation-only sidecar; pixels remain separate from clean captures.
@@ -232,6 +236,8 @@ private:
     void setDiscIdentity();
     bool setCoreOption(const QByteArray& key, const QByteArray& value, QString& error, bool* changed = nullptr);
     bool applyGameGearLcd(QString& error, bool* changed = nullptr);
+    bool applyScreenBorders(QString& error);
+    bool screenBordersEnabled() const { return localScreenBorders_ && screenBordersSupported(); }
     bool saveStateFile(const QString& path, QString& error, bool keepPrevious);
     QString statePath(int slot) const;
     QString saveReadPath(const QString& directory, const QString& suffix) const;
@@ -279,7 +285,7 @@ private:
     QByteArray megaLdMediaIdentity_;
     std::map<QByteArray,QByteArray> variables_, optionOverrides_;
     QByteArray localBlarggFilter_ = "disabled";
-    bool localGameGearLcd_ = false;
+    bool localGameGearLcd_ = false, localScreenBorders_ = false;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
     bool firecoreDmcPcm_ = true, activeFirecoreDmcPcm_ = false;

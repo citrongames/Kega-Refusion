@@ -1,0 +1,293 @@
+--- a/core/vdp_render.c
++++ b/core/vdp_render.c
+@@ -285,6 +285,9 @@
+  * Keep the unmerged selected plane, including transparent pixels' palette. */
+ static uint8 test_plane_line[0x200];
+ static unsigned int test_plane_select;
++/* H40 sprite pattern rows exposed by the Plane B test-port mux. */
++#define PLANE_B_BUS_ROWS 4
++static uint16 sprite_bus_rows[PLANE_B_BUS_ROWS];
+ 
+ #ifdef ALT_RENDERER
+ /* Draw background tiles directly using priority look-up table */
+@@ -4700,6 +4703,13 @@
+   object_count[(line + 1) & 1] = count;
+ }
+ 
++static int vdp_render_counter(int physical_line)
++{
++  if (vdp_forgotten_border && physical_line > vc_max)
++    return (physical_line - lines_per_frame) & 0x1ff;
++  return physical_line;
++}
++
+ void parse_satb_m5(int line)
+ {
+   /* Sprite Y position */
+@@ -4735,7 +4745,7 @@
+   const int phase_bank = (line + 1) & 1;
+ 
+   /* Adjust line offset */
+-  line += 0x81;
++  line = (vdp_render_counter(line + 1) + 0x80) & 0x1ff;
+ 
+   do
+   {
+@@ -4788,8 +4798,8 @@
+   }
+   while (--total);
+ 
+-  /* Update sprite count for next line (line value already incremented) */
+-  object_count[line & 1] = count;
++  /* Update sprite count using physical row parity. */
++  object_count[phase_bank] = count;
+   sprite_phase_revision[phase_bank] = kega_vdp_sat_revision;
+   sprite_phase_next[phase_bank] = 0;
+   sprite_phase_pending |= 1u << phase_bank;
+@@ -4830,7 +4840,7 @@
+   const int phase_bank = (line + 1) & 1;
+ 
+   /* Adjust line offset */
+-  line = ((line + 0x81) << 1) + odd_frame;
++  line = (((vdp_render_counter(line + 1) + 0x80) << 1) + odd_frame) & 0x3ff;
+ 
+   do
+   {
+@@ -4883,8 +4893,8 @@
+   }
+   while (--total);
+ 
+-  /* Update sprite count for next line (line value already incremented) */
+-  object_count[(line >> 1) & 1] = count;
++  /* Update sprite count using physical row parity. */
++  object_count[phase_bank] = count;
+   sprite_phase_revision[phase_bank] = kega_vdp_sat_revision;
+   sprite_phase_next[phase_bank] = 0;
+   sprite_phase_pending |= 1u << phase_bank;
+@@ -4940,7 +4950,8 @@
+ 
+   const uint16 *q = (uint16 *)&sat[0];
+   const uint16 *p = (uint16 *)&vram[satb];
+-  const unsigned int target = im2_flag ? ((line + 0x80) << 1) + odd_frame : line + 0x80;
++  const unsigned int y = vdp_render_counter(line) + 0x80;
++  const unsigned int target = im2_flag ? (y << 1) + odd_frame : y;
+   for (; i < end; i++)
+   {
+     const unsigned int link = sprite_phase_link[bank][i];
+@@ -5199,6 +5210,16 @@
+     link_wire_put32(out + cursor + 8, object->attr); link_wire_put32(out + cursor + 12, mode == 4 ? 0 : object->size);
+     cursor += 16;
+   }
++  /* Keep the raw pattern row addresses for slots that keep fetching a
++   * previous tile. A tagged tail leaves the original state layout intact. */
++  if (mode == 5 && (sprite_bus_rows[0] || sprite_bus_rows[1] ||
++                    sprite_bus_rows[2] || sprite_bus_rows[3]))
++  {
++    uint8 *bus = out + capacity - 16;
++    memcpy(bus, "KRVB0001", 8);
++    link_wire_put32(bus + 8, sprite_bus_rows[0] | ((uint32)sprite_bus_rows[1] << 16));
++    link_wire_put32(bus + 12, sprite_bus_rows[2] | ((uint32)sprite_bus_rows[3] << 16));
++  }
+   memcpy(out, "KRVDP001", 8);
+ }
+ 
+@@ -5235,6 +5256,16 @@
+     else if (xpos > 255 || attr > 255 || ypos > 15 || size > (mode == 4 ? 0u : 255u)) return;
+   }
+   sprite_phase_pending = 0;
++  memset(sprite_bus_rows, 0, sizeof(sprite_bus_rows));
++  if (mode == 5 && !memcmp(in + capacity - 16, "KRVB0001", 8))
++  {
++    const unsigned int right = link_wire_get32(in + capacity - 8);
++    const unsigned int left = link_wire_get32(in + capacity - 4);
++    sprite_bus_rows[0] = right & 0xfffc;
++    sprite_bus_rows[1] = (right >> 16) & 0xfffc;
++    sprite_bus_rows[2] = left & 0xfffc;
++    sprite_bus_rows[3] = (left >> 16) & 0xfffc;
++  }
+   object_count[0] = counts[0]; object_count[1] = counts[1];
+   spr_ovr = link_wire_get32(in + 16);
+   spr_col = link_wire_get32(in + 20);
+@@ -5271,6 +5302,7 @@
+ void render_reset(void)
+ {
+   sprite_phase_pending = 0;
++  memset(sprite_bus_rows, 0, sizeof(sprite_bus_rows));
+   kega_vdp_sat_revision = 0;
+   backdrop_frame(0);
+   if (!reset_do_not_clear_buffers)
+@@ -5373,6 +5405,98 @@
+ 
+ #include "vdp_render_firecore.inc"
+ 
++/* The horizontal blank fetches sprite patterns from VRAM. A slot with
++ * no new pattern repeats its latched address. Plane B exposes slots 4/5
++ * on the right and 36/37 on the left. */
++int render_sprite_bus_step(int physical_line)
++{
++  if ((reg[1] & 0x44) != 0x44 || !(reg[12] & 1) || im2_flag || kr_firecore_active)
++    return 0;
++
++  static const uint8 bus_slot[PLANE_B_BUS_ROWS] = {4, 5, 36, 37};
++  const object_info_t *objects = obj_info[physical_line & 1];
++  const int count = object_count[physical_line & 1];
++  int n, first = 0, slot = 0;
++  for (n = 0; n < count && slot < PLANE_B_BUS_ROWS; ++n)
++  {
++    const object_info_t *object = &objects[n];
++    const int end = first + 1 + (object->size >> 2);
++    if (bus_slot[slot] < end)
++    {
++      const unsigned int attr = object->attr;
++      const unsigned int y = object->ypos;
++      const uint8 *offsets = &name_lut[((attr >> 3) & 0x300) |
++        (object->size << 4) | ((y & 0x18) >> 1)];
++      const unsigned int row = (y ^ ((attr & 0x1000) ? 7 : 0)) & 7;
++      do
++      {
++        const unsigned int tile = ((attr & 0x7ff) + offsets[bus_slot[slot] - first]) & 0x7ff;
++        sprite_bus_rows[slot++] = (tile << 5) + (row << 2);
++      }
++      while (slot < PLANE_B_BUS_ROWS && bus_slot[slot] < end);
++    }
++    first = end;
++  }
++  return 1;
++}
++
++static unsigned int horizontal_border_pixel(uint16 address, unsigned int pixel)
++{
++  /* The external VRAM bus has not passed through horizontal tile flipping. */
++  unsigned int byte = READ_BYTE(vram, address + (pixel >> 1));
++  return ((pixel & 1) ? byte : byte >> 4) & 15;
++}
++
++/* Test-port Plane B uses the normal extra prefetch for fine scrolling.
++ * During the rest of each horizontal border, its colour index comes from
++ * the sprite fetch bus and the last two Plane B palette bits. */
++static void render_test_plane_b_border(int raster)
++{
++  const unsigned int hscroll = *(uint16 *)&vram[hscb + ((raster & hscroll_mask) << 2) + 2];
++  const unsigned int yscroll = *(uint16 *)&vsram[2];
++  const unsigned int index = playfield_col_mask + 1 - ((hscroll >> 4) & playfield_col_mask);
++  const int fine = hscroll & 0xf;
++  const int left = 16 - fine;
++  const unsigned int v = (raster + yscroll) & playfield_row_mask;
++  const unsigned int row = (v & 7) << 3;
++  const uint16 *nt = (const uint16 *)&vram[ntbb + (((v >> 3) << playfield_shift) & 0x1fc0)];
++  const unsigned int last_pair = (index + (bitmap.viewport.w >> 4) - 1) & playfield_col_mask;
++  const unsigned int first_pair = (index - 1) & playfield_col_mask;
++  int i;
++  for (i = 0; i < bitmap.viewport.x; ++i)
++  {
++    int x = i - bitmap.viewport.x;
++    int lp = x + left;
++    int rp = i + left;
++    unsigned int attr, data;
++    if (lp >= 0)
++    {
++      attr = nt[first_pair * 2 + (lp >> 3)];
++      data = bg_pattern_cache[((attr & 0x1fff) << 6) | row | (lp & 7)];
++    }
++    else
++    {
++      lp += 16;
++      attr = nt[last_pair * 2 + (lp >> 3)];
++      data = horizontal_border_pixel(sprite_bus_rows[2 + (lp >> 3)], lp & 7);
++    }
++    test_plane_line[0x20 + x] = (attr >> 9 & 0x30) | data;
++
++    if (rp < 16)
++    {
++      attr = nt[last_pair * 2 + (rp >> 3)];
++      data = bg_pattern_cache[((attr & 0x1fff) << 6) | row | (rp & 7)];
++    }
++    else
++    {
++      rp -= 16;
++      attr = nt[last_pair * 2 + (rp >> 3)];
++      data = horizontal_border_pixel(sprite_bus_rows[rp >> 3], rp & 7);
++    }
++    test_plane_line[0x20 + bitmap.viewport.w + i] = (attr >> 9 & 0x30) | data;
++  }
++}
++
+ void render_line(int line)
+ {
+   if (FIRECORE_RENDERING)
+@@ -5403,8 +5527,15 @@
+       bg_list_index = 0;
+     }
+ 
++    /* The PAL scanline counter jumps into its wrapped 9-bit range in the
++     * top border. Keep the framebuffer and sprite pipeline on physical rows. */
++    int raster_line = reg[1] & 4 ? vdp_render_counter(line) : line;
++
+     /* Render BG layer(s) */
+-    render_bg(line);
++    render_bg(raster_line);
++    if (render_sprite_bus_step(line) && test_plane_select == 3 &&
++        bitmap.viewport.x > 0 && !(reg[11] & 4) && !(kega_debug_video_mask & 2))
++      render_test_plane_b_border(raster_line);
+ 
+     if ((!(reg[1] & 4) || (system_hw & SYSTEM_PBC) != SYSTEM_MD) &&
+         (kega_debug_video_mask & (((system_hw & SYSTEM_PBC) == SYSTEM_MD) ? 1u : 16u)))
+--- a/core/vdp_render.h
++++ b/core/vdp_render.h
+@@ -116,6 +116,7 @@
+ extern void render_line(int line);
+ extern uint32 kega_vdp_sat_revision;
+ extern void render_sprite_phase2(void);
++extern int render_sprite_bus_step(int physical_line);
+ extern void render_sprite_phase2_before(unsigned int cycles);
+ extern void blank_line(int line, int offset, int width);
+ extern void remap_line(int line);
+--- a/core/system.c
++++ b/core/system.c
+@@ -602,11 +602,12 @@
+       else if (!do_skip)
+         render_line(line);
+     }
+-    else if (active && !last && !do_skip && (reg[1] & 0x40))
+-    {
+-      /* Only overscan rows reach the framebuffer, but sprite evaluation
+-       * continues through the open border. */
+-      parse_satb(line);
++    if (active && (do_skip || (line >= end && line < start)))
++    {
++      /* Sprite bus addresses are fetched even if no output row is drawn. */
++      const int sprite_bus_running = render_sprite_bus_step(line);
++      if (!last && (reg[1] & 0x40) && (sprite_bus_running || !do_skip))
++        parse_satb(line);
+     }
+     if (last && (reg[1] & 0x40)) parse_satb(-1);
+ 
+@@ -1020,6 +1021,8 @@
+     {
+       render_line(line);
+     }
++    else if (render_sprite_bus_step(line) && line < bitmap.viewport.h - 1)
++      parse_satb(line);
+ 
+     /* update 6-Buttons & Lightguns */
+     input_refresh();
+@@ -1423,6 +1426,8 @@
+     {
+       render_line(line);
+     }
++    else if (render_sprite_bus_step(line) && line < bitmap.viewport.h - 1)
++      parse_satb(line);
+     
+     /* update 6-Buttons & Lightguns */
+     input_refresh();
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3913,7 +3913,7 @@
+ }
+ 
+ /* Mode 5 bus timing changes deterministic execution on MD and its expansions. */
+-#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v5" : id)
++#define MD_FIFO_ABI(id) ((((system_hw & SYSTEM_PBC) == SYSTEM_MD) && !kr_firecore_active) ? id "-md-vdp-v6" : id)
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {

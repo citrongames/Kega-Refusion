@@ -35,7 +35,9 @@ public:
     QString shaderPreset() const { return shaderPreset_.path; }
     QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
     bool setShaderParameter(const QString& id, float value);
-    void setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {});
+    void setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {},
+                  const QRectF& inputViewport = {});
+    QRectF inputViewport() const { return inputViewport_; }
     void clearGame();
     void resetShaderHistory();
     void setLoading(bool loading, const QString& fileName = {});
@@ -186,6 +188,7 @@ private:
     void paintLoading(QPainter& painter, const QSize& canvas);
 
     QImage frame_;
+    QRectF inputViewport_{0,0,1,1};
     double aspectRatio_ = 4.0 / 3.0;
     AspectMode aspectMode_ = AspectMode::Console;
     bool integerScaling_ = false;

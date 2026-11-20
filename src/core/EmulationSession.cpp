@@ -191,6 +191,7 @@ void EmulationSession::setDebugAudioGain(unsigned channel, unsigned percent) {
 void EmulationSession::setDebugBackdrop(quint32 rgb) { enqueue({Type::DebugBackdrop,{},int(rgb & 0xffffff)}); }
 void EmulationSession::setBlarggFilter(int filter) { enqueue({Type::Filter,{},filter}); }
 void EmulationSession::setGameGearLcd(bool enabled) { enqueue({Type::GameGearLcd,{},enabled ? 1 : 0}); }
+void EmulationSession::setScreenBorders(bool enabled) { enqueue({Type::ScreenBorders,{},int(enabled)}); }
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
 void EmulationSession::setPerGameCdBackup(bool enabled) { enqueue({Type::PerGameCdBackup,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
@@ -261,24 +262,28 @@ InputDisplayState EmulationSession::inputDisplay() {
     inputDisplayPending_ = false;
     return latestInputDisplay_;
 }
-void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
+void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership,
+                                    const QRectF& inputViewport) {
     bool notify = false;
     {
         std::lock_guard<std::mutex> lock(videoMutex_);
         latestFrame_ = frame; latestAspect_ = aspectRatio;
         latestSpriteOwnership_ = spriteOwnership;
+        latestInputViewport_ = inputViewport;
         if (!videoPending_) { videoPending_ = true; notify = true; }
     }
     if (notify) emit videoFrameReady();
     // Kept for instrumentation; the application uses the coalesced ready signal.
     emit videoFrame(frame,aspectRatio);
 }
-bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership) {
+bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership,
+                                       QRectF* inputViewport) {
     std::lock_guard<std::mutex> lock(videoMutex_);
     if (!videoPending_) return false;
     frame = latestFrame_; aspectRatio = latestAspect_; videoPending_ = false;
     if (spriteOwnership) *spriteOwnership = std::move(latestSpriteOwnership_);
     else latestSpriteOwnership_ = {};
+    if (inputViewport) *inputViewport = latestInputViewport_;
     return !frame.isNull();
 }
 void EmulationSession::saveState(int slot) { enqueue({Type::Save,{},slot}); }
@@ -509,10 +514,14 @@ void EmulationSession::run() {
         }
         if (notify) emit inputDisplayChanged();
     };
-    auto presentFrame = [&](const QImage& frame, double aspect, const QImage& ownership = QImage()) {
+    auto presentFrame = [&](const QImage& frame, double aspect, const QImage& ownership = {},
+                            const QRectF& inputViewport = {}) {
         publishClock();
         if (inputDisplayEnabled) publishInput();
-        publishVideo(frame,aspect,ownership);
+        publishVideo(frame,aspect,ownership,inputViewport);
+    };
+    auto presentHostFrame = [&] {
+        presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership(),host.inputViewport());
     };
     auto addNetworkClock = [&](QJsonObject& metadata) {
         const auto clock = host.runClock();
@@ -1083,7 +1092,7 @@ void EmulationSession::run() {
             // Export is a read-only pass over a fixed recording. GUI changes,
             // background pauses and input must not alter its deterministic timeline.
             if (videoExport && command.type != Type::VideoStop && command.type != Type::RunTimer &&
-                command.type != Type::InputDisplay &&
+                command.type != Type::InputDisplay && command.type != Type::ScreenBorders &&
                 command.type != Type::AchievementsResponse && command.type != Type::AchievementsRefresh)
                 continue;
             if ((command.type==Type::Load || command.type==Type::Close) && videoRecorder.accepting())
@@ -1162,7 +1171,7 @@ void EmulationSession::run() {
                     }
                     {
                         std::lock_guard<std::mutex> lock(videoMutex_);
-                        latestFrame_={};latestSpriteOwnership_={};videoPending_=false;latestAspect_=4.0/3.0;
+                        latestFrame_={};latestSpriteOwnership_={};latestInputViewport_={};videoPending_=false;latestAspect_=4.0/3.0;
                     }
                     host.restoreMovieConfiguration(error);
                     releaseButtons();
@@ -1201,7 +1210,7 @@ void EmulationSession::run() {
                 configureAchievements();
                 host.setLinkPresentationRole(command.value);
                 clearAudio();
-                if(host.loaded() && !host.frame().isNull() && networkRewindImage.isNull())presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership());
+                if(host.loaded() && !host.frame().isNull() && networkRewindImage.isNull())presentHostFrame();
                 break;
             case Type::NetLinkCable: {
                 const bool requested=command.value!=0;
@@ -1221,7 +1230,7 @@ void EmulationSession::run() {
                     if(!host.loaded())emit gameClosed();
                     if(host.loaded()) {
                         emit stateSlotsChanged(-1,host.occupiedStateSlots());
-                        if(!host.frame().isNull())presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership());
+                        if(!host.frame().isNull())presentHostFrame();
                     }
                 }
                 networkDirty=true; // Readiness was cleared by the lobby even when requests coalesced.
@@ -1485,6 +1494,7 @@ void EmulationSession::run() {
                     clearAudio();
                     resetMetrics();
                     emit gameLoaded(host.gamePath(),host.fps(),host.contentName(),host.controllerProfile());
+                    emit screenBordersAvailableChanged(host.screenBordersSupported());
                     emit stateSlotsChanged(-1,host.occupiedStateSlots());
                     emit pausedChanged(false);
                     pacer.reset(nowNs());
@@ -1529,6 +1539,7 @@ void EmulationSession::run() {
                     std::lock_guard<std::mutex> lock(videoMutex_);
                     latestFrame_ = QImage();
                     latestSpriteOwnership_ = {};
+                    latestInputViewport_ = {};
                     latestAspect_ = 4.0 / 3.0;
                     videoPending_ = false;
                 }
@@ -1718,6 +1729,9 @@ void EmulationSession::run() {
                 } else emit errorOccurred(error);
                 break;
             }
+            case Type::ScreenBorders:
+                if (!host.setScreenBorders(command.value != 0,error)) emit errorOccurred(error);
+                break;
             case Type::GameGearLcd:
                 if (!host.setGameGearLcd(command.value!=0,error)) emit errorOccurred(error);
                 break;
@@ -1769,7 +1783,7 @@ void EmulationSession::run() {
                             networkRewindImage = {};
                             networkRewindLinkPreview.clear();
                             if (host.previewLoadedState()) {
-                                presentFrame(host.frame(), host.aspectRatio(), host.spriteOwnership());
+                                presentHostFrame();
                             } else {
                                 // A failed preview restore must not become the live timeline.
                                 if (!loadState()) { emit errorOccurred(error); break; }
@@ -1872,7 +1886,7 @@ void EmulationSession::run() {
             if (now >= nextVideoProgressNs || movie.mode() == MovieSession::Finished) {
                 emit videoExportProgress(movie.position(),movie.length());
                 if (inputDisplayEnabled) frameInput = host.inputDisplay();
-                presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership()); movieStatus();
+                presentHostFrame(); movieStatus();
                 nextVideoProgressNs = now + 100000000;
             }
             if (movie.mode() == MovieSession::Finished) finishVideo();
@@ -2068,7 +2082,7 @@ void EmulationSession::run() {
             if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
                 history.clear(); historyHealthy = false;
             }
-            presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership());
+            presentHostFrame();
             clearAudio(); pacer.reset(nowNs());
             continue;
         }
@@ -2136,7 +2150,7 @@ void EmulationSession::run() {
             }
         }
         if (present) {
-            presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership());
+            presentHostFrame();
             nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
         }
         if (!fast && !paused && !host.audio().isEmpty()) {

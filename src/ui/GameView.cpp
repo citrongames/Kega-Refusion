@@ -304,10 +304,12 @@ QImage GameView::captureGameImage() {
     return capture;
 }
 
-void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership) {
+void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership,
+                        const QRectF& inputViewport) {
     const bool hadFrame = !frame_.isNull();
     const QSize previousNative = VideoFrameGeometry::nativeSize(frame_);
     const double previousAspect = aspectRatio_;
+    inputViewport_ = inputViewport.isValid() ? inputViewport : QRectF(0,0,1,1);
     frame_ = frame;
     spriteOwnership_ = shaderPreset_.usesSpriteOwnership() && spriteOwnership.size() == frame.size()
         && spriteOwnership.format() == QImage::Format_Grayscale8 ? spriteOwnership : QImage();

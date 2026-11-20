@@ -1,0 +1,29 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -4020,6 +4020,26 @@
+    *width = full - crop; *height = vheight;
+    return true;
+ }
++/* Active input area in the native output raster. Keep pointer coordinates
++ * independent of local border visibility before recording/network transport. */
++RETRO_API bool retro_kegarefusion_input_viewport(int *x, int *y,
++                                                unsigned *width, unsigned *height)
++{
++   unsigned full_width, full_height;
++   if (!x || !y || !width || !height ||
++       !retro_kegarefusion_native_video_size(&full_width, &full_height) ||
++       !bitmap.viewport.w || !bitmap.viewport.h) return false;
++   const int crop = config.ntsc ? vwoffset * 2 / 5 : vwoffset;
++   const unsigned fields = (config.render && interlaced) ? 2 : 1;
++   *x = bitmap.viewport.x - crop;
++   *y = bitmap.viewport.y * fields;
++   *width = bitmap.viewport.w;
++#ifdef KEGAREFUSION_32X
++   if (kegarefusion_32x_attached) *width = 320;
++#endif
++   *height = bitmap.viewport.h * fields;
++   return true;
++}
+ /* The returned raster is borrowed until the next run/disable/deinit. Pixel
+  * mapping is performed alongside scanline output, before NTSC/LCD filtering. */
+ RETRO_API bool retro_kegarefusion_recording_video(bool enabled)

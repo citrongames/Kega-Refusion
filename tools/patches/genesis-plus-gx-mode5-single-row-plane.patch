@@ -1,0 +1,14 @@
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -2714,7 +2714,10 @@
+       reg[16] = d;
+       playfield_shift = shift_table[(d & 3)];
+       playfield_col_mask = col_mask_table[(d & 3)];
+-      playfield_row_mask = row_mask_table[(d >> 4) & 3];
++      /* Prohibited horizontal size 2 is 32 columns by one tile row.
++       * Retain the tile's fine Y scroll but do not advance the name table. */
++      playfield_row_mask = (d & 3) == 2 && !kr_firecore_active
++        ? 0x007 : row_mask_table[(d >> 4) & 3];
+       break;
+     }
+ 
