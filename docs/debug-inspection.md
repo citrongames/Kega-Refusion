@@ -57,9 +57,9 @@ expansion-specific buffers, native wide-mode VRAM and MD Mode 4 CRAM
 remain read-only. The available actions follow actual hardware and mode.
 
 The [CPU debugger](debug-execution.md) provides logical CPU addresses,
-registers, disassembly and execution controls. Full-domain search, persistent
-watch lists remain [later work](debugger-plan.md); [trace capture](debug-tracing.md)
-is available separately.
+registers, disassembly and execution controls. RAM Watch lists can be saved
+in debug projects. Full-domain search remains [later work](debugger-plan.md);
+[trace capture](debug-tracing.md) is available separately.
 
 ## Threading and resource limits
 
