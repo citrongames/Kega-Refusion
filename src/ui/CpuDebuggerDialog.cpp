@@ -441,7 +441,7 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
     connect(follow_, &QPushButton::clicked, this, &CpuDebuggerDialog::followProgramCounter);
     connect(import_, &QPushButton::clicked, this, &CpuDebuggerDialog::importSymbols);
     connect(bookmarks_, &QComboBox::activated, this, [this](int index) {
-        if (index > 0) navigateTo(cpuId_, bookmarks_->itemData(index).toUInt());
+        if (index > 0) navigateSymbol(bookmarks_->itemData(index).toULongLong());
         bookmarks_->setCurrentIndex(0);
     });
     connect(code_, &QTableWidget::cellClicked, this, [this](int row, int column) {
@@ -526,6 +526,7 @@ void CpuDebuggerDialog::navigateTo(quint32 cpu, quint32 address) {
     if (address > addressMask(cpu) || (snapshot_.attached && !findTarget(snapshot_, cpu))) return;
     cpuId_ = cpu;
     addressValue_ = address;
+    pendingNavigation_ = 0;
     followPc_ = false;
     address_->setText(hex(address, addressDigits(cpu)));
     updateCpuChoices();
@@ -539,6 +540,7 @@ void CpuDebuggerDialog::navigateTo(quint32 cpu, quint32 address) {
 
 void CpuDebuggerDialog::followProgramCounter() {
     followPc_ = true;
+    pendingNavigation_ = 0;
     follow_->setChecked(true);
     feedback_->hide();
     send(DebuggerCommand::Navigate);
@@ -554,6 +556,7 @@ void CpuDebuggerDialog::goToInput() {
     }
     const auto symbols = symbols_.constFind(cpuId_);
     bool found = false;
+    quint64 key = 0;
     if (symbols != symbols_.cend()) {
         for (auto symbol = symbols->cbegin(); symbol != symbols->cend(); ++symbol) {
             if (symbol->label != query) continue;
@@ -563,11 +566,11 @@ void CpuDebuggerDialog::goToInput() {
                 return;
             }
             found = true;
-            target = symbol.key();
+            key = symbol.key();
         }
     }
     if (found) {
-        navigateTo(cpuId_, target);
+        navigateSymbol(key);
     } else {
         feedback_->setText(text("Введите адрес в шестнадцатеричном виде или имя метки."));
         feedback_->show();
@@ -603,6 +606,20 @@ void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
                                     snapshot.configureRequestId < lastConfigureResult_;
     const auto previousRuntime = olderConfiguration ? snapshot_.breakpoints : QVector<DebuggerBreakpoint>{};
     snapshot_ = snapshot;
+    if (!snapshot.attached || changedGeneration || changedGame) pendingNavigation_ = 0;
+    if (pendingNavigation_ && snapshot.navigationRequestId == pendingNavigation_) {
+        pendingNavigation_ = 0;
+        if (snapshot.hasNavigationState) {
+            followPc_ = snapshot.followingPc;
+            addressValue_ = snapshot.navigationAddress;
+            follow_->setChecked(followPc_);
+            address_->setText(hex(addressValue_, addressDigits(cpuId_)));
+        }
+        if (!snapshot.navigationAccepted) {
+            feedback_->setText(snapshot.navigationError);
+            feedback_->show();
+        }
+    }
     if (olderConfiguration) snapshot_.breakpoints = previousRuntime;
     if (snapshot_.attached && (!wasAttached || changedTargets))
         needsConfiguration_ = true;
@@ -655,7 +672,8 @@ DebugProject CpuDebuggerDialog::exportProject() const {
     for (const auto cpu : cpus) {
         const auto entries = symbols_.constFind(cpu);
         for (auto symbol = entries->cbegin(); symbol != entries->cend(); ++symbol)
-            project.symbols.append({cpu, symbol.key(), symbol->label, symbol->comment, symbol->bookmarked});
+            project.symbols.append({cpu, symbol->address, symbol->label, symbol->comment, symbol->bookmarked,
+                                    quint32(symbol.key() >> 32), quint32(symbol.key() >> 32) ? quint32(symbol.key()) : 0});
     }
     return project;
 }
@@ -663,7 +681,8 @@ DebugProject CpuDebuggerDialog::exportProject() const {
 void CpuDebuggerDialog::replaceSymbols(const QVector<DebugProjectSymbol>& imported) {
     symbols_.clear();
     for (const auto& symbol : imported)
-        symbols_[symbol.cpu].insert(symbol.address, {symbol.label, symbol.comment, symbol.bookmarked});
+        symbols_[symbol.cpu].insert((quint64(symbol.source) << 32) | (symbol.source ? symbol.offset : symbol.address),
+                                   {symbol.label, symbol.comment, symbol.bookmarked, symbol.address});
 }
 
 qsizetype CpuDebuggerDialog::symbolCount() const {
@@ -862,7 +881,7 @@ void CpuDebuggerDialog::updateControls() {
     } else {
         QString state;
         const quint32 stopCpu = snapshot_.eventCpu ? snapshot_.eventCpu : snapshot_.selectedCpu;
-        const QString address = QStringLiteral("0x%1").arg(hex(snapshot_.address, addressDigits(stopCpu)));
+        const QString address = QStringLiteral("0x%1").arg(hex(snapshot_.address, (stopCpu&0xff)==KR_DEBUG_SSP1601 && snapshot_.event!=KR_DEBUG_EXEC ? 6 : addressDigits(stopCpu)));
         if (!snapshot_.stopped) {
             state = text("Выполняется");
         } else if (snapshot_.event == KR_DEBUG_EXEC) {
@@ -914,6 +933,10 @@ void CpuDebuggerDialog::updateCpuChoices() {
 void CpuDebuggerDialog::updateBreakEventAvailability() {
     const auto* target = findTarget(snapshot_, breakCpu_->currentData().toUInt());
     const quint32 events = target ? target->capabilities & 7u : 0;
+    const QString hint = (breakCpu_->currentData().toUInt()&0xff)==KR_DEBUG_SSP1601 ?
+        text("SVP: выполнение — адрес слова; чтение/запись — адрес байта. ROM: 000000–1FFFFF, DRAM: 300000–31FFFF, IRAM: 390000–3907FF. RAM0/RAM1: условные диапазоны отладчика 400000–4001FF / 400200–4003FF. Выполнение и доступ к данным задаются разными точками.") : QString();
+    breakFirst_->setToolTip(hint);
+    breakLast_->setToolTip(hint);
     for (size_t i = 0; i < breakEvents_.size(); ++i) {
         breakEvents_[i]->setEnabled(events & eventBits[i]);
         if (target && !(events & eventBits[i])) breakEvents_[i]->setChecked(false);
@@ -965,7 +988,8 @@ void CpuDebuggerDialog::updateCode() {
                                                              text("Команда недоступна"));
         QString annotation;
         if (codeSymbols != symbols_.cend()) {
-            const auto symbol = codeSymbols->constFind(instruction.address);
+            auto symbol = codeSymbols->constFind(codeSymbolKey(row));
+            if (symbol == codeSymbols->cend()) symbol = codeSymbols->constFind(instruction.address);
             if (symbol != codeSymbols->cend()) {
                 if (symbol->bookmarked) annotation = QStringLiteral("★ ");
                 annotation += symbol->label;
@@ -975,6 +999,8 @@ void CpuDebuggerDialog::updateCode() {
                 }
             }
         }
+        const QString location=symbolLocation(codeSymbolKey(row));
+        if (addressCell->toolTip()!=location) addressCell->setToolTip(location);
         cell(code_, row++, CodeAnnotation, annotation);
     }
     if (followPc_ && state && !address_->hasFocus())
@@ -1137,7 +1163,7 @@ void CpuDebuggerDialog::updateBreakpoints() {
         if (bp.id == editingBreakpoint_) selectedRow = row;
         cell(breakpoints_, row, 1, cpuName(bp.cpu));
         cell(breakpoints_, row, 2, eventNames(bp.events));
-        const int digits = addressDigits(bp.cpu);
+        const int digits = (bp.cpu&0xff)==KR_DEBUG_SSP1601 && !(bp.events&KR_DEBUG_EXEC) ? 6 : addressDigits(bp.cpu);
         QString address = hex(bp.first, digits);
         if (bp.first != bp.last) address += QStringLiteral("–%1").arg(hex(bp.last, digits));
         cell(breakpoints_, row, 3, address);
@@ -1152,8 +1178,9 @@ void CpuDebuggerDialog::updateBreakpoints() {
 void CpuDebuggerDialog::editBreakpoint(const DebuggerBreakpoint* bp) {
     editingBreakpoint_ = bp ? bp->id : 0;
     breakEnabled_->setChecked(!bp || bp->enabled);
-    breakFirst_->setText(bp ? hex(bp->first, addressDigits(bp->cpu)) : QString());
-    breakLast_->setText(bp && bp->last != bp->first ? hex(bp->last, addressDigits(bp->cpu)) : QString());
+    const int digits=bp && (bp->cpu&0xff)==KR_DEBUG_SSP1601 && !(bp->events&KR_DEBUG_EXEC) ? 6 : bp ? addressDigits(bp->cpu) : 4;
+    breakFirst_->setText(bp ? hex(bp->first, digits) : QString());
+    breakLast_->setText(bp && bp->last != bp->first ? hex(bp->last, digits) : QString());
     breakCondition_->setText(bp ? bp->condition : QString());
     breakIgnore_->setText(bp ? QString::number(bp->ignoreHits) : QStringLiteral("0"));
     breakOnce_->setChecked(bp && bp->oneShot);
@@ -1188,9 +1215,10 @@ void CpuDebuggerDialog::saveBreakpoint() {
         feedback_->show();
         return;
     }
-    const bool firstOk = readHex(breakFirst_->text(), addressMask(bp.cpu), bp.first);
+    const quint32 mask=(bp.cpu&0xff)==KR_DEBUG_SSP1601 ? kr_debug_ssp_event_address_mask(bp.events) : addressMask(bp.cpu);
+    const bool firstOk = mask && readHex(breakFirst_->text(), mask, bp.first);
     bp.last = bp.first;
-    if (!firstOk || (!breakLast_->text().isEmpty() && !readHex(breakLast_->text(), addressMask(bp.cpu), bp.last))
+    if (!firstOk || (!breakLast_->text().isEmpty() && !readHex(breakLast_->text(), mask, bp.last))
                  || bp.last < bp.first) {
         feedback_->setText(text("Проверьте границы диапазона для выбранного процессора."));
         feedback_->show();
@@ -1313,6 +1341,7 @@ void CpuDebuggerDialog::importSymbols() {
             return;
         }
         Symbol& symbol = merged[address];
+        symbol.address = address;
         symbol.label = match.captured(2);
         if (match.hasCaptured(3)) symbol.comment = match.captured(3);
         if (occupied + merged.size() > maxSymbols) {
@@ -1340,9 +1369,15 @@ void CpuDebuggerDialog::showCodeMenu(const QPoint& point) {
     const auto address = addressCell->data(Qt::UserRole).toUInt();
     const quint32 cpu = cpuId_;
     const quint64 context = generation_;
+    const quint64 observedKey = codeSymbolKey(index.row());
+    quint64 key = observedKey;
     Symbol original;
+    original.address = address;
     const auto symbolsForCpu = symbols_.constFind(cpu);
-    if (symbolsForCpu != symbols_.cend()) original = symbolsForCpu->value(address);
+    if (symbolsForCpu != symbols_.cend()) {
+        if (!symbolsForCpu->contains(key) && symbolsForCpu->contains(address)) key=address;
+        original = symbolsForCpu->value(key, original);
+    }
     QMenu menu(this);
     auto* breakpoint = menu.addAction(text("Переключить точку останова"));
     const auto* target = findTarget(snapshot_, cpu);
@@ -1378,7 +1413,7 @@ void CpuDebuggerDialog::showCodeMenu(const QPoint& point) {
         bool ok = false;
         const bool editingLabel = action == label;
         const QString value = QInputDialog::getText(this, editingLabel ? text("Метка") : text("Комментарий"),
-            QStringLiteral("%1 · 0x%2").arg(cpuName(cpu), hex(address, addressDigits(cpu))),
+            QStringLiteral("%1 · 0x%2\n%3").arg(cpuName(cpu), hex(address, addressDigits(cpu)), symbolLocation(key)),
             QLineEdit::Normal, editingLabel ? original.label : original.comment, &ok);
         if (!ok || !snapshot_.attached || generation_ != context || cpu != cpuId_ || pendingConfiguration_) return;
         if (editingLabel) edited.label = value.trimmed().left(maxLabelLength);
@@ -1387,9 +1422,9 @@ void CpuDebuggerDialog::showCodeMenu(const QPoint& point) {
     if (edited == original) return;
     auto& symbols = symbols_[cpu];
     if (!edited.bookmarked && edited.label.isEmpty() && edited.comment.isEmpty()) {
-        symbols.remove(address);
-    } else if (symbols.contains(address) || symbolCount() < maxSymbols) {
-        symbols.insert(address, std::move(edited));
+        symbols.remove(key);
+    } else if (symbols.contains(key) || symbolCount() < maxSymbols) {
+        symbols.insert(key, std::move(edited));
     } else {
         feedback_->setText(text("В проекте можно задать не более %1 меток.").arg(maxSymbols));
         feedback_->show();
@@ -1408,10 +1443,46 @@ void CpuDebuggerDialog::updateBookmarks() {
     if (symbols != symbols_.cend()) {
         for (auto entry = symbols->cbegin(); entry != symbols->cend(); ++entry) {
             if (!entry->bookmarked) continue;
-            QString title = hex(entry.key(), addressDigits(cpuId_));
+            QString title = hex(entry->address, addressDigits(cpuId_));
+            if (entry.key() >> 32) title += QStringLiteral(" [%1]").arg(symbolLocation(entry.key()));
             if (!entry->label.isEmpty()) title += QStringLiteral(" · ") + entry->label;
             bookmarks_->addItem(title, entry.key());
         }
     }
     bookmarks_->setVisible(bookmarks_->count() > 1 && snapshot_.attached);
+}
+
+quint64 CpuDebuggerDialog::codeSymbolKey(int row) const {
+    if (row<0 || row>=snapshot_.instructions.size()) return 0;
+    if (row<snapshot_.instructionLocations.size()) {
+        const auto& location=snapshot_.instructionLocations[row];
+        if(location.source) return (quint64(location.source)<<32)|location.offset;
+    }
+    return snapshot_.instructions[row].address;
+}
+
+QString CpuDebuggerDialog::symbolLocation(quint64 key) const {
+    const quint32 source=quint32(key>>32);
+    if(!source) return text("Логический адрес");
+    for(const auto& info:snapshot_.codeSources)
+        if(info.id==source) return QStringLiteral("%1 + $%2").arg(Localization::text(QString::fromLatin1(info.name)),hex(quint32(key),6));
+    return QStringLiteral("%1:$%2").arg(source).arg(hex(quint32(key),6));
+}
+
+void CpuDebuggerDialog::navigateSymbol(quint64 key) {
+    const auto entries=symbols_.constFind(cpuId_);
+    if(entries==symbols_.cend()) return;
+    const auto entry=entries->constFind(key);
+    if(entry==entries->cend()) return;
+    if(!(key>>32)) { navigateTo(cpuId_,entry->address); return; }
+    auto request=refreshCommand();
+    request.kind=DebuggerCommand::Navigate;
+    request.navigationRequestId = pendingNavigation_ = ++nextNavigation_;
+    request.gameKey = gameKey_;
+    request.followPc=false;
+    request.address=entry->address;
+    request.physicalSource=quint32(key>>32);
+    request.physicalOffset=quint32(key);
+    feedback_->hide();
+    emit command(request);
 }

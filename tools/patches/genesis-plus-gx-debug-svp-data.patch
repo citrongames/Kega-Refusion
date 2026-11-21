@@ -1,0 +1,402 @@
+diff --git a/core/cart_hw/svp/ssp16.c b/core/cart_hw/svp/ssp16.c
+--- a/core/cart_hw/svp/ssp16.c
++++ b/core/cart_hw/svp/ssp16.c
+@@ -360,6 +360,8 @@
+ /* The live PC is a native interpreter pointer while a slice runs. Keep the
+  * debugger view separate from the SSP register layout used by save states. */
+ static int kr_debug_ssp_at_instruction;
++static int kr_debug_ssp_at_data;
++static uint16_t kr_debug_ssp_opcode_pc;
+ static unsigned kr_debug_ssp_slice_ticks;
+ 
+ static void kr_debug_ssp_before_opcode(int allowance)
+@@ -370,6 +372,39 @@
+   kr_debug_ssp_at_instruction = 0;
+ }
+ 
++static KR_COV_COLD void kr_debug_ssp_data(unsigned event, uint32_t address, uint16_t value)
++{
++  kr_debug_ssp_at_data = 1;
++  kr_debug_notify(KR_DEBUG_SSP1601, event, address, value, 2);
++  kr_debug_ssp_at_data = 0;
++}
++
++INLINE uint16_t kr_debug_ssp_read_ram(unsigned word)
++{
++  const uint16_t value = ssp->mem.RAM[word];
++  if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_READ))
++    kr_debug_ssp_data(KR_DEBUG_READ, KR_DEBUG_SSP_RAM0_BASE + (word << 1), value);
++  return value;
++}
++
++INLINE void kr_debug_ssp_write_ram(unsigned word, uint16_t value)
++{
++  ssp->mem.RAM[word] = value;
++  if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_WRITE))
++    kr_debug_ssp_data(KR_DEBUG_WRITE, KR_DEBUG_SSP_RAM0_BASE + (word << 1), value);
++}
++
++INLINE uint16_t kr_debug_ssp_read_program(unsigned word)
++{
++  const uint16_t value = ((const unsigned short *)svp->iram_rom)[word];
++  if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_READ))
++  {
++    const uint32_t base = word < 0x400 ? KR_DEBUG_SSP_IRAM_BASE : 0;
++    kr_debug_ssp_data(KR_DEBUG_READ, base + (word << 1), value);
++  }
++  return value;
++}
++
+ #ifdef USE_DEBUGGER
+ static int running = 0;
+ static int last_iram = 0;
+@@ -516,12 +551,11 @@
+     #define CADDR ((((mode<<16)&0x7f0000)|addr)<<1)
+ #endif
+     unsigned short *dram = (unsigned short *)svp->dram;
++    uint32_t data_base = UINT32_MAX;
++    int addr = ssp->pmac[write][reg] & 0xffff;
++    const int mode = ssp->pmac[write][reg] >> 16;
+     if (write)
+     {
+-      /*int mode = ssp->pmac_write[reg]&0xffff;
+-      int addr = ssp->pmac_write[reg]>>16;*/
+-      int addr = ssp->pmac[1][reg]&0xffff;
+-      int mode = ssp->pmac[1][reg]>>16;
+ #ifdef LOG_SVP
+       if ((mode & 0xb800) == 0xb800)
+         elprintf(EL_SVP|EL_ANOMALY, "ssp FIXME: mode %04x", mode);
+@@ -537,6 +571,7 @@
+                overwite_write(dram[addr], d);
+         } else dram[addr] = d;
+         ssp->pmac[1][reg] += inc;
++        data_base = KR_DEBUG_SSP_DRAM_BASE;
+       }
+       else if ((mode & 0xfbff) == 0x4018) /* DRAM, cell inc */
+       {
+@@ -549,6 +584,7 @@
+         } else dram[addr] = d;
+         /* ssp->pmac_write[reg] += (addr&1) ? (31<<16) : (1<<16); */
+         ssp->pmac[1][reg] += (addr&1) ? 31 : 1;
++        data_base = KR_DEBUG_SSP_DRAM_BASE;
+       }
+       else if ((mode & 0x47ff) == 0x001c) /* IRAM */
+       {
+@@ -558,8 +594,10 @@
+           elprintf(EL_SVP|EL_ANOMALY, "ssp FIXME: invalid IRAM addr: %04x", addr<<1);
+         elprintf(EL_SVP, "ssp IRAM w [%06x] %04x (inc %i)", (addr<<1)&0x7ff, d, inc >> 16);
+ #endif
+-        ((unsigned short *)svp->iram_rom)[addr&0x3ff] = d;
++        addr &= 0x3ff;
++        ((unsigned short *)svp->iram_rom)[addr] = d;
+         ssp->pmac[1][reg] += inc;
++        data_base = KR_DEBUG_SSP_IRAM_BASE;
+       }
+ #ifdef LOG_SVP
+       else
+@@ -571,11 +609,6 @@
+     }
+     else
+     {
+-      /*int mode = ssp->pmac_read[reg]&0xffff;
+-      int addr = ssp->pmac_read[reg]>>16;*/
+-      int addr = ssp->pmac[0][reg]&0xffff;
+-      int mode = ssp->pmac[0][reg]>>16;
+-
+       if      ((mode & 0xfff0) == 0x0800) /* ROM, inc 1, verified to be correct */
+       {
+ #ifdef LOG_SVP
+@@ -584,7 +617,9 @@
+ #endif
+         ssp->pmac[0][reg] ++;
+ 
+-        d = ((unsigned short *)cart.rom)[addr|((mode&0xf)<<16)];
++        addr |= (mode & 0xf) << 16;
++        d = ((unsigned short *)cart.rom)[addr];
++        data_base = 0;
+       }
+       else if ((mode & 0x47ff) == 0x0018) /* DRAM */
+       {
+@@ -594,6 +629,7 @@
+ #endif
+         d = dram[addr];
+         ssp->pmac[0][reg] += inc;
++        data_base = KR_DEBUG_SSP_DRAM_BASE;
+       }
+       else
+       {
+@@ -608,6 +644,9 @@
+     /* PMC value corresponds to last PMR accessed (not sure). */
+     rPMC.v = ssp->pmac[write][reg];
+ 
++    const unsigned event = write ? KR_DEBUG_WRITE : KR_DEBUG_READ;
++    if (UNLIKELY(kr_debug_ssp_mask & event) && data_base != UINT32_MAX)
++      kr_debug_ssp_data(event, data_base + ((uint32_t)addr << 1), d);
+     return d;
+   }
+ 
+@@ -858,63 +897,59 @@
+ 
+ static u32 ptr1_read_(int ri, int isj2, int modi3)
+ {
+-  /* int t = (op&3) | ((op>>6)&4) | ((op<<1)&0x18); */
+-  u32 mask, add = 0, t = ri | isj2 | modi3;
+-  unsigned char *rp = NULL;
++  const int t = ri | isj2 | modi3;
++  int add;
+   switch (t)
+   {
+     /* mod=0 (00) */
+     case 0x00:
+     case 0x01:
+-    case 0x02: return ssp->mem.bank.RAM0[ssp->ptr.bank.r0[t&3]];
+-    case 0x03: return ssp->mem.bank.RAM0[0];
++    case 0x02: return kr_debug_ssp_read_ram(ssp->ptr.bank.r0[t&3]);
++    case 0x03: return kr_debug_ssp_read_ram(0);
+     case 0x04:
+     case 0x05:
+-    case 0x06: return ssp->mem.bank.RAM1[ssp->ptr.bank.r1[t&3]];
+-    case 0x07: return ssp->mem.bank.RAM1[0];
++    case 0x06: return kr_debug_ssp_read_ram(0x100 + ssp->ptr.bank.r1[t&3]);
++    case 0x07: return kr_debug_ssp_read_ram(0x100 + 0);
+     /* mod=1 (01), "+!" */
+     case 0x08:
+     case 0x09:
+-    case 0x0a: return ssp->mem.bank.RAM0[ssp->ptr.bank.r0[t&3]++];
+-    case 0x0b: return ssp->mem.bank.RAM0[1];
++    case 0x0a: return kr_debug_ssp_read_ram(ssp->ptr.bank.r0[t&3]++);
++    case 0x0b: return kr_debug_ssp_read_ram(1);
+     case 0x0c:
+     case 0x0d:
+-    case 0x0e: return ssp->mem.bank.RAM1[ssp->ptr.bank.r1[t&3]++];
+-    case 0x0f: return ssp->mem.bank.RAM1[1];
++    case 0x0e: return kr_debug_ssp_read_ram(0x100 + ssp->ptr.bank.r1[t&3]++);
++    case 0x0f: return kr_debug_ssp_read_ram(0x100 + 1);
+     /* mod=2 (10), "-" */
+     case 0x10:
+     case 0x11:
+-    case 0x12: rp = &ssp->ptr.bank.r0[t&3]; t = ssp->mem.bank.RAM0[*rp];
+-               if (!(rST&7)) { (*rp)--; return t; }
+-               add = -1; goto modulo;
+-    case 0x13: return ssp->mem.bank.RAM0[2];
++    case 0x12: add = -1; break;
++    case 0x13: return kr_debug_ssp_read_ram(2);
+     case 0x14:
+     case 0x15:
+-    case 0x16: rp = &ssp->ptr.bank.r1[t&3]; t = ssp->mem.bank.RAM1[*rp];
+-               if (!(rST&7)) { (*rp)--; return t; }
+-               add = -1; goto modulo;
+-    case 0x17: return ssp->mem.bank.RAM1[2];
++    case 0x16: add = -1; break;
++    case 0x17: return kr_debug_ssp_read_ram(0x100 + 2);
+     /* mod=3 (11), "+" */
+     case 0x18:
+     case 0x19:
+-    case 0x1a: rp = &ssp->ptr.bank.r0[t&3]; t = ssp->mem.bank.RAM0[*rp];
+-               if (!(rST&7)) { (*rp)++; return t; }
+-               add = 1; goto modulo;
+-    case 0x1b: return ssp->mem.bank.RAM0[3];
++    case 0x1a: add = 1; break;
++    case 0x1b: return kr_debug_ssp_read_ram(3);
+     case 0x1c:
+     case 0x1d:
+-    case 0x1e: rp = &ssp->ptr.bank.r1[t&3]; t = ssp->mem.bank.RAM1[*rp];
+-               if (!(rST&7)) { (*rp)++; return t; }
+-               add = 1; goto modulo;
+-    case 0x1f: return ssp->mem.bank.RAM1[3];
++    case 0x1e: add = 1; break;
++    case 0x1f: return kr_debug_ssp_read_ram(0x100 + 3);
++    default: return 0;
+   }
+ 
+-  return 0;
+-
+-modulo:
+-  mask = (1 << (rST&7)) - 1;
+-  *rp = (*rp & ~mask) | ((*rp + add) & mask);
+-  return t;
++  unsigned char *rp = &ssp->ptr.r[t & 7];
++  const unsigned word = (isj2 ? 0x100 : 0) + *rp;
++  if (!(rST & 7))
++    *rp += add;
++  else
++  {
++    const unsigned mask = (1u << (rST & 7)) - 1;
++    *rp = (*rp & ~mask) | ((*rp + add) & mask);
++  }
++  return kr_debug_ssp_read_ram(word);
+ }
+ 
+ static void ptr1_write(int op, u32 d)
+@@ -925,12 +960,12 @@
+     /* mod=0 (00) */
+     case 0x00:
+     case 0x01:
+-    case 0x02: ssp->mem.bank.RAM0[ssp->ptr.bank.r0[t&3]] = d; return;
+-    case 0x03: ssp->mem.bank.RAM0[0] = d; return;
++    case 0x02: kr_debug_ssp_write_ram(ssp->ptr.bank.r0[t&3], d); return;
++    case 0x03: kr_debug_ssp_write_ram(0, d); return;
+     case 0x04:
+     case 0x05:
+-    case 0x06: ssp->mem.bank.RAM1[ssp->ptr.bank.r1[t&3]] = d; return;
+-    case 0x07: ssp->mem.bank.RAM1[0] = d; return;
++    case 0x06: kr_debug_ssp_write_ram(0x100 + ssp->ptr.bank.r1[t&3], d); return;
++    case 0x07: kr_debug_ssp_write_ram(0x100 + 0, d); return;
+     /* mod=1 (01), "+!" */
+     /* mod=3,      "+" */
+     case 0x08:
+@@ -938,53 +973,54 @@
+     case 0x09:
+     case 0x19:
+     case 0x0a:
+-    case 0x1a: ssp->mem.bank.RAM0[ssp->ptr.bank.r0[t&3]++] = d; return;
+-    case 0x0b: ssp->mem.bank.RAM0[1] = d; return;
++    case 0x1a: kr_debug_ssp_write_ram(ssp->ptr.bank.r0[t&3]++, d); return;
++    case 0x0b: kr_debug_ssp_write_ram(1, d); return;
+     case 0x0c:
+     case 0x1c:
+     case 0x0d:
+     case 0x1d:
+     case 0x0e:
+-    case 0x1e: ssp->mem.bank.RAM1[ssp->ptr.bank.r1[t&3]++] = d; return;
+-    case 0x0f: ssp->mem.bank.RAM1[1] = d; return;
++    case 0x1e: kr_debug_ssp_write_ram(0x100 + ssp->ptr.bank.r1[t&3]++, d); return;
++    case 0x0f: kr_debug_ssp_write_ram(0x100 + 1, d); return;
+     /* mod=2 (10), "-" */
+     case 0x10:
+     case 0x11:
+-    case 0x12: ssp->mem.bank.RAM0[ssp->ptr.bank.r0[t&3]--] = d; return;
+-    case 0x13: ssp->mem.bank.RAM0[2] = d; return;
++    case 0x12: kr_debug_ssp_write_ram(ssp->ptr.bank.r0[t&3]--, d); return;
++    case 0x13: kr_debug_ssp_write_ram(2, d); return;
+     case 0x14:
+     case 0x15:
+-    case 0x16: ssp->mem.bank.RAM1[ssp->ptr.bank.r1[t&3]--] = d; return;
+-    case 0x17: ssp->mem.bank.RAM1[2] = d; return;
++    case 0x16: kr_debug_ssp_write_ram(0x100 + ssp->ptr.bank.r1[t&3]--, d); return;
++    case 0x17: kr_debug_ssp_write_ram(0x100 + 2, d); return;
+     /* mod=3 (11) */
+-    case 0x1b: ssp->mem.bank.RAM0[3] = d; return;
+-    case 0x1f: ssp->mem.bank.RAM1[3] = d; return;
++    case 0x1b: kr_debug_ssp_write_ram(3, d); return;
++    case 0x1f: kr_debug_ssp_write_ram(0x100 + 3, d); return;
+   }
+ }
+ 
+ static u32 ptr2_read(int op)
+ {
+-  int mv = 0, t = (op&3) | ((op>>6)&4) | ((op<<1)&0x18);
++  const int t = (op&3) | ((op>>6)&4) | ((op<<1)&0x18);
++  unsigned word;
+   switch (t)
+   {
+     /* mod=0 (00) */
+     case 0x00:
+     case 0x01:
+-    case 0x02: mv = ssp->mem.bank.RAM0[ssp->ptr.bank.r0[t&3]]++; break;
+-    case 0x03: mv = ssp->mem.bank.RAM0[0]++; break;
++    case 0x02: word = ssp->ptr.bank.r0[t&3]; break;
++    case 0x03: word = 0; break;
+     case 0x04:
+     case 0x05:
+-    case 0x06: mv = ssp->mem.bank.RAM1[ssp->ptr.bank.r1[t&3]]++; break;
+-    case 0x07: mv = ssp->mem.bank.RAM1[0]++; break;
++    case 0x06: word = 0x100 + ssp->ptr.bank.r1[t&3]; break;
++    case 0x07: word = 0x100 + 0; break;
+     /* mod=1 (01) */
+-    case 0x0b: mv = ssp->mem.bank.RAM0[1]++; break;
+-    case 0x0f: mv = ssp->mem.bank.RAM1[1]++; break;
++    case 0x0b: word = 1; break;
++    case 0x0f: word = 0x100 + 1; break;
+     /* mod=2 (10) */
+-    case 0x13: mv = ssp->mem.bank.RAM0[2]++; break;
+-    case 0x17: mv = ssp->mem.bank.RAM1[2]++; break;
++    case 0x13: word = 2; break;
++    case 0x17: word = 0x100 + 2; break;
+     /* mod=3 (11) */
+-    case 0x1b: mv = ssp->mem.bank.RAM0[3]++; break;
+-    case 0x1f: mv = ssp->mem.bank.RAM1[3]++; break;
++    case 0x1b: word = 3; break;
++    case 0x1f: word = 0x100 + 3; break;
+     default:
+ #ifdef LOG_SVP
+       elprintf(EL_SVP|EL_ANOMALY, "ssp FIXME: invalid mod in ((rX))? @ %04x", GET_PPC_OFFS());
+@@ -992,7 +1028,9 @@
+       return 0;
+   }
+ 
+-  return ((unsigned short *)svp->iram_rom)[mv];
++  const uint16_t program_word = kr_debug_ssp_read_ram(word);
++  kr_debug_ssp_write_ram(word, program_word + 1);
++  return kr_debug_ssp_read_program(program_word);
+ }
+ 
+ 
+@@ -1120,8 +1158,13 @@
+     int op;
+     u32 tmpv;
+ 
+-    if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_EXEC))
+-      kr_debug_ssp_before_opcode(cycles);
++    if (UNLIKELY(kr_debug_ssp_mask & (KR_DEBUG_EXEC | KR_DEBUG_READ | KR_DEBUG_WRITE)))
++    {
++      if (kr_debug_ssp_mask & KR_DEBUG_EXEC)
++        kr_debug_ssp_before_opcode(cycles);
++      kr_debug_ssp_opcode_pc = (uint16_t)GET_PC();
++      kr_debug_ssp_slice_ticks = (unsigned)(cycles - g_cycles);
++    }
+     op = kr_cov_ssp_word();
+     if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_SSP1601))
+       kr_trace_exec(KR_DEBUG_SSP1601, (uint16_t)(GET_PC() - 1), (uint16_t)op, 2,
+@@ -1162,7 +1205,7 @@
+       case 0x06: tmpv = kr_cov_ssp_word(); ptr1_write(op, tmpv); break;
+ 
+       /* ld adr, a */
+-      case 0x07: ssp->mem.RAM[op & 0x1ff] = rA; break;
++      case 0x07: kr_debug_ssp_write_ram(op & 0x1ff, rA); break;
+ 
+       /* ld d, ri */
+       case 0x09: tmpv = rIJ[(op&3)|((op>>6)&4)]; REG_WRITE((op & 0xf0) >> 4, tmpv); break;
+@@ -1186,7 +1229,7 @@
+       }
+ 
+       /* ld d, (a) */
+-      case 0x25: tmpv = ((unsigned short *)svp->iram_rom)[rA]; REG_WRITE((op & 0xf0) >> 4, tmpv); break;
++      case 0x25: tmpv = kr_debug_ssp_read_program(rA); REG_WRITE((op & 0xf0) >> 4, tmpv); break;
+ 
+       /* bra cond, addr */
+       case 0x26: {
+@@ -1271,13 +1314,13 @@
+       case 0x71: tmpv = ptr1_read(op); OP_EORA(tmpv); break;
+ 
+       /* OP a, adr */
+-      case 0x03: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_LDA (tmpv); break;
+-      case 0x13: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_SUBA(tmpv); break;
+-      case 0x33: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_CMPA(tmpv); break;
+-      case 0x43: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_ADDA(tmpv); break;
+-      case 0x53: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_ANDA(tmpv); break;
+-      case 0x63: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_ORA (tmpv); break;
+-      case 0x73: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_EORA(tmpv); break;
++      case 0x03: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_LDA (tmpv); break;
++      case 0x13: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_SUBA(tmpv); break;
++      case 0x33: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_CMPA(tmpv); break;
++      case 0x43: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_ADDA(tmpv); break;
++      case 0x53: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_ANDA(tmpv); break;
++      case 0x63: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_ORA (tmpv); break;
++      case 0x73: tmpv = kr_debug_ssp_read_ram(op & 0x1ff); OP_EORA(tmpv); break;
+ 
+       /* OP a, imm */
+       case 0x14: tmpv = kr_cov_ssp_word(); OP_SUBA(tmpv); break;
+@@ -1375,9 +1418,11 @@
+   const ssp1601_t *state = &svp->ssp1601;
+   const ssp_reg_t *gr = state->gr;
+   out->pc = kr_debug_ssp_at_instruction ? (uint16_t)GET_PC() : gr[SSP_PC].byte.h;
++  if (kr_debug_ssp_at_data)
++    out->pc = kr_debug_ssp_opcode_pc;
+   out->sp = gr[SSP_STACK].byte.h;
+   out->cycles = (mcycles_vdp / MCYCLES_PER_LINE) * (uint64_t)SVP_cycles;
+-  if (kr_debug_ssp_at_instruction)
++  if (kr_debug_ssp_at_instruction || kr_debug_ssp_at_data)
+     out->cycles += kr_debug_ssp_slice_ticks;
+ 
+   kr_debug_ssp_register(out, "X", 4, gr[SSP_X].byte.h);

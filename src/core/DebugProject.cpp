@@ -15,7 +15,7 @@
 
 namespace {
 constexpr qint64 MaxBytes = 2 * 1024 * 1024;
-constexpr int Version = 1;
+constexpr int Version = 2;
 constexpr int MaxBreakpoints = 128;
 constexpr int MaxSymbols = 4096;
 constexpr int MaxGameLength = 256;
@@ -56,12 +56,16 @@ bool validAddress(quint32 cpu, quint32 address) {
 
 bool validBreakpoint(const DebuggerBreakpoint& bp) {
     return bp.id && bp.events && !(bp.events & ~(KR_DEBUG_EXEC | KR_DEBUG_READ | KR_DEBUG_WRITE)) &&
-           bp.first <= bp.last && validAddress(bp.cpu, bp.last) &&
+           bp.first <= bp.last &&
+           ((bp.cpu&0xff)==KR_DEBUG_SSP1601 ?
+             (bp.cpu>>8)<=1 && kr_debug_ssp_event_address_mask(bp.events) &&
+             bp.last<=kr_debug_ssp_event_address_mask(bp.events) : validAddress(bp.cpu, bp.last)) &&
            validText(bp.condition, MaxConditionLength);
 }
 
 bool validSymbol(const DebugProjectSymbol& symbol) {
-    return validAddress(symbol.cpu, symbol.address) && validText(symbol.label, MaxLabelLength) &&
+    return validAddress(symbol.cpu, symbol.address) && symbol.source < KR_COV_MAX_SOURCES &&
+           (symbol.source || !symbol.offset) && validText(symbol.label, MaxLabelLength) &&
            validText(symbol.comment, MaxCommentLength) &&
            (symbol.bookmarked || !symbol.label.trimmed().isEmpty() || !symbol.comment.trimmed().isEmpty());
 }
@@ -84,11 +88,11 @@ bool checkCounts(qsizetype breakpoints, qsizetype symbols, qsizetype watches, QS
 template <typename Entry, typename Key>
 bool validateEntries(const QVector<Entry>& entries, bool (*valid)(const Entry&), Key key,
                      const char* errorText, QString& error) {
-    QSet<quint64> keys;
+    QSet<decltype(key(Entry{}))> keys;
     keys.reserve(entries.size());
     for (qsizetype i = 0; i < entries.size(); ++i) {
         const auto& entry = entries[i];
-        const quint64 id = key(entry);
+        const auto id = key(entry);
         if (!valid(entry) || keys.contains(id)) {
             error = tr(errorText).arg(i + 1);
             return false;
@@ -108,13 +112,13 @@ bool validate(const DebugProject& project, QString& error) {
     return validateEntries(project.breakpoints, validBreakpoint,
                            [](const auto& bp) { return bp.id; }, breakpointError, error) &&
            validateEntries(project.symbols, validSymbol,
-                           [](const auto& symbol) { return (quint64(symbol.cpu) << 32) | symbol.address; },
+                           [](const auto& symbol) { return QStringLiteral("%1:%2:%3").arg(symbol.cpu).arg(symbol.source).arg(symbol.source ? symbol.offset : symbol.address); },
                            symbolError, error) &&
            validateEntries(project.watches, validWatch,
                            [](const auto& watch) { return watch.id; }, watchError, error);
 }
 
-// All numeric fields are integer tokens in version 1. Check before building
+// All numeric fields are integer tokens in supported versions. Check before building
 // the JSON tree so a decimal cannot round to an integer in the Qt parser.
 bool integerTokens(const QByteArray& bytes) {
     bool quoted = false;
@@ -175,7 +179,8 @@ bool readBreakpoint(const QJsonObject& row, DebuggerBreakpoint& bp) {
 }
 
 bool readSymbol(const QJsonObject& row, DebugProjectSymbol& symbol) {
-    return row.size() == 5 && readUInt(row, "cpu", symbol.cpu) && readUInt(row, "address", symbol.address) &&
+    return (row.size() == 5 || (row.size() == 7 && readUInt(row, "source", symbol.source) &&
+           readUInt(row, "offset", symbol.offset))) && readUInt(row, "cpu", symbol.cpu) && readUInt(row, "address", symbol.address) &&
            readText(row, "label", symbol.label) && readText(row, "comment", symbol.comment) &&
            readBool(row, "bookmarked", symbol.bookmarked);
 }
@@ -220,6 +225,7 @@ QByteArray encode(const DebugProject& project) {
         symbols.append(QJsonObject{
             {"cpu", qint64(symbol.cpu)}, {"address", qint64(symbol.address)}, {"label", symbol.label},
             {"comment", symbol.comment}, {"bookmarked", symbol.bookmarked},
+            {"source", qint64(symbol.source)}, {"offset", qint64(symbol.offset)},
         });
     }
     for (const auto& watch : project.watches) {
@@ -267,7 +273,7 @@ bool loadDebugProject(const QString& path, DebugProject& result, QString& error)
         return false;
     }
     quint32 version;
-    if (!readUInt(root, "version", version) || version != Version) {
+    if (!readUInt(root, "version", version) || (version != 1 && version != Version)) {
         error = tr("Версия проекта отладчика не поддерживается.");
         return false;
     }
@@ -283,6 +289,12 @@ bool loadDebugProject(const QString& path, DebugProject& result, QString& error)
     const auto bpRows = breakpoints.toArray();
     const auto symbolRows = symbols.toArray();
     const auto watchRows = watches.toArray();
+    for (const auto row : symbolRows) {
+        if (!row.isObject() || row.toObject().size() != (version == 1 ? 5 : 7)) {
+            error = tr("Некорректные параметры проекта отладчика.");
+            return false;
+        }
+    }
     if (!checkCounts(bpRows.size(), symbolRows.size(), watchRows.size(), error) ||
         !readEntries(bpRows, project.breakpoints, readBreakpoint, breakpointError, error) ||
         !readEntries(symbolRows, project.symbols, readSymbol, symbolError, error) ||

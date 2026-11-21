@@ -772,9 +772,9 @@ void EmulationSession::run() {
     LibretroHost::DebugCapabilities debugAvailable;
     const auto updateDebugControls = [&] {
         const auto available = host.debugCapabilities();
-        if (available.video != debugAvailable.video || available.audio != debugAvailable.audio) {
+        if (available.video != debugAvailable.video || available.audio != debugAvailable.audio || available.firecore != debugAvailable.firecore) {
             debugAvailable = available;
-            emit debugControlsChanged(available.video,available.audio);
+            emit debugControlsChanged(available.video,available.audio,available.firecore);
         }
     };
     auto rewindStatus = [&](bool enabled) {
@@ -1965,13 +1965,13 @@ void EmulationSession::run() {
             case Type::CheatSearchClear: cheatSearch.clear(); break;
             case Type::CheatSearch: {
                 const auto args = QJsonDocument::fromJson(command.bytes).object();
-                QByteArray memory; quint32 base=0; bool bigEndian=false;
+                QByteArray memory; quint32 base=0, watchDomain=0; bool bigEndian=false;
                 const int width=args.value("width").toInt(), comparison=args.value("comparison").toInt();
                 const auto value=quint32(args.value("value").toDouble());
                 bool ok=false;
                 if (achievementHardcore || movie.active())
                     error=Localization::text(QStringLiteral("Поиск читов недоступен в текущем режиме."));
-                else if (host.cheatMemory(memory,base,bigEndian,error))
+                else if (host.cheatMemory(memory,base,bigEndian,error,&watchDomain))
                     ok=cheatSearch.filter(memory,base,bigEndian,width,Cheats::Search::Comparison(comparison),value,
                         args.value("restart").toBool(),error);
                 QJsonArray results;
@@ -1979,7 +1979,8 @@ void EmulationSession::run() {
                     results.append(QJsonObject{{"address",double(match.address)},
                         {"previous",double(match.previous)},{"value",double(match.value)}});
                 const QJsonObject result{{"error",error},{"count",double(cheatSearch.count())},{"width",width},
-                    {"base",double(base)},{"bigEndian",bigEndian},{"results",results}};
+                    {"base",double(base)},{"bigEndian",bigEndian},{"watchDomain",double(watchDomain)},
+                    {"results",results}};
                 emit cheatSearchResults(command.requestId,QJsonDocument(result).toJson(QJsonDocument::Compact));
                 break;
             }

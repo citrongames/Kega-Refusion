@@ -194,7 +194,8 @@ static bool kr_cov_in_storage(const void *ptr, const void *storage, unsigned siz
   return true;
 }
 
-kr_cov_location kr_cov_locate(uint32_t address, const uint8_t *bytes)
+static kr_cov_location kr_cov_locate_in(uint32_t address, const uint8_t *bytes,
+                                       const kr_cov_storage *storage, unsigned count)
 {
   if (!bytes) return (kr_cov_location){0, address};
   uint32_t offset;
@@ -208,13 +209,62 @@ kr_cov_location kr_cov_locate(uint32_t address, const uint8_t *bytes)
         return (kr_cov_location){KR_COV_CD_WORD, ((offset & ~1u) << 1) | (bank << 1) | (offset & 1u)};
   }
   /* Secondary backing storage (notably SVP inside cart.rom) takes priority. */
-  for (unsigned i = kr_cov_bound_count; i; --i)
+  for (unsigned i = count; i; --i)
   {
-    const kr_cov_storage *entry = &kr_cov_bound[i - 1];
+    const kr_cov_storage *entry = &storage[i - 1];
     if (kr_cov_in_storage(bytes, entry->bytes, entry->info.size, &offset))
       return (kr_cov_location){entry->info.id, offset};
   }
   return (kr_cov_location){0, address};
+}
+
+kr_cov_location kr_cov_locate(uint32_t address, const uint8_t *bytes)
+{
+  return kr_cov_locate_in(address, bytes, kr_cov_bound, kr_cov_bound_count);
+}
+
+RETRO_API size_t retro_kegarefusion_debug_locations_v1(unsigned version, unsigned cpu,
+    const uint32_t *addresses, kr_cov_location *out, size_t count, unsigned flags)
+{
+  if (version != KR_COV_VERSION || !addresses || !out || count > 4096 ||
+      !cpu || (cpu & (cpu - 1)) || !(kr_debug_cpu_set() & cpu) || (flags & ~1u)) return 0;
+  kr_cov_storage storage[KR_COV_MAX_SOURCES];
+  const unsigned storage_count = kr_cov_layout(storage);
+  for (size_t i = 0; i < count; ++i)
+  {
+    const uint32_t a = addresses[i] & kr_debug_address_mask(cpu);
+    const uint8_t *bytes = NULL;
+    if (cpu == KR_DEBUG_SSP1601) bytes = svp->iram_rom + (a << 1);
+    else if (cpu == KR_DEBUG_Z80) {
+      const uint8_t *base = z80_readmap[a >> 10];
+      if (base) bytes = base + (a & 0x3ff);
+    }
+    else if (cpu == KR_DEBUG_M68K || cpu == KR_DEBUG_SUB68K) {
+      const m68ki_cpu_core *core = cpu == KR_DEBUG_SUB68K ? &s68k : &m68k;
+      const uint8_t *base = core->memory_map[a >> 16].base;
+#ifdef KEGAREFUSION_32X
+      if (cpu == KR_DEBUG_M68K) base = kr_cov_32x_md_code_base(a, base);
+#endif
+      if (base) bytes = base + (a & 0xffff);
+    }
+#ifdef KEGAREFUSION_32X
+    else bytes = kr_cov_32x_code(cpu, a);
+#endif
+    out[i] = kr_cov_locate_in(a, bytes, storage, storage_count);
+    /* The disassembler may show the old prefetched opcode, not the new
+       mapping. Never attribute that word to the replacement bank by guessing. */
+    uint16_t opcode;
+    if ((flags & 1u) && cpu == KR_DEBUG_M68K && kr_debug_m68k_prefetch(a, &opcode)) {
+      const kr_cov_prefetch_tag *tag = &kr_cov_prefetch_tags[0];
+      const kr_cov_location previous = tag->location[0];
+      /* Coverage marks the copied backing page. It carries no provenance for
+         which cartridge bank supplied a word from the shadowed tail. */
+      const bool copied_tail = previous.source == KR_COV_32X_BOOT && previous.offset >= 0x100;
+      out[i] = !copied_tail && tag->epoch == kr_cov_epoch && tag->address == a && tag->value == opcode ?
+               previous : (kr_cov_location){0, a};
+    }
+  }
+  return count;
 }
 
 void kr_cov_emit(unsigned cpu, unsigned kind, kr_cov_location location, unsigned width)

@@ -35,6 +35,23 @@ enum kr_debug_event {
     KR_DEBUG_WRITE = 4    /* After a CPU data write has reached the bus. */
 };
 
+/* SSP data addresses are byte offsets. The internal RAM bases are debugger
+ * identifiers for the two banks. Other CPUs retain their usual bus map. */
+enum kr_debug_ssp_data_base {
+    KR_DEBUG_SSP_DRAM_BASE = 0x300000,
+    KR_DEBUG_SSP_IRAM_BASE = 0x390000,
+    KR_DEBUG_SSP_RAM0_BASE = 0x400000,
+    KR_DEBUG_SSP_RAM1_BASE = 0x400200
+};
+
+/* A single SSP breakpoint cannot mix program-word and data-byte addresses. */
+static inline uint32_t kr_debug_ssp_event_address_mask(unsigned events)
+{
+    if (events & KR_DEBUG_EXEC)
+        return (events & (KR_DEBUG_READ | KR_DEBUG_WRITE)) ? 0 : UINT32_C(0xffff);
+    return UINT32_C(0xffffff);
+}
+
 enum kr_debug_instruction_flag { KR_DEBUG_CALL=1, KR_DEBUG_RETURN=2, KR_DEBUG_DELAYED=4 };
 
 typedef void (*kr_debug_callback)(void *opaque, unsigned cpu, unsigned event,
@@ -69,6 +86,8 @@ typedef struct kr_debug_instruction {
  *                                      unsigned m68k_mask, unsigned z80_mask);
  * A null callback detaches regardless of the masks. The masks combine event
  * bits. An execute event has size zero. Trap addresses are logical.
+ * SSP execute addresses are 16-bit program words. SSP data events use byte
+ * addresses and size 2. Peek and disassembly continue to use program words.
  *
  * bool retro_kegarefusion_debug_state(unsigned cpu, kr_debug_cpu *, size_t);
  * bool retro_kegarefusion_debug_disassemble(unsigned cpu, uint32_t address,

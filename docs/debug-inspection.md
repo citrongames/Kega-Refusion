@@ -13,7 +13,7 @@ Layer masks, backdrop and channel gain remain temporary presentation controls.
 - Memory / Hardware: actual console, CPU/device presence, relevant mapper bank
   registers, ports, CD and MegaLD controller state.
 - Graphics: decoded tiles, maps, sprites, palette, VDP registers and 32X
-  indexed/direct-color/RLE framebuffer snapshots.
+  indexed/direct-color/RLE framebuffer snapshots and Firecore bitmap snapshots.
 - Sound Channels / State: PSG, common MAME/Nuked YM2612 channel/timer state,
   physically available YM2413, CD PCM/CDDA, 32X PWM and supported external music
   state. Inspection never activates an audio decoder or advances playback.
@@ -33,9 +33,11 @@ Sprite order follows the captured table and links. Raster history, scanline
 sprite evaluation and pixel provenance remain later roadmap work. The separate
 [Trace window](debug-tracing.md) records implemented hardware events.
 
-Firecore six-bit tiles and RGB888 palette are supported. Bitmap/YUV and
-interlaced six-bit tile previews explicitly report unsupported modes;
-raw memory, palette and registers remain inspectable. MegaLD player/controller
+The **Firecore bitmap** tab shows the active bitmap area decoded from the
+captured 2×2 YUV blocks in VRAM. Select a block to open its four bytes in
+Memory. The snapshot shows the bitmap layer before sprite composition.
+Firecore six-bit tiles and RGB888 palette are also supported. Interlaced
+six-bit tile previews explicitly report an unsupported mode. MegaLD player/controller
 values are available, while separate disc-video/compositor inspection remains
 later work. Special cartridge memories/values are exposed only when supported,
 not inferred from game names.

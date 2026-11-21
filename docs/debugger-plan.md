@@ -19,6 +19,7 @@ for the delivered interface and explicit scope limitations.
   - [x] Instruction/event trace, bounded history, explicit asynchronous file capture.
   - [x] Physical-bank-aware code/data coverage, bounded maps and explicit asynchronous export.
   - [x] Explicit debug projects and live memory watches.
+  - [x] Physical-bank-aware labels, Firecore bitmap inspection and SSP1601 data stops.
   - [ ] Exact pixel provenance and profiling. Deferred at the user's request.
 
 Phase 1 completed on 2026-11-21 with the scope and limits recorded in
@@ -37,9 +38,11 @@ state/rewind, link-console and performance checks.
 The third tranche adds [debug projects and live memory watches](debugger-projects.md).
 [Verification](debugger-projects-verification.md) covers bounded project files,
 physical memory watches and acknowledged application of breakpoint settings.
-Physical-bank-aware labels, scanline/interrupt run controls and reverse-instruction
-execution remain later work. Exact pixel
-provenance and profiling are deferred. Append platform and device verification
+The fourth tranche adds physical-bank-aware labels, a Firecore YUV bitmap viewer,
+SSP1601 data breakpoints, and a simplified watch list connected to cheat search.
+See [verification](debugger-banks-devices-verification.md) for exact scope and costs.
+Scanline/interrupt run controls and reverse-instruction execution remain later
+work. Exact pixel provenance and profiling are deferred. Append platform and device verification
 evidence before completing each phase.
 
 ## Scope and interface
@@ -51,7 +54,7 @@ core. Use a common backend and connected, modeless windows:
 | --- | --- |
 | Debugger | Disassembly, registers, flags, stack, breakpoints and execution controls |
 | Memory | Memory domains, search, editing and bank mapping |
-| Memory Watch | Named values by console and physical domain, with previous value and change count |
+| Memory Watch | Live named values from RAM search, the memory inspector or manually entered addresses |
 | Graphics | Extend existing graphics controls with tiles, maps, sprites, palettes, registers and framebuffers |
 | Sound | Extend existing channel controls with chip state, PCM and external-track inspection |
 | Trace | Selected CPU instructions and hardware events |
@@ -264,8 +267,8 @@ per-device limitations are recorded in [Phase 3 verification](debugger-phase3-ve
 | --- | --- |
 | Sega CD and MegaLD | Sub 68000 targets use the existing CD scheduler. Main/sub execution and data stops preserve the full-frame continuation path. |
 | 32X and CD+32X | Both SH-2 targets use logical 32-bit addresses and interpreter hooks while armed. Resume honors delay slots and returns to the normal execution backend when hooks are cleared. |
-| Firecore | Existing 68000/Z80 targets follow the actual hardware. Bitmap/YUV graphics previews remain a separate limitation. |
-| SVP | SSP1601 code addresses are in words. Execution stops and instruction controls use the hardware return stack. Data traps remain unavailable. |
+| Firecore | Existing 68000/Z80 targets follow the actual hardware. The graphics viewer includes the YUV bitmap snapshot and 2×2-block navigation into VRAM. |
+| SVP | SSP1601 code addresses are in words. Instruction controls use the hardware return stack. Data stops cover internal RAM, PM cartridge ROM and shared DRAM, IRAM writes, and program-space data operands using the byte addresses in the [CPU debugger guide](debug-execution.md#execution). |
 | Local Link Cable | A/B CPU targets and a shared inspection selector identify the actual console. Closing the game or disabling the pair releases peer state. Link topology changes are blocked during input recording, playback and online play. |
 | Safe editing | The backend exposes writable registers and flags at authorized stops. Physical memory writes are bounded and require a full-frame pause. ROM, MMIO and domains that lack safe write support remain read-only. |
 

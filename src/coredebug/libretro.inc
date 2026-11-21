@@ -98,8 +98,9 @@ static int kr_debug_target_info(unsigned cpu, kr_debug_target *out)
     out->address_shift = 1;
     out->clock_hz = (uint32_t)(((uint64_t)system_clock * SVP_cycles) / MCYCLES_PER_LINE);
     out->flags_kind = KR_DEBUG_FLAGS_SSP1601;
-    out->capabilities = KR_DEBUG_CAP_EXEC | KR_DEBUG_CAP_STEP | KR_DEBUG_CAP_OVER |
-                       KR_DEBUG_CAP_OUT | KR_DEBUG_CAP_STACK_ASCENDING;
+    out->capabilities = KR_DEBUG_CAP_EXEC | KR_DEBUG_CAP_READ | KR_DEBUG_CAP_WRITE |
+                       KR_DEBUG_CAP_STEP | KR_DEBUG_CAP_OVER | KR_DEBUG_CAP_OUT |
+                       KR_DEBUG_CAP_STACK_ASCENDING;
     name = "SVP SSP1601";
   }
   else if (cpu == KR_DEBUG_SUB68K) name = "Sub 68000";
@@ -183,8 +184,9 @@ void kr_debug_notify(unsigned cpu, unsigned event, uint32_t address,
     const unsigned previous_event = kr_debug_callback_event;
     kr_debug_callback_cpu = cpu;
     kr_debug_callback_event = event;
-    kr_debug_callback_fn(kr_debug_callback_user, cpu, event,
-                         address & kr_debug_address_mask(cpu), value, size);
+    const uint32_t mask = cpu == KR_DEBUG_SSP1601 ? kr_debug_ssp_event_address_mask(event)
+                                                 : kr_debug_address_mask(cpu);
+    kr_debug_callback_fn(kr_debug_callback_user, cpu, event, address & mask, value, size);
     kr_debug_callback_cpu = previous_cpu;
     kr_debug_callback_event = previous_event;
   }

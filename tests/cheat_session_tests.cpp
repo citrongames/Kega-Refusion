@@ -172,6 +172,7 @@ int main(int argc, char** argv) {
         check(found.value(QStringLiteral("error")).toString().isEmpty() &&
               found.value(QStringLiteral("base")).toDouble() == 0xff0000 &&
               found.value(QStringLiteral("bigEndian")).toBool() &&
+              found.value(QStringLiteral("watchDomain")).toInt() == KR_MEM_RAM &&
               found.value(QStringLiteral("count")).toDouble() > 256 &&
               found.value(QStringLiteral("results")).toArray().size() == 256,
               "main RAM search metadata or result bound");

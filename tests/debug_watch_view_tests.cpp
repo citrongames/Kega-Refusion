@@ -2,21 +2,23 @@
 #include "ui/DebugWatchDialog.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSet>
 #include <QTableView>
 #include <QTimer>
+#include <QToolButton>
 
 #include <cstdio>
 #include <cstdlib>
 
 namespace {
-constexpr int valueColumn = 4;
-constexpr int previousColumn = 5;
-constexpr int changesColumn = 6;
+constexpr int addressColumn = 1;
+constexpr int valueColumn = 2;
 
 void check(bool condition, const char* message) {
     if (condition) return;
@@ -45,6 +47,7 @@ DebugWatchDomain ram(quint32 instance) {
     domain.instance = instance;
     domain.native.id = KR_MEM_RAM;
     domain.native.size = 65536;
+    domain.native.address_base = 0xff0000;
     domain.native.big_endian = 1;
     qstrncpy(domain.native.name, "Work RAM", sizeof(domain.native.name));
     return domain;
@@ -64,6 +67,8 @@ int main(int argc, char** argv) {
     auto* table = find<QTableView>(dialog, "debugWatchTable");
     auto* model = table->model();
     auto value = [model](int row, int column) { return model->index(row, column).data().toString(); };
+    auto history = [model](int row) { return model->index(row, valueColumn).data(Qt::ToolTipRole).toString(); };
+    check(model->columnCount() == 3, "Watch exposes only name, address and current value");
     auto* signedEntry = "Enemy health";
     auto s16 = entry(10, 0xa0, 2, DebugWatchEntry::Signed);
     s16.name = QString::fromLatin1(signedEntry);
@@ -81,6 +86,8 @@ int main(int argc, char** argv) {
     snapshot.info.version = KR_INSPECT_VERSION;
     snapshot.generation = 2;
     snapshot.gameKey = QStringLiteral("Watch fixture");
+    snapshot.instance = 1;
+    snapshot.memoryDomain = KR_MEM_RAM;
     snapshot.watchDomains = {ram(0), ram(1)};
     snapshot.watchValues = {
         {s16.id, QByteArray::fromHex("ff80"), true},
@@ -95,8 +102,8 @@ int main(int argc, char** argv) {
     check(value(1, valueColumn) == QStringLiteral("0x12345678"), "Forced little-endian 32-bit decode");
     check(value(2, valueColumn) == QStringLiteral("0b10100101") &&
           value(3, valueColumn) == QStringLiteral("9"), "Binary and unsigned formatting");
-    check(value(0, previousColumn) == QStringLiteral("—") && value(0, changesColumn) == QStringLiteral("0"),
-          "First sample starts each baseline");
+    check(value(0, addressColumn) == QStringLiteral("0xFF00A0"), "List shows the full RAM address");
+    check(history(0) == QStringLiteral("-128"), "First sample starts each baseline");
 
     changed = 0;
     ++snapshot.frame;
@@ -105,8 +112,8 @@ int main(int argc, char** argv) {
     snapshot.watchValues[0].bytes = QByteArray::fromHex("0008");
     dialog.setSnapshot(snapshot);
     check(changed == 1 && value(0, valueColumn) == QStringLiteral("8") &&
-          value(0, previousColumn) == QStringLiteral("-128") && value(0, changesColumn) == QStringLiteral("1"),
-          "One changed sample updates only its value/history cells");
+          history(0).contains(QStringLiteral("-128")) && history(0).endsWith(QStringLiteral("1")),
+          "One changed sample updates its current value and history tooltip");
     check(model->index(0, valueColumn).data(Qt::BackgroundRole).isValid(), "Changed sample highlighted");
     if (!previewPath.isEmpty()) {
         QApplication::processEvents();
@@ -115,8 +122,10 @@ int main(int argc, char** argv) {
     dialog.setSnapshot(snapshot);
     changed = 0;
     dialog.setSnapshot(snapshot);
-    check(changed == 0 && value(0, changesColumn) == QStringLiteral("1") &&
-          value(0, previousColumn) == QStringLiteral("-128"), "Identical values retain the last differing value");
+    check(changed == 0 && history(0).endsWith(QStringLiteral("1")) &&
+          history(0).contains(QStringLiteral("-128")) &&
+          model->index(0, valueColumn).data(Qt::BackgroundRole).isValid(),
+          "Identical values retain the last differing value and brief highlight");
 
     auto* open = find<QPushButton>(dialog, "debugWatchMemory");
     table->selectRow(0);
@@ -131,16 +140,21 @@ int main(int argc, char** argv) {
     check(navigatedInstance == 1 && navigatedDomain == KR_MEM_RAM && navigatedOffset == s16.offset,
           "Open Memory uses the watched console and physical region");
 
-    auto* clearHistory = find<QPushButton>(dialog, "debugWatchClearHistory");
-    clearHistory->click();
-    check(value(0, valueColumn) == QStringLiteral("8") && value(0, previousColumn) == QStringLiteral("—") &&
-          value(0, changesColumn) == QStringLiteral("0"), "Clear history retains values and entries");
+    QTimer::singleShot(0, &dialog, [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        check(menu && !menu->actions().isEmpty(), "Open watch context menu");
+        menu->actions().last()->trigger();
+        menu->close();
+    });
+    table->customContextMenuRequested(table->visualRect(model->index(0, addressColumn)).center());
+    check(value(0, valueColumn) == QStringLiteral("8") && history(0) == QStringLiteral("8"),
+          "Clear history retains values and entries");
     snapshot.watchValues[0].bytes = QByteArray::fromHex("0009");
     dialog.setSnapshot(snapshot);
     ++snapshot.generation;
     snapshot.watchValues[0].bytes = QByteArray::fromHex("000d");
     dialog.setSnapshot(snapshot);
-    check(value(0, valueColumn) == QStringLiteral("13") && value(0, changesColumn) == QStringLiteral("0"),
+    check(value(0, valueColumn) == QStringLiteral("13") && history(0) == QStringLiteral("13"),
           "A new generation resets sampled change history");
 
     snapshot.watchValues[0].bytes.clear();
@@ -150,24 +164,49 @@ int main(int argc, char** argv) {
     snapshot.watchDomains.append(ram(1));
     snapshot.watchValues[0].bytes = QByteArray::fromHex("000e");
     dialog.setSnapshot(snapshot);
-    check(value(0, changesColumn) == QStringLiteral("0"), "Returning from an unavailable sample starts a baseline");
+    check(history(0) == QStringLiteral("14"), "Returning from an unavailable sample starts a baseline");
 
     auto* edit = find<QPushButton>(dialog, "debugWatchEdit");
     QTimer::singleShot(0, &dialog, [&] {
         auto* active = QApplication::activeModalWidget();
         check(active != nullptr, "Open watch editor");
         auto* name = find<QLineEdit>(*active, "debugWatchEditorName");
+        auto* console = find<QComboBox>(*active, "debugWatchEditorConsole");
+        auto* advanced = find<QToolButton>(*active, "debugWatchEditorAdvanced");
+        check(!console->isVisible(), "Advanced controls start collapsed");
+        advanced->click();
+        check(console->isVisible() && console->currentData().toUInt() == 1, "Advanced console selection is retained");
+        advanced->click();
         name->setText(QStringLiteral("Health"));
         active->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
     });
     edit->click();
     check(dialog.entries().front().name == QStringLiteral("Health") &&
-          dialog.entries().front().id == s16.id, "Editing retains the watch identity");
+          dialog.entries().front().id == s16.id && dialog.entries().front().format == DebugWatchEntry::Signed,
+          "Editing retains the watch identity and format");
+
+    auto* add = find<QPushButton>(dialog, "debugWatchAdd");
+    QTimer::singleShot(0, &dialog, [&] {
+        auto* active = QApplication::activeModalWidget();
+        check(active != nullptr, "Open new watch editor");
+        find<QLineEdit>(*active, "debugWatchEditorName")->setText(QStringLiteral("Lives"));
+        find<QLineEdit>(*active, "debugWatchEditorOffset")->setText(QStringLiteral("0xFF0270"));
+        active->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    add->click();
+    const auto added = dialog.entries().last();
+    check(added.name == QStringLiteral("Lives") && added.instance == 1 && added.domain == KR_MEM_RAM &&
+          added.offset == 0x270 && added.width == 1 && added.format == DebugWatchEntry::Unsigned &&
+          added.order == DebugWatchEntry::Native, "Manual watch uses the current console, RAM and simple defaults");
+    snapshot.watchValues.append({added.id, QByteArray::fromHex("03"), true});
+    dialog.setSnapshot(snapshot);
+    check(value(4, addressColumn) == QStringLiteral("0xFF0270") && value(4, valueColumn) == QStringLiteral("3"),
+          "Manually entered RAM address is sampled as a physical offset");
 
     const int beforeHide = subscriptions;
     dialog.hide();
     dialog.setSnapshot(snapshot);
-    check(subscriptions == beforeHide + 1 && value(0, valueColumn) == QStringLiteral("—") && dialog.entries().size() == 4,
+    check(subscriptions == beforeHide + 1 && value(0, valueColumn) == QStringLiteral("—") && dialog.entries().size() == 5,
           "Hiding unsubscribes and clears samples, preserving saved watches");
 
     QVector<DebugWatchEntry> tooMany(DebugWatchLimit + 5, s16);

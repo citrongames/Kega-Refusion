@@ -219,6 +219,7 @@ bool LibretroHost::initialize(QString& error) {
     api_->set_firecore_dmc_pcm = reinterpret_cast<decltype(api_->set_firecore_dmc_pcm)>(library_.resolve("retro_kegarefusion_set_firecore_dmc_pcm"));
     api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
+    api_->debug_locations = reinterpret_cast<decltype(api_->debug_locations)>(library_.resolve("retro_kegarefusion_debug_locations_v1"));
     api_->coverage_sources = reinterpret_cast<decltype(api_->coverage_sources)>(library_.resolve("retro_kegarefusion_coverage_sources_v1"));
     api_->coverage_bind = reinterpret_cast<decltype(api_->coverage_bind)>(library_.resolve("retro_kegarefusion_coverage_bind_v1"));
     api_->trace_bind = reinterpret_cast<decltype(api_->trace_bind)>(library_.resolve("retro_kegarefusion_trace_bind_v1"));
@@ -1009,6 +1010,7 @@ LibretroHost::DebugCapabilities LibretroHost::debugCapabilities() const {
         uint32_t video = 0; uint64_t audio = 0;
         api_->debug_capabilities(&video,&audio);
         result.video = video; result.audio = audio;
+        result.firecore = contentFirecore_ && api_->inspect_info && api_->inspect_read;
         if (hasCdHardware()) result.audio |= quint64(0x3ff) << 24;
         if (api_->paprium_active && api_->paprium_active()) result.audio |= quint64(1) << 37;
     }
@@ -1166,8 +1168,10 @@ bool LibretroHost::cheatsSupported() const {
     return loaded_ && api_->cheat_reset && api_->cheat_set &&
         (!(api_->features && (api_->features() & 2u)) || api_->invalidate_code);
 }
-bool LibretroHost::cheatMemory(QByteArray& memory, quint32& base, bool& bigEndian, QString& error) const {
+bool LibretroHost::cheatMemory(QByteArray& memory, quint32& base, bool& bigEndian, QString& error,
+                              quint32* watchDomain) const {
     error.clear();
+    if (watchDomain) *watchDomain = 0;
     if (!cheatsSupported() || !api_->get_memory_data || !api_->get_memory_size) {
         error = Localization::text(QStringLiteral("Память игры недоступна для поиска.")); return false;
     }
@@ -1184,6 +1188,25 @@ bool LibretroHost::cheatMemory(QByteArray& memory, quint32& base, bool& bigEndia
 #endif
     }
     memory = std::move(snapshot); base = md?0xff0000u:0xc000u; bigEndian = md;
+    if (watchDomain) {
+        // Both regions expose libretro's system RAM in canonical guest order.
+        // Ask for the catalog only and require it to cover the search range.
+        DebugInspectionRequest request;
+        request.parts = KR_INSPECT_MEMORY;
+        request.length = 0;
+        const auto inspection = inspect(request);
+        const quint32 expected = md ? KR_MEM_RAM : KR_MEM_ZRAM;
+        if (inspection.available()) {
+            for (quint32 i = 0; i < inspection.info.domain_count; ++i) {
+                const auto& domain = inspection.info.domains[i];
+                if (domain.id == expected && domain.address_base == base &&
+                    domain.size >= size && bool(domain.big_endian) == bigEndian) {
+                    *watchDomain = domain.id;
+                    break;
+                }
+            }
+        }
+    }
     return true;
 }
 QString LibretroHost::cheatSupportText() const {

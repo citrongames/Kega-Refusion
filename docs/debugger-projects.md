@@ -2,21 +2,27 @@
 
 ## Keep a watch list
 
-Open **Debug → Memory Watch** to add a watch. Choose the console, physical
-memory domain, byte offset and a width of 1, 2 or 4 bytes. The display supports
-hexadecimal, unsigned and signed decimal, and binary. Use the domain's
-native byte order or select big-endian or little-endian for interpretation.
-The optional name can describe the location's purpose.
+Select a result in **Cheats → Cheat search…** and choose **Add watch** to open
+**RAM Watch** with that address and value size. The list shows the watch name,
+address and current value. A changed value is highlighted briefly. Hover over
+the value to see its previous value and how many changes were observed.
 
-From **Debug → Memory**, select a value and use **Add Watch** to carry its
-domain, console and offset into the list. **Open in Memory** returns to the
-selected watch's physical location. A watch for a disconnected console or
-unavailable domain displays an empty value until the location is available.
+Open **Debug → RAM Watch** or **Cheats → RAM Watch** to add an address by
+hand. Enter a hexadecimal address, choose 8, 16 or 32 bits and optionally give
+the watch a name. The editor starts with the active console and memory area or
+the console's work RAM. **Advanced options** contains the console, physical
+memory domain, display format and byte order.
 
-**Previous** shows the value before the last observed change. **Changes**
-counts changes between received snapshots. A reset, state restore or change
-of inspection context starts a fresh sample history. **Clear History** clears
-the previous values and counters while keeping the definitions.
+From **Debug → Memory**, select a value and choose **Add watch** to carry
+its location into the list. **Open in Memory** returns to the selected watch's
+location. Hover over the watch address to see its console, domain and physical
+offset. A watch for a disconnected console or an unavailable domain shows an
+empty value until the location is available.
+
+The change count comes from received snapshots. Resetting, restoring a state
+or changing the inspection context starts a fresh sample history. **Clear
+history** in the watch list context menu clears previous values and counters
+while keeping the watch list.
 
 The visible window uses the shared inspection timer, normally one request
 every 100 ms. One sample reads up to four bytes through the safe physical
@@ -35,17 +41,28 @@ Closing a game keeps its project available to save. Loading a different game
 starts a fresh set of definitions. Opening a file with a different saved
 game title asks for confirmation.
 
-A version 1 project stores the game title and up to 128 breakpoint
+A version 2 project stores the game title and up to 128 breakpoint
 definitions, 4,096 addresses with labels, notes or bookmarks, and 128 memory
 watches. The file limit is 2 MiB. Breakpoint definitions include their
 enabled and one-shot settings, condition, and ignored-hit count. Applied
 breakpoints start with fresh hit counts. Watch sample history, ROM contents,
 memory contents and native emulation state stay outside the project file.
 
-Labels, notes and bookmarks use logical addresses in the selected CPU
-namespace, including separate A and B targets when linked. A bank switch can
-change which bytes appear at a logical label. Watches use physical domain
-offsets for their selected console. See the
+New labels, notes and bookmarks bind to the physical source and byte offset
+shown by the disassembly map, separately for each CPU and console A/B. Bank
+switches can therefore show different labels at the same CPU address; aliases
+of one physical byte share its label. The address tooltip identifies the source.
+Bookmark/name navigation checks that the saved logical address still maps to
+that source; it reports an unavailable bank rather than changing game hardware.
+
+Version 1 projects still load with their original logical labels, as do plain
+text symbol imports. Logical labels are the fallback when an exact source is
+unavailable. In particular, an already prefetched 68000 opcode is not assigned
+to the newly mapped bank: it uses existing coverage provenance when available,
+otherwise remains unqualified. No per-instruction provenance tracking is enabled
+merely for labels. Project files retain both the physical identity and a logical
+navigation hint. Watches use physical domain offsets for their selected console.
+See the
 [CPU debugger](debug-execution.md) for conditions and execution tools and
 [physical coverage](debug-coverage.md) for bank-aware observations.
 

@@ -123,9 +123,12 @@ DebugGraphicsDialog::DebugGraphicsDialog(QWidget* parent)
 }
 
 void DebugGraphicsDialog::setControls(quint32 available, quint32 disabled,
-                                      bool hardcore, bool ready, QColor backdrop) {
+                                      bool hardcore, bool ready, QColor backdrop, bool firecore) {
     available_ = available;
-    tabs_->setTabVisible(tabs_->indexOf(views_.back()), (available & (1u << 5)) != 0);
+    const int framebuffer = tabs_->indexOf(views_.back());
+    tabs_->setTabText(framebuffer, Localization::text(firecore ? QStringLiteral("Растр Firecore")
+                                                               : QStringLiteral("Буфер 32X")));
+    tabs_->setTabVisible(framebuffer, firecore || (available & (1u << 5)));
     disabled_ = disabled & available;
     backdrop_ = backdrop;
     placeholder_->setVisible(available == 0);

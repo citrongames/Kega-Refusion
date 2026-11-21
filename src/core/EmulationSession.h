@@ -189,7 +189,7 @@ signals:
     void coverageReady();
     void traceReady();
     void inspectionReady();
-    void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
+    void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable, bool firecore = false);
     void discStateChanged(const QStringList& paths, int index, bool ejected, bool megaLd);
     void pausedChanged(bool paused);
     void effectivePauseChanged(bool paused);

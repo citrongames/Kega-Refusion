@@ -472,9 +472,10 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         close(); // The ordinary close path finalizes recordings, settings and saves.
     });
     connect(&session_, &EmulationSession::debugControlsChanged, this,
-            [this](quint32 videoAvailable, quint64 audioAvailable) {
+            [this](quint32 videoAvailable, quint64 audioAvailable, bool firecore) {
         const bool changed = debugVideoAvailable_ != videoAvailable ||
-                             debugAudioAvailable_ != audioAvailable;
+                             debugAudioAvailable_ != audioAvailable || debugFirecore_ != firecore;
+        debugFirecore_ = firecore;
         debugVideoAvailable_ = videoAvailable;
         debugAudioAvailable_ = audioAvailable;
         if (!videoAvailable && !audioAvailable) {
@@ -1436,6 +1437,7 @@ void MainWindow::buildMenus() {
     debugMemoryAction_->setObjectName(QStringLiteral("debugMemoryAction"));
     connect(debugMemoryAction_, &QAction::triggered, this, &MainWindow::showDebugMemory);
     debugWatchAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Наблюдение памяти…")));
+    cheatsMenu->addAction(debugWatchAction_);
     debugWatchAction_->setObjectName(QStringLiteral("debugWatchAction"));
     connect(debugWatchAction_, &QAction::triggered, this, &MainWindow::showDebugWatch);
     debugMenu_->addSeparator();
@@ -1577,7 +1579,7 @@ void MainWindow::updateDebugDialogs() {
     }
     if (debugGraphicsDialog_)
         debugGraphicsDialog_->setControls(debugVideoAvailable_, debugVideoDisabled_,
-                                          achievementsHardcore_, !loading_ && !videoExporting_, debugBackdropColor_);
+                                          achievementsHardcore_, !loading_ && !videoExporting_, debugBackdropColor_, debugFirecore_);
     if (debugAudioDialog_)
         debugAudioDialog_->setControls(debugAudioAvailable_, debugAudioDisabled_,
                                        !loading_ && !videoExporting_, debugAudioGains_);
@@ -1683,7 +1685,8 @@ void MainWindow::ensureCpuDebugger() {
             if (command.kind == DebuggerCommand::Detach) {
                 debuggerTimer_->stop();
             } else if (!cpuDebuggerBlockedReason().isEmpty() &&
-                       command.kind != DebuggerCommand::Configure && command.kind != DebuggerCommand::Validate) {
+                       command.kind != DebuggerCommand::Configure && command.kind != DebuggerCommand::Validate &&
+                       !(command.kind == DebuggerCommand::Navigate && command.navigationRequestId)) {
                 return;
             } else if (command.kind == DebuggerCommand::Attach) {
                 debuggerTimer_->start();
@@ -1893,7 +1896,7 @@ void MainWindow::scheduleInspection() {
 
 void MainWindow::refreshInspection() {
     DebugInspectionRequest request;
-    if (debugMemoryDialog_)
+    if (debugMemoryDialog_ && debugMemoryDialog_->isVisible())
         request = debugMemoryDialog_->request();
     if (debugGraphicsDialog_ && debugGraphicsDialog_->isVisible())
         request.parts |= debugGraphicsDialog_->request().parts;
@@ -3294,6 +3297,12 @@ void MainWindow::showCheatSearch() {
         connect(dialog,&CheatSearchDialog::searchRequested,&session_,&EmulationSession::searchCheats);
         connect(dialog,&CheatSearchDialog::clearRequested,&session_,&EmulationSession::clearCheatSearch);
         connect(&session_,&EmulationSession::cheatSearchResults,dialog,&CheatSearchDialog::setResults);
+        connect(dialog,&CheatSearchDialog::watchRequested,this,[this](const DebugWatchEntry& entry) {
+            if (!debugWatchAction_->isEnabled() || !session_.hasGame()) return;
+            ensureDebugWatch();
+            debugWatchDialog_->addWatch(entry);
+            showDebugWatch();
+        });
         connect(&session_,&EmulationSession::cheatsChanged,dialog,
             [dialog](const CheatList& entries,int,bool,const QString&) { dialog->setCheats(entries); });
         connect(&session_,&EmulationSession::errorOccurred,dialog,&CheatSearchDialog::setSaveError);

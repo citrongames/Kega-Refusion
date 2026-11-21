@@ -13,9 +13,6 @@ enum kr_cov_source_id {
   KR_COV_SVP_IRAM, KR_COV_SVP_ROM, KR_COV_SVP_DRAM, KR_COV_SMS_FLASH
 };
 
-typedef struct kr_cov_location {
-  uint32_t source, offset;
-} kr_cov_location;
 
 typedef struct kr_cov_access {
   const uint8_t *bytes; /* Canonical byte offset within native backing storage. */
@@ -55,6 +52,8 @@ unsigned kr_cov_sms_bios_size(void);
 bool kr_cov_firecore_location(uint32_t address, const uint8_t *bytes, uint32_t *offset);
 
 #ifdef KEGAREFUSION_32X
+const uint8_t *kr_cov_32x_code(unsigned cpu, uint32_t address);
+const uint8_t *kr_cov_32x_md_code_base(uint32_t address, const uint8_t *base);
 void kr_cov_32x_bind(unsigned exec_cpus, unsigned read_cpus);
 const uint8_t *kr_cov_32x_storage(unsigned id, unsigned *size);
 kr_cov_access kr_cov_32x_md_data(unsigned cpu, uint32_t address, unsigned width);

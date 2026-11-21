@@ -93,10 +93,24 @@ struct Probe {
         while (count--) host.runFrame(false,false);
     }
     void expect(const std::array<unsigned,8>& values,const char* message) const {
-        QByteArray snapshot; quint32 base=0; bool bigEndian=false; QString error;
-        require(host.cheatMemory(snapshot,base,bigEndian,error),qPrintable(error));
+        QByteArray snapshot; quint32 base=0, watchDomain=0; bool bigEndian=false; QString error;
+        require(host.cheatMemory(snapshot,base,bigEndian,error,&watchDomain),qPrintable(error));
         require(base==(md?0xff0000u:0xc000u) && bigEndian==md &&
                 snapshot.size()==(md?65536:8192),"normalized RAM range or endian");
+        require(watchDomain==(md?KR_MEM_RAM:KR_MEM_ZRAM),"cheat result maps to native RAM domain");
+        DebugWatchEntry watch;
+        watch.id=1;
+        watch.domain=watchDomain;
+        watch.offset=0x100;
+        watch.width=4;
+        DebugInspectionRequest request;
+        request.parts=KR_INSPECT_MEMORY;
+        request.length=0;
+        request.watches={watch};
+        const auto watched=host.inspect(request);
+        require(watched.available() && watched.watchValues.size()==1 &&
+                watched.watchValues[0].bytes==snapshot.mid(watch.offset, watch.width) &&
+                watched.watchValues[0].bigEndian==md,"watch reads the same physical bytes as search");
         for (unsigned i=0;i<values.size();++i)
             require(quint8(snapshot[0x100+i])==values[i] &&
                     get(0x100+i)==values[i] &&

@@ -131,12 +131,17 @@ CheatSearchDialog::CheatSearchDialog(QWidget* parent)
     layout->addLayout(saveRow);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    addWatch_ = buttons->addButton(Localization::text(QStringLiteral("Добавить наблюдение")),
+                                   QDialogButtonBox::ActionRole);
+    addWatch_->setObjectName(QStringLiteral("cheatSearchWatch"));
+    addWatch_->setAutoDefault(false);
     buttons->button(QDialogButtonBox::Close)->setText(Localization::text(QStringLiteral("Закрыть")));
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     connect(newSearch_, &QPushButton::clicked, this, [this] { requestSearch(true); });
     connect(filter_, &QPushButton::clicked, this, [this] { requestSearch(false); });
     connect(addCheat_, &QPushButton::clicked, this, &CheatSearchDialog::addSelectedCheat);
+    connect(addWatch_, &QPushButton::clicked, this, &CheatSearchDialog::watchSelectedResult);
     connect(results_, &QTableWidget::itemSelectionChanged, this, [this] {
         const int row = results_->currentRow();
         if (row >= 0 && row < results_->rowCount()) {
@@ -172,8 +177,10 @@ void CheatSearchDialog::setStatus(const QString& text, bool error) {
 void CheatSearchDialog::updateActions() {
     newSearch_->setEnabled(pendingRequestId_ == 0);
     filter_->setEnabled(started_ && pendingRequestId_ == 0);
-    addCheat_->setEnabled(started_ && pendingRequestId_ == 0 &&
-                          results_->currentRow() >= 0);
+    const bool hasResult = started_ && pendingRequestId_ == 0 &&
+        results_->selectionModel()->hasSelection() && results_->item(results_->currentRow(), 0);
+    addCheat_->setEnabled(hasResult);
+    addWatch_->setEnabled(hasResult && watchDomain_ != 0);
 }
 
 void CheatSearchDialog::requestSearch(bool restart) {
@@ -226,6 +233,7 @@ void CheatSearchDialog::setResults(quint64 requestId, const QByteArray& json) {
     const qint64 count = object.value(QStringLiteral("count")).toInteger(-1);
     const qint64 base = object.value(QStringLiteral("base")).toInteger(-1);
     const int width = object.value(QStringLiteral("width")).toInt();
+    const qint64 watchDomain = object.value(QStringLiteral("watchDomain")).toInteger();
     const QJsonValue endianValue = object.value(QStringLiteral("bigEndian"));
     const QJsonValue matchesValue = object.value(QStringLiteral("results"));
     if (count < 0 || base < 0 || base > std::numeric_limits<quint32>::max() ||
@@ -247,7 +255,7 @@ void CheatSearchDialog::setResults(quint64 requestId, const QByteArray& json) {
         const qint64 address = match.value(QStringLiteral("address")).toInteger(-1);
         const qint64 previous = match.value(QStringLiteral("previous")).toInteger(-1);
         const qint64 value = match.value(QStringLiteral("value")).toInteger(-1);
-        if (!matches[index].isObject() || address < 0 || previous < 0 || value < 0 ||
+        if (!matches[index].isObject() || address < base || previous < 0 || value < 0 ||
             address > std::numeric_limits<quint32>::max() ||
             previous > std::numeric_limits<quint32>::max() ||
             value > std::numeric_limits<quint32>::max()) {
@@ -260,6 +268,8 @@ void CheatSearchDialog::setResults(quint64 requestId, const QByteArray& json) {
 
     width_ = width;
     base_ = nextBase;
+    watchDomain_ = watchDomain > 0 && watchDomain <= std::numeric_limits<quint32>::max()
+        ? quint32(watchDomain) : 0;
     bigEndian_ = nextBigEndian;
     started_ = true;
     {
@@ -313,6 +323,18 @@ void CheatSearchDialog::addSelectedCheat() {
     emit saveRequested(*pendingSave_);
 }
 
+void CheatSearchDialog::watchSelectedResult() {
+    if (!addWatch_->isEnabled()) return;
+    const quint32 address = results_->item(results_->currentRow(), 0)->data(Qt::UserRole).toUInt();
+
+    DebugWatchEntry entry;
+    entry.domain = watchDomain_;
+    entry.offset = address - base_;
+    entry.width = width_;
+    if (description_->isModified()) entry.name = description_->text().trimmed();
+    emit watchRequested(entry);
+}
+
 void CheatSearchDialog::setCheats(const CheatList& entries) {
     if (!pendingSave_) return;
     if (std::find(entries.cbegin(), entries.cend(), *pendingSave_) == entries.cend()) return;
@@ -331,6 +353,7 @@ void CheatSearchDialog::resetSearch() {
     pendingSave_.reset();
     started_ = false;
     base_ = 0;
+    watchDomain_ = 0;
     width_ = 0;
     bigEndian_ = false;
     results_->setRowCount(0);

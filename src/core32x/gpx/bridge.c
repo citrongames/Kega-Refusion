@@ -927,6 +927,41 @@ const uint8_t *kr_cov_32x_storage(unsigned id,unsigned *size)
     }
 }
 
+/* Only the first 256 bytes belong to the 32X bootstrap and HINT latch.
+   The rest is a copy of the current cartridge page zero. */
+const uint8_t *kr_cov_32x_md_code_base(uint32_t address, const uint8_t *base)
+{
+    if (ctx && base == ctx->boot_page && address >= 0x100 && address < sizeof(ctx->boot_page))
+        return ctx->original[0].base;
+    return base;
+}
+
+/* Mirrors the side-effect-free SH-2 disassembly view, never a bus read. */
+const uint8_t *kr_cov_32x_code(unsigned cpu,uint32_t address)
+{
+    if (!kr32_cpu(cpu)) return NULL;
+    const unsigned side=cpu==KR_DEBUG_SH2_SLAVE;
+    const uint32_t a=address>=0xc0000000?address:address&0xc7ffffff;
+    unsigned size=0,id=0,offset=0;
+    if(a>=0xc0000000 && a<0xe0000000) {
+        id=side?KR_COV_SH2_SLAVE_DATA:KR_COV_SH2_MASTER_DATA; offset=a&0xfff;
+    } else if(a&0xc0000000) return NULL;
+    else switch(a&0x06000000) {
+        case 0: id=side?KR_COV_SH2_SLAVE_BOOT:KR_COV_SH2_MASTER_BOOT; offset=a&0x3ffff; break;
+        case 0x02000000: {
+            const uint32_t off=a&0x3fffff;
+            return ctx->rom_pages[off>>16] ?
+                (const uint8_t *)ctx->rom_pages[off>>16]+(off&0xffff) : NULL;
+        }
+        case 0x04000000:
+            id=((kega32x_machine_bus(ctx->machine)->s.vdp[5]&1)^1)?KR_COV_32X_FB1:KR_COV_32X_FB0;
+            offset=a&0x1ffff; break;
+        case 0x06000000: id=KR_COV_32X_SDRAM; offset=a&0x3ffff; break;
+    }
+    const uint8_t *base=kr_cov_32x_storage(id,&size);
+    return base && offset<size ? base+offset : NULL;
+}
+
 static void kr32_coverage_event(void *opaque,KegaSh2 *cpu,unsigned kind,
                                  uint32_t address,const uint8_t *bytes,unsigned width)
 {

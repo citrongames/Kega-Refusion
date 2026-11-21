@@ -8,6 +8,7 @@ struct DebugProjectSymbol {
     quint32 cpu=1, address=0;
     QString label, comment;
     bool bookmarked=false;
+    quint32 source=0, offset=0; // 0: legacy logical label; otherwise physical source byte.
 };
 struct DebugProject {
     QString game;

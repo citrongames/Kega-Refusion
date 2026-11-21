@@ -49,6 +49,7 @@ private:
         QString label;
         QString comment;
         bool bookmarked = false;
+        quint32 address = 0;
         bool operator==(const Symbol& other) const {
             return label == other.label && comment == other.comment && bookmarked == other.bookmarked;
         }
@@ -94,6 +95,9 @@ private:
     void importSymbols();
     void showCodeMenu(const QPoint& point);
     void updateBookmarks();
+    quint64 codeSymbolKey(int row) const;
+    QString symbolLocation(quint64 key) const;
+    void navigateSymbol(quint64 key);
 
     QTabWidget* pages_ = nullptr;
     QLabel* status_ = nullptr;
@@ -131,12 +135,13 @@ private:
     QVector<DebuggerBreakpoint> savedBreakpoints_;
     std::optional<PendingConfiguration> pendingConfiguration_;
     std::optional<DebugProject> queuedProject_;
-    QHash<quint32, QMap<quint32, Symbol>> symbols_;
+    QHash<quint32, QMap<quint64, Symbol>> symbols_;
     QString gameKey_;
     quint64 generation_ = 0;
     quint64 nextConfigureRequest_ = 0, lastConfigureResult_ = 0;
     quint32 cpuId_ = KR_DEBUG_M68K;
     quint32 addressValue_ = 0;
+    quint64 pendingNavigation_ = 0, nextNavigation_ = 0;
     quint32 editingBreakpoint_ = 0;
     bool followPc_ = true;
     bool needsConfiguration_ = false, resetNextHits_ = false;

@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QImage>
 #include <QInputDialog>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QTimer>
 #include <QLabel>
@@ -443,6 +444,76 @@ void verifyFramebuffer() {
     check(pixel(view, {4, 4}) == qRgb(0, 255, 0), "32X RLE line");
 }
 
+void verifyFirecoreBitmap() {
+    DebugGraphicsDialog window;
+    window.show();
+    auto* tabs = named<QTabWidget>(window, "debugGraphicsTabs");
+    const int tab = tabs->count() - 1;
+    check(!tabs->isTabVisible(tab), "bitmap tab stays hidden without supported hardware");
+    window.setControls(15, 0, false, true, QColor(), true);
+    check(tabs->isTabVisible(tab) && tabs->tabText(tab).contains(QStringLiteral("Firecore")) &&
+          window.request().parts == 0, "Firecore bitmap tab available without capturing on controls page");
+    tabs->setCurrentIndex(tab);
+    check(window.request().parts == KR_INSPECT_VIDEO, "Firecore bitmap subscribes when selected");
+    auto* view = qobject_cast<DebugVideoInspector*>(tabs->currentWidget());
+    check(view != nullptr, "Firecore bitmap view");
+    auto* image = named<QWidget>(*view, "debugVideoSnapshotImage");
+    auto* detail = named<QLabel>(*view, "debugVideoSelection");
+
+    auto data = snapshot(KR_INSPECT_VIDEO, KR_HW_MD | KR_HW_FIRECORE, KR_VIDEO_FIRECORE_BITMAP);
+    data.info.width = 256;
+    data.info.vdp_regs[0x18] = 0xc0;
+    data.blocks[KR_MEM_VRAM] = QByteArray(0x20000, '\0');
+    constexpr int address = 0x5088;
+    const auto block = QByteArray::fromHex("4523c14e"); // U=48, V=20, Y={3,9,17,28}
+    data.blocks[KR_MEM_VRAM].replace(address, block.size(), block);
+    window.setSnapshot(data);
+    check(image->size() == QSize(256, 224) &&
+          pixel(*view, {4, 2}) == qRgb(0, 23, 138) && pixel(*view, {5, 2}) == qRgb(0, 79, 194) &&
+          pixel(*view, {4, 3}) == qRgb(63, 154, 255) && pixel(*view, {5, 3}) == qRgb(165, 255, 255),
+          "Firecore H32 uses 320-byte stride, two chroma channels and four ordered luma values");
+
+    const QPoint point(4, 2);
+    QMouseEvent click(QEvent::MouseButtonPress, QPointF(point), QPointF(image->mapToGlobal(point)),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(image, &click);
+    const auto target = QStringLiteral("%1/%2").arg(KR_MEM_VRAM).arg(address);
+    check(detail->text().contains(target), "selected Firecore bitmap block links to VRAM");
+    quint32 memoryDomain = 0, offset = 0;
+    QObject::connect(&window, &DebugGraphicsDialog::memoryRequested, &window,
+                     [&](quint32 domain, quint32 address) { memoryDomain = domain; offset = address; });
+    emit detail->linkActivated(target);
+    check(memoryDomain == KR_MEM_VRAM && offset == address, "Firecore bitmap link reaches Memory");
+
+    data.info.width = 320;
+    data.info.height = 240;
+    data.blocks[KR_MEM_VRAM].replace(0x179fc, block.size(), block);
+    window.setSnapshot(data);
+    check(image->size() == QSize(320, 240) && pixel(*view, {319, 239}) == qRgb(165, 255, 255),
+          "Firecore H40 last bitmap block");
+    data.blocks[KR_MEM_VRAM].replace(0x179fc, block.size(), QByteArray::fromHex("00008200")); // Neutral chroma, zero luma.
+    window.setSnapshot(data);
+    check(pixel(*view, {319, 239}) == qRgb(0, 0, 0), "changed Firecore bitmap updates the preview");
+    data.blocks[KR_MEM_VRAM].resize(0x17a00 - 1);
+    window.setSnapshot(data);
+    check(image->size().isEmpty() && detail->text().isEmpty(), "truncated Firecore snapshot clears stale data");
+
+    data.blocks[KR_MEM_VRAM].resize(0x20000);
+    window.setSnapshot(data);
+    check(!image->size().isEmpty(), "complete Firecore snapshot restores the preview");
+    data.info.video_format = KR_VIDEO_MD;
+    data.info.vdp_regs[0x18] = 0x80;
+    window.setSnapshot(data);
+    check(image->size().isEmpty() && detail->text().isEmpty(), "tile mode clears bitmap image and link");
+    window.setControls(15, 0, false, true, QColor(), false);
+    check(!tabs->isTabVisible(tab) && tabs->currentIndex() != tab, "switching hardware hides Firecore bitmap");
+    window.setControls(47, 0, false, true, QColor(), false);
+    check(tabs->isTabVisible(tab) && tabs->tabText(tab).contains(QStringLiteral("32X")),
+          "32X framebuffer tab remains available");
+    window.hide();
+    check(window.request().parts == 0, "hidden framebuffer unsubscribes");
+}
+
 void verifyAudio() {
     DebugAudioDialog dialog;
     verifyWindow(dialog);
@@ -472,6 +543,7 @@ int main(int argc, char** argv) {
     verifyGraphics(previewDirectory);
     verifyOtherFormats();
     verifyFramebuffer();
+    verifyFirecoreBitmap();
     verifyAudio();
     std::puts("PASS: inspection subscriptions, bounded memory editing, watch, links, video and sound");
 }

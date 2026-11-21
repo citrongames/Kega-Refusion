@@ -169,10 +169,16 @@ void testConfigure(LibretroHost& host, const QString& nextFixture) {
     request.configureRequestId = 100;
     request.breakpoints = {point, disabled};
     expectReply(host, request, true);
+    DebuggerCommand initialNavigation;
+    initialNavigation.kind=DebuggerCommand::Navigate;
+    initialNavigation.address=0x200;
+    initialNavigation.followPc=false;
+    QString navigationError;
+    require(host.debuggerCommand(initialNavigation,navigationError),navigationError);
 
     require(!host.runDebugFrame() && host.debuggerStopped(), "The new one-shot breakpoint hits inside a real frame");
     const auto hit = host.debuggerSnapshot();
-    require(hit.address == Loop && hit.breakpoints.size() == 2 &&
+    require(hit.followingPc && hit.address == Loop && hit.breakpoints.size() == 2 &&
             hit.breakpoints.front().hits == 1 && !hit.breakpoints.front().enabled,
             "The runtime counter and one-shot disable are visible");
 
@@ -182,6 +188,38 @@ void testConfigure(LibretroHost& host, const QString& nextFixture) {
     expectReply(host, bad, false);
     const auto rejection = host.debuggerSnapshot();
     QString error;
+    require(hit.instructions.size()>1 && hit.instructionLocations.size()==hit.instructions.size(),
+            "Debugger captures physical identities for displayed instructions");
+    const auto& mapped=hit.instructionLocations[1];
+    require(mapped.source!=0,"Second instruction has a proven mapped source");
+    DebuggerCommand navigate;
+    navigate.kind=DebuggerCommand::Navigate;
+    navigate.cpu=KR_DEBUG_M68K;
+    navigate.gameKey=gameKey;
+    navigate.address=hit.instructions[1].address;
+    navigate.followPc=false;
+    navigate.physicalSource=mapped.source;
+    navigate.physicalOffset=mapped.offset;
+    navigate.navigationRequestId=1;
+    require(host.debuggerCommand(navigate,error),error);
+    auto navigation=host.debuggerSnapshot();
+    require(navigation.navigationRequestId==1 && navigation.navigationAccepted &&
+            navigation.navigationAddress==navigate.address && !navigation.followingPc,
+            "Physical navigation is acknowledged");
+    DebuggerCommand refresh;
+    refresh.address=0;
+    refresh.followPc=true;
+    require(host.debuggerCommand(refresh,error),error);
+    navigation=host.debuggerSnapshot();
+    require(navigation.navigationAddress==navigate.address && !navigation.followingPc &&
+            navigation.navigationRequestId==1,"Queued stale refresh cannot overwrite explicit navigation or its reply");
+    navigate.physicalOffset++;
+    navigate.navigationRequestId=2;
+    require(!host.debuggerCommand(navigate,error) && !error.isEmpty(),"Reject a no-longer-mapped bank without mutation");
+    navigation=host.debuggerSnapshot();
+    require(navigation.navigationRequestId==2 && !navigation.navigationAccepted &&
+            navigation.navigationAddress==navigate.address && navigation.navigationError==error,
+            "Failed bank navigation reports a persistent specific reply");
     require(host.debuggerCommand({}, error), error);
     auto snapshot = host.debuggerSnapshot();
     require(snapshot.configureRequestId == 101 && snapshot.configureError == rejection.configureError &&
@@ -216,6 +254,10 @@ void testConfigure(LibretroHost& host, const QString& nextFixture) {
             snapshot.breakpoints.back().hits == 0,
             "Project replacement uses requested enabled flags and resets all hit counts");
 
+    require(host.debuggerCommand(initialNavigation,error),error);
+    host.reset();
+    require(host.debuggerCommand({},error),error);
+    require(host.debuggerSnapshot().followingPc,"Reset returns the debugger view to the PC without a polling side effect");
     host.debuggerDetach();
     require(host.load(nextFixture, error), error);
     const auto currentGame = host.debuggerSnapshot().gameKey;

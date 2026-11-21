@@ -1,0 +1,126 @@
+{
+  "date": "2026-11-21",
+  "baselineCommit": "687ed18",
+  "baselineLinuxCoreSha256": "4896170c2c37a5b4efdd61ba72919b4f99ba0ce69f5252725b93a79250637906",
+  "finalLinuxCoreSha256": "74fdd74b2a3ba34b41d52eba0a67cc09a26150d9b330908417284a90ec6b4801",
+  "windowsRuntimeTested": false,
+  "checks": {
+    "bankSources": "PASS: SMS swapped banks/aliases without coverage, MD self-switch and old prefetch, 32X bootstrap prefix/copied tail",
+    "bankUi": "PASS: distinct physical labels at same PC, alias labels, A/B namespaces, pending navigation ignores old refresh snapshot",
+    "projects": "PASS: v2 physical identities, legacy v1 logical labels, strict limits and atomic/transactional saves",
+    "hostNavigation": "PASS: matching reply, unavailable-bank rejection, refresh cannot replace navigation, breakpoint/reset follows PC",
+    "firecore": "PASS: native-generated H32 raster and YUV order, H40 bounds, state invariance and contextual tab/VRAM navigation",
+    "svp": "PASS: real instruction stops on internal RAM, PM ROM/DRAM/IRAM and program operands; resumed complete outputs/state",
+    "watch": "PASS: 3-column UI, bounded change highlighting, cheat-result to canonical memory match on MD/SMS, hidden polling absent",
+    "session": "PASS: partial-frame publication, save/load, rewind, reset, recording cursor and shutdown",
+    "builds": "PASS: Linux and Windows application/core builds",
+    "deployment": {
+      "matchedFiles": 73,
+      "sha256": {
+        "KegaRefusion.exe": "fdadb05edd0a0124ec0d12bd8d454a4333f1ec61923e417e20d1141b7541f8c8",
+        "cores/genesis_plus_gx_libretro.dll": "38acb090db81841aee09d4a4f466ba99b26b75e8c64e91179ed7c8b0d398fa9d",
+        "cores/genesis_plus_gx_libretro_linkpeer.dll": "38acb090db81841aee09d4a4f466ba99b26b75e8c64e91179ed7c8b0d398fa9d",
+        "languages/en.json": "c6b64151d2d08ddf0aab2b3c6ec89bc0bbefb4cb940553ddcea797629ea192f6",
+        "languages/ru.json": "81bbbce841c317e299dddfe2582dff39dd5995b29039874ec5825a8ddb8ccbc1"
+      }
+    }
+  },
+  "performance": {
+    "initialBeforeColdHelper": {
+      "racing": {
+        "game": "Virtua Racing (USA)",
+        "region": "NTSC-U",
+        "nominal_fps": 59.92274340431231,
+        "scenes": "Title/attract, mode and course selection, Beginner race grid and live opponents",
+        "frames_per_run": 3600,
+        "runs_per_core": 5,
+        "audio_sha256": "636a055581b90d5327469b82eb6bc2571536849720e5aedd1b6d60bf661e5c1a",
+        "final_video_sha256": "fa599fceaf6bdd71cda17fe4ff64af7ab14d3e55d24e196de039626eb7301e74",
+        "checkpoint_video_match": true,
+        "state_match": true,
+        "state_bytes": 1036288,
+        "state_sha256": "dcc4e6c9148044e52382508173d6e5a751fb65f2a7c88b715227052549e1c926",
+        "wall_ms": {
+          "before": [
+            3517.25,
+            3436.74,
+            3395.81,
+            3380.01,
+            3440.77
+          ],
+          "after": [
+            3632.02,
+            3446.8,
+            3545.54,
+            3467.55,
+            3510.99
+          ]
+        },
+        "paired_wall_time_change_percent": [
+          3.263,
+          0.293,
+          4.409,
+          2.59,
+          2.041
+        ],
+        "median_paired_wall_time_change_percent": 2.59
+      },
+      "mickey": {
+        "game": "Mickey Mania (Europe)",
+        "region": "PAL",
+        "nominal_fps": 49.7014591857706,
+        "scenes": "Title, pencil sequence, and Steamboat Willie first level on the moving ship",
+        "frames_per_run": 3600,
+        "runs_per_core": 5,
+        "audio_sha256": "df2ea33b4d50ceb7db9b67dd5bb7150f2a049836a4a2d51e4654bbb776e83935",
+        "final_video_sha256": "d74734eb6debb5845d4cae60236c5fb1f833ef807c2adfac0e4da03e63abc2ec",
+        "checkpoint_video_match": true,
+        "state_match": true,
+        "state_bytes": 1036288,
+        "state_sha256": "bc1f84edc5875c156de7a4edb179a944a4e00d59b888afb8abde92d16bf36cbc",
+        "wall_ms": {
+          "before": [
+            2209.64,
+            2119.83,
+            2101.45,
+            2150.62,
+            2144.5
+          ],
+          "after": [
+            2200.31,
+            2118.13,
+            2139.43,
+            2101.32,
+            2163.21
+          ]
+        },
+        "paired_wall_time_change_percent": [
+          -0.422,
+          -0.08,
+          1.807,
+          -2.292,
+          0.872
+        ],
+        "median_paired_wall_time_change_percent": -0.08
+      }
+    },
+    "finalPair": {
+      "frames": 3600,
+      "run_count_per_core": 1,
+      "nominal_fps": 59.92274340431231,
+      "baseline_elapsed_ms": 3295.576916,
+      "candidate_elapsed_ms": 3426.521832,
+      "elapsed_change_percent": 3.9733533562595236,
+      "audio_sha256_pcm16": "636a055581b90d5327469b82eb6bc2571536849720e5aedd1b6d60bf661e5c1a",
+      "video_sha256_rgba": "fa599fceaf6bdd71cda17fe4ff64af7ab14d3e55d24e196de039626eb7301e74",
+      "state_sha256": "dcc4e6c9148044e52382508173d6e5a751fb65f2a7c88b715227052549e1c926"
+    },
+    "notes": "Final one-pair Virtua Racing timing is a sanity measurement, not a stable estimate. Intermediate cold-helper timing overlapped compilation and is excluded. Native framebuffer, PCM and full serialized states matched."
+  },
+  "limits": [
+    "Opaque fetch backing and pre-existing prefetch without provenance remain logical; plain text imports and v1 projects retain logical semantics.",
+    "SSP data event addresses use debugger-assigned RAM0/RAM1 ranges; unsupported PM modes/raw register traffic do not emit fabricated accesses.",
+    "Firecore raster is a VRAM snapshot, not pixel provenance for mid-line writes.",
+    "Pixel provenance/profiling, scanline/IRQ run controls and reverse-instruction stepping remain deferred."
+  ]
+}

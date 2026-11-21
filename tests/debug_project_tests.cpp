@@ -50,6 +50,8 @@ DebugProject exampleProject() {
         {0x100 | KR_DEBUG_Z80, 0xfff0, QStringLiteral("入口 B"), {}, false},
         {KR_DEBUG_SH2_MASTER, 0xffffffffu, {}, QStringLiteral("Last SH-2 address"), false},
         {KR_DEBUG_SSP1601, 0xffff, {}, {}, true},
+        {KR_DEBUG_Z80, 0x4000, "Bank1", {}, true, 1, 0x4000},
+        {KR_DEBUG_Z80, 0x4000, "Bank3", {}, true, 1, 0xc000},
     };
     DebugWatchEntry watch;
     watch.id = 15;
@@ -89,7 +91,7 @@ void checkRoundTrip(const DebugProject& loaded, const DebugProject& expected) {
         const auto& a = loaded.symbols[i];
         const auto& b = expected.symbols[i];
         require(a.cpu == b.cpu && a.address == b.address && a.label == b.label && a.comment == b.comment &&
-                a.bookmarked == b.bookmarked, "Labels, notes and bookmarks round-trip in both CPU namespaces");
+                a.bookmarked == b.bookmarked && a.source == b.source && a.offset == b.offset, "Labels, notes and bookmarks round-trip in both CPU namespaces");
     }
     for (qsizetype i = 0; i < loaded.watches.size(); ++i) {
         const auto& a = loaded.watches[i];
@@ -107,12 +109,27 @@ void testRoundTrip(const QString& path) {
     const auto bytes = readFile(path);
     const auto root = QJsonDocument::fromJson(bytes).object();
     const auto bp = root.value("breakpoints").toArray().at(0).toObject();
-    require(root.value("format") == "KegaRefusionDebugProject" && root.value("version").toInt() == 1 &&
+    require(root.value("format") == "KegaRefusionDebugProject" && root.value("version").toInt() == 2 &&
             bp.value("ignoreHits") == "18446744073709551615" && !bp.contains("hits") &&
             bytes.contains(QStringLiteral("入口 B").toUtf8()), "Versioned UTF-8 data preserves all 64 counter bits");
     DebugProject loaded;
     require(loadDebugProject(path, loaded, error), error);
     checkRoundTrip(loaded, expected);
+    // Version 1 projects remain readable with their original logical labels.
+    auto legacy=root;
+    legacy["version"]=1;
+    auto expectedLegacy=expected;
+    expectedLegacy.symbols.resize(4);
+    QJsonArray symbols;
+    for (const auto value:root.value("symbols").toArray()) {
+        auto item=value.toObject();
+        if(item.value("source").toInt()) continue;
+        item.remove("source"); item.remove("offset"); symbols.append(item);
+    }
+    legacy["symbols"]=symbols;
+    writeFile(path+".v1",QJsonDocument(legacy).toJson());
+    require(loadDebugProject(path+".v1",loaded,error),error);
+    checkRoundTrip(loaded,expectedLegacy);
 }
 
 QJsonObject changeFirst(QJsonObject root, const char* arrayKey, const char* key, QJsonValue value) {
@@ -142,12 +159,12 @@ void testFailedLoads(const QString& inputPath, const QString& validPath) {
     rejectBytes("{\"format\":");
     rejectBytes("[]");
     auto roundedFraction = QJsonDocument(baseline).toJson(QJsonDocument::Compact);
-    require(roundedFraction.contains("\"version\":1"), "Fixture has a plain integer version");
-    rejectBytes(roundedFraction.replace("\"version\":1", "\"version\":1.000000000000000000000001"));
+    require(roundedFraction.contains("\"version\":2"), "Fixture has a plain integer version");
+    rejectBytes(roundedFraction.replace("\"version\":2", "\"version\":2.000000000000000000000001"));
     rejectBytes(QByteArray(2 * 1024 * 1024 + 1, ' '));
 
     auto bad = baseline;
-    bad["version"] = 2;
+    bad["version"] = 3;
     reject(bad);
     bad["version"] = true;
     reject(bad);

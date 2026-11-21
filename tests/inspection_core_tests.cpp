@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -77,6 +78,10 @@ QByteArray makeMdRom(Cartridge kind) {
     writeWord(0x0eee, 0xc00000);
     if (kind == Cartridge::Firecore || kind == Cartridge::FirecoreBitmap)
         writeWord(kind == Cartridge::FirecoreBitmap ? 0x98c0 : 0x9880, 0xc00004);
+    if (kind == Cartridge::FirecoreBitmap) {
+        writeLong(0x50880001, 0xc00004); // $5088: start of the 2x2 block at (4, 2).
+        writeLong(0x4523c14e, 0xc00000); // U=48, V=20, Y={3,9,17,28}; low word first.
+    }
     writeWord(0x8144, 0xc00004);
     for (quint16 data : {0x8d, 0x12, 0x93}) {
         word(0x13fc); word(data); longWord(0xc00011); // MOVE.B #data,(PSG).L
@@ -347,6 +352,24 @@ void checkCartridge(LibretroHost& host, const Inspection& api, const QString& pa
             snapshot.blocks.value(KR_MEM_VRAM).size() == vram->size &&
             snapshot.blocks.value(KR_MEM_VRAM).left(4) == QByteArray::fromHex("2468ace1"),
             "Host caps memory and captures complete requested graphics domains");
+    if (kind == Cartridge::FirecoreBitmap) {
+        require(snapshot.info.width == 256 && snapshot.info.height == 224 &&
+                snapshot.blocks.value(KR_MEM_VRAM).mid(0x5088, 4) == QByteArray::fromHex("4523c14e"),
+                "Firecore H32 snapshot preserves guest word order and active dimensions");
+        const auto frame = host.frame();
+        require(frame.width() >= 6 && frame.height() >= 4, "Firecore native bitmap frame");
+        const std::array<QRgb, 4> expected{
+            qRgb(0, 23, 138), qRgb(0, 79, 194), qRgb(63, 154, 255), qRgb(165, 255, 255)
+        };
+        for (int i = 0; i < int(expected.size()); ++i) {
+            const auto actual = frame.pixel(4 + (i & 1), 2 + (i >> 1));
+            // The native output may quantize RGB to 5/6/5 or 5/5/5.
+            require(std::abs(qRed(actual) - qRed(expected[i])) <= 7 &&
+                    std::abs(qGreen(actual) - qGreen(expected[i])) <= 7 &&
+                    std::abs(qBlue(actual) - qBlue(expected[i])) <= 7,
+                    "Firecore YUV snapshot fixture matches native rendered block");
+        }
+    }
     request.parts = KR_INSPECT_MEMORY;
     request.domain = KR_MEM_CD_WORD;
     const auto stale = host.inspect(request);

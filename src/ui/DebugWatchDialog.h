@@ -46,11 +46,12 @@ private:
     QPushButton* edit_ = nullptr;
     QPushButton* remove_ = nullptr;
     QPushButton* memory_ = nullptr;
-    QPushButton* clearHistory_ = nullptr;
     QLabel* status_ = nullptr;
     QLabel* feedback_ = nullptr;
     QVector<DebugWatchDomain> domains_;
     QString gameKey_;
     quint64 generation_ = 0;
+    quint32 activeInstance_ = 0;
+    quint32 activeDomain_ = KR_MEM_RAM;
     quint32 nextId_ = 1;
 };

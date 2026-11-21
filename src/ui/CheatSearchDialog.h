@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/Cheats.h"
+#include "../core/DebugWatch.h"
 #include <QByteArray>
 #include <QDialog>
 #include <optional>
@@ -26,6 +27,7 @@ signals:
                          quint32 value, bool restart);
     void clearRequested();
     void saveRequested(const CheatEntry& entry);
+    void watchRequested(const DebugWatchEntry& entry);
 
 protected:
     void done(int result) override;
@@ -33,6 +35,7 @@ protected:
 private:
     void requestSearch(bool restart);
     void addSelectedCheat();
+    void watchSelectedResult();
     void updateActions();
     void setStatus(const QString& text, bool error = false);
     bool parseValue(const QLineEdit* edit, int width, quint32& value) const;
@@ -50,9 +53,11 @@ private:
     QLineEdit* description_ = nullptr;
     QCheckBox* freeze_ = nullptr;
     QPushButton* addCheat_ = nullptr;
+    QPushButton* addWatch_ = nullptr;
     quint64 pendingRequestId_ = 0;
     std::optional<CheatEntry> pendingSave_;
     quint32 base_ = 0;
+    quint32 watchDomain_ = 0;
     int width_ = 0;
     bool bigEndian_ = false;
     bool started_ = false;

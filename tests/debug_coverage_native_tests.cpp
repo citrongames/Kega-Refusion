@@ -88,14 +88,28 @@ struct Observed {
 
 using Enumerate = size_t (*)(unsigned, kr_cov_source*, size_t);
 using Bind = bool (*)(unsigned, uint32_t, uint32_t, kr_cov_callback, void*);
+using Locations = size_t (*)(unsigned,unsigned,const uint32_t*,kr_cov_location*,size_t,unsigned);
 using DebugConnect = bool (*)(kr_debug_callback, void*, const unsigned*, size_t);
 
 struct DebugEvents {
     unsigned exec = 0, reads = 0;
-    static void record(void* opaque, unsigned cpu, unsigned event, uint32_t, uint32_t, unsigned) {
+    Locations locations = nullptr;
+    bool prefetchChecked = false;
+    static void record(void* opaque, unsigned cpu, unsigned event, uint32_t address, uint32_t, unsigned) {
         auto& events = *static_cast<DebugEvents*>(opaque);
         if (cpu != KR_DEBUG_M68K) return;
-        if (event == KR_DEBUG_EXEC) ++events.exec;
+        if (event == KR_DEBUG_EXEC) {
+            ++events.exec;
+            if (address==0x08010e && events.locations) {
+                kr_cov_location mapped{},prefetched{};
+                require(events.locations(KR_COV_VERSION,cpu,&address,&mapped,1,0)==1 &&
+                        events.locations(KR_COV_VERSION,cpu,&address,&prefetched,1,1)==1 &&
+                        mapped.source==1 && mapped.offset==0x18010e &&
+                        prefetched.source==1 && prefetched.offset==0x10010e,
+                        "Labels distinguish the queued opcode origin from current bank mapping");
+                events.prefetchChecked=true;
+            }
+        }
         if (event == KR_DEBUG_READ) ++events.reads;
     }
 };
@@ -113,6 +127,7 @@ public:
         symbol<decltype(&retro_set_input_poll)>("retro_set_input_poll")(poll);
         symbol<decltype(&retro_set_input_state)>("retro_set_input_state")(input);
         symbol<decltype(&retro_init)>("retro_init")();
+        locations = symbol<Locations>("retro_kegarefusion_debug_locations_v1");
         sources = symbol<Enumerate>("retro_kegarefusion_coverage_sources_v1");
         bind = symbol<Bind>("retro_kegarefusion_coverage_bind_v1");
         debugConnect = symbol<DebugConnect>("retro_kegarefusion_debug_connect_v2");
@@ -158,6 +173,7 @@ public:
         require(bind(KR_COV_VERSION, cpu, cpu, Observed::mark, &observation), "Bind native coverage capture");
     }
 
+    Locations locations = nullptr;
     Enumerate sources = nullptr;
     Bind bind = nullptr;
     DebugConnect debugConnect = nullptr;
@@ -260,9 +276,18 @@ bool marked(const Observed::Region& region, unsigned kind, unsigned start, unsig
 
 void testSms(NativeCore& core) {
     core.load("coverage-original.sms", smsRom());
+    const uint32_t addresses[]={0x4100,0x8100};
+    kr_cov_location mapped[2]{};
+    require(core.locations(KR_COV_VERSION,KR_DEBUG_Z80,addresses,mapped,2,0)==2 &&
+            mapped[0].source==1 && mapped[0].offset==0x4100,"Read-only bank resolution works with coverage disabled");
+    require(core.locations(KR_COV_VERSION,KR_DEBUG_Z80,addresses,mapped,4097,0)==0,"Reject oversized map request");
+
     Observed observed;
     core.arm(observed, KR_DEBUG_Z80);
     core.run();
+    require(core.locations(KR_COV_VERSION,KR_DEBUG_Z80,addresses,mapped,2,0)==2 &&
+            mapped[0].source==1 && mapped[0].offset==0xc100 &&
+            mapped[1].source==1 && mapped[1].offset==0x4100,"Resolve switched bank and distinct alias");
     const auto& rom = observed.domain(KR_MEM_ROM);
     require(rom.source.size == 0x10000 && !observed.malformed, "Sega 8-bit cartridge bounds");
     require(marked(rom, KR_COV_EXEC, 0x4100, 4) && marked(rom, KR_COV_EXEC, 0xc100, 4),
@@ -279,10 +304,11 @@ void testMd(NativeCore& core) {
     Observed observed;
     core.arm(observed, KR_DEBUG_M68K);
     DebugEvents debug;
+    debug.locations=core.locations;
     const unsigned masks[] = {KR_DEBUG_EXEC | KR_DEBUG_READ};
     require(core.debugConnect(DebugEvents::record, &debug, masks, 1), "Arm both native observers");
     core.run();
-    require(debug.exec && debug.reads, "Execution and read callbacks coexist with coverage");
+    require(debug.exec && debug.reads && debug.prefetchChecked, "Execution and read callbacks coexist with coverage");
     const auto& rom = observed.domain(KR_MEM_ROM);
     require(rom.source.size == 0x200000 && !observed.malformed, "MD cartridge bounds");
     require(marked(rom, KR_COV_EXEC, 0x100100, 16) && marked(rom, KR_COV_EXEC, 0x180110, 8),
@@ -311,6 +337,33 @@ void testMd(NativeCore& core) {
     require(core.sources(KR_COV_VERSION, descriptors.data(), descriptors.size()) == 0,
             "Unload clears native source enumeration and capture");
 }
+
+void test32xBootWindow(NativeCore& core) {
+    MdProgram code;
+    qToBigEndian<uint32_t>(0xffff00, code.rom.data());
+    qToBigEndian<uint32_t>(0x200, code.rom.data() + 4);
+    code.rom.replace(0x100, 16, "SEGA 32X        ", 16);
+    qToBigEndian<uint32_t>(code.rom.size() - 1, code.rom.data() + 0x1a4);
+    code.rom[0x1f0] = 'U';
+    code.word(0x46fc); code.word(0x2700);          // Mask interrupts.
+    code.word(0x33fc); code.word(1); code.address(0xa15100); // Adapter on, SH-2 reset.
+    code.word(0x60fe);
+    core.load("coverage-boot.32x", code.rom);
+    core.run();
+
+    // 32X overlays the first 256 bytes, then shadows cartridge page zero.
+    const uint32_t addresses[]{0xfe, 0x100, 0x200, 0x880200};
+    kr_cov_location locations[std::size(addresses)]{};
+    require(core.locations(KR_COV_VERSION, KR_DEBUG_M68K, addresses, locations, std::size(addresses), 0) ==
+                std::size(addresses),
+            "Read 32X boot-window mapping");
+    require(locations[0].source > 1 && locations[0].offset == 0xfe, "32X bootstrap prefix has its own source");
+    require(locations[3].source == 1 && locations[3].offset == 0x200, "32X cartridge window resolves to ROM");
+    require(locations[1].source == 1 && locations[1].offset == 0x100 &&
+            locations[2].source == locations[3].source && locations[2].offset == locations[3].offset,
+            "32X boot shadow tail aliases cartridge ROM");
+    core.unload();
+}
 }
 
 int main(int argc, char** argv) {
@@ -320,7 +373,8 @@ int main(int argc, char** argv) {
         NativeCore core(app.arguments()[1]);
         testSms(core);
         testMd(core);
-        std::puts("PASS: Z80 and 68000 physical code/read banking, operands, mirrors, and prefetch");
+        test32xBootWindow(core);
+        std::puts("PASS: Z80 and 68000 physical code/read banking, operands, mirrors, prefetch and 32X boot overlay");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL: %s\n", error.what());

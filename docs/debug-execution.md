@@ -38,9 +38,27 @@ are cleared. SH-2 addresses use the full 32-bit logical address space.
 
 The SSP1601 uses 16-bit program-word addresses for navigation, disassembly
 and execute breakpoints. The instruction bytes are displayed in guest order.
-Its hardware return stack is available as `SP` and `S0`–`S5` in Registers.
-Step over and step out use this stack. SSP1601 data-breakpoint controls are
-unavailable.
+Step over and step out use the hardware return stack shown as `SP` and
+`S0`–`S5` in Registers.
+
+SSP1601 read and write breakpoints use byte addresses and report `SIZE == 2`.
+Choose Execute or Read/Write for each breakpoint. At a data stop, PC points
+to the instruction that issued the access.
+
+| Byte address | SSP1601 data accessed |
+| --- | --- |
+| `$000000–$1FFFFF` | Cartridge ROM reads via PM. Explicit program ROM operand reads use the matching byte addresses from `$000800` to `$01FFFF`. |
+| `$300000–$31FFFF` | Shared DRAM through PM. |
+| `$390000–$3907FF` | IRAM read as program data or written through PM. |
+| `$400000–$4001FF` | Internal RAM0 at a debugger-assigned address. |
+| `$400200–$4003FF` | Internal RAM1 at a debugger-assigned address. |
+
+A double-indirect load reads and increments its pointer word in RAM before
+reading the program operand. A breakpoint can stop on any of those accesses.
+DRAM overwrite mode applies its nibble mask before the stop, and `VALUE`
+reports the word supplied by the instruction. Use the register view for
+PM setup and the raw mailbox registers. Use a main 68000 breakpoint for
+accesses issued by that CPU.
 
 Video, audio, rewind history and input recordings receive completed frames
 only. Resume completes the original frame with its original input. Saving,

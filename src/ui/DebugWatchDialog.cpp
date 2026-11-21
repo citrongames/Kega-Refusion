@@ -5,6 +5,8 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QElapsedTimer>
+#include <QFont>
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QHideEvent>
@@ -17,7 +19,9 @@
 #include <QRegularExpressionValidator>
 #include <QSet>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QTableView>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -25,14 +29,19 @@
 
 namespace {
 constexpr int nameLimit = 128;
-enum Column { Name, Offset, Domain, Console, Value, Previous, Changes, ColumnCount };
+constexpr int changeHighlightMs = 1000;
+enum Column { Name, Address, Value, ColumnCount };
 
 QString text(const char* source) {
     return Localization::text(QString::fromUtf8(source));
 }
 
-QString hex(quint32 value, int digits = 0) {
+QString hex(quint64 value, int digits = 0) {
     return QString::number(value, 16).toUpper().rightJustified(digits, QLatin1Char('0'));
+}
+
+QString addressText(quint32 offset, quint32 base = 0) {
+    return QStringLiteral("0x%1").arg(hex(quint64(base) + offset));
 }
 
 QString consoleName(quint32 instance) {
@@ -94,7 +103,7 @@ QPushButton* makeButton(QWidget* parent, const char* source, const char* name) {
 
 class DebugWatchModel final : public QAbstractTableModel {
 public:
-    explicit DebugWatchModel(QObject* parent) : QAbstractTableModel(parent) {}
+    explicit DebugWatchModel(QObject* parent) : QAbstractTableModel(parent) { clock_.start(); }
 
     int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : rows_.size(); }
     int columnCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : ColumnCount; }
@@ -103,12 +112,8 @@ public:
         if (orientation != Qt::Horizontal || role != Qt::DisplayRole) return {};
         switch (section) {
         case Name: return text("Имя");
-        case Offset: return text("Смещение");
-        case Domain: return text("Область памяти");
-        case Console: return text("Консоль");
+        case Address: return text("Адрес");
         case Value: return text("Значение");
-        case Previous: return text("Предыдущее");
-        case Changes: return text("Изменения");
         default: return {};
         }
     }
@@ -119,16 +124,31 @@ public:
         if (index.column() == Value && row.highlight) {
             if (role == Qt::BackgroundRole) return QColor(233, 190, 80);
             if (role == Qt::ForegroundRole) return QColor(Qt::black);
+            if (role == Qt::FontRole) {
+                QFont emphasis;
+                emphasis.setBold(true);
+                return emphasis;
+            }
+        }
+        if (role == Qt::ToolTipRole && index.column() == Address) {
+            const auto domain = row.domain.id ? text(row.domain.name) :
+                text("Область %1 (недоступна)").arg(row.entry.domain);
+            return QStringLiteral("%1 · %2\n%3: %4").arg(consoleName(row.entry.instance), domain,
+                text("Смещение (hex)"), addressText(row.entry.offset));
+        }
+        if (role == Qt::ToolTipRole && index.column() == Value && row.changes) {
+            return QStringLiteral("%1: %2\n%3: %4\n%5: %6").arg(
+                text("Значение"), formatValue(row.current, row.bigEndian, row.entry),
+                text("Предыдущее"), formatValue(row.previous, row.bigEndian, row.entry),
+                text("Изменения"), QString::number(row.changes));
         }
         if (role != Qt::DisplayRole && role != Qt::ToolTipRole) return {};
         switch (index.column()) {
         case Name: return row.entry.name.isEmpty() ? QStringLiteral("—") : row.entry.name;
-        case Offset: return QStringLiteral("0x%1").arg(hex(row.entry.offset));
-        case Domain: return row.domainName.isEmpty() ? text("Область %1").arg(row.entry.domain) : row.domainName;
-        case Console: return consoleName(row.entry.instance);
+        case Address:
+            return (row.domain.id ? QString() : QStringLiteral("+")) +
+                addressText(row.entry.offset, row.domain.address_base);
         case Value: return formatValue(row.current, row.bigEndian, row.entry);
-        case Previous: return formatValue(row.previous, row.bigEndian, row.entry);
-        case Changes: return row.current.isEmpty() ? QStringLiteral("—") : QString::number(row.changes);
         default: return {};
         }
     }
@@ -177,50 +197,51 @@ public:
         QHash<quint32, const DebugWatchSample*> samples;
         samples.reserve(values.size());
         for (const auto& value : values) samples.insert(value.id, &value);
+        const qint64 now = clock_.elapsed();
         for (int i = 0; i < rows_.size(); ++i) {
             auto& row = rows_[i];
             const auto* domain = findDomain(domains, row.entry.instance, row.entry.domain);
             const auto* sample = samples.value(row.entry.id, nullptr);
+            const kr_inspect_domain native = domain ? domain->native : kr_inspect_domain{};
             const bool valid = domain && sample && sample->bytes.size() == row.entry.width &&
-                quint64(row.entry.offset) + row.entry.width <= domain->native.size;
-            const auto name = domain ? domainName(*domain) : QString();
-            const auto size = domain ? domain->native.size : 0;
-            const bool changedDomain = row.domainName != name;
-            if (changedDomain) row.domainName = name;
-            const bool newBaseline = reset || changedDomain || row.domainSize != size || !valid ||
-                (sample && row.bigEndian != sample->bigEndian);
-            row.domainSize = size;
-            if (changedDomain) emit dataChanged(index(i, Domain), index(i, Domain));
+                quint64(row.entry.offset) + row.entry.width <= native.size;
+            const bool changedDomain = row.domain.id != native.id || row.domain.size != native.size ||
+                row.domain.address_base != native.address_base || qstrcmp(row.domain.name, native.name) != 0;
+            row.domain = native;
+            const bool changedOrder = valid && row.bigEndian != sample->bigEndian;
+            const bool newBaseline = reset || changedDomain || !valid || changedOrder;
             const QByteArray next = valid ? sample->bytes : QByteArray{};
             const bool different = row.current != next;
             const bool hadHighlight = row.highlight;
             const bool hadHistory = row.changes != 0;
-            row.highlight = !newBaseline && !row.current.isEmpty() && different;
             if (newBaseline) {
                 row.previous.clear();
                 row.changes = 0;
-            } else if (row.highlight) {
+                row.highlightUntil = 0;
+            } else if (!row.current.isEmpty() && different) {
                 row.previous = row.current;
                 if (row.changes < std::numeric_limits<quint64>::max()) ++row.changes;
+                row.highlightUntil = now + changeHighlightMs;
             }
-            const bool changedOrder = valid && row.bigEndian != sample->bigEndian;
+            row.highlight = now < row.highlightUntil;
             if (valid) row.bigEndian = sample->bigEndian;
             row.current = next;
-            if (row.highlight || (newBaseline && hadHistory) || different || changedOrder)
-                emit dataChanged(index(i, Value), index(i, Changes));
-            else if (hadHighlight != row.highlight)
-                emit dataChanged(index(i, Value), index(i, Value), {Qt::BackgroundRole, Qt::ForegroundRole});
+            if (different || changedOrder || (newBaseline && hadHistory) || hadHighlight != row.highlight)
+                emit dataChanged(index(i, changedDomain ? Address : Value), index(i, Value));
+            else if (changedDomain)
+                emit dataChanged(index(i, Address), index(i, Address));
         }
     }
 
     void clearHistory() {
         for (int i = 0; i < rows_.size(); ++i) {
             auto& row = rows_[i];
-            if (!row.changes && !row.highlight) continue;
+            if (!row.changes) continue;
             row.previous.clear();
             row.changes = 0;
+            row.highlightUntil = 0;
             row.highlight = false;
-            emit dataChanged(index(i, Value), index(i, Changes));
+            emit dataChanged(index(i, Value), index(i, Value));
         }
     }
 
@@ -230,13 +251,14 @@ private:
         DebugWatchEntry entry;
         QByteArray current;
         QByteArray previous;
-        QString domainName;
-        quint32 domainSize = 0;
+        kr_inspect_domain domain{};
         quint64 changes = 0;
+        qint64 highlightUntil = 0;
         bool bigEndian = false;
         bool highlight = false;
     };
     QVector<Row> rows_;
+    QElapsedTimer clock_;
 };
 
 DebugWatchDialog::DebugWatchDialog(QWidget* parent)
@@ -244,7 +266,7 @@ DebugWatchDialog::DebugWatchDialog(QWidget* parent)
     setObjectName(QStringLiteral("debugWatchDialog"));
     setWindowTitle(text("Наблюдение за памятью"));
     setWindowModality(Qt::NonModal);
-    resize(900, 420);
+    resize(470, 320);
 
     auto* outer = new QVBoxLayout(this);
     auto* actions = new QHBoxLayout;
@@ -252,9 +274,7 @@ DebugWatchDialog::DebugWatchDialog(QWidget* parent)
     edit_ = makeButton(this, "Изменить…", "debugWatchEdit");
     remove_ = makeButton(this, "Удалить", "debugWatchRemove");
     memory_ = makeButton(this, "Открыть в памяти", "debugWatchMemory");
-    clearHistory_ = makeButton(this, "Сбросить историю", "debugWatchClearHistory");
-    clearHistory_->setToolTip(text("Очистить предыдущие значения и счётчики, сохранив список наблюдений."));
-    for (auto* button : {add_, edit_, remove_, memory_, clearHistory_}) actions->addWidget(button);
+    for (auto* button : {add_, edit_, remove_, memory_}) actions->addWidget(button);
     actions->addStretch();
     outer->addLayout(actions);
 
@@ -283,19 +303,14 @@ DebugWatchDialog::DebugWatchDialog(QWidget* parent)
     table_->setModel(model_);
     table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     table_->horizontalHeader()->setSectionResizeMode(Name, QHeaderView::Stretch);
-    table_->horizontalHeader()->setSectionResizeMode(Domain, QHeaderView::Stretch);
-    table_->setColumnWidth(Offset, 106);
-    table_->setColumnWidth(Console, 102);
-    table_->setColumnWidth(Value, 125);
-    table_->setColumnWidth(Previous, 125);
-    table_->setColumnWidth(Changes, 90);
+    table_->setColumnWidth(Address, 110);
+    table_->setColumnWidth(Value, 135);
     outer->addWidget(table_, 1);
 
     connect(add_, &QPushButton::clicked, this, [this] { editWatch(-1); });
     connect(edit_, &QPushButton::clicked, this, [this] { editWatch(table_->currentIndex().row()); });
     connect(remove_, &QPushButton::clicked, this, &DebugWatchDialog::removeWatch);
     connect(memory_, &QPushButton::clicked, this, [this] { navigate(table_->currentIndex().row()); });
-    connect(clearHistory_, &QPushButton::clicked, this, [this] { model_->clearHistory(); });
     connect(table_, &QTableView::doubleClicked, this, [this](const QModelIndex& index) { editWatch(index.row()); });
     connect(table_, &QTableView::customContextMenuRequested, this, &DebugWatchDialog::showTableMenu);
     connect(table_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this] { updateActions(); });
@@ -367,13 +382,18 @@ void DebugWatchDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
     generation_ = snapshot.generation;
     if (snapshot.available()) {
         domains_ = snapshot.watchDomains;
+        activeInstance_ = snapshot.instance;
+        activeDomain_ = snapshot.memoryDomain;
         model_->applySamples(domains_, snapshot.watchValues, !sameContext);
     } else {
         resetSamples();
     }
-    const QString message = snapshot.available() ? text("Изменения между полученными снимками")
-        : snapshot.status.isEmpty() ? text("Нет данных снимка") : snapshot.status;
-    if (status_->text() != message) status_->setText(message);
+    const QString message = snapshot.available() ? QString() :
+        snapshot.status.isEmpty() ? text("Нет данных снимка") : snapshot.status;
+    if (status_->text() != message) {
+        status_->setText(message);
+        status_->setVisible(!message.isEmpty());
+    }
     updateActions();
 }
 
@@ -381,7 +401,11 @@ void DebugWatchDialog::editWatch(int row) {
     const auto* existing = model_->entry(row);
     const bool adding = !existing;
     if (adding && (domains_.isEmpty() || model_->rowCount() >= DebugWatchLimit)) return;
-    const DebugWatchEntry original = existing ? *existing : DebugWatchEntry{};
+    DebugWatchEntry original = existing ? *existing : DebugWatchEntry{};
+    if (adding) {
+        original.instance = activeInstance_;
+        original.domain = activeDomain_;
+    }
     const auto catalog = domains_;
     const auto gameKey = gameKey_;
     const auto generation = generation_;
@@ -389,12 +413,37 @@ void DebugWatchDialog::editWatch(int row) {
     editor.setObjectName(QStringLiteral("debugWatchEditor"));
     editor.setWindowTitle(adding ? text("Добавить наблюдение") : text("Изменить наблюдение"));
     auto* layout = new QVBoxLayout(&editor);
+    layout->setSizeConstraint(QLayout::SetFixedSize);
     auto* form = new QFormLayout;
     auto* name = new QLineEdit(original.name, &editor);
     name->setObjectName(QStringLiteral("debugWatchEditorName"));
     name->setMaxLength(nameLimit);
+    name->setMinimumWidth(180);
     form->addRow(text("Имя"), name);
-    auto* instance = new QComboBox(&editor);
+    auto* address = new QLineEdit(&editor);
+    address->setObjectName(QStringLiteral("debugWatchEditorOffset"));
+    address->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("(?:0[xX])?[0-9a-fA-F]{1,8}")), address));
+    form->addRow(text("Адрес (hex)"), address);
+    auto* width = new QComboBox(&editor);
+    width->setObjectName(QStringLiteral("debugWatchEditorWidth"));
+    for (const quint32 value : {1u, 2u, 4u})
+        width->addItem(text("%1 бит").arg(value * 8), value);
+    width->setCurrentIndex(width->findData(original.width));
+    form->addRow(text("Размер"), width);
+    layout->addLayout(form);
+
+    auto* advancedToggle = new QToolButton(&editor);
+    advancedToggle->setObjectName(QStringLiteral("debugWatchEditorAdvanced"));
+    advancedToggle->setText(text("Дополнительные параметры"));
+    advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    advancedToggle->setArrowType(Qt::RightArrow);
+    advancedToggle->setCheckable(true);
+    layout->addWidget(advancedToggle, 0, Qt::AlignLeft);
+    auto* advanced = new QWidget(&editor);
+    auto* advancedForm = new QFormLayout(advanced);
+    advancedForm->setContentsMargins(0, 0, 0, 0);
+    auto* instance = new QComboBox(advanced);
     instance->setObjectName(QStringLiteral("debugWatchEditorConsole"));
     for (const quint32 value : {0u, 1u}) {
         if ((!adding && value == original.instance) ||
@@ -403,51 +452,54 @@ void DebugWatchDialog::editWatch(int row) {
     }
     const int selectedConsole = instance->findData(original.instance);
     instance->setCurrentIndex(selectedConsole >= 0 ? selectedConsole : 0);
-    form->addRow(text("Консоль"), instance);
-    auto* domain = new QComboBox(&editor);
+    advancedForm->addRow(text("Консоль"), instance);
+    auto* domain = new QComboBox(advanced);
     domain->setObjectName(QStringLiteral("debugWatchEditorDomain"));
+    const auto updateAddress = [&] {
+        const auto* region = findDomain(catalog, instance->currentData().toUInt(), domain->currentData().toUInt());
+        const quint32 base = region ? region->native.address_base : 0;
+        address->setPlaceholderText(addressText(0, base));
+        if (!adding && !address->isModified()) address->setText(addressText(original.offset, base));
+    };
     const auto selectDomains = [&] {
-        domain->clear();
         const auto console = instance->currentData().toUInt();
+        const QSignalBlocker blocker(domain);
+        domain->clear();
         for (const auto& item : catalog)
             if (item.instance == console) domain->addItem(domainName(item), item.native.id);
         if (!adding && console == original.instance && domain->findData(original.domain) < 0)
             domain->addItem(text("Область %1 (недоступна)").arg(original.domain), original.domain);
         int selection = domain->findData(original.domain);
+        if (selection < 0) selection = domain->findData(quint32(KR_MEM_RAM));
         if (selection < 0) selection = domain->findData(quint32(KR_MEM_ZRAM));
         domain->setCurrentIndex(selection >= 0 ? selection : 0);
+        updateAddress();
     };
     selectDomains();
     connect(instance, &QComboBox::currentIndexChanged, &editor, selectDomains);
-    form->addRow(text("Область памяти"), domain);
-
-    auto* offset = new QLineEdit(hex(original.offset), &editor);
-    offset->setObjectName(QStringLiteral("debugWatchEditorOffset"));
-    offset->setValidator(new QRegularExpressionValidator(
-        QRegularExpression(QStringLiteral("(?:0[xX])?[0-9a-fA-F]{1,8}")), offset));
-    form->addRow(text("Смещение (hex)"), offset);
-    auto* width = new QComboBox(&editor);
-    width->setObjectName(QStringLiteral("debugWatchEditorWidth"));
-    for (const quint32 value : {1u, 2u, 4u})
-        width->addItem(text("%1 бит").arg(value * 8), value);
-    width->setCurrentIndex(width->findData(original.width));
-    form->addRow(text("Размер"), width);
-    auto* format = new QComboBox(&editor);
+    connect(domain, &QComboBox::currentIndexChanged, &editor, updateAddress);
+    advancedForm->addRow(text("Область памяти"), domain);
+    auto* format = new QComboBox(advanced);
     format->setObjectName(QStringLiteral("debugWatchEditorFormat"));
     format->addItem(QStringLiteral("Hex"), int(DebugWatchEntry::Hex));
     format->addItem(text("Без знака"), int(DebugWatchEntry::Unsigned));
     format->addItem(text("Со знаком"), int(DebugWatchEntry::Signed));
     format->addItem(text("Двоичный"), int(DebugWatchEntry::Binary));
     format->setCurrentIndex(format->findData(int(original.format)));
-    form->addRow(text("Формат"), format);
-    auto* order = new QComboBox(&editor);
+    advancedForm->addRow(text("Формат"), format);
+    auto* order = new QComboBox(advanced);
     order->setObjectName(QStringLiteral("debugWatchEditorOrder"));
     order->addItem(text("Порядок области"), int(DebugWatchEntry::Native));
     order->addItem(QStringLiteral("Big-endian"), int(DebugWatchEntry::Big));
     order->addItem(QStringLiteral("Little-endian"), int(DebugWatchEntry::Little));
     order->setCurrentIndex(order->findData(int(original.order)));
-    form->addRow(text("Порядок байтов"), order);
-    layout->addLayout(form);
+    advancedForm->addRow(text("Порядок байтов"), order);
+    advanced->hide();
+    layout->addWidget(advanced);
+    connect(advancedToggle, &QToolButton::toggled, &editor, [advancedToggle, advanced](bool shown) {
+        advanced->setVisible(shown);
+        advancedToggle->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
+    });
 
     auto* error = new QLabel(&editor);
     error->setTextFormat(Qt::PlainText);
@@ -465,7 +517,7 @@ void DebugWatchDialog::editWatch(int row) {
             return;
         }
         bool ok = false;
-        updated.offset = offset->text().toUInt(&ok, 16);
+        const quint32 absolute = address->text().toUInt(&ok, 16);
         updated.instance = instance->currentData().toUInt();
         updated.domain = domain->currentData().toUInt();
         updated.width = width->currentData().toUInt();
@@ -473,6 +525,8 @@ void DebugWatchDialog::editWatch(int row) {
         updated.order = DebugWatchEntry::Order(order->currentData().toInt());
         updated.name = name->text().trimmed();
         const auto* region = findDomain(domains_, updated.instance, updated.domain);
+        const quint32 base = region ? region->native.address_base : 0;
+        updated.offset = absolute >= base ? absolute - base : absolute;
         const bool available = region && quint64(updated.offset) + updated.width <= region->native.size;
         if (!ok || !validEntry(updated) || (!available && (adding || !sameLocation(original, updated)))) {
             error->setText(text("Значение выходит за границы доступной области памяти."));
@@ -481,7 +535,8 @@ void DebugWatchDialog::editWatch(int row) {
         }
         editor.accept();
     });
-    name->setFocus();
+    if (adding) address->setFocus();
+    else name->setFocus();
     if (editor.exec() != QDialog::Accepted) return;
 
     if (adding) {
@@ -530,6 +585,8 @@ void DebugWatchDialog::showTableMenu(const QPoint& point) {
     open->setEnabled(canNavigate(index.row()));
     menu.addAction(text("Изменить…"), this, [this, row = index.row()] { editWatch(row); });
     menu.addAction(text("Удалить"), this, &DebugWatchDialog::removeWatch);
+    menu.addSeparator();
+    menu.addAction(text("Сбросить историю"), this, [this] { model_->clearHistory(); });
     menu.exec(table_->viewport()->mapToGlobal(point));
 }
 
@@ -539,7 +596,6 @@ void DebugWatchDialog::updateActions() {
     edit_->setEnabled(model_->entry(row) != nullptr);
     remove_->setEnabled(model_->entry(row) != nullptr);
     memory_->setEnabled(canNavigate(row));
-    clearHistory_->setEnabled(model_->rowCount() != 0);
 }
 
 void DebugWatchDialog::resetSamples() {
@@ -561,6 +617,7 @@ void DebugWatchDialog::hideEvent(QHideEvent* event) {
     QDialog::hideEvent(event);
     resetSamples();
     status_->setText(text("Нет данных снимка"));
+    status_->show();
     showFeedback({});
     updateActions();
     emit inspectionChanged();

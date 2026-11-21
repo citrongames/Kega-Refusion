@@ -436,6 +436,58 @@ void verifyProjectRoundTrip() {
           !dialog.projectPending(), "clearing the game ignores a late acknowledgement");
 }
 
+
+void verifyBankLabels() {
+    CpuDebuggerDialog dialog;
+    QVector<DebuggerCommand> commands;
+    QObject::connect(&dialog,&CpuDebuggerDialog::command,&dialog,[&](const auto& c){commands.append(c);});
+    dialog.show();
+    auto data=attached();
+    data.instructionLocations={{1,0x40102}};
+    dialog.setSnapshot(data);
+    DebugProject project;
+    project.game="fixture";
+    project.symbols={
+        {KR_DEBUG_M68K,0x102,"first",{},true,1,0x40102},
+        {KR_DEBUG_M68K,0x102,"second",{},true,1,0x80102},
+        {KR_DEBUG_M68K|0x100,0x102,"peer",{},false,1,0x40102}
+    };
+    dialog.applyProject(project);
+    acceptConfiguration(dialog,data,commands.last());
+    auto* code=find<QTableWidget>(dialog,"debugCpuDisassembly");
+    check(code->item(0,5)->text().contains("first"),"physical label on first bank");
+    data.instructionLocations[0].offset=0x80102;
+    dialog.setSnapshot(data);
+    check(code->item(0,5)->text().contains("second") && !code->item(0,5)->text().contains("first"),"same CPU address switches bank label");
+    data.instructionLocations[0].offset=0xc0102;
+    dialog.setSnapshot(data);
+    check(code->item(0,5)->text().isEmpty(),"unknown bank does not inherit a label");
+    data.instructions[0].address=0x20102;
+    data.instructionLocations[0].offset=0x40102;
+    dialog.setSnapshot(data);
+    check(code->item(0,5)->text().contains("first"),"physical alias shares its label");
+    auto* address=find<QLineEdit>(dialog,"debugCpuAddress");
+    address->setText("second");
+    find<QPushButton>(dialog,"debugCpuNavigate")->click();
+    check(commands.last().physicalSource==1 && commands.last().physicalOffset==0x80102 &&
+          commands.last().address==0x102,"physical label navigation validates mapping on worker");
+    const auto navigation=commands.last();
+    data.hasNavigationState=true;
+    data.followingPc=false;
+    data.navigationAddress=0x998;
+    dialog.setSnapshot(data); // queued pre-command timer snapshot
+    check(dialog.refreshCommand().address!=0x998,"unrelated snapshot cannot settle pending label navigation");
+    data.navigationRequestId=navigation.navigationRequestId;
+    data.navigationAccepted=false;
+    data.navigationError="bank unavailable";
+    data.followingPc=true;
+    data.status="bank unavailable";
+    dialog.setSnapshot(data);
+    check(!dialog.refreshCommand().physicalSource && dialog.refreshCommand().followPc,"failed bank navigation restores prior navigation");
+    const auto saved=dialog.exportProject();
+    check(saved.symbols.size()==3 && saved.symbols[0].source==1 && saved.symbols[1].offset==0x80102,"bank identity retained in project");
+}
+
 void verifyExpansionTargets() {
     CpuDebuggerDialog dialog;
     QVector<DebuggerCommand> commands;
@@ -555,6 +607,7 @@ int main(int argc, char** argv) {
     if (!previews.isEmpty()) check(QDir().mkpath(previews), "create preview directory");
     verify(previews);
     verifyProjectRoundTrip();
+    verifyBankLabels();
     verifyExpansionTargets();
     verifyRegisterWrites();
     std::puts("PASS: debugger commands, ranges, symbols, projects, shortcuts, expansion targets, Link Cable and register edits");

@@ -25,7 +25,7 @@ class DebugGraphicsDialog final : public QDialog {
 public:
     explicit DebugGraphicsDialog(QWidget* parent = nullptr);
     void setControls(quint32 available, quint32 disabled, bool hardcore,
-                     bool ready, QColor backdrop);
+                     bool ready, QColor backdrop, bool firecore = false);
     DebugInspectionRequest request() const;
     void setSnapshot(const DebugInspectionSnapshot& snapshot);
 

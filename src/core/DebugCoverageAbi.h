@@ -11,6 +11,11 @@ typedef struct kr_cov_source {
     uint32_t inspect_domain, inspect_offset;
     char name[48];
 } kr_cov_source;
+typedef struct kr_cov_location { uint32_t source, offset; } kr_cov_location;
+/* Read-only opcode-map lookup, independent of enabled coverage. At most 4096
+ * addresses; flags bit 0 requests prefetch-aware identity (unknown if unproven).
+ * size_t retro_kegarefusion_debug_locations_v1(unsigned version, unsigned cpu,
+ *    const uint32_t *addresses, kr_cov_location *out, size_t count, unsigned flags); */
 typedef struct kr_cov_event {
     uint32_t cpu, kind, source, offset, size;
 } kr_cov_event;

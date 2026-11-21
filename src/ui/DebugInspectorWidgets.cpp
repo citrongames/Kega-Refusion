@@ -1192,6 +1192,56 @@ quint32 fbValue(const DebugInspectionSnapshot& snapshot, const char* name, quint
     return field(snapshot, "32X VDP", name, fallback);
 }
 
+constexpr quint32 firecoreBitmapBase = 0x4e00;
+constexpr int firecoreBitmapPitch = 320;
+
+quint32 firecoreBlockAddress(int x, int y) {
+    return firecoreBitmapBase + y * (2 * firecoreBitmapPitch) + x * 4;
+}
+
+QByteArrayView firecoreBitmapStorage(const Video& video) {
+    const auto width = video.snapshot.info.width;
+    const auto height = video.snapshot.info.height;
+    if (video.format != KR_VIDEO_FIRECORE_BITMAP || (width != 256 && width != 320) ||
+        !height || height > 240 || (height & 1)) return {};
+    const auto end = firecoreBlockAddress(int(width / 2), int(height / 2 - 1));
+    if (end > video.vram.size()) return {};
+    return QByteArrayView(video.vram).sliced(firecoreBitmapBase, end - firecoreBitmapBase);
+}
+
+QRgb firecoreBitmapColor(int luma, int u, int v) {
+    // The Firecore renderer expands Y5/U6/V6 before fixed-point conversion.
+    const int c = luma * 8 - 16;
+    const int d = u * 4 - 128;
+    const int e = v * 4 - 128;
+    const auto clamp = [](int channel) { return std::clamp((channel + 128) >> 8, 0, 255); };
+    return qRgb(clamp(298 * c + 409 * e), clamp(298 * c - 100 * d - 208 * e),
+                clamp(298 * c + 516 * d));
+}
+
+QImage firecoreBitmapImage(const Video& video) {
+    const auto bytes = firecoreBitmapStorage(video);
+    if (bytes.isEmpty()) return {};
+    QImage image(int(video.snapshot.info.width), int(video.snapshot.info.height), QImage::Format_RGB32);
+    for (int y = 0; y < image.height(); y += 2) {
+        auto* upper = reinterpret_cast<QRgb*>(image.scanLine(y));
+        auto* lower = reinterpret_cast<QRgb*>(image.scanLine(y + 1));
+        const char* block = bytes.data() + y * firecoreBitmapPitch;
+        for (int x = 0; x < image.width(); x += 2, block += 4) {
+            // Within a block the guest words are big-endian, low word first.
+            const quint32 packed = qFromBigEndian<quint16>(block)
+                                 | (quint32(qFromBigEndian<quint16>(block + 2)) << 16);
+            const int u = packed >> 26;
+            const int v = (packed >> 20) & 63;
+            upper[x]     = firecoreBitmapColor(packed & 31, u, v);
+            upper[x + 1] = firecoreBitmapColor((packed >> 5) & 31, u, v);
+            lower[x]     = firecoreBitmapColor((packed >> 10) & 31, u, v);
+            lower[x + 1] = firecoreBitmapColor((packed >> 15) & 31, u, v);
+        }
+    }
+    return image;
+}
+
 using FrameLine = std::array<quint16, 320>;
 FrameLine framebufferLine(const QByteArray& page, const QByteArray& colors,
                           int y, int mode, bool pixelShift) {
@@ -1372,6 +1422,10 @@ bool sameVideoPreview(DebugVideoInspector::View view, int option,
 
     const auto sameBlock = [&](quint32 domain) { return previous.blocks.value(domain) == next.blocks.value(domain); };
     if (view == DebugVideoInspector::Framebuffer) {
+        if (after.hardware & KR_HW_FIRECORE) {
+            return previous.info.width == next.info.width && previous.info.height == next.info.height &&
+                firecoreBitmapStorage(before) == firecoreBitmapStorage(after);
+        }
         for (const char* field : {"Mode", "Height", "Displayed framebuffer", "Pixel shift"})
             if (fbValue(previous, field) != fbValue(next, field)) return false;
         const auto domain = option == 0 ? KR_MEM_32X_FB0 : KR_MEM_32X_FB1;
@@ -1464,6 +1518,16 @@ void DebugVideoInspector::redraw() {
                 painter.fillRect(rect.adjusted(0, 0, -1, -1), QColor::fromRgb(color));
             }
         }
+    } else if (view_ == Framebuffer && (video.hardware & KR_HW_FIRECORE)) {
+        if (video.format == KR_VIDEO_FIRECORE_BITMAP) {
+            preview = firecoreBitmapImage(video);
+            const auto description = preview.isNull() ? trText("Снимок растра недоступен")
+                : trText("Снимок растра %1×%2").arg(preview.width()).arg(preview.height());
+            caption += QStringLiteral(" · ") + description;
+            if (!preview.isNull()) grid = QSize(2, 2);
+        } else {
+            caption = trText("Растровый режим Firecore не включён");
+        }
     } else if (view_ == Framebuffer) {
         const int mode = fbValue(snapshot_, "Mode");
         const auto page = snapshot_.blocks.value(option == 0 ? KR_MEM_32X_FB0 : KR_MEM_32X_FB1);
@@ -1553,7 +1617,14 @@ void DebugVideoInspector::updateDetail() {
     const auto paletteLink = [&](int bank) {
         return memoryLink(KR_MEM_CRAM, bank * video.bankColors() * video.colorBytes(), QStringLiteral("CRAM"));
     };
-    if (view_ == Framebuffer) {
+    if (view_ == Framebuffer && (video.hardware & KR_HW_FIRECORE)) {
+        if (valid && !firecoreBitmapStorage(video).isEmpty() &&
+            point_.x() < int(snapshot_.info.width / 2) && point_.y() < int(snapshot_.info.height / 2)) {
+            details << trText("Блок %1, %2").arg(point_.x()).arg(point_.y());
+            details << memoryLink(KR_MEM_VRAM, firecoreBlockAddress(point_.x(), point_.y()),
+                                  QStringLiteral("VRAM"));
+        }
+    } else if (view_ == Framebuffer) {
         const quint32 domain = option == 0 ? KR_MEM_32X_FB0 : KR_MEM_32X_FB1;
         const auto page = snapshot_.blocks.value(domain);
         if (!page.isEmpty()) {

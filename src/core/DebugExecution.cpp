@@ -92,6 +92,7 @@ struct LibretroHost::DebugExecution {
     bool pending = false, running = false, stopped = false, suppress = false;
     bool activeHooks = false, renderVideo = true, captureAudio = true;
     bool follow = true, pauseNext = false, stepping = false, over = false, out = false;
+    quint64 viewGeneration = 0;
     unsigned cpu = KR_DEBUG_M68K, stepCpu = KR_DEBUG_M68K, stopCpu = 0, event = 0, accessSize = 0;
     quint32 address = 0, value = 0, navigate = 0, stepTarget = 0, startSp = 0;
     unsigned steps = 0, depth = 0, pendingFlow = 0;
@@ -264,6 +265,7 @@ struct LibretroHost::DebugExecution {
 
     void stop(unsigned which, unsigned kind, quint32 at, quint32 val, unsigned bytes) {
         cpu = stopCpu = which;
+        follow = true;
         event = kind;
         address = at;
         value = val;
@@ -294,7 +296,8 @@ struct LibretroHost::DebugExecution {
         for (qsizetype i = 0; i < d.breaks.size(); ++i) {
             auto& b = d.breaks[i];
             if (!b.enabled || b.cpu != which || !(b.events & kind)) continue;
-            const quint32 mask = addressMask(*chip);
+            const quint32 mask = native == KR_DEBUG_SSP1601 ? kr_debug_ssp_event_address_mask(kind)
+                                                              : addressMask(*chip);
             const quint64 last = quint64(at) + std::max(1u, bytes) - 1;
             const bool overlaps = last <= mask ? !(at > b.last || last < b.first)
                                               : at <= b.last || (last & mask) >= b.first;
@@ -344,9 +347,16 @@ void LibretroHost::DebugExecutionDeleter::operator()(DebugExecution* p) const { 
 bool LibretroHost::debuggerAttach(QString& error) {
     error.clear();
     if (!loaded_) { error = tr("Игра не загружена."); return false; }
+    if (debugger_ && debugger_->viewGeneration != inspectionGeneration_) {
+        debugger_->viewGeneration = inspectionGeneration_;
+        debugger_->follow = true;
+    }
     if (debugger_ && debugger_->pending) return true;
 
-    if (!debugger_) debugger_.reset(new DebugExecution(*this));
+    if (!debugger_) {
+        debugger_.reset(new DebugExecution(*this));
+        debugger_->viewGeneration = inspectionGeneration_;
+    }
     debugger_->discover();
     if (debugger_->targets.isEmpty() || (linkPair_ &&
         std::none_of(debugger_->targets.begin(), debugger_->targets.end(),
@@ -459,6 +469,14 @@ void LibretroHost::finishDebugFrame() {
 
 bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& error) {
     error.clear();
+    const bool navigation = command.kind == DebuggerCommand::Navigate && command.navigationRequestId;
+    if (navigation) {
+        debugNavigationId_ = command.navigationRequestId;
+        debugNavigationAccepted_ = false;
+    }
+    const auto navigationReply = qScopeGuard([&] {
+        if (navigation) debugNavigationError_ = error;
+    });
     const bool configuration = command.kind == DebuggerCommand::Configure || command.kind == DebuggerCommand::Validate;
     const bool temporaryInspection = command.kind == DebuggerCommand::Validate && !debuggerAttached();
     const auto releaseInspection = qScopeGuard([&] { if (temporaryInspection) debuggerDetach(); });
@@ -478,7 +496,7 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
         }
         return setLinkCableEnabled(command.linkEnabled, error);
     }
-    if (configuration && !command.gameKey.isEmpty() &&
+    if ((configuration || navigation) && !command.gameKey.isEmpty() &&
         command.gameKey != gamePath_ + QLatin1Char('\n') + contentName_) {
         error=tr("Игра изменилась. Обновите проект отладки.");
         return false;
@@ -498,14 +516,31 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
         error = tr("Не удалось прочитать состояние процессора.");
         return false;
     }
-    if (command.kind != DebuggerCommand::Validate) {
+    if (command.kind == DebuggerCommand::Navigate || command.kind == DebuggerCommand::Attach) {
+        if (command.physicalSource) {
+            auto* core=d.console(instance(command.cpu));
+            kr_cov_location location{};
+            if (!core) { error=tr("Процессор больше недоступен."); return false; }
+            Activation active(core);
+            const uint32_t address=command.address;
+            if (!core->api_->debug_locations ||
+                core->api_->debug_locations(KR_COV_VERSION,nativeCpu(command.cpu),&address,&location,1,0)!=1 ||
+                location.source!=command.physicalSource || location.offset!=command.physicalOffset) {
+                error=tr("Банк этой метки сейчас не подключён по сохранённому адресу.");
+                return false;
+            }
+        }
         d.cpu = selected;
         d.navigate = command.address;
         d.follow = command.followPc;
+        if (navigation) debugNavigationAccepted_ = true;
     }
     if (command.kind == DebuggerCommand::Attach || command.kind == DebuggerCommand::Refresh ||
         command.kind == DebuggerCommand::Navigate)
         return true;
+
+    if (command.kind != DebuggerCommand::Refresh && command.kind != DebuggerCommand::Validate)
+        d.cpu = selected;
 
     if (command.kind == DebuggerCommand::WriteRegister) {
         if (!d.canEdit(selected)) {
@@ -542,20 +577,23 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
             const auto* chip = d.target(b.cpu);
             kr_debug_cpu registers{};
             Condition condition;
-            const unsigned native=nativeCpu(b.cpu);
-            const bool known=instance(b.cpu)<=1 && native && !(native&(native-1)) && native<=KR_DEBUG_SSP1601;
-            if (!chip && command.kind==DebuggerCommand::Validate && known && b.id &&
-                !ids.contains(b.id) && b.first<=b.last && b.events && !(b.events&~debugEvents) &&
-                b.condition.size()<=256) {
+            const unsigned native = nativeCpu(b.cpu);
+            const bool known = instance(b.cpu) <= 1 && native && !(native & (native - 1)) &&
+                               native <= KR_DEBUG_SSP1601;
+            const quint32 mask = native == KR_DEBUG_SSP1601 ? kr_debug_ssp_event_address_mask(b.events)
+                : chip ? addressMask(*chip) : native == KR_DEBUG_Z80 ? 0xffffu
+                : (native == KR_DEBUG_M68K || native == KR_DEBUG_SUB68K) ? 0xffffffu : UINT32_MAX;
+            const bool valid = b.id && !ids.contains(b.id) && b.condition.size() <= 256 &&
+                               mask && b.first <= b.last && b.last <= mask &&
+                               b.events && !(b.events & ~debugEvents);
+            if (valid && !chip && command.kind == DebuggerCommand::Validate && known) {
                 // A saved absent peer/expansion stays dormant. Its register
                 // condition is checked when that actual target becomes available.
-                const unsigned bits=(native==KR_DEBUG_Z80 || native==KR_DEBUG_SSP1601)?16:
-                    (native==KR_DEBUG_M68K || native==KR_DEBUG_SUB68K)?24:32;
-                if (bits==32 || b.last<=(quint32(1)<<bits)-1) { ids.insert(b.id); continue; }
+                ids.insert(b.id);
+                continue;
             }
-            if (!b.id || ids.contains(b.id) || b.condition.size() > 256 || !chip || b.first > b.last || b.last > addressMask(*chip) || !b.events ||
-                (b.events & ~(debugEvents & chip->capabilities)) || !d.state(b.cpu, registers) ||
-                !condition.compile(b.condition, registers)) {
+            if (!valid || !chip || (b.events & ~chip->capabilities) ||
+                !d.state(b.cpu, registers) || !condition.compile(b.condition, registers)) {
                 error = tr("Неверная точка остановки или условие.");
                 return false;
             }
@@ -645,6 +683,9 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
 
 DebuggerSnapshot LibretroHost::debuggerSnapshot() const {
     DebuggerSnapshot out;
+    out.navigationRequestId = debugNavigationId_;
+    out.navigationAccepted = debugNavigationAccepted_;
+    out.navigationError = debugNavigationError_;
     out.configureRequestId = debugConfigureId_;
     out.configureAccepted = debugConfigureAccepted_;
     out.configureError = debugConfigureError_;
@@ -657,6 +698,9 @@ DebuggerSnapshot LibretroHost::debuggerSnapshot() const {
 
     const auto& d = *debugger_;
     out.attached = true;
+    out.hasNavigationState = true;
+    out.followingPc = d.follow;
+    out.navigationAddress = d.navigate;
     out.stopped = d.stopped;
     out.partialFrame = d.pending;
     out.selectedCpu = d.cpu;
@@ -692,6 +736,19 @@ DebuggerSnapshot LibretroHost::debuggerSnapshot() const {
     }
 
     Activation active(core);
+    if (core->api_->debug_locations) {
+        std::array<uint32_t,32> addresses{};
+        for (qsizetype i=0;i<out.instructions.size();++i) addresses[size_t(i)]=out.instructions[i].address;
+        out.instructionLocations.resize(out.instructions.size());
+        if (core->api_->debug_locations(KR_COV_VERSION,nativeCpu(d.cpu),addresses.data(),
+                out.instructionLocations.data(),size_t(out.instructions.size()),1) != size_t(out.instructions.size()))
+            out.instructionLocations.clear();
+        if (core->api_->coverage_sources) {
+            std::array<kr_cov_source,KR_COV_MAX_SOURCES> sources{};
+            const auto n=std::min<size_t>(sources.size(),core->api_->coverage_sources(KR_COV_VERSION,sources.data(),sources.size()));
+            for(size_t i=0;i<n;++i) { sources[i].name[sizeof(sources[i].name)-1]=0; out.codeSources.append(sources[i]); }
+        }
+    }
     const unsigned native = nativeCpu(d.cpu);
     if (d.canEdit(d.cpu)) {
         for (unsigned i = 0; i < state->count; ++i)

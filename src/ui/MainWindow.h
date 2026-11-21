@@ -310,6 +310,7 @@ private:
     bool rewindAccelerate_ = true;
     int rewindFixedFactor_ = 1;
     bool smsFmEnabled_ = true;
+    bool debugFirecore_ = false;
     quint32 debugVideoAvailable_ = 0;
     quint32 debugVideoDisabled_ = 0;
     quint64 debugAudioAvailable_ = 0;

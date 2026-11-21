@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QDialogButtonBox>
+#include <QLineEdit>
 #include <QPixmap>
 #include <QPushButton>
 #include <QTableWidget>
@@ -68,6 +69,13 @@ int main(int argc, char** argv) {
 
         CheatSearchDialog search;
         quint64 requestId = 0;
+        DebugWatchEntry selectedWatch;
+        int watchRequests = 0;
+        int cheatSaves = 0;
+        QObject::connect(&search, &CheatSearchDialog::watchRequested, &search,
+                         [&](const DebugWatchEntry& watch) { selectedWatch = watch; ++watchRequests; });
+        QObject::connect(&search, &CheatSearchDialog::saveRequested, &search,
+                         [&](const CheatEntry&) { ++cheatSaves; });
         QObject::connect(&search, &CheatSearchDialog::searchRequested, &search,
                          [&](quint64 id, int width, int comparison, quint32, bool restart) {
             require(width == 1 && comparison == 5 && restart,
@@ -79,24 +87,48 @@ int main(int argc, char** argv) {
         auto* newSearch = search.findChild<QPushButton*>(QStringLiteral("cheatSearchNew"));
         auto* results = search.findChild<QTableWidget*>(QStringLiteral("cheatSearchResults"));
         auto* add = search.findChild<QPushButton*>(QStringLiteral("cheatSearchAdd"));
-        require(newSearch && results && add && newSearch->isVisible() && add->isVisible(),
+        auto* watch = search.findChild<QPushButton*>(QStringLiteral("cheatSearchWatch"));
+        require(newSearch && results && add && watch && newSearch->isVisible() &&
+                add->isVisible() && watch->isVisible() && !watch->isEnabled(),
                 "search controls are missing at default size");
         newSearch->click();
         require(requestId != 0, "search request was not emitted");
-        const QByteArray response = R"({"error":"","count":3,"width":1,"base":16711680,"bigEndian":true,"results":[{"address":16711680,"previous":2,"value":3},{"address":16711681,"previous":7,"value":8},{"address":16711682,"previous":9,"value":10}]})";
+        const QByteArray response = R"({"error":"","count":3,"width":1,"base":16711680,"bigEndian":true,"watchDomain":2,"results":[{"address":16711680,"previous":2,"value":3},{"address":16711681,"previous":7,"value":8},{"address":16711682,"previous":9,"value":10}]})";
         search.setResults(requestId, response);
         QApplication::processEvents();
         require(results->rowCount() == 3, "search results were not displayed");
         results->selectRow(1);
         QApplication::processEvents();
-        require(add->isEnabled(), "selected search result cannot be added");
+        require(add->isEnabled() && watch->isEnabled(), "selected search result cannot be added");
+        watch->click();
+        require(watchRequests == 1 && cheatSaves == 0 && selectedWatch.instance == 0 &&
+                selectedWatch.domain == KR_MEM_RAM && selectedWatch.offset == 1 &&
+                selectedWatch.width == 1 && selectedWatch.format == DebugWatchEntry::Unsigned &&
+                selectedWatch.order == DebugWatchEntry::Native && selectedWatch.name.isEmpty(),
+                "watch did not carry the selected RAM result");
+        auto* description = search.findChild<QLineEdit*>(QStringLiteral("cheatSearchDescription"));
+        require(description, "watch name source is missing");
+        description->setText(QStringLiteral("Lives"));
+        description->setModified(true);
+        watch->click();
+        require(watchRequests == 2 && selectedWatch.name == QStringLiteral("Lives"),
+                "user-entered description was not carried over as the watch name");
+        results->clearSelection();
+        require(!watch->isEnabled(), "watch remained available without a selected result");
+        results->selectRow(1);
         require(add->geometry().right() <= search.width(),
                 "search action overflows the default dialog width");
         preview(search, QDir(directory).filePath(QStringLiteral("cheat-search-dialog.png")));
 
         search.resetSearch();
         search.setResults(requestId, response);
-        require(results->rowCount() == 0, "stale response restored reset search results");
+        require(results->rowCount() == 0 && !watch->isEnabled(), "stale response restored reset search results");
+        newSearch->click();
+        auto legacy = response;
+        legacy.replace(",\"watchDomain\":2", "");
+        search.setResults(requestId, legacy);
+        require(results->rowCount() == 3 && add->isEnabled() && !watch->isEnabled(),
+                "results without inspection metadata offered an unsupported watch");
         std::puts("cheat dialog visual previews and stale search response: passed");
         return 0;
     } catch (const std::exception& error) {

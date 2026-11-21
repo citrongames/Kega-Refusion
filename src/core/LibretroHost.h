@@ -75,7 +75,7 @@ public:
     bool isGameGear() const;
     bool gameGearLcdEnabled() const;
     bool smsPauseStateSupported() const;
-    struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
+    struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; bool firecore = false; };
     DebugCapabilities debugCapabilities() const;
     DebugInspectionSnapshot inspect(const DebugInspectionRequest& request) const;
     bool writeInspectionMemory(const DebugMemoryWrite& request, QString& error);
@@ -119,7 +119,8 @@ public:
     const CheatList& cheats() const { return movieCheatsActive_ ? movieCheats_ : cheats_.entries(); }
     Cheats::Platform cheatPlatform() const;
     bool cheatsSupported() const;
-    bool cheatMemory(QByteArray& memory, quint32& base, bool& bigEndian, QString& error) const;
+    bool cheatMemory(QByteArray& memory, quint32& base, bool& bigEndian, QString& error,
+                     quint32* watchDomain = nullptr) const;
     QString cheatSupportText() const;
     // activeChanged excludes descriptions and disabled-code edits.
     bool setCheats(const CheatList& entries, QString& error, bool* activeChanged = nullptr);
@@ -377,6 +378,9 @@ private:
     quint64 debugConfigureId_ = 0;
     bool debugConfigureAccepted_ = false;
     QString debugConfigureError_;
+    quint64 debugNavigationId_ = 0;
+    bool debugNavigationAccepted_ = false;
+    QString debugNavigationError_;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;
     bool perGameCdBackup_ = true;

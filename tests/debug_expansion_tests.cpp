@@ -31,8 +31,14 @@ constexpr quint32 mdEntry = 0x200;
 constexpr quint32 mdMarker = 0xff0020;
 constexpr quint32 z80Marker = 0xc020;
 constexpr quint32 svpEntry = 0x400;
-constexpr quint32 svpLoop = 0x402;
+constexpr quint32 svpAfterMailbox = 0x402;
 constexpr quint16 svpMarker = 0x5aa5;
+constexpr quint32 svpTestIramWord = 0x112;
+constexpr quint32 svpTestIram = KR_DEBUG_SSP_IRAM_BASE + svpTestIramWord * 2;
+constexpr quint32 svpTestRam0 = KR_DEBUG_SSP_RAM0_BASE + 0x40;
+constexpr quint32 svpTestRam1 = KR_DEBUG_SSP_RAM1_BASE;
+constexpr quint32 svpTestDram = KR_DEBUG_SSP_DRAM_BASE + 0x40;
+constexpr quint32 svpTestPmRom = 0x1f800;
 constexpr quint32 subHandler = 0x300;
 constexpr quint32 sh2Master = 0x06000000;
 constexpr quint32 sh2Slave = 0x06000100;
@@ -88,9 +94,40 @@ QByteArray svpRom() {
     code.word(0x33c0); code.address(mdMarker);   // MOVE.W D0,(work RAM).L
     code.word(0x60fe);
 
-    code.pc = svpEntry * 2;                      // SSP addresses program words.
-    code.word(0x08b0); code.word(svpMarker);    // LDI XST,#$5AA5
-    code.word(0x4c00); code.word(svpLoop);      // BRA always,$0402
+    code.pc = svpEntry * 2;                    // SSP addresses program words.
+    const auto ldi = [&](unsigned reg, quint16 value) {
+        code.word(0x0800 | (reg << 4));
+        code.word(value);
+    };
+    const auto pm4 = [&](quint16 address, quint16 mode, bool write) {
+        ldi(14, address);                       // PMC low, PMC high.
+        ldi(14, mode);
+        code.word(write ? 0x00c0 : 0x000c);    // LD PM4,- or LD -,PM4.
+    };
+    ldi(11, svpMarker);                         // $0400: LDI XST,$5AA5.
+    pm4(0x8000 + svpTestIramWord, 0x081c, true);
+    ldi(12, 0xcafe);                            // $0407: PM4 IRAM write.
+    ldi(3, 0x1234);
+    code.word(0x0e20);                         // $040b: LD RAM0[$20],A.
+    code.word(0x1820);                         // LDI r0,$20.
+    code.word(0x021c);                         // $040d: LD X,(r0+).
+    code.word(0x0d03); code.word(svpTestIramWord); // $040e: LDI (r7|0),$0112.
+    code.word(0x0b23);                         // $0410: LD Y,((r7|0)).
+    ldi(3, svpEntry);
+    code.word(0x4a30);                         // $0413: LD A,(A) reads the first opcode as data.
+    pm4(svpTestPmRom / 2, 0x0800, false);
+    code.word(0x003c);                         // $0419: LD A,PM4 reads cartridge ROM.
+    pm4(0x20, 0x0818, true);
+    ldi(12, 0x3fc5);                            // $041f: PM4 DRAM write.
+    pm4(0x20, 0x4418, true);
+    ldi(12, 0x0070);                            // $0426: PM4 cell/overwrite DRAM write.
+    pm4(0x20, 0x0818, false);
+    code.word(0x003c);                         // $042d: LD A,PM4 reads merged $3F75.
+    const quint16 loop = code.pc / 2;
+    code.word(0x4c00); code.word(loop);         // BRA always,loop.
+
+    code.pc = svpTestPmRom;
+    code.word(0xbeef);
     return code.rom;
 }
 
@@ -577,19 +614,44 @@ void testSvp(const QString& core, const QTemporaryDir& temp) {
 
     coverage(host, true, KR_DEBUG_SSP1601);
     trace(host, true, KR_DEBUG_SSP1601);
+    auto internalRead = point(4, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpTestRam0);
+    internalRead.condition = QStringLiteral("R0 == $21");
+    auto dramRead = point(10, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpTestDram);
+    dramRead.condition = QStringLiteral("PMC == $08180021");
     command(host, DebuggerCommand::Configure, KR_DEBUG_SSP1601, {
         point(1, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpEntry),
         point(2, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker),
+        point(3, KR_DEBUG_SSP1601, KR_DEBUG_WRITE, svpTestRam0),
+        internalRead,
+        point(5, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpTestRam1),
+        point(6, KR_DEBUG_SSP1601, KR_DEBUG_WRITE, svpTestRam1, false),
+        point(7, KR_DEBUG_SSP1601, KR_DEBUG_WRITE, svpTestIram),
+        point(8, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpTestIram),
+        point(9, KR_DEBUG_SSP1601, KR_DEBUG_WRITE, svpTestDram, false),
+        dramRead,
+        point(11, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpTestPmRom),
+        point(12, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpEntry * 2 + 1),
+        point(13, KR_DEBUG_SSP1601, KR_DEBUG_READ, svpEntry * 2 + 2),
     });
     const auto first = timeline.stop(host, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpEntry);
     const auto ssp = target(first, KR_DEBUG_SSP1601);
     const auto m68k = target(first, KR_DEBUG_M68K);
-    require(ssp.address_shift == 1 && m68k.address_shift == 0 &&
-            (ssp.capabilities & KR_DEBUG_CAP_STEP), "SSP code is word addressed and supports stepping");
+    constexpr unsigned capabilities = KR_DEBUG_CAP_STEP | KR_DEBUG_CAP_READ | KR_DEBUG_CAP_WRITE;
+    require(ssp.address_bits == 16 && ssp.address_shift == 1 && m68k.address_shift == 0 &&
+            (ssp.capabilities & capabilities) == capabilities,
+            "SSP exposes its original program-word navigation and data stops");
+    DebuggerCommand invalid;
+    invalid.kind = DebuggerCommand::Validate;
+    invalid.cpu = KR_DEBUG_SSP1601;
+    invalid.breakpoints = {point(100, KR_DEBUG_SSP1601, KR_DEBUG_EXEC | KR_DEBUG_READ, svpEntry)};
+    QString error;
+    require(!host.debuggerCommand(invalid, error), "Reject mixed SSP program and data addresses");
+    invalid.breakpoints = {point(100, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpTestRam0)};
+    require(!host.debuggerCommand(invalid, error), "Reject an SSP code address outside the word range");
     require(!first.instructions.isEmpty() && first.instructions.front().address == svpEntry &&
             first.instructions.front().length == 4, "SSP LDI disassembly includes its immediate word");
     command(host, DebuggerCommand::StepInto, KR_DEBUG_SSP1601);
-    timeline.stop(host, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpLoop);
+    timeline.stop(host, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpAfterMailbox);
     const auto sspTrace = host.traceSnapshot();
     require(traced(sspTrace, KR_DEBUG_SSP1601, KR_TRACE_EXEC, svpEntry, 0x08b0),
             "Trace logs the executed SSP opcode at its word address");
@@ -601,6 +663,38 @@ void testSvp(const QString& core, const QTemporaryDir& temp) {
             "SVP coverage includes the executed opcode and immediate word before the next stop");
     coverage(host, false);
     trace(host, false);
+    const auto dataStop = [&](unsigned event, quint32 address, quint32 value, quint32 pc) {
+        command(host, DebuggerCommand::Continue, KR_DEBUG_SSP1601);
+        const auto result = timeline.stop(host, KR_DEBUG_SSP1601, event, address);
+        require(result.value == value && result.accessSize == 2 &&
+                cpu(result, KR_DEBUG_SSP1601).pc == pc && !result.instructions.isEmpty() &&
+                result.instructions.front().address == pc,
+                QStringLiteral("SSP data stop at $%1 exposes the accessed word and issuing instruction")
+                    .arg(address, 0, 16));
+        return result;
+    };
+    dataStop(KR_DEBUG_WRITE, svpTestIram, 0xcafe, 0x407);
+    dataStop(KR_DEBUG_WRITE, svpTestRam0, 0x1234, 0x40b);
+    const auto pointerRead = dataStop(KR_DEBUG_READ, svpTestRam0, 0x1234, 0x40d);
+    require(reg(pointerRead, KR_DEBUG_SSP1601, "R0") == 0x21 &&
+            reg(pointerRead, KR_DEBUG_SSP1601, "X") == 0,
+            "SSP pointer advances before the read stop and destination is written on resume");
+    DebuggerCommand write;
+    write.kind = DebuggerCommand::WriteRegister;
+    write.cpu = KR_DEBUG_SSP1601;
+    write.registerName = QStringLiteral("X");
+    write.registerValue = 1;
+    require(!host.debuggerCommand(write, error), "Reject SSP register edits at a data stop");
+    dataStop(KR_DEBUG_WRITE, svpTestRam1, svpTestIramWord, 0x40e);
+    dataStop(KR_DEBUG_READ, svpTestRam1, svpTestIramWord, 0x410);
+    dataStop(KR_DEBUG_WRITE, svpTestRam1, svpTestIramWord + 1, 0x410);
+    dataStop(KR_DEBUG_READ, svpTestIram, 0xcafe, 0x410);
+    dataStop(KR_DEBUG_READ, svpEntry * 2, 0x08b0, 0x413);
+    dataStop(KR_DEBUG_READ, svpTestPmRom, 0xbeef, 0x419);
+    dataStop(KR_DEBUG_WRITE, svpTestDram, 0x3fc5, 0x41f);
+    dataStop(KR_DEBUG_WRITE, svpTestDram, 0x0070, 0x426);
+    dataStop(KR_DEBUG_READ, svpTestDram, 0x3f75, 0x42d);
+
     command(host, DebuggerCommand::Continue, KR_DEBUG_SSP1601);
     const auto marker = timeline.stop(host, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker);
     require(marker.value == svpMarker && marker.accessSize == 2, "68000 observed the SSP mailbox write");
@@ -995,7 +1089,7 @@ int main(int argc, char** argv) {
         testRecordingEditPolicy(args[1], temp, program, registerPath);
         std::puts("PASS: recording worker rejects register edits and commits one complete movie frame");
         testSvp(args[1], temp);
-        std::puts("PASS: original SSP1601 cartridge crosses to main 68000 and resumes exactly");
+        std::puts("PASS: original SSP1601 cartridge traps real data accesses and resumes exactly");
         testLink(args[1], temp, false);
         std::puts("PASS: connected Mega Drive B breakpoint, paired outputs and peer release");
         testLink(args[1], temp, true);
