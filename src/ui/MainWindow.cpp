@@ -741,7 +741,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         input_->setProfile(activeInputProfile_);
         updateGunConfiguration();
         currentGameName_ = displayName(contentName);
-        clearDebugProjectForGame(path, currentGameName_);
+        clearDebugProjectForGame(path, contentName);
         setWindowTitle(QStringLiteral("%1 — Kega Refusion").arg(currentGameName_));
         recentPaths_.removeAll(path);
         recentPaths_.prepend(path);
@@ -1896,7 +1896,7 @@ void MainWindow::scheduleInspection() {
 
 void MainWindow::refreshInspection() {
     DebugInspectionRequest request;
-    if (debugMemoryDialog_ && debugMemoryDialog_->isVisible())
+    if (debugMemoryDialog_)
         request = debugMemoryDialog_->request();
     if (debugGraphicsDialog_ && debugGraphicsDialog_->isVisible())
         request.parts |= debugGraphicsDialog_->request().parts;

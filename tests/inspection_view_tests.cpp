@@ -270,13 +270,17 @@ void verifyMemoryEditing() {
     dialog.finishMemoryWrite({});
     check(!edit->isEnabled(), "successful write waits for a fresh snapshot");
 
+    dialog.hide();
+    check(dialog.request().parts == 0 && dialog.request().instance == 1,
+          "hidden Memory keeps the shared console without requesting memory bytes");
     auto detached = DebugInspectionSnapshot{};
     detached.serial = 4;
     detached.instance = 1;
     detached.instanceCount = 1;
     dialog.setSnapshot(detached);
-    check(dialog.request().instance == 0 && !instance->isVisible(), "peer teardown clears memory selection");
+    check(dialog.request().instance == 0 && !instance->isVisible(), "hidden Memory clears the detached peer");
 
+    dialog.show();
     data.instance = 0;
     dialog.setSnapshot(data);
     dialog.navigateTo(1, KR_MEM_ROM, 0x21035);

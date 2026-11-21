@@ -99,7 +99,7 @@ private:
     void pollDebugProjectIo();
     void updateDebugProjectActions();
     void debugProjectChanged();
-    void clearDebugProjectForGame(const QString& path, const QString& name);
+    void clearDebugProjectForGame(const QString& path, const QString& contentName);
     void finishDebugProjectApply(bool accepted);
     void updateCpuDebugger();
     void refreshCpuDebugger();
@@ -209,7 +209,7 @@ private:
     QAction* debugProjectSaveAction_ = nullptr;
     QAction* debugProjectSaveAsAction_ = nullptr;
     QAction* debugProjectStatus_ = nullptr;
-    QString debugProjectGame_, debugProjectRom_, debugProjectPath_, debugProjectPendingPath_;
+    QString debugProjectGame_, debugProjectRom_, debugProjectContent_, debugProjectPath_, debugProjectPendingPath_;
     quint64 debugProjectRevision_ = 0, debugProjectContext_ = 0;
     bool debugProjectDirty_ = false, debugProjectApplying_ = false;
     std::optional<DebugProject> debugProjectPending_;

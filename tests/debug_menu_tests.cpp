@@ -1,6 +1,7 @@
 #include "core/EmulationSession.h"
 #include "i18n/Localization.h"
 #include "ui/DebugDialogs.h"
+#include "ui/DebugWatchDialog.h"
 #include "ui/ControlsPage.h"
 #include "ui/ControllerDiagram.h"
 #include "ui/MainWindow.h"
@@ -991,6 +992,26 @@ int main(int argc, char** argv) {
             testControlsLayout(window);
             std::puts("Controls layout and sticky validation footer passed");
             return 0;
+        }
+
+        {
+            EmulationSession session(QString(), data.path());
+            MainWindow window(session, data.path(), true);
+            window.show();
+            const QString archive = data.filePath(QStringLiteral("games.zip"));
+            const QString smsMember = QStringLiteral("Game.sms");
+            session.gameLoaded(archive, 60, smsMember, ConsoleProfile::MasterSystem);
+            child<QAction>(window, "debugWatchAction")->trigger();
+            auto* watch = child<DebugWatchDialog>(window, "debugWatchDialog");
+            DebugWatchEntry entry;
+            entry.domain = KR_MEM_ZRAM;
+            watch->addWatch(entry);
+            session.gameClosed();
+            session.gameLoaded(archive, 60, smsMember, ConsoleProfile::MasterSystem);
+            require(watch->entries().size() == 1, "reopening the same archive member lost its project");
+            session.gameLoaded(archive, 60, QStringLiteral("Game.gg"), ConsoleProfile::GameGear);
+            require(watch->entries().isEmpty(), "archive members with the same title shared a project");
+            watch->close();
         }
 
         {

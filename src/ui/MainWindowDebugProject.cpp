@@ -80,10 +80,9 @@ void MainWindow::updateDebugProjectActions() {
     updateDebugMenuVisibility();
 }
 
-void MainWindow::clearDebugProjectForGame(const QString& path,const QString& name) {
-    // A normal reset does not emit a different game load. A different game must
-    // not inherit breakpoints or watches. No automatic project files are written.
-    if (debugProjectRom_!=path || debugProjectGame_!=name) {
+void MainWindow::clearDebugProjectForGame(const QString& path,const QString& contentName) {
+    // Include the full archive member name, since distinct games may share a display title.
+    if (debugProjectRom_!=path || debugProjectContent_!=contentName) {
         ++debugProjectContext_;
         debugProjectApplying_=true;
         debugProjectPending_.reset();
@@ -95,7 +94,8 @@ void MainWindow::clearDebugProjectForGame(const QString& path,const QString& nam
         debugProjectApplying_=false;
     }
     debugProjectRom_=path;
-    debugProjectGame_=name;
+    debugProjectContent_=contentName;
+    debugProjectGame_=currentGameName_;
     updateDebugProjectActions();
     scheduleInspection();
 }
