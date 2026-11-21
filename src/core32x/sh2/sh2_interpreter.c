@@ -26,6 +26,9 @@ struct KegaSh2 {
     bool running, stop, idle_fastpath;
     KegaSh2InternalIrqAck internal_ack;
     void *internal_ack_user;
+    KegaSh2DebugCallback debug;
+    void *debug_user;
+    unsigned debug_mask;
 };
 
 static KegaSh2 *owner(SH2 *core) { return (KegaSh2 *)core; }
@@ -53,7 +56,7 @@ static inline const uint16_t *rom_page(SH2 *s, uint32_t a) {
     const uint16_t *const *pages = owner(s)->host.rom_pages;
     return pages && (a & 0xc6000000u) == 0x02000000u ? pages[(a >> 16) & 63] : NULL;
 }
-static uint8_t read8(SH2 *s, uint32_t a) {
+static uint8_t raw_read8(SH2 *s, uint32_t a) {
     uint32_t offset;
     const void *base=plain_base(s,a,&offset);
     if (base) {
@@ -65,7 +68,7 @@ static uint8_t read8(SH2 *s, uint32_t a) {
     if (page) return (uint8_t)(page[index] >> ((a & 1) ? 0 : 8));
     KegaSh2 *c = owner(s); return c->host.read8(c->host.user, c, a);
 }
-static uint16_t read16(SH2 *s, uint32_t a) {
+static uint16_t raw_read16(SH2 *s, uint32_t a) {
     uint32_t offset;
     const void *base=plain_base(s,a,&offset);
     if (base) return plain_word(base,offset & ~1u);
@@ -79,9 +82,9 @@ static uint16_t fetch16(SH2 *s, uint32_t a) {
     const void *base=(a & 1u) ? NULL : plain_base(s,a,&offset);
     if (base) return plain_word(base,offset);
     KegaSh2 *c = owner(s);
-    return c->host.fetch16 ? c->host.fetch16(c->host.user, c, a) : read16(s, a);
+    return c->host.fetch16 ? c->host.fetch16(c->host.user, c, a) : raw_read16(s, a);
 }
-static uint32_t read32(SH2 *s, uint32_t a) {
+static uint32_t raw_read32(SH2 *s, uint32_t a) {
     uint32_t offset;
     const void *base=plain_base(s,a,&offset);
     if (base) {
@@ -94,6 +97,25 @@ static uint32_t read32(SH2 *s, uint32_t a) {
     if (page && index < 0x7fff) return ((uint32_t)page[index] << 16) | page[index + 1];
     KegaSh2 *c = owner(s); return c->host.read32(c->host.user, c, a);
 }
+static uint8_t read8(SH2 *s, uint32_t a) {
+    uint8_t value=raw_read8(s,a);
+    KegaSh2 *c=owner(s);
+    if(__builtin_expect((c->debug_mask & 2u)!=0,0))c->debug(c->debug_user,2,a,value,1);
+    return value;
+}
+static uint16_t read16(SH2 *s, uint32_t a) {
+    uint16_t value=raw_read16(s,a);
+    KegaSh2 *c=owner(s);
+    if(__builtin_expect((c->debug_mask & 2u)!=0,0))c->debug(c->debug_user,2,a,value,2);
+    return value;
+}
+static uint32_t read32(SH2 *s, uint32_t a) {
+    uint32_t value=raw_read32(s,a);
+    KegaSh2 *c=owner(s);
+    if(__builtin_expect((c->debug_mask & 2u)!=0,0))c->debug(c->debug_user,2,a,value,4);
+    return value;
+}
+
 /* Plain machine RAM has no write side effects other than translated code
    invalidation. Check the affected native word(s), including unaligned
    guest addresses and physical mirrors, before changing their contents. */
@@ -123,7 +145,7 @@ static inline bool store_plain(SH2 *s, uint32_t a, uint32_t v, unsigned size) {
     memcpy(base+offset,&word,sizeof(word));
     return true;
 }
-static void write8(SH2 *s, uint32_t a, uint8_t v) {
+static void raw_write8(SH2 *s, uint32_t a, uint8_t v) {
     if (store_plain(s,a,v,1)) return;
     KegaSh2 *c = owner(s);
 #ifdef KEGA_SH2_DRC
@@ -131,7 +153,7 @@ static void write8(SH2 *s, uint32_t a, uint8_t v) {
 #endif
     c->host.write8(c->host.user, c, a, v);
 }
-static void write16(SH2 *s, uint32_t a, uint16_t v) {
+static void raw_write16(SH2 *s, uint32_t a, uint16_t v) {
     if (store_plain(s,a,v,2)) return;
     KegaSh2 *c = owner(s);
 #ifdef KEGA_SH2_DRC
@@ -139,13 +161,29 @@ static void write16(SH2 *s, uint32_t a, uint16_t v) {
 #endif
     c->host.write16(c->host.user, c, a, v);
 }
-static void write32(SH2 *s, uint32_t a, uint32_t v) {
+static void raw_write32(SH2 *s, uint32_t a, uint32_t v) {
     if (store_plain(s,a,v,4)) return;
     KegaSh2 *c = owner(s);
 #ifdef KEGA_SH2_DRC
     kega_sh2_drc_invalidate(c,a,4);
 #endif
     c->host.write32(c->host.user, c, a, v);
+}
+
+static void write8(SH2 *s, uint32_t a, uint8_t value) {
+    raw_write8(s,a,value);
+    KegaSh2 *c=owner(s);
+    if(__builtin_expect((c->debug_mask & 4u)!=0,0))c->debug(c->debug_user,4,a,value,1);
+}
+static void write16(SH2 *s, uint32_t a, uint16_t value) {
+    raw_write16(s,a,value);
+    KegaSh2 *c=owner(s);
+    if(__builtin_expect((c->debug_mask & 4u)!=0,0))c->debug(c->debug_user,4,a,value,2);
+}
+static void write32(SH2 *s, uint32_t a, uint32_t value) {
+    raw_write32(s,a,value);
+    KegaSh2 *c=owner(s);
+    if(__builtin_expect((c->debug_mask & 4u)!=0,0))c->debug(c->debug_user,4,a,value,4);
 }
 
 /* Only the opcode implementation is included, not Pico's dispatcher. */
@@ -239,6 +277,16 @@ int sh2_execute_interpreter(SH2 *s, int cycles) {
     if (!s->delay) take_irq(s);
     while ((s->icount > 0 && !c->stop) || s->delay) {
         uint16_t opcode;
+        if(__builtin_expect((c->debug_mask & 1u)!=0,0)) {
+            c->debug(c->debug_user,1,s->delay?s->delay:s->pc,0,0);
+            /* SR edits defer IRQ service until the suspended hook returns.
+               The callback may have disabled its own event mask meanwhile. */
+            if(s->test_irq && !s->delay) {
+                bool accepted=s->pending_level>(int)((s->sr>>4)&15);
+                take_irq(s);
+                if(accepted)continue;
+            }
+        }
         if (s->delay) {
             s->ppc = s->delay;
             opcode = fetch16(s, s->delay);
@@ -254,7 +302,7 @@ int sh2_execute_interpreter(SH2 *s, int cycles) {
             s->ppc = s->pc;
             opcode = fetch16(s, s->pc);
         }
-        if(c->idle_fastpath && !s->delay && s->icount>0 && !c->stop &&
+        if(c->idle_fastpath && !c->debug && !s->delay && s->icount>0 && !c->stop &&
            opcode==0xaffe && s->pc<=UINT32_MAX-3u && c->host.can_idle_fetch &&
            c->host.can_idle_fetch(c->host.user,c,s->pc,4) &&
            s->pending_level<=(int)((s->sr>>4)&15) && fetch16(s,s->pc+2)==0x0009) {
@@ -339,7 +387,8 @@ bool kega_sh2_reset(KegaSh2 *cpu) {
     memset(s->rts_cache, -1, sizeof(s->rts_cache));
     memset(s->branch_cache, -1, sizeof(s->branch_cache));
     cpu->cycles = 0; cpu->stop = false;
-    s->pc = read32(s, 0); s->r[15] = read32(s, 4); s->sr = I;
+    /* Reset vector reads are initialization, outside an executing CPU slice. */
+    s->pc = raw_read32(s, 0); s->r[15] = raw_read32(s, 4); s->sr = I;
     return true;
 }
 uint32_t kega_sh2_run(KegaSh2 *cpu, uint32_t budget) {
@@ -349,7 +398,7 @@ uint32_t kega_sh2_run(KegaSh2 *cpu, uint32_t budget) {
     cpu->running = true; cpu->stop = false;
     cpu->core.state |= SH2_STATE_RUN;
     cpu->core.cycles_timeslice = budget;
-    remaining = cpu->core.run(&cpu->core, (int)budget);
+    remaining = cpu->debug ? sh2_execute_interpreter(&cpu->core, (int)budget) : cpu->core.run(&cpu->core, (int)budget);
     done = (uint32_t)((int64_t)cpu->core.cycles_timeslice - remaining);
     cpu->cycles += done;
     cpu->running = false;
@@ -460,10 +509,12 @@ bool kega_sh2_set_state(KegaSh2 *cpu, const KegaSh2State *state) {
 #ifdef KEGA_SH2_DRC
 bool kega_sh2_is_running(const KegaSh2 *cpu) { return cpu && cpu->running; }
 u32 kega_sh2_host_read(SH2 *s,u32 a,unsigned width) {
-    return width==8 ? read8(s,a) : width==16 ? read16(s,a) : read32(s,a);
+    /* Translated execution is inactive whenever the debugger is armed.
+       Keep its normal slow-memory adapters free of breakpoint checks. */
+    return width==8 ? raw_read8(s,a) : width==16 ? raw_read16(s,a) : raw_read32(s,a);
 }
 void kega_sh2_host_write(SH2 *s,u32 a,u32 v,unsigned width) {
-    if(width==8) write8(s,a,(uint8_t)v); else if(width==16) write16(s,a,(uint16_t)v); else write32(s,a,v);
+    if(width==8) raw_write8(s,a,(uint8_t)v); else if(width==16) raw_write16(s,a,(uint16_t)v); else raw_write32(s,a,v);
 }
 u16 kega_sh2_host_fetch(SH2 *s,u32 a) { return fetch16(s,a); }
 bool kega_sh2_host_fetch_is_pure(SH2 *s,u32 a,size_t bytes) {
@@ -478,3 +529,8 @@ int kega_sh2_service_irq(SH2 *s,int remaining) {
     return s->icount;
 }
 #endif
+
+void kega_sh2_set_debug(KegaSh2 *cpu,KegaSh2DebugCallback callback,void *user,unsigned mask) {
+    if(!cpu)return;
+    cpu->debug=callback;cpu->debug_user=user;cpu->debug_mask=callback ? mask & 7u : 0;
+}

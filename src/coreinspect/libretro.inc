@@ -466,3 +466,62 @@ RETRO_API size_t retro_kegarefusion_inspect_read(unsigned domain, uint32_t offse
   }
   return capacity;
 }
+
+
+int kr_inspect_vdp_write(unsigned domain, uint32_t offset,
+                         const uint8 *source, size_t length, int mode5);
+
+RETRO_API bool retro_kegarefusion_inspect_writable(unsigned domain)
+{
+  if (!kr_inspect_content || !system_hw)
+    return false;
+  switch (domain)
+  {
+    case KR_MEM_VRAM:
+      /* The wide native VDP mode disconnects a data lane and requires a
+       * separate mapping from the physical array to the internal SAT. */
+      if (kr_inspect_mode5() && (reg[1] & 0x80) && !kr_firecore_active)
+        return false;
+      break;
+    case KR_MEM_CRAM:
+      if (kr_inspect_md() && !kr_inspect_mode5())
+        return false;
+      break;
+    case KR_MEM_RAM:
+    case KR_MEM_ZRAM:
+    case KR_MEM_VSRAM:
+    case KR_MEM_CD_PRG:
+    case KR_MEM_CD_WORD:
+    case KR_MEM_CD_PCM:
+    case KR_MEM_CD_BRAM:
+      break;
+    default:
+      return false;
+  }
+  const kr_memory_view view = kr_inspect_domain_view(domain);
+  return view.data && view.size;
+}
+
+RETRO_API size_t retro_kegarefusion_inspect_write(unsigned domain, uint32_t offset,
+                                                 const void *source, size_t length)
+{
+  if (!source || !length || length > KR_INSPECT_MAX_WRITE ||
+      !retro_kegarefusion_inspect_writable(domain))
+    return 0;
+  const kr_memory_view view = kr_inspect_domain_view(domain);
+  if (offset >= view.size || length > view.size - offset)
+    return 0;
+
+  const uint8 *bytes = (const uint8 *)source;
+  if (domain == KR_MEM_VRAM || domain == KR_MEM_CRAM || domain == KR_MEM_VSRAM)
+    return kr_inspect_vdp_write(domain, offset, bytes, length, kr_inspect_mode5()) ? length : 0;
+  uint8 *destination = (uint8 *)view.data;
+  if (view.order == KR_WORDS_BE)
+  {
+    for (size_t i = 0; i < length; ++i)
+      WRITE_BYTE(destination, offset + i, bytes[i]);
+  }
+  else
+    memcpy(destination + offset, bytes, length);
+  return length;
+}

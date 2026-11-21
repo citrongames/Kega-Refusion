@@ -5,6 +5,9 @@
 #include <QComboBox>
 #include <QDir>
 #include <QImage>
+#include <QInputDialog>
+#include <QPushButton>
+#include <QTimer>
 #include <QLabel>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -128,6 +131,58 @@ void verifyMemory(const QString& previewDirectory) {
     check(dialog.request().domain == KR_MEM_ZRAM && dialog.request().offset == 0, "eight-bit RAM fallback");
     dialog.hide();
     check(dialog.request().parts == 0, "closing memory drops subscription");
+}
+
+void verifyMemoryEditing() {
+    DebugMemoryDialog dialog;
+    dialog.show();
+    auto data = snapshot(KR_INSPECT_MEMORY, KR_HW_MD, KR_VIDEO_MD);
+    domain(data, KR_MEM_RAM, 0x10000, "RAM", true);
+    data.memoryDomain = KR_MEM_RAM;
+    data.memory = QByteArray(259, '\0');
+    data.memory[0] = char(0xaa);
+    data.memory[1] = char(0xbb);
+    data.writableDomains = {KR_MEM_RAM};
+    data.instanceCount = 2;
+    dialog.setSnapshot(data);
+    auto* edit = named<QPushButton>(dialog, "debugMemoryEdit");
+    auto* instance = named<QComboBox>(dialog, "debugMemoryInstance");
+    check(!edit->isEnabled() && instance->isVisible(), "running memory is read-only and both consoles selectable");
+
+    instance->setCurrentIndex(instance->findData(1u));
+    check(dialog.request().instance == 1, "memory request selects console B");
+    data.instance = 1;
+    data.canEdit = true;
+    dialog.setSnapshot(data);
+    auto* width = named<QComboBox>(dialog, "debugMemoryWidth");
+    auto* order = named<QComboBox>(dialog, "debugMemoryByteOrder");
+    width->setCurrentIndex(width->findData(2));
+    order->setCurrentIndex(order->findData(1));
+    check(edit->isEnabled(), "paused writable domain permits edit");
+
+    DebugMemoryWrite write;
+    QObject::connect(&dialog, &DebugMemoryDialog::writeRequested, &dialog,
+                     [&](const DebugMemoryWrite& request) { write = request; });
+    QTimer::singleShot(0, &dialog, [] {
+        auto* editor = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        check(editor != nullptr, "open memory hex editor");
+        editor->setTextValue(QStringLiteral("1234"));
+        editor->accept();
+    });
+    edit->click();
+    check(write.generation == data.generation && write.instance == 1 && write.domain == KR_MEM_RAM &&
+          write.offset == 0 && write.before == QByteArray::fromHex("aabb") &&
+          write.after == QByteArray::fromHex("3412"), "bounded little-endian edit carries expected bytes and console");
+    check(!edit->isEnabled(), "edit unavailable until acknowledgement");
+    dialog.finishMemoryWrite({});
+    check(!edit->isEnabled(), "successful write waits for a fresh snapshot");
+
+    auto detached = DebugInspectionSnapshot{};
+    detached.serial = 4;
+    detached.instance = 1;
+    detached.instanceCount = 1;
+    dialog.setSnapshot(detached);
+    check(dialog.request().instance == 0 && !instance->isVisible(), "peer teardown clears memory selection");
 }
 
 QRgb pixel(DebugVideoInspector& view, QPoint at) {
@@ -304,9 +359,10 @@ int main(int argc, char** argv) {
     const QString previewDirectory = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
     if (!previewDirectory.isEmpty()) check(QDir().mkpath(previewDirectory), "preview directory");
     verifyMemory(previewDirectory);
+    verifyMemoryEditing();
     verifyGraphics(previewDirectory);
     verifyOtherFormats();
     verifyFramebuffer();
     verifyAudio();
-    std::puts("PASS: read-only viewer subscriptions, watch, links, video formats and sound state");
+    std::puts("PASS: inspection subscriptions, bounded memory editing, watch, links, video and sound");
 }

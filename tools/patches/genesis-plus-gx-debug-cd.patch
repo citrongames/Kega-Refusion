@@ -1,0 +1,514 @@
+diff --git a/core/cd_hw/gfx.c b/core/cd_hw/gfx.c
+--- a/core/cd_hw/gfx.c
++++ b/core/cd_hw/gfx.c
+@@ -186,28 +186,20 @@
+   WRITE_BYTE(scd.word_ram[1], address, data);
+ }
+ 
++static uint8 word_ram_dot_read_byte(unsigned bank, unsigned address)
++{
++  const uint8 data = READ_BYTE(scd.word_ram[bank], (address >> 1) & 0x1ffff);
++  return (address & 1) ? (data & 0x0f) : (data >> 4);
++}
++
+ unsigned int dot_ram_0_read8(unsigned int address)
+ {
+-  uint8 data = READ_BYTE(scd.word_ram[0], (address >> 1) & 0x1ffff);
+-
+-  if (address & 1)
+-  {
+-    return (data & 0x0f);
+-  }
+-
+-  return (data >> 4);
++  return word_ram_dot_read_byte(0, address);
+ }
+ 
+ unsigned int dot_ram_1_read8(unsigned int address)
+ {
+-  uint8 data = READ_BYTE(scd.word_ram[1], (address >> 1) & 0x1ffff);
+-
+-  if (address & 1)
+-  {
+-    return (data & 0x0f);
+-  }
+-
+-  return (data >> 4);
++  return word_ram_dot_read_byte(1, address);
+ }
+ 
+ void dot_ram_0_write8(unsigned int address, unsigned int data)
+@@ -273,16 +265,20 @@
+   *(uint16 *)(scd.word_ram[1] + address) = data;
+ }
+ 
++static uint8 word_ram_cell_read_byte(unsigned bank, unsigned address)
++{
++  address = gfx.lut_offset[(address >> 2) & 0x7fff] | (address & 0x10003);
++  return READ_BYTE(scd.word_ram[bank], address);
++}
++
+ unsigned int cell_ram_0_read8(unsigned int address)
+ {
+-  address = gfx.lut_offset[(address >> 2) & 0x7fff] | (address & 0x10003);
+-  return READ_BYTE(scd.word_ram[0], address);
++  return word_ram_cell_read_byte(0, address);
+ }
+ 
+ unsigned int cell_ram_1_read8(unsigned int address)
+ {
+-  address = gfx.lut_offset[(address >> 2) & 0x7fff] | (address & 0x10003);
+-  return READ_BYTE(scd.word_ram[1], address);
++  return word_ram_cell_read_byte(1, address);
+ }
+ 
+ void cell_ram_0_write8(unsigned int address, unsigned int data)
+@@ -757,3 +753,17 @@
+     gfx.cycles = cycles;
+   }
+ }
++
++#include "../kegadebug/hooks.h"
++
++int kr_debug_peek_cd_graphics(unsigned int (*read_byte)(unsigned int),
++                            uint32_t address, uint8_t *byte)
++{
++  if (read_byte == cell_ram_0_read8 || read_byte == cell_ram_1_read8)
++    *byte = word_ram_cell_read_byte(read_byte == cell_ram_1_read8, address);
++  else if (read_byte == dot_ram_0_read8 || read_byte == dot_ram_1_read8)
++    *byte = word_ram_dot_read_byte(read_byte == dot_ram_1_read8, address);
++  else
++    return 0;
++  return 1;
++}
+diff --git a/core/cd_hw/scd.c b/core/cd_hw/scd.c
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -399,7 +399,7 @@
+ /*--------------------------------------------------------------------------*/
+ /* internal backup RAM (8KB)                                                */
+ /*--------------------------------------------------------------------------*/
+-static unsigned int bram_read_byte(unsigned int address)
++static uint8_t bram_byte(unsigned int address)
+ {
+   /* LSB only */
+   if (address & 0x01)
+@@ -408,6 +408,11 @@
+   }
+ 
+   return 0xff;
++}
++
++static unsigned int bram_read_byte(unsigned int address)
++{
++  return bram_byte(address);
+ }
+ 
+ static unsigned int bram_read_word(unsigned int address)
+@@ -2512,3 +2517,35 @@
+ }
+ 
+ #endif
++
++#include "../kegadebug/hooks.h"
++
++int kr_debug_peek_cd(unsigned cpu, uint32_t address, uint8_t *byte)
++{
++  unsigned page = address >> 16;
++  const cpu_memory_map *map = cpu == KR_DEBUG_SUB68K ? s68k.memory_map : m68k.memory_map;
++  unsigned int (*read_byte)(unsigned int) = cpu == KR_DEBUG_Z80 ?
++      zbank_memory_map[page].read : map[page].read8;
++
++  /* The mirror base can retain an old bank. Follow the same redirect as the
++   * actual byte bus using only its current map and known pure transforms. */
++  if (read_byte == word_ram_s68k_read_byte)
++    page &= 0x0f;
++  else if (read_byte == word_ram_m68k_read_byte || read_byte == word_ram_z80_read_byte)
++    page &= 0x23;
++  else if (read_byte == prg_ram_m68k_read_byte || read_byte == prg_ram_z80_read_byte)
++    page &= 0x03;
++
++  read_byte = cpu == KR_DEBUG_Z80 ? zbank_memory_map[page].read : map[page].read8;
++  if (!read_byte && map[page].base)
++  {
++    *byte = READ_BYTE(map[page].base, address & 0xffff);
++    return 1;
++  }
++  if (read_byte == bram_read_byte)
++  {
++    *byte = bram_byte(address);
++    return 1;
++  }
++  return kr_debug_peek_cd_graphics(read_byte, address, byte);
++}
+diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
+--- a/core/m68k/m68kcpu.c
++++ b/core/m68k/m68kcpu.c
+@@ -276,6 +276,22 @@
+   m68ki_check_interrupts(); /* Level triggered (IRQ) */
+ }
+ 
++
++static int kr_debug_m68k_irq_recheck;
++
++static int kr_debug_m68k_before_opcode(void)
++{
++  kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_EXEC, REG_PC, 0, 0);
++  if (!kr_debug_m68k_irq_recheck)
++    return 0;
++
++  /* Reconcile an edited SR once the suspended callback has returned. */
++  kr_debug_m68k_irq_recheck = 0;
++  const unsigned before = m68ki_cpu.cycles;
++  m68ki_check_interrupts();
++  return m68ki_cpu.cycles != before || CPU_STOPPED;
++}
++
+ void m68k_run(unsigned int cycles) 
+ {
+   /* Make sure CPU is not already ahead */
+@@ -341,8 +357,15 @@
+ #endif
+ 
+     /* Decode next instruction */
+-    if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_EXEC))
+-      kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_EXEC, REG_PC, 0, 0);
++    if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_EXEC) && kr_debug_m68k_before_opcode())
++    {
++      if (CPU_STOPPED)
++      {
++        if (m68k.cycles < cycles) m68k.cycles = cycles;
++        break;
++      }
++      continue;
++    }
+     REG_IR = m68ki_read_imm_16();
+ 
+     /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
+@@ -507,6 +530,15 @@
+ #endif
+ 
+     /* Decode next instruction */
++    if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_EXEC) && kr_debug_m68k_before_opcode())
++    {
++      if (CPU_STOPPED)
++      {
++        if (m68k.cycles < cycles) m68k.cycles = cycles;
++        break;
++      }
++      continue;
++    }
+     REG_IR = m68ki_read_imm_16();
+ 
+     /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
+@@ -548,3 +580,19 @@
+ #endif
+   return 0;
+ }
++
++void kr_debug_write_m68k(unsigned reg, uint32_t value, int before_instruction)
++{
++  if (reg == M68K_REG_SR)
++  {
++    m68ki_set_sr_fields(value);
++    kr_debug_m68k_irq_recheck = before_instruction;
++    return;
++  }
++
++  m68k_set_reg((m68k_register_t)reg, value);
++#if M68K_EMULATE_PREFETCH
++  if (reg == M68K_REG_PC)
++    CPU_PREF_ADDR = ~REG_PC;
++#endif
++}
+diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -540,29 +540,41 @@
+ /* Map PC-relative reads */
+ #include "../kegadebug/hooks.h"
+ 
++/* This interpreter header is compiled once per CPU. A CD transaction that
++ * holds /DTACK is retried and its placeholder bus value is not an access. */
++#ifdef KR_DEBUG_SUB68K_CORE
++#define KR_DEBUG_68K_CPU KR_DEBUG_SUB68K
++#define KR_DEBUG_68K_MASK kr_debug_sub68k_mask
++#define KR_DEBUG_68K_COMPLETED (!(CPU_STOPPED & STOP_LEVEL_WAIT))
++#else
++#define KR_DEBUG_68K_CPU KR_DEBUG_M68K
++#define KR_DEBUG_68K_MASK kr_debug_m68k_mask
++#define KR_DEBUG_68K_COMPLETED 1
++#endif
++
+ /* These are data operands, even though this core sources them from the
+  * same direct map as instruction fetches. Leave opcode prefetch separate. */
+ INLINE uint m68ki_read_pcrel_8(uint address)
+ {
+   const uint value = m68k_read_pcrelative_8(address);
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_READ))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_READ, address, value, 1);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, 1);
+   return value;
+ }
+ 
+ INLINE uint m68ki_read_pcrel_16(uint address)
+ {
+   const uint value = m68k_read_pcrelative_16(address);
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_READ))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_READ, address, value, 2);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, 2);
+   return value;
+ }
+ 
+ INLINE uint m68ki_read_pcrel_32(uint address)
+ {
+   const uint value = m68k_read_pcrelative_32(address);
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_READ))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_READ, address, value, 4);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, 4);
+   return value;
+ }
+ 
+@@ -885,8 +897,8 @@
+   if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
+   else val = READ_BYTE(temp->base, (address) & 0xffff);
+ 
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_READ))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_READ, address, val, 1);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, val, 1);
+ 
+ #ifdef HOOK_CPU
+   if (UNLIKELY(cpu_hook))
+@@ -908,8 +920,8 @@
+   if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
+   else val = *(uint16 *)(temp->base + ((address) & 0xffff));
+ 
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_READ))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_READ, address, val, 2);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, val, 2);
+ 
+ #ifdef HOOK_CPU
+   if (UNLIKELY(cpu_hook))
+@@ -935,8 +947,8 @@
+   if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
+   else val |= m68k_read_immediate_16(address+2);
+ 
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_READ))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_READ, address, val, 4);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, val, 4);
+ 
+ #ifdef HOOK_CPU
+   if (UNLIKELY(cpu_hook))
+@@ -960,8 +972,8 @@
+   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
+   if (temp->write8) (*temp->write8)(ADDRESS_68K(address),value);
+   else WRITE_BYTE(temp->base, (address) & 0xffff, value);
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_WRITE))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_WRITE, address, value & 0xff, 1);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_WRITE) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_WRITE, address, value & 0xff, 1);
+ }
+ 
+ INLINE void m68ki_write_16(uint address, uint value)
+@@ -979,8 +991,8 @@
+   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
+   if (temp->write16) (*temp->write16)(ADDRESS_68K(address),value);
+   else *(uint16 *)(temp->base + ((address) & 0xffff)) = value;
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_WRITE))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_WRITE, address, value & 0xffff, 2);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_WRITE) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_WRITE, address, value & 0xffff, 2);
+ }
+ 
+ INLINE void m68ki_write_32(uint address, uint value)
+@@ -1002,8 +1014,8 @@
+   temp = &m68ki_cpu.memory_map[((address + 2)>>16)&0xff];
+   if (temp->write16) (*temp->write16)(ADDRESS_68K(address+2),value&0xffff);
+   else *(uint16 *)(temp->base + ((address + 2) & 0xffff)) = value;
+-  if (UNLIKELY(kr_debug_m68k_mask & KR_DEBUG_WRITE))
+-    kr_debug_notify(KR_DEBUG_M68K, KR_DEBUG_WRITE, address, value, 4);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_WRITE) && KR_DEBUG_68K_COMPLETED)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_WRITE, address, value, 4);
+ }
+ 
+ 
+@@ -1234,14 +1246,19 @@
+ }
+ 
+ 
+-/* Set the status register and check for interrupts */
+-INLINE void m68ki_set_sr(uint value)
+-{
+-  /* Set the status register */
++/* Update flags and stack banks without acknowledging an interrupt. */
++INLINE void m68ki_set_sr_fields(uint value)
++{
+   FLAG_T1 = BIT_F(value);
+   FLAG_INT_MASK = value & 0x0700;
+   m68ki_set_ccr(value);
+   m68ki_set_s_flag((value >> 11) & 4);
++}
++
++/* Set the status register and check for interrupts */
++INLINE void m68ki_set_sr(uint value)
++{
++  m68ki_set_sr_fields(value);
+ 
+   /* A lowered mask takes effect after the SR-writing instruction completes,
+    * not at its first cycle. Keep this on the rare SR/IRQ path: ordinary
+diff --git a/core/m68k/s68kcpu.c b/core/m68k/s68kcpu.c
+--- a/core/m68k/s68kcpu.c
++++ b/core/m68k/s68kcpu.c
+@@ -5,6 +5,7 @@
+ extern int scd_68k_irq_ack(int level);
+ 
+ #define m68ki_cpu s68k
++#define KR_DEBUG_SUB68K_CORE
+ #define MUL (4)
+ #define S68K_IRQ_AT_INSTRUCTION_END
+ 
+@@ -218,6 +219,22 @@
+ #endif
+ }
+ 
++
++static int kr_debug_sub68k_irq_recheck;
++
++static int kr_debug_sub68k_before_opcode(void)
++{
++  kr_debug_notify(KR_DEBUG_SUB68K, KR_DEBUG_EXEC, REG_PC, 0, 0);
++  if (!kr_debug_sub68k_irq_recheck)
++    return 0;
++
++  /* Reconcile an edited SR once the suspended callback has returned. */
++  kr_debug_sub68k_irq_recheck = 0;
++  const unsigned before = m68ki_cpu.cycles;
++  m68ki_check_interrupts();
++  return m68ki_cpu.cycles != before || CPU_STOPPED;
++}
++
+ void s68k_run(unsigned int cycles) 
+ {
+   /* Make sure CPU is not already ahead */
+@@ -254,7 +271,17 @@
+     /* Set the address space for reads */
+     m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
+ 
+-    /* Save current instruction PC */
++    if (UNLIKELY(kr_debug_sub68k_mask & KR_DEBUG_EXEC) && kr_debug_sub68k_before_opcode())
++    {
++      if (CPU_STOPPED)
++      {
++        if (s68k.cycles < cycles) s68k.cycles = cycles;
++        break;
++      }
++      continue;
++    }
++
++    /* Save the instruction PC after any debugger register edits. */
+     s68k.prev_pc = REG_PC;
+ 
+     /* Decode next instruction */
+@@ -578,7 +605,17 @@
+     /* Set the address space for reads */
+     m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
+ 
+-    /* Save current instruction PC */
++    if (UNLIKELY(kr_debug_sub68k_mask & KR_DEBUG_EXEC) && kr_debug_sub68k_before_opcode())
++    {
++      if (CPU_STOPPED)
++      {
++        if (s68k.cycles < cycles) s68k.cycles = cycles;
++        break;
++      }
++      continue;
++    }
++
++    /* Save the instruction PC after any debugger register edits. */
+     s68k.prev_pc = REG_PC;
+ 
+     /* Decode next instruction */
+@@ -596,3 +633,24 @@
+   s68k.cycle_end = 0;
+ }
+ #endif
++
++unsigned kr_debug_sub68k_sr(void)
++{
++  return m68ki_get_sr();
++}
++
++void kr_debug_write_sub68k(unsigned reg, uint32_t value, int before_instruction)
++{
++  if (reg == M68K_REG_SR)
++  {
++    m68ki_set_sr_fields(value);
++    kr_debug_sub68k_irq_recheck = before_instruction;
++    return;
++  }
++
++  s68k_set_reg((m68k_register_t)reg, value);
++#if M68K_EMULATE_PREFETCH
++  if (reg == M68K_REG_PC)
++    CPU_PREF_ADDR = ~REG_PC;
++#endif
++}
+diff --git a/core/z80/z80.c b/core/z80/z80.c
+--- a/core/z80/z80.c
++++ b/core/z80/z80.c
+@@ -3431,6 +3431,17 @@
+ /****************************************************************************
+  * Run until given cycle count 
+  ****************************************************************************/
++
++static int kr_debug_z80_before_opcode(void)
++{
++  kr_debug_notify(KR_DEBUG_Z80, KR_DEBUG_EXEC, PCD, 0, 0);
++  if (!kr_debug_z80_irq_recheck)
++    return 0;
++
++  kr_debug_z80_irq_recheck = 0;
++  return Z80.irq_state && IFF1 && !Z80.after_ei;
++}
++
+ void z80_run(unsigned int cycles)
+ {
+   if (md_cart_umkt_tracks_active == MD_CART_UMKT_UPLOAD && cart.hw.regs[MD_CART_UMKT_DRIVER_PENDING_REG])
+@@ -3440,8 +3451,7 @@
+     return;
+   }
+ 
+-  /* Ordinary sessions retain their original instruction loop, with no extra
+-   * per-instruction branch or callback. Linked GG uses master-clock cycles. */
++  /* Linked GG uses master-clock cycles. */
+   if (gg_link_yield)
+   {
+     while (Z80.cycles < cycles)
+@@ -3458,6 +3468,9 @@
+         take_interrupt();
+         if (Z80.cycles >= cycles) return;
+       }
++      if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_EXEC) && !HALT &&
++          kr_debug_z80_before_opcode())
++        continue;
+       Z80.after_ei = FALSE;
+       R++;
+       EXEC_INLINE(op,ROP());
+@@ -3475,8 +3488,9 @@
+     }
+ 
+     /* HALT repeats M1 cycles without executing another guest instruction. */
+-    if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_EXEC) && !HALT)
+-      kr_debug_notify(KR_DEBUG_Z80, KR_DEBUG_EXEC, PCD, 0, 0);
++    if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_EXEC) && !HALT &&
++        kr_debug_z80_before_opcode())
++      continue;
+     Z80.after_ei = FALSE;
+     R++;
+     EXEC_INLINE(op,ROP());

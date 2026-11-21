@@ -16,3 +16,9 @@
   The adaptation uses the Z80 mnemonics and five opcode tables in a C
   decoder with bounded input and output. It consumes repeated and ignored
   index prefixes within one decoded instruction, as the emulated CPU does.
+
+- SH-2 decoder adapted from the pinned PicoDrive 32X donor,
+  [sh2dasm.c](https://github.com/irixxxx/picodrive/blob/07abb00550528f7bf53087d932dd3d747cf2d0df/cpu/sh2/mame/sh2dasm.c).
+  Donor non-commercial terms remain in `third_party/picodrive32x/COPYING`.
+  Adaptations bound output, remove the command-line frontend, avoid signed
+  shift overflow, and expose guest call/return/delay-slot metadata.

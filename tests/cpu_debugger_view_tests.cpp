@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QGroupBox>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -32,6 +34,21 @@ T* find(QWidget& parent, const char* name) {
     return widget;
 }
 
+constexpr quint32 fullCaps = KR_DEBUG_CAP_EXEC | KR_DEBUG_CAP_READ | KR_DEBUG_CAP_WRITE |
+    KR_DEBUG_CAP_STEP | KR_DEBUG_CAP_OVER | KR_DEBUG_CAP_OUT | KR_DEBUG_CAP_STACK;
+
+kr_debug_target target(quint32 cpu, quint32 addressBits, quint32 flags, const char* name,
+                       quint32 capabilities = fullCaps, quint32 addressShift = 0) {
+    kr_debug_target result{};
+    result.cpu = cpu;
+    result.address_bits = addressBits;
+    result.address_shift = addressShift;
+    result.flags_kind = flags;
+    result.capabilities = capabilities;
+    qstrncpy(result.name, name, sizeof(result.name));
+    return result;
+}
+
 DebuggerSnapshot attached() {
     DebuggerSnapshot snapshot;
     snapshot.attached = true;
@@ -56,6 +73,8 @@ DebuggerSnapshot attached() {
     z80.regs[0].digits = 4;
     qstrncpy(z80.regs[0].name, "AF", sizeof(z80.regs[0].name));
     snapshot.cpus.append(z80);
+    snapshot.targets.append(target(KR_DEBUG_M68K, 24, KR_DEBUG_FLAGS_M68K, "Main 68000"));
+    snapshot.targets.append(target(KR_DEBUG_Z80, 16, KR_DEBUG_FLAGS_Z80, "Z80"));
     kr_debug_instruction instruction{};
     instruction.address = md.pc;
     instruction.valid = 1;
@@ -99,7 +118,7 @@ void verify(const QString& previews) {
     check(code->rowCount() == 1 && code->item(0, 1)->text() == QStringLiteral("4E 71"),
           "instruction bytes in guest order");
     check(registers->item(0, 1)->text() == QStringLiteral("0x2704") &&
-          registers->item(2, 1)->text().contains(QStringLiteral("IPL=7")), "captured SR and flags");
+          find<QGroupBox>(dialog, "debugCpuFlags")->title().contains(QStringLiteral("IPL 7")), "captured SR and flags");
     check(stack->isReadOnly() && stack->toPlainText() == QStringLiteral("FF4000 77 ??"), "stack validity");
     check(pause->isEnabled() && !resume->isEnabled() && !into->isEnabled(), "running controls");
     pause->click();
@@ -219,14 +238,125 @@ void verify(const QString& previews) {
     sms.gameKey = QStringLiteral("fixture.sms\nSMS fixture");
     sms.selectedCpu = KR_DEBUG_Z80;
     sms.cpus.append(snapshot.cpus.last());
+    sms.targets.append(snapshot.targets.last());
     dialog.setSnapshot(sms);
     check(!cpu->isVisible() && dialog.refreshCommand().cpu == KR_DEBUG_Z80,
           "eight-bit system selects its only CPU automatically");
-    check(registers->item(2, 1)->text().contains(QStringLiteral("Z=1")), "Z80 AF flags");
+    check(find<QCheckBox>(dialog, "debugCpuFlag1")->isChecked(), "Z80 AF flags");
     dialog.hide();
     check(commands.last().kind == DebuggerCommand::Detach && code->rowCount() == 0 &&
           registers->rowCount() == 0 && stack->toPlainText().isEmpty(), "closing detaches and clears snapshot");
 }
+void verifyExpansionTargets() {
+    CpuDebuggerDialog dialog;
+    QVector<DebuggerCommand> commands;
+    QObject::connect(&dialog, &CpuDebuggerDialog::command, &dialog,
+                     [&](const DebuggerCommand& command) { commands.append(command); });
+    dialog.show();
+    auto data = attached();
+    data.stopped = true;
+    data.targets.append(target(KR_DEBUG_SUB68K, 24, KR_DEBUG_FLAGS_M68K, "Sub 68000"));
+    data.targets.append(target(KR_DEBUG_SH2_MASTER, 32, KR_DEBUG_FLAGS_SH2, "Master SH-2",
+                               KR_DEBUG_CAP_EXEC | KR_DEBUG_CAP_STEP));
+    data.targets.append(target(KR_DEBUG_SSP1601, 16, KR_DEBUG_FLAGS_SSP1601, "SSP1601",
+                               KR_DEBUG_CAP_EXEC, 1));
+    kr_debug_cpu sh2{};
+    sh2.cpu = KR_DEBUG_SH2_MASTER;
+    sh2.pc = 0x02000010;
+    sh2.count = 1;
+    sh2.regs[0].value = 0x101;
+    sh2.regs[0].digits = 8;
+    qstrncpy(sh2.regs[0].name, "SR", sizeof(sh2.regs[0].name));
+    data.cpus.append(sh2);
+    data.linkSupported = true;
+    dialog.setSnapshot(data);
+    auto* cpu = find<QComboBox>(dialog, "debugCpuSelector");
+    auto* into = find<QPushButton>(dialog, "debugCpuStepInto");
+    auto* over = find<QPushButton>(dialog, "debugCpuStepOver");
+    auto* out = find<QPushButton>(dialog, "debugCpuStepOut");
+    auto* address = find<QLineEdit>(dialog, "debugCpuAddress");
+    auto* go = find<QPushButton>(dialog, "debugCpuNavigate");
+    check(cpu->count() == 5, "CPU selection uses advertised targets");
+    cpu->setCurrentIndex(cpu->findData(quint32(KR_DEBUG_SH2_MASTER)));
+    check(into->isEnabled() && !over->isEnabled() && !out->isEnabled(), "SH-2 step capability filtering");
+    address->setText(QStringLiteral("FFFFFFFF"));
+    go->click();
+    check(commands.last().kind == DebuggerCommand::Navigate && commands.last().address == 0xffffffffu,
+          "full 32-bit SH-2 address");
+    check(find<QCheckBox>(dialog, "debugCpuFlag0")->isChecked() &&
+          find<QCheckBox>(dialog, "debugCpuFlag2")->isChecked(), "SH-2 SR flags");
+    cpu->setCurrentIndex(cpu->findData(quint32(KR_DEBUG_SSP1601)));
+    check(!into->isEnabled(), "SSP execute-only target has no step button");
+    const int previous = commands.size();
+    address->setText(QStringLiteral("10000"));
+    go->click();
+    check(commands.size() == previous, "16-bit SSP word address bound");
+    address->setText(QStringLiteral("BEEF"));
+    go->click();
+    check(commands.last().address == 0xbeef && commands.last().cpu == KR_DEBUG_SSP1601,
+          "SSP navigation sends logical word address");
+
+    auto* link = find<QCheckBox>(dialog, "debugCpuLinkCable");
+    check(link->isVisible() && link->isEnabled(), "local Link Cable control");
+    link->click();
+    check(commands.last().kind == DebuggerCommand::SetLink && commands.last().linkEnabled,
+          "explicit Link Cable command");
+    auto linked = attached();
+    linked.linkEnabled = true;
+    linked.linkSupported = false;
+    linked.targets.append(target(KR_DEBUG_Z80 | 0x100u, 16, KR_DEBUG_FLAGS_Z80, "Z80"));
+    dialog.setSnapshot(linked);
+    const int peerIndex = cpu->findData(quint32(KR_DEBUG_Z80 | 0x100u));
+    check(peerIndex >= 0 && cpu->itemText(peerIndex).contains(QStringLiteral(" B")),
+          "linked target identifies console B");
+    cpu->setCurrentIndex(peerIndex);
+    check(commands.last().kind == DebuggerCommand::Navigate && commands.last().cpu == (KR_DEBUG_Z80 | 0x100u),
+          "navigation preserves complete peer CPU ID");
+    check(link->isChecked() && !link->isEnabled(), "restricted session cannot change Link Cable mode");
+}
+
+void verifyRegisterWrites() {
+    CpuDebuggerDialog dialog;
+    QVector<DebuggerCommand> commands;
+    QObject::connect(&dialog, &CpuDebuggerDialog::command, &dialog,
+                     [&](const DebuggerCommand& command) { commands.append(command); });
+    dialog.show();
+    auto data = attached();
+    auto* flags = find<QCheckBox>(dialog, "debugCpuFlag4");
+    dialog.setSnapshot(data);
+    check(flags->isChecked() && !flags->isEnabled(), "running flags are read-only");
+    auto* table = find<QTableWidget>(dialog, "debugCpuRegisters");
+    const int previous = commands.size();
+    emit table->cellDoubleClicked(0, 1);
+    check(commands.size() == previous, "register editor blocked during run");
+
+    data.stopped = true;
+    data.canEdit = true;
+    data.writableRegisters = {QStringLiteral("SR")};
+    dialog.setSnapshot(data);
+    check(flags->isEnabled(), "safe stopped SR flags editable");
+    flags->click();
+    check(commands.last().kind == DebuggerCommand::WriteRegister &&
+          commands.last().registerName == QStringLiteral("SR") &&
+          commands.last().registerValue == 0 && commands.last().registerMask == 4,
+          "flag command changes one bit atomically");
+
+    QTimer::singleShot(0, &dialog, [] {
+        auto* editor = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        check(editor != nullptr, "register hex editor opens");
+        editor->setTextValue(QStringLiteral("2100"));
+        editor->accept();
+    });
+    emit table->cellDoubleClicked(0, 1);
+    check(commands.last().kind == DebuggerCommand::WriteRegister &&
+          commands.last().registerName == QStringLiteral("SR") &&
+          commands.last().registerValue == 0x2100 && commands.last().registerMask == 0xffffffffu,
+          "register command writes complete hex value");
+    data.writableRegisters.clear();
+    dialog.setSnapshot(data);
+    check(!flags->isEnabled(), "per-register permission enforced");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -235,5 +365,7 @@ int main(int argc, char** argv) {
     const QString previews = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
     if (!previews.isEmpty()) check(QDir().mkpath(previews), "create preview directory");
     verify(previews);
-    std::puts("PASS: CPU debugger commands, stopped CPU, range breakpoints, disassembly and symbol navigation");
+    verifyExpansionTargets();
+    verifyRegisterWrites();
+    std::puts("PASS: debugger commands, ranges, symbols, expansion targets, Link Cable and register edits");
 }

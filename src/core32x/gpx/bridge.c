@@ -1,9 +1,11 @@
 /* Kega Refusion GPX attachment. MD/CD engines and their maps stay in GPX.
  * 32X mapping rules adapted from PicoDrive 07abb005, noncommercial COPYING.
  * This file is compiled only in the experimental GPX fork. */
+#include <picodrive32x/cpu/sh2/sh2.h>
 #include "shared.h"
 #include "bridge.h"
 #include "bootrom.h"
+#include "DebugExecutionAbi.h"
 #include "../machine.h"
 #include "../state.h"
 #ifdef KEGA_SH2_DRC
@@ -336,6 +338,31 @@ static void rom_window_write8(unsigned a,unsigned v) {a=rom_address(a);map_write
 static void rom_window_write16(unsigned a,unsigned v) {a=rom_address(a);map_write16(&ctx->original[a>>16],a,v);}
 static unsigned zrom_window8(unsigned a) {return zmap_read8(rom_address(a));}
 static void zrom_window_write8(unsigned a,unsigned v) {zmap_write8(rom_address(a),v);}
+/* Inspect the currently selected 32X overlays without synchronizing the
+   SH-2s or invoking an original cartridge handler. */
+bool kr_debug_32x_peek_md(unsigned cpu,uint32_t address,uint8_t *value)
+{
+    if(!ctx || !ctx->machine || !value || address>0xffffff ||
+       (cpu!=KR_DEBUG_M68K && cpu!=KR_DEBUG_Z80))return false;
+
+    const bool z80=cpu==KR_DEBUG_Z80;
+    unsigned page=address>>16;
+    unsigned (*read)(unsigned)=z80?zbank_memory_map[page].read:m68k.memory_map[page].read8;
+    if(read==(z80?zfb_read8:fb_read8)) {
+        unsigned word=kega32x_fb_read16(kega32x_machine_bus(ctx->machine),address);
+        *value=(uint8_t)(word>>((address&1)?0:8));
+        return true;
+    }
+    if(read!=(z80?zrom_window8:rom_window8))return false;
+
+    address=rom_address(address);
+    page=address>>16;
+    const cpu_memory_map *map=&ctx->original[page];
+    if(!map->base || (z80?ctx->original_zbank[page].read:map->read8))return false;
+    *value=READ_BYTE(map->base,address&0xffff);
+    return true;
+}
+
 static void hint_write8(unsigned a,unsigned v) {if((a&0xfffc)==0x70)WRITE_BYTE(ctx->boot_page,a&65535,v);}
 static void hint_write16(unsigned a,unsigned v) {if((a&0xfffc)==0x70)*(uint16 *)(ctx->boot_page+(a&65534))=(uint16)v;}
 /* $70-$73 are a writable hardware latch, not bytes from the G BIOS.
@@ -810,4 +837,101 @@ const Kega32xBus *kegarefusion_32x_inspect_bus(void)
 const Kega32xPwmState *kegarefusion_32x_inspect_pwm(void)
 {
     return ctx && ctx->machine ? &kega32x_machine_pwm(ctx->machine)->s : NULL;
+}
+
+/* Debugger bindings are runtime-only. Both SH-2s use the instruction path
+   while attached so nested shared-bus synchronization has coherent registers. */
+typedef struct Kr32DebugEndpoint {
+    kr_debug_callback callback;
+    void *user;
+    unsigned cpu;
+} Kr32DebugEndpoint;
+static Kr32DebugEndpoint kr32_debug[2];
+static void kr32_debug_event(void *opaque,unsigned event,uint32_t address,uint32_t value,unsigned size) {
+    Kr32DebugEndpoint *e=opaque;
+    if(e->callback)e->callback(e->user,e->cpu,event,address,value,size);
+}
+static KegaSh2 *kr32_cpu(unsigned cpu) {
+    if(!ctx || !ctx->machine || (cpu!=KR_DEBUG_SH2_MASTER && cpu!=KR_DEBUG_SH2_SLAVE))return NULL;
+    return kega32x_machine_cpu(ctx->machine,cpu==KR_DEBUG_SH2_SLAVE);
+}
+void kr_debug_32x_connect(kr_debug_callback callback,void *user,unsigned master_mask,unsigned slave_mask) {
+    unsigned i;
+    for(i=0;i<2;i++) {
+        unsigned id=i?KR_DEBUG_SH2_SLAVE:KR_DEBUG_SH2_MASTER;
+        KegaSh2 *c=kr32_cpu(id);
+        kr32_debug[i].callback=callback;kr32_debug[i].user=user;kr32_debug[i].cpu=id;
+        if(c)kega_sh2_set_debug(c,callback?kr32_debug_event:NULL,&kr32_debug[i],i?slave_mask:master_mask);
+    }
+}
+static void kr32_reg(kr_debug_cpu *out,const char *name,unsigned digits,uint32_t value) {
+    kr_debug_reg *r;
+    if(out->count>=KR_DEBUG_MAX_REGS)return;
+    r=&out->regs[out->count++];
+    snprintf(r->name,sizeof(r->name),"%s",name);r->digits=digits;r->value=value;
+}
+bool kr_debug_32x_state(unsigned cpu,kr_debug_cpu *out) {
+    KegaSh2 *c=kr32_cpu(cpu);
+    SH2 *s;
+    unsigned i;
+    uint64_t clock;
+    if(!c || !out)return false;
+    s=kega_sh2_native(c);memset(out,0,sizeof(*out));out->cpu=cpu;
+    out->pc=s->delay?s->delay:s->pc;out->sp=s->r[15];
+    clock=kega32x_machine_cpu_mclk(ctx->machine,cpu==KR_DEBUG_SH2_SLAVE);
+    out->cycles=clock>ctx->frame_base?clock-ctx->frame_base:0;
+    for(i=0;i<16;i++) {char name[12];snprintf(name,sizeof(name),"R%u",i);kr32_reg(out,name,8,s->r[i]);}
+    kr32_reg(out,"PC",8,out->pc);kr32_reg(out,"SR",4,s->sr&0x3f3u);
+    kr32_reg(out,"PR",8,s->pr);kr32_reg(out,"GBR",8,s->gbr);kr32_reg(out,"VBR",8,s->vbr);
+    kr32_reg(out,"MACH",8,s->mach);kr32_reg(out,"MACL",8,s->macl);
+    kr32_reg(out,"NEXT",8,s->pc);kr32_reg(out,"DELAY",8,s->delay);
+    kr32_reg(out,"IRQ",2,s->pending_level);kr32_reg(out,"POLL",8,s->state);
+    return true;
+}
+bool kr_debug_32x_peek(unsigned cpu,uint32_t address,uint8_t *value) {
+    return kr32_cpu(cpu) && kega32x_machine_peek(ctx->machine,cpu==KR_DEBUG_SH2_SLAVE,address,value);
+}
+extern unsigned kr_debug_disassemble_sh2(kr_debug_instruction *,unsigned);
+bool kr_debug_32x_disassemble(unsigned cpu,uint32_t address,kr_debug_instruction *out) {
+    unsigned n;
+    if(!kr32_cpu(cpu)||!out)return false;
+    memset(out,0,sizeof(*out));out->address=address;out->length=2;
+    if(address&1)return false;
+    for(n=0;n<2;n++)if(!kr_debug_32x_peek(cpu,address+n,&out->bytes[n]))break;
+    /* PC-relative loads in a delay slot use the branch destination, not
+       slot + 4. Keep the displayed logical address and fetched bytes intact. */
+    SH2 *s=kega_sh2_native(kr32_cpu(cpu));
+    unsigned opcode=((unsigned)out->bytes[0]<<8)|out->bytes[1];
+    if(n==2 && s->delay==address && ((opcode&0xf000)==0x9000 ||
+       (opcode&0xf000)==0xd000 || (opcode&0xff00)==0xc700))
+        out->address=s->pc-2u;
+    out->valid=kr_debug_disassemble_sh2(out,n)!=0;
+    out->address=address;
+    return out->valid!=0;
+}
+static uint32_t *kr32_register(SH2 *s,const char *name) {
+    unsigned i;
+    for(i=0;i<16;i++) {char key[12];snprintf(key,sizeof(key),"R%u",i);if(!strcmp(name,key))return &s->r[i];}
+    if(!strcmp(name,"SP"))return &s->r[15];
+    if(!strcmp(name,"PC"))return s->delay?NULL:&s->pc;
+    if(!strcmp(name,"SR"))return &s->sr;
+    if(!strcmp(name,"PR"))return &s->pr;
+    if(!strcmp(name,"GBR"))return &s->gbr;
+    if(!strcmp(name,"VBR"))return &s->vbr;
+    if(!strcmp(name,"MACH"))return &s->mach;
+    if(!strcmp(name,"MACL"))return &s->macl;
+    return NULL;
+}
+bool kr_debug_32x_writable(unsigned cpu,const char *name) {
+    KegaSh2 *c=kr32_cpu(cpu);
+    return c && name && kr32_register(kega_sh2_native(c),name)!=NULL;
+}
+bool kr_debug_32x_write(unsigned cpu,const char *name,uint32_t value) {
+    KegaSh2 *c=kr32_cpu(cpu);SH2 *s;uint32_t *r;
+    if(!c||!name)return false;
+    s=kega_sh2_native(c);r=kr32_register(s,name);if(!r)return false;
+    if(!strcmp(name,"PC")&&(value&1))return false;
+    if(!strcmp(name,"SR")) {if(value&~0x3f3u)return false;s->test_irq=1;}
+    *r=value;
+    return true;
 }

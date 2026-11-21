@@ -10,6 +10,7 @@
 #define KR_INSPECT_MAX_DOMAINS 32u
 #define KR_INSPECT_MAX_VALUES 384u
 #define KR_INSPECT_MAX_READ (256u * 1024u)
+#define KR_INSPECT_MAX_WRITE 4u
 enum kr_inspect_part { KR_INSPECT_MEMORY=1, KR_INSPECT_VIDEO=2,
     KR_INSPECT_AUDIO=4, KR_INSPECT_HARDWARE=8 };
 enum kr_inspect_domain_id { KR_MEM_ROM=1, KR_MEM_RAM, KR_MEM_ZRAM,
@@ -43,5 +44,9 @@ typedef struct kr_inspect_info {
  *                                      kr_inspect_info*, size_t capacity);
  * size_t retro_kegarefusion_inspect_read(unsigned domain, uint32_t offset,
  *                                        void* destination, size_t capacity);
- * Unsupported domains return zero. Requests must be capped before copying. */
+ * bool retro_kegarefusion_inspect_writable(unsigned domain);
+ * size_t retro_kegarefusion_inspect_write(unsigned domain, uint32_t offset,
+ *                                         const void* source, size_t length);
+ * Write only at a full-frame stop. The frontend authorizes the write and
+ * validates the current snapshot. A rejected native write changes no bytes. */
 #endif

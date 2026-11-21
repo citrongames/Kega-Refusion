@@ -1,5 +1,7 @@
 /* Original synthetic SH-2 programs; no game or BIOS content. */
+#include "core/DebugExecutionAbi.h"
 #include "core32x/sh2/sh2_interpreter.h"
+#include <picodrive32x/cpu/sh2/sh2.h>
 #ifdef NDEBUG
 #undef NDEBUG /* These executable checks must run in Release builds too. */
 #endif
@@ -86,6 +88,62 @@ static void start(KegaSh2 *cpu, Fixture *f, uint32_t pc) {
     KegaSh2State s = state(cpu); s.pc = pc; s.sr = 0;
     assert(kega_sh2_set_state(cpu, &s));
 }
+typedef struct DebugIrq {
+    KegaSh2 *cpu;
+    uint32_t instructions[2];
+    unsigned instruction_count, read_count;
+} DebugIrq;
+
+static void debug_unmask_irq(void *user, unsigned event, uint32_t address,
+                             uint32_t value, unsigned size) {
+    DebugIrq *debug = user;
+    if (event == KR_DEBUG_READ) {
+        assert(address == 68 * 4 && value == 0x900 && size == 4);
+        ++debug->read_count;
+        return;
+    }
+    assert(event == KR_DEBUG_EXEC && value == 0 && size == 0);
+    assert(debug->instruction_count < 2);
+    debug->instructions[debug->instruction_count++] = address;
+    if (address == 0x800) {
+        SH2 *s = kega_sh2_native(debug->cpu);
+        assert((s->sr & 0xf0) == 0xf0);
+        s->sr = 0;
+        s->test_irq = 1;
+    }
+}
+
+static void test_debug_irq(KegaSh2 *cpu, Fixture *f) {
+    put16(f, 0x800, 0xe007);
+    put16(f, 0x900, 0xe02a);
+    put32(f, 68 * 4, 0x900);
+    f->clear_irq = true;
+    const uint32_t budgets[] = {1, 14};
+    for (unsigned i = 0; i < sizeof(budgets) / sizeof(budgets[0]); ++i) {
+        DebugIrq debug = {.cpu = cpu};
+        kega_sh2_set_debug(cpu, debug_unmask_irq, &debug, KR_DEBUG_EXEC | KR_DEBUG_READ);
+        assert(kega_sh2_reset(cpu));
+        assert(debug.instruction_count == 0 && debug.read_count == 0);
+        f->reported_cycles = 0;
+        KegaSh2State s = state(cpu);
+        s.pc = 0x800;
+        assert(kega_sh2_set_state(cpu, &s) && kega_sh2_set_irq(cpu, 8));
+        assert(kega_sh2_run(cpu, budgets[i]) == (i == 0 ? 13 : 14));
+        assert(debug.read_count == 1 && debug.instructions[0] == 0x800);
+        s = state(cpu);
+        assert(s.r[15] == 0x1ef8 && (s.sr & 0xf0) == 0x80);
+        assert(rl(f, cpu, s.r[15]) == 0x800);
+        if (i == 0) {
+            assert(debug.instruction_count == 1 && s.pc == 0x900 && s.r[0] == 0);
+            assert(kega_sh2_run(cpu, 1) == 1);
+            s = state(cpu);
+        }
+        assert(debug.instruction_count == 2 && debug.instructions[1] == 0x900);
+        assert(s.pc == 0x902 && s.r[0] == 42);
+        kega_sh2_set_debug(cpu, NULL, NULL, 0);
+    }
+}
+
 int main(void) {
     Fixture master = {0}, slave = {0};
     KegaSh2 *a = create(&master, false), *b = create(&slave, true);
@@ -151,6 +209,8 @@ int main(void) {
     s = state(a); assert(s.r[0] == 7 && s.pc == 0x600);
     assert(rl(&master, a, s.r[15]) == 0x206);
 
+    test_debug_irq(a, &master);
+
     /* A memory callback may execute the peer CPU without changing ownership. */
     start(a, &master, 0x300); put16(&master, 0x300, 0xe001);
     put16(&slave, 0x100, 0xe02a); master.peer = b; master.nested = true;
@@ -158,6 +218,6 @@ int main(void) {
     assert(state(a).r[0] == 1 && state(b).r[0] == 42);
     assert(kega_sh2_cycles(a) == 1 && kega_sh2_cycles(b) == 1);
     kega_sh2_destroy(a); kega_sh2_destroy(b);
-    puts("SH2 reference: two contexts, memory widths, cycles, delay slots, IRQ/RTE and state passed");
+    puts("SH2 reference: two contexts, memory widths, cycles, delay slots, IRQ/RTE, debug hooks and state passed");
     return 0;
 }

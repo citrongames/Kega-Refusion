@@ -2,7 +2,7 @@
 
 Agreed with the user on 2026-11-20. This is the implementation roadmap, not a
 description of shipped features. The user authorized starting implementation on
-2026-11-21; the current batch is Phase 2.
+2026-11-21. Phases 1–3 are complete; the next implementation batch is Phase 4.
 
 Planning baseline: release 0.28.0, repository a5edb31. The plan was committed as
 28c61f9 before implementation. See [debug-inspection.md](debug-inspection.md)
@@ -14,21 +14,19 @@ for the delivered interface and explicit scope limitations.
 - [x] Agree on scope, architecture and delivery order; preserve this plan.
 - [x] Phase 1: common inspection interface and memory, graphics and audio viewers.
 - [x] Phase 2: 68000/Z80 debugger with resumable execution.
-- [ ] Phase 3: coordinated debugging of expansions, special hardware and link peers.
+- [x] Phase 3: coordinated debugging of expansions, special hardware and link peers.
 - [ ] Phase 4: integrated tracing, hardware timeline, code/data coverage and pixel provenance.
 
 Phase 1 completed on 2026-11-21 with the scope and limits recorded in
 [debug-inspection.md](debug-inspection.md) and
 [verification](debugger-phase1-verification.md).
 Phase 2 completed on 2026-11-21; see [CPU debugger](debug-execution.md) and
-[verification](debugger-phase2-verification.md). Next task when requested: Phase 3.
-Memory/register writes, physical-bank-aware labels, persistent debug projects,
-scanline/interrupt run controls and reverse-instruction execution remain later
-work; current CPU controls and safe peeks do not imply those features exist.
-Update this checklist and
-append concrete verification evidence after each completed phase. Do not mark a
-whole phase complete on the basis of one representative system. Preserve
-remaining CPU/device limitations explicitly.
+[verification](debugger-phase2-verification.md). Phase 3 includes the
+requested register, flag and bounded physical-memory edits during safe stops.
+Phase 3 completed on 2026-11-21; see [verification](debugger-phase3-verification.md) for per-device coverage and measured limits.
+Physical-bank-aware labels, persistent debug projects, scanline/interrupt run
+controls and reverse-instruction execution remain later work. Append platform
+and device verification evidence before completing each phase.
 
 ## Scope and interface
 
@@ -243,6 +241,18 @@ instances. Implement only capabilities actually supported by each backend.
 Acceptance: cross-CPU ordering, SH-2 delay slots/cache handoff, media continuation
 and linked-instance lifetime are correct. Maintain an explicit per-device ledger.
 
+Delivered implementation ledger. Linux checks, Windows build/deployment and
+per-device limitations are recorded in [Phase 3 verification](debugger-phase3-verification.md).
+
+| Scope | Implemented behavior and boundary |
+| --- | --- |
+| Sega CD and MegaLD | Sub 68000 targets use the existing CD scheduler. Main/sub execution and data stops preserve the full-frame continuation path. |
+| 32X and CD+32X | Both SH-2 targets use logical 32-bit addresses and interpreter hooks while armed. Resume honors delay slots and returns to the normal execution backend when hooks are cleared. |
+| Firecore | Existing 68000/Z80 targets follow the actual hardware. Bitmap/YUV graphics previews remain a separate limitation. |
+| SVP | SSP1601 code addresses are in words. Execution stops and instruction controls use the hardware return stack. Data traps remain unavailable. |
+| Local Link Cable | A/B CPU targets and a shared inspection selector identify the actual console. Closing the game or disabling the pair releases peer state. Link topology changes are blocked during input recording, playback and online play. |
+| Safe editing | The backend exposes writable registers and flags at authorized stops. Physical memory writes are bounded and require a full-frame pause. ROM, MMIO and domains that lack safe write support remain read-only. |
+
 ### Phase 4
 
 Integrate instruction/event tracing, the hardware timeline, code/data coverage
@@ -258,11 +268,11 @@ from different developers/regions and appropriate expansion coverage. Record
 actual scenes, refresh rate, backend, memory and measured results. Avoid repeated
 unrelated test sweeps; never claim untested platforms are verified.
 
-## Research findings and references
+## Initial research findings and references
 
-Current Qt DebugGraphicsDialog/DebugAudioDialog only expose output masks and
+At the planning baseline, Qt DebugGraphicsDialog/DebugAudioDialog only exposed output masks and
 gains. EmulationSession owns LibretroHost on its worker; its bounded queue and
-latest-frame publication are suitable patterns. Existing exported core APIs do
+latest-frame publication are suitable patterns. The exported core APIs at that baseline did
 not supply instruction stepping or guest disassembly.
 
 The prepared GPX source has conditional M68K/VDP CPU hooks. Z80 event names alone

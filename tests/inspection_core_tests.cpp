@@ -119,13 +119,19 @@ QByteArray make8BitRom(Cartridge kind) {
 struct Inspection {
     using Info = bool (*)(unsigned, unsigned, kr_inspect_info*, size_t);
     using Read = size_t (*)(unsigned, uint32_t, void*, size_t);
+    using Writable = bool (*)(unsigned);
+    using Write = size_t (*)(unsigned, uint32_t, const void*, size_t);
     Info info;
     Read read;
+    Writable writable;
+    Write write;
 
     explicit Inspection(QLibrary& library)
         : info(reinterpret_cast<Info>(library.resolve("retro_kegarefusion_inspect_info"))),
-          read(reinterpret_cast<Read>(library.resolve("retro_kegarefusion_inspect_read"))) {
-        require(info && read, "Core inspection exports");
+          read(reinterpret_cast<Read>(library.resolve("retro_kegarefusion_inspect_read"))),
+          writable(reinterpret_cast<Writable>(library.resolve("retro_kegarefusion_inspect_writable"))),
+          write(reinterpret_cast<Write>(library.resolve("retro_kegarefusion_inspect_write"))) {
+        require(info && read && writable && write, "Core inspection exports");
     }
 
     kr_inspect_info catalog(unsigned parts) const {
@@ -202,6 +208,57 @@ kr_inspect_info checkCatalog(const Inspection& api) {
     require(metadata.hardware == info.hardware && metadata.domain_count == 0 && metadata.value_count == 0,
             "Metadata-only request");
     return info;
+}
+
+void checkWrites(LibretroHost& host, const Inspection& api, const kr_inspect_info& info,
+                 unsigned ramId, Cartridge kind) {
+    DebugMemoryWrite request;
+    request.generation = host.inspectionGeneration();
+    request.domain = ramId;
+    request.offset = 1;
+    request.before = api.bytes(ramId, request.offset, 2);
+    request.after = QByteArray::fromHex("b6e3");
+    QString error;
+    require(host.writeInspectionMemory(request, error) &&
+            api.bytes(ramId, request.offset, 2) == request.after,
+            QStringLiteral("Odd-offset RAM write/readback: %1").arg(error));
+    require(!host.writeInspectionMemory(request, error) &&
+            api.bytes(ramId, request.offset, 2) == request.after, "Reject stale memory generation");
+    request.generation = host.inspectionGeneration();
+    require(!host.writeInspectionMemory(request, error) &&
+            api.bytes(ramId, request.offset, 2) == request.after, "Reject mismatched expected bytes");
+
+    const auto* ram = findDomain(info, ramId);
+    const auto tail = api.bytes(ramId, ram->size - 1, 1);
+    require(!api.writable(KR_MEM_ROM) && !api.writable(KR_MEM_VDP_REGS) &&
+            !api.write(KR_MEM_ROM, 0, "x", 1) && !api.write(KR_MEM_VDP_REGS, 0, "x", 1) &&
+            !api.write(ramId, ram->size - 1, "xy", 2) &&
+            !api.write(ramId, 0, "abcde", KR_INSPECT_MAX_WRITE + 1) &&
+            api.bytes(ramId, ram->size - 1, 1) == tail, "Reject ROM/MMIO writes and out-of-bounds memory writes");
+
+    require(api.writable(KR_MEM_VRAM) && api.write(KR_MEM_VRAM, 1, "\x41\x92", 2) == 2 &&
+            api.bytes(KR_MEM_VRAM, 0, 4) == QByteArray::fromHex("244192e1"),
+            "VRAM write uses captured byte order");
+    if (findDomain(info, KR_MEM_VSRAM)) {
+        require(api.writable(KR_MEM_VSRAM) && api.write(KR_MEM_VSRAM, 1, "\x67", 1) == 1 &&
+                api.bytes(KR_MEM_VSRAM, 1, 1) == QByteArray::fromHex("67"), "VSRAM write/readback");
+    }
+    if (findDomain(info, KR_MEM_CRAM)) {
+        QByteArray color;
+        if (kind == Cartridge::GameGear) color = QByteArray::fromHex("2f0c");
+        else if (kind == Cartridge::MasterSystem) color = QByteArray::fromHex("1b");
+        else if (kind == Cartridge::Firecore || kind == Cartridge::FirecoreBitmap)
+            color = QByteArray::fromHex("20400080");
+        else color = QByteArray::fromHex("0023");
+        require(api.writable(KR_MEM_CRAM) &&
+                api.write(KR_MEM_CRAM, 0, color.constData(), size_t(color.size())) == size_t(color.size()) &&
+                api.bytes(KR_MEM_CRAM, 0, color.size()) == color, "CRAM format write and readback");
+        if (kind == Cartridge::MegaDrive) {
+            const auto before = api.bytes(KR_MEM_CRAM, 0, 4);
+            require(!api.write(KR_MEM_CRAM, 1, "\x99\xfe", 2) &&
+                    api.bytes(KR_MEM_CRAM, 0, 4) == before, "Invalid cross-color write is atomic");
+        }
+    }
 }
 
 void checkCartridge(LibretroHost& host, const Inspection& api, const QString& path, Cartridge kind,
@@ -296,6 +353,7 @@ void checkCartridge(LibretroHost& host, const Inspection& api, const QString& pa
     require(stale.available() && stale.memory.isEmpty() && stale.blocks.isEmpty(),
             "Stale domain selection does not read an unrelated domain");
     require(host.serialize() == state, "Inspection changed the serialized machine");
+    checkWrites(host, api, info, ramId, kind);
     std::printf("PASS: %s domains, bounded reads, canonical bytes, native-state invariance\n", qPrintable(path));
 }
 

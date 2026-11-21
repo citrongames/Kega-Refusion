@@ -8,6 +8,7 @@
 #include <QHideEvent>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -39,9 +40,10 @@ QString hexNumber(quint64 value, int digits = 0) {
 }
 
 QString stateCaption(const DebugInspectionSnapshot& snapshot) {
-    return QStringLiteral("%1 · %2")
-        .arg(QString::fromUtf8(snapshot.info.system),
-             trText("Снимок кадра %1").arg(snapshot.frame));
+    QString name = QString::fromUtf8(snapshot.info.system);
+    if (snapshot.instanceCount > 1)
+        name += QStringLiteral(" · ") + (snapshot.instance ? trText("Консоль B") : trText("Консоль A"));
+    return QStringLiteral("%1 · %2").arg(name, trText("Снимок кадра %1").arg(snapshot.frame));
 }
 
 QString emptyCaption(const DebugInspectionSnapshot& snapshot) {
@@ -79,6 +81,16 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     auto* outer = new QVBoxLayout(this);
     tabs_ = new QTabWidget(this);
     tabs_->setObjectName(QStringLiteral("debugMemoryTabs"));
+    instances_ = new QComboBox(tabs_);
+    instances_->setObjectName(QStringLiteral("debugMemoryInstance"));
+    instances_->setAccessibleName(trText("Консоль Link Cable"));
+    instances_->addItem(trText("Консоль A"), 0u);
+    instances_->addItem(trText("Консоль B"), 1u);
+    tabs_->setCornerWidget(instances_);
+    instances_->hide();
+    connect(instances_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index >= 0) changeInstance(instances_->itemData(index).toUInt());
+    });
     outer->addWidget(tabs_);
     auto* memory = new QWidget(tabs_);
     tabs_->addTab(memory, trText("Память"));
@@ -164,7 +176,7 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     connect(this, &DebugMemoryDialog::inspectionChanged, findStatus, &QLabel::clear);
 
     auto* watch = new QHBoxLayout;
-    auto* valueLabel = new QLabel(trText("Значение по выбранному смещению"), this);
+    auto* valueLabel = new QLabel(trText("Значение"), this);
     watch->addWidget(valueLabel);
     width_ = new QComboBox(this);
     width_->setObjectName(QStringLiteral("debugMemoryWidth"));
@@ -185,11 +197,30 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     value_->setObjectName(QStringLiteral("debugMemoryValue"));
     value_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     watch->addWidget(value_, 1);
+    edit_ = new QPushButton(trText("Изменить…"), this);
+    edit_->setObjectName(QStringLiteral("debugMemoryEdit"));
+    edit_->setAutoDefault(false);
+    watch->addWidget(edit_);
     layout->addLayout(watch);
+    editStatus_ = new QLabel(this);
+    editStatus_->setObjectName(QStringLiteral("debugMemoryWriteStatus"));
+    editStatus_->setTextFormat(Qt::PlainText);
+    editStatus_->setWordWrap(true);
+    editStatus_->hide();
+    layout->addWidget(editStatus_);
+    connect(edit_, &QPushButton::clicked, this, [this] { editMemory(qAbs(width_->currentData().toInt())); });
+    connect(hex_, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
+        if (row >= 0 && col >= 0 && col < rowBytes && quint32(row * rowBytes + col) < bytes_.size()) {
+            selection_ = page_ + quint32(row * rowBytes + col);
+            editMemory(1);
+        }
+    });
 
     connect(domains_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (index < 0) return;
         domain_ = domains_->itemData(index).toUInt();
+        writable_ = false;
+        editStatus_->hide();
         size_ = domains_->itemData(index, Qt::UserRole + 1).toUInt();
         bigEndian_ = domains_->itemData(index, Qt::UserRole + 2).toBool();
         selection_ = 0;
@@ -239,6 +270,7 @@ DebugInspectionRequest DebugMemoryDialog::request() const {
     request.domain = domain_;
     request.offset = page_;
     request.length = pageBytes + 3;
+    request.instance = instance_;
     return request;
 }
 
@@ -254,18 +286,45 @@ void DebugMemoryDialog::navigateTo(quint32 domain, quint32 offset) {
     }
     const bool changed = domain_ != domain;
     domain_ = domain;
-    if (changed) updatePage({});
+    if (changed) {
+        writable_ = false;
+        updatePage({});
+    }
     const quint32 oldPage = page_;
     changeOffset(offset);
     if (changed && oldPage == page_) emit inspectionChanged();
 }
 
+void DebugMemoryDialog::changeInstance(quint32 instance) {
+    if (instance == instance_) return;
+    instance_ = instance;
+    available_ = false;
+    canEdit_ = writable_ = false;
+    status_->setText(trText("Нет данных снимка"));
+    editStatus_->hide();
+    updatePage({});
+    updateNavigation();
+    hardware_->setSnapshot({});
+    emit inspectionInstanceChanged();
+    emit inspectionChanged();
+}
+
 void DebugMemoryDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
+    if (snapshot.available() || snapshot.serial) {
+        instances_->setVisible(snapshot.instanceCount > 1);
+        if (instance_ >= snapshot.instanceCount && instance_ != 0) {
+            const QSignalBlocker block(instances_);
+            instances_->setCurrentIndex(0);
+            changeInstance(0);
+        }
+        if (snapshot.instance != instance_) return;
+    }
     if (!snapshot.available()) {
         hardware_->setSnapshot(snapshot);
         status_->setText(emptyCaption(snapshot));
         if (!available_) return;
         available_ = false;
+        canEdit_ = writable_ = false;
         size_ = 0;
         {
             const QSignalBlocker block(domains_);
@@ -319,6 +378,8 @@ void DebugMemoryDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
     const quint32 resolved = domains_->itemData(index).toUInt();
     if (domain_ != resolved) selection_ = 0;
     domain_ = resolved;
+    canEdit_ = snapshot.canEdit;
+    writable_ = snapshot.writableDomains.contains(domain_);
     size_ = domains_->itemData(index, Qt::UserRole + 1).toUInt();
     bigEndian_ = domains_->itemData(index, Qt::UserRole + 2).toBool();
     if (size_) selection_ = std::min(selection_, size_ - 1);
@@ -403,13 +464,16 @@ void DebugMemoryDialog::updateNavigation() {
 void DebugMemoryDialog::updateWatch() {
     const int type = width_->currentData().toInt();
     const int width = qAbs(type);
+    edit_->setEnabled(canWrite(width));
+    edit_->setToolTip(writable_
+        ? trText("Изменение доступно на паузе, вне записи и воспроизведения ввода.")
+        : trText("Эта область памяти доступна только для чтения."));
     const quint32 relative = selection_ - page_;
     if (!width || relative + width > quint64(bytes_.size())) {
         value_->setText(QStringLiteral("—"));
         return;
     }
-    const int order = order_->currentData().toInt();
-    const bool bigEndian = order == 0 ? bigEndian_ : order == 2;
+    const bool bigEndian = watchBigEndian();
     const auto* data = bytes_.constData() + relative;
     quint32 number = quint8(*data);
     if (width == 2) number = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
@@ -419,6 +483,71 @@ void DebugMemoryDialog::updateWatch() {
     value_->setText(QStringLiteral("0x%1  (%2)").arg(hexNumber(number, width * 2)).arg(decimal));
 }
 
+bool DebugMemoryDialog::watchBigEndian() const {
+    const int order = order_->currentData().toInt();
+    return order == 0 ? bigEndian_ : order == 2;
+}
+
+bool DebugMemoryDialog::canWrite(int width) const {
+    return isVisible() && tabs_->currentIndex() == 0 && available_ && canEdit_ && writable_ &&
+           !writePending_ && (width == 1 || width == 2 || width == 4) &&
+           quint64(selection_ - page_) + width <= quint64(bytes_.size());
+}
+
+void DebugMemoryDialog::editMemory(int width) {
+    if (!canWrite(width)) return;
+    DebugMemoryWrite request;
+    request.generation = generation_;
+    request.instance = instance_;
+    request.domain = domain_;
+    request.offset = selection_;
+    request.before = bytes_.mid(selection_ - page_, width);
+    const bool bigEndian = watchBigEndian();
+    const auto* data = request.before.constData();
+    quint32 previous = quint8(*data);
+    if (width == 2) previous = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
+    if (width == 4) previous = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
+    bool accepted = false;
+    const QString input = QInputDialog::getText(this, trText("Изменить память"),
+        trText("Новое значение по 0x%1 (hex)").arg(hexNumber(request.offset)),
+        QLineEdit::Normal, hexNumber(previous, width * 2), &accepted);
+    if (!accepted || generation_ != request.generation || instance_ != request.instance ||
+        domain_ != request.domain || selection_ != request.offset || !canWrite(width)) return;
+    QString digits = input.trimmed();
+    if (digits.startsWith(QLatin1Char('$'))) digits.remove(0, 1);
+    else if (digits.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) digits.remove(0, 2);
+    static const QRegularExpression hexDigits(QStringLiteral("^[0-9a-fA-F]{1,8}$"));
+    bool ok = false;
+    const auto value = digits.toUInt(&ok, 16);
+    if (!ok || !hexDigits.match(digits).hasMatch() || quint64(value) >= (quint64(1) << (width * 8))) {
+        finishMemoryWrite(trText("Введите шестнадцатеричное значение в пределах выбранного размера."));
+        return;
+    }
+    request.after = QByteArray(width, '\0');
+    if (width == 1) request.after[0] = char(value);
+    else if (width == 2) {
+        if (bigEndian) qToBigEndian(quint16(value), request.after.data());
+        else qToLittleEndian(quint16(value), request.after.data());
+    } else {
+        if (bigEndian) qToBigEndian(value, request.after.data());
+        else qToLittleEndian(value, request.after.data());
+    }
+    if (request.after == request.before) return;
+    writePending_ = true;
+    editStatus_->hide();
+    updateWatch();
+    emit writeRequested(request);
+}
+
+void DebugMemoryDialog::finishMemoryWrite(const QString& error) {
+    writePending_ = false;
+    if (error.isEmpty()) canEdit_ = false;
+    if (!isVisible()) return;
+    editStatus_->setText(error.isEmpty() ? trText("Байты записаны") : error);
+    editStatus_->show();
+    updateWatch();
+}
+
 void DebugMemoryDialog::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
     emit inspectionChanged();
@@ -426,6 +555,7 @@ void DebugMemoryDialog::showEvent(QShowEvent* event) {
 
 void DebugMemoryDialog::hideEvent(QHideEvent* event) {
     QDialog::hideEvent(event);
+    editStatus_->hide();
     setSnapshot({});
     emit inspectionChanged();
 }
@@ -1007,6 +1137,7 @@ void DebugVideoInspector::setSnapshot(const DebugInspectionSnapshot& snapshot) {
     if (snapshot.available() && !(snapshot.parts & KR_INSPECT_VIDEO)) return;
     const bool graphicsSame = snapshot.available() && snapshot_.available()
         && snapshot.generation == snapshot_.generation
+        && snapshot.instance == snapshot_.instance
         && snapshot.info.hardware == snapshot_.info.hardware
         && snapshot.info.video_format == snapshot_.info.video_format
         && snapshot.info.height == snapshot_.info.height

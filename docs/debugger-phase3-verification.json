@@ -1,0 +1,304 @@
+{
+  "date": "2026-11-21",
+  "baselineCommit": "7d3fdc9e3b6b7e1603045a9705b90117b91808ba",
+  "baselineCoreSha256": "e8bccd7ba26703779561f0d0b67270ec27055b4f3fd7c6bddc619755997c0cfc",
+  "candidateLinuxCoreSha256": "dcc7c6d44fa72228a4b0f6afd1428cf4c694f243c9103a11c9fe3528fcee6e21",
+  "candidateWindowsCoreUnstrippedSha256": "af744cf4c479252e6e960aad0e355626d678f94e161438819b9d90687ff201f7",
+  "windowsDeployedFiles": {
+    "KegaRefusion.exe": "3eed099ed740784eb550b78cc7453ef1a1a710c59f9caf36ea8edd21bf207812",
+    "cores/genesis_plus_gx_libretro_linkpeer.dll": "748efe9d2d66e000e1a2a19274f6625dcf3c3a59488c21eee61f3df8ff0245c1",
+    "cores/genesis_plus_gx_libretro.dll": "748efe9d2d66e000e1a2a19274f6625dcf3c3a59488c21eee61f3df8ff0245c1",
+    "languages/en.json": "54df0ad91c05897d85f14bc50fff6e58bbfb7e88c4bd98d746f12e5bae0789d5",
+    "languages/ru.json": "73854a267adcfca1d2515df8830bfda72c8ecb75c14979060ca1f80d45fbd307"
+  },
+  "windowsRuntimeTested": false,
+  "originalFixtureResults": {
+    "mainAnd8BitCpuExecution": "pass: MD/SMS/GG/SG, DMA, delivered VBlank IRQ and exact completed outputs",
+    "expandedExecution": "pass: SVP mailbox, MD/GG Link pair, CD Mode 1 IRQ2, dual SH-2 delays/nested calls/step over/out",
+    "mutation": "pass: 68000 masked flags and prefetched PC redirection; read/write-hook edits rejected; movie edit rejected",
+    "memory": "pass: bounded writes/canonical bytes, invalid palette atomicity, ROM/MMIO rejection, stale generation and bytes, full-frame pause, recording/playback rejection",
+    "session": "pass: paused partial-frame publication, saves, loads, rewind, reset, power reset, recording cursor, shutdown",
+    "ui": "pass: Linux Qt offscreen CPU and memory dialogs, editable flag/register requests, peer topology and writable policy",
+    "sh2Components": "pass: interpreter, DRC, machine, reset with no false read trap, SR edit IRQ ordering",
+    "sh2Decoder": "pass: 65536 opcodes at zero and wrap boundary, ASan/UBSan, call/return/delay metadata"
+  },
+  "realMedia": {
+    "result": "pass",
+    "coreSha256": "dcc7c6d44fa72228a4b0f6afd1428cf4c694f243c9103a11c9fe3528fcee6e21",
+    "testBinarySha256": "5eb6df8dde8e06dc09d4fb9a263adfa15da7d4b97dd3624cb72f829dc4f1f627",
+    "nativeStateException": "Only backend-local SH-2 previous PC (PPC) and effective address scratch (EA), 4 bytes each per SH-2. All remaining bytes compare exactly.",
+    "freshLoads": 10,
+    "checkedProcessors": 15,
+    "matchedFrames": 90,
+    "scenes": [
+      {
+        "name": "Sonic CD (Europe)",
+        "checkedProcessors": 3,
+        "matchedFrames": 18,
+        "checkpoint": 1340,
+        "controls": "START on zero-based frames 60–63, 180–183, 420–423 and 660–663. Right from 1300."
+      },
+      {
+        "name": "Corpse Killer (USA) (Sega CD 32X)",
+        "checkedProcessors": 5,
+        "matchedFrames": 30,
+        "checkpoint": 1800,
+        "controls": "START on zero-based frames 60–63, matching the previous active-scene setup."
+      },
+      {
+        "name": "Hi-Roller Battle (Japan)",
+        "checkedProcessors": 3,
+        "matchedFrames": 18,
+        "checkpoint": 300,
+        "controls": "No controller input. Check the opening menu/attract boundary at 300 frames."
+      },
+      {
+        "name": "Wall Breaking",
+        "checkedProcessors": 2,
+        "matchedFrames": 12,
+        "checkpoint": 520,
+        "controls": "START on zero-based frames 180–183 and 300–303. No additional input through checks."
+      },
+      {
+        "name": "40 Bonus Games in 1 / Jewel Magic",
+        "checkedProcessors": 2,
+        "matchedFrames": 12,
+        "checkpoint": 850,
+        "controls": "Right at 340, Up at 370, START at 400, START at 590; each held four frames."
+      }
+    ]
+  },
+  "benchmark": {
+    "method": "Pinned CPU 5, MAME YM2612, no debugger/viewers/shader, 180 warmup then 3000 frames; normal = every frame plus PCM; fast = present every32 and no PCM; alternate before/after order.",
+    "mdCandidateCoreSha256": "5cf99b847ce9fabba6fa278916918744eee642af25171289c986ae37c2e4ad48",
+    "mdNote": "Three pairs before the final SH-2-only inactive-path optimization. MD execution sources unchanged by that optimization.",
+    "sonic2": {
+      "normal": {
+        "medianChangePercent": -1.061728711722143,
+        "pairs": [
+          {
+            "beforeFps": 1880.83,
+            "afterFps": 1878.797,
+            "changePercent": -0.10809057703247138,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 38556,
+            "afterMaxRssKiB": 38040
+          },
+          {
+            "beforeFps": 1889.801,
+            "afterFps": 1845.879,
+            "changePercent": -2.3241600570642063,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 38448,
+            "afterMaxRssKiB": 38156
+          },
+          {
+            "beforeFps": 1871.382,
+            "afterFps": 1851.513,
+            "changePercent": -1.061728711722143,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 38488,
+            "afterMaxRssKiB": 37960
+          }
+        ]
+      },
+      "fast": {
+        "medianChangePercent": -0.2524730658900243,
+        "pairs": [
+          {
+            "beforeFps": 2930.598,
+            "afterFps": 2929.36,
+            "changePercent": -0.04224393792665593,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 38836,
+            "afterMaxRssKiB": 38868
+          },
+          {
+            "beforeFps": 2922.688,
+            "afterFps": 2915.309,
+            "changePercent": -0.2524730658900243,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 38760,
+            "afterMaxRssKiB": 38436
+          },
+          {
+            "beforeFps": 2932.186,
+            "afterFps": 2893.506,
+            "changePercent": -1.3191523320826293,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 38768,
+            "afterMaxRssKiB": 38240
+          }
+        ]
+      }
+    },
+    "bomberman": {
+      "normal": {
+        "medianChangePercent": 1.258853845088237,
+        "pairs": [
+          {
+            "beforeFps": 2100.641,
+            "afterFps": 2127.085,
+            "changePercent": 1.258853845088237,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 38624,
+            "afterMaxRssKiB": 38148
+          },
+          {
+            "beforeFps": 2132.603,
+            "afterFps": 2159.477,
+            "changePercent": 1.2601501545294491,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 38588,
+            "afterMaxRssKiB": 38200
+          },
+          {
+            "beforeFps": 2136.829,
+            "afterFps": 2111.801,
+            "changePercent": -1.1712682671379038,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 38540,
+            "afterMaxRssKiB": 38144
+          }
+        ]
+      },
+      "fast": {
+        "medianChangePercent": -0.5296961381703658,
+        "pairs": [
+          {
+            "beforeFps": 3073.49,
+            "afterFps": 3117.496,
+            "changePercent": 1.4317925225070027,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 39008,
+            "afterMaxRssKiB": 39184
+          },
+          {
+            "beforeFps": 3097.625,
+            "afterFps": 3081.217,
+            "changePercent": -0.5296961381703658,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 38972,
+            "afterMaxRssKiB": 38516
+          },
+          {
+            "beforeFps": 3053.191,
+            "afterFps": 2956.227,
+            "changePercent": -3.175824899261137,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 38988,
+            "afterMaxRssKiB": 38524
+          }
+        ]
+      }
+    },
+    "doom": {
+      "normal": {
+        "medianChangePercent": -0.17982686758007405,
+        "pairs": [
+          {
+            "beforeFps": 471.838,
+            "afterFps": 469.516,
+            "changePercent": -0.49211805746888215,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 48428,
+            "afterMaxRssKiB": 47868
+          },
+          {
+            "beforeFps": 473.335,
+            "afterFps": 473.962,
+            "changePercent": 0.13246432230873406,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 48244,
+            "afterMaxRssKiB": 47848
+          }
+        ]
+      },
+      "fast": {
+        "medianChangePercent": -2.000490398705934,
+        "pairs": [
+          {
+            "beforeFps": 584.128,
+            "afterFps": 576.751,
+            "changePercent": -1.2629081297250044,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 50296,
+            "afterMaxRssKiB": 50312
+          },
+          {
+            "beforeFps": 590.744,
+            "afterFps": 574.569,
+            "changePercent": -2.738072667686864,
+            "stateImagePcmEqual": true,
+            "nominalHz": 59.922743,
+            "beforeMaxRssKiB": 50112,
+            "afterMaxRssKiB": 49720
+          }
+        ]
+      }
+    },
+    "darxide": {
+      "normal": {
+        "medianChangePercent": -2.915283372644523,
+        "pairs": [
+          {
+            "beforeFps": 151.755,
+            "afterFps": 147.689,
+            "changePercent": -2.6793186385951073,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 47796,
+            "afterMaxRssKiB": 47504
+          },
+          {
+            "beforeFps": 152.511,
+            "afterFps": 147.705,
+            "changePercent": -3.151248106693938,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 47868,
+            "afterMaxRssKiB": 47468
+          }
+        ]
+      },
+      "fast": {
+        "medianChangePercent": -2.549645603902623,
+        "pairs": [
+          {
+            "beforeFps": 160.66,
+            "afterFps": 156.728,
+            "changePercent": -2.4474044566164532,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 48640,
+            "afterMaxRssKiB": 48884
+          },
+          {
+            "beforeFps": 160.037,
+            "afterFps": 155.793,
+            "changePercent": -2.6518867511887922,
+            "stateImagePcmEqual": true,
+            "nominalHz": 49.701459,
+            "beforeMaxRssKiB": 48708,
+            "afterMaxRssKiB": 48308
+          }
+        ]
+      }
+    }
+  }
+}

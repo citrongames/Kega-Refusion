@@ -380,12 +380,15 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     inspectionTimer_ = new QTimer(this);
     inspectionTimer_->setInterval(100);
     connect(inspectionTimer_, &QTimer::timeout, this, &MainWindow::refreshInspection);
+    connect(&session_, &EmulationSession::debugMemoryWriteFinished, this, [this](const QString& error) {
+        if (debugMemoryDialog_) debugMemoryDialog_->finishMemoryWrite(error);
+        scheduleInspection();
+    });
     connect(&session_, &EmulationSession::inspectionReady, this, [this] {
         DebugInspectionSnapshot snapshot;
         if (!session_.takeInspection(snapshot) || snapshot.serial != inspectionSerial_ ||
             loading_ || videoExporting_ || achievementsHardcore_) return;
-        if (debugMemoryDialog_ && debugMemoryDialog_->isVisible())
-            debugMemoryDialog_->setSnapshot(snapshot);
+        if (debugMemoryDialog_) debugMemoryDialog_->setSnapshot(snapshot);
         if (debugGraphicsDialog_ && debugGraphicsDialog_->isVisible())
             debugGraphicsDialog_->setSnapshot(snapshot);
         if (debugAudioDialog_ && debugAudioDialog_->isVisible())
@@ -1560,6 +1563,15 @@ void MainWindow::showDebugMemory() {
         debugMemoryDialog_ = new DebugMemoryDialog(this);
         connect(debugMemoryDialog_, &DebugMemoryDialog::inspectionChanged,
                 this, &MainWindow::scheduleInspection);
+        connect(debugMemoryDialog_, &DebugMemoryDialog::inspectionInstanceChanged, this, [this] {
+            if (debugGraphicsDialog_) debugGraphicsDialog_->setSnapshot({});
+            if (debugAudioDialog_) debugAudioDialog_->setSnapshot({});
+        });
+        connect(debugMemoryDialog_, &DebugMemoryDialog::writeRequested, this, [this](const DebugMemoryWrite& write) {
+            if (!session_.writeDebugMemory(write))
+                debugMemoryDialog_->finishMemoryWrite(Localization::text(QStringLiteral(
+                    "Запись памяти пока недоступна.")));
+        });
     }
     debugMemoryDialog_->show();
     debugMemoryDialog_->raise();
@@ -1642,7 +1654,7 @@ void MainWindow::scheduleInspection() {
 
 void MainWindow::refreshInspection() {
     DebugInspectionRequest request;
-    if (debugMemoryDialog_ && debugMemoryDialog_->isVisible())
+    if (debugMemoryDialog_)
         request = debugMemoryDialog_->request();
     if (debugGraphicsDialog_ && debugGraphicsDialog_->isVisible())
         request.parts |= debugGraphicsDialog_->request().parts;

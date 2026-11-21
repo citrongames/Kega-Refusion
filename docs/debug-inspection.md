@@ -1,15 +1,15 @@
-# Read-only hardware inspection
+# Hardware inspection
 
-Phase 1 of [the debugger roadmap](debugger-plan.md). The Debug menu now includes
-Memory, while the existing Graphics and Sound Channels windows have inspector
-tabs. These are modeless tools: opening/focusing them does not pause emulation.
-Layer masks, backdrop and channel gain keep their existing temporary behavior.
+Open **Memory**, **Graphics** or **Sound Channels** from the Debug menu.
+The modeless windows leave emulation running when opened or focused.
+Layer masks, backdrop and channel gain remain temporary presentation controls.
 
 ## Available tools
 
 - Memory: domain-relative hexadecimal offset, 256-byte pages, ASCII, changed
   byte highlighting, signed/unsigned 8/16/32-bit selected values with automatic
   or explicit byte order, and hex-pattern search within the current page.
+  Writable domains also support edits during an explicit full-frame pause.
 - Memory / Hardware: actual console, CPU/device presence, relevant mapper bank
   registers, ports, CD and MegaLD controller state.
 - Graphics: decoded tiles, maps, sprites, palette, VDP registers and 32X
@@ -21,15 +21,17 @@ Layer masks, backdrop and channel gain keep their existing temporary behavior.
 Graphics links open the corresponding physical memory domain/offset. Switching
 games or display modes updates available domains and viewers. Tools retain user
 selection where valid and clear captured data on close, unload or blocked access.
-Both English and Russian captions are supplied; chip names and register notation
-remain conventional technical labels.
+The Memory window shows a **Console A/B** selector when Link Cable has two
+consoles. This selection also applies to Graphics and Sound snapshots.
+Both English and Russian captions are supplied alongside conventional chip
+names and register notation.
 
 ## What a snapshot means
 
-Images are decoded from the captured table/framebuffer storage. They do not
-reconstruct earlier raster writes or the internal sprite evaluation cache.
-Sprite order is table/link order, not a promise of scanline evaluation order.
-Pixel provenance and a hardware event timeline remain later roadmap work.
+Images show captured table and framebuffer storage at the snapshot time.
+Sprite order follows the captured table and links. Raster history, scanline
+sprite evaluation, pixel provenance and a hardware event timeline remain
+later roadmap work.
 
 Firecore six-bit tiles and RGB888 palette are supported. Bitmap/YUV and
 interlaced six-bit tile previews explicitly report unsupported modes;
@@ -38,42 +40,56 @@ values are available, while separate disc-video/compositor inspection remains
 later work. Special cartridge memories/values are exposed only when supported,
 not inferred from game names.
 
-This phase is read-only. CPU disassembly, instruction stepping/breakpoints,
-editing, full memory watch lists, full-domain search and trace capture are not
-advertised as available. Existing cheat search and frame stepping remain separate.
+## Editing paused memory
+
+Double-click a hex byte to change it, or choose a width and byte order and
+click **Edit…** for a multi-byte value. Each command writes at most four
+bytes to the selected physical domain and console. The worker checks the
+machine generation and original bytes before writing. A successful edit
+updates the affected video caches and clears rewind history.
+
+Main and Z80 RAM, Sega CD Program, Word, PCM and Backup RAM, and ordinary
+VRAM, CRAM and VSRAM support writes where present. CD Backup RAM follows
+normal save persistence. ROM, VDP registers, cartridge save storage,
+expansion-specific buffers, native wide-mode VRAM and MD Mode 4 CRAM
+remain read-only. The available actions follow actual hardware and mode.
+
+The [CPU debugger](debug-execution.md) provides logical CPU addresses,
+registers, disassembly and execution controls. Full-domain search, persistent
+watch lists and trace capture remain [later work](debugger-plan.md).
 
 ## Threading and resource limits
 
 The versioned C ABI is in src/core/DebugInspectionAbi.h. Core-only adapters live
 in src/coreinspect and the reproducible genesis-plus-gx-inspection.patch.
-All exported reads use physical storage/latches without invoking guest bus
-handlers. CPU logical-bus peeks and editing are future interfaces.
+Exported inspection reads use physical storage and latches. Memory
+writes use bounded core adapters for the selected domain and avoid guest bus
+handlers. The CPU debugger has a separate API for logical-address peeks.
 
 LibretroHost copies requested data on the emulation owner thread. EmulationSession
-holds at most one pending request and one latest result; a serial discards
-superseded results. State changes advance a generation. Qt receives copied
-snapshots and cannot reference or mutate running core data.
+holds one pending snapshot request, one latest result and one pending memory
+edit. A serial discards superseded results. Context changes and accepted
+memory edits advance a generation. Qt receives copied snapshots and submits
+edit requests to the worker.
 
-A single GUI timer requests visible inspector tabs at 10 Hz; controls-only tabs
-do not subscribe. Closed/inactive viewers release captured buffers. The worker's
-inactive path is one atomic pending-request check, with no capture or polling
-timer. Reads are bounded to 256 KiB each, memory windows to 4096 bytes, with fixed
-domain/value catalog capacities. Only active graphic tabs decode images.
-
-No new periodic disk writes, hardware-state fields, recording compatibility
-changes or guest timing hooks were introduced.
+A single GUI timer requests visible inspector tabs at 10 Hz. Controls-only
+tabs release their subscriptions. Closed or inactive viewers release captured
+buffers. The worker checks for queued requests and edits and only captures
+when requested. Reads are bounded to 256 KiB each and memory windows to
+4096 bytes, with fixed domain and value catalog capacities. Graphic tabs
+decode images while active.
 
 ## Restrictions
 
-The worker rejects inspection in achievement Hardcore and during offline video
-export. Existing presentation controls retain their previous restrictions.
-Ordinary netplay permits local read-only snapshots. Linked-console inspection is
-explicitly unavailable until per-instance coordinated debugging is implemented.
-No inspection command is replicated as gameplay input.
+The worker blocks inspection in achievement Hardcore and during offline
+video export. Online sessions permit read-only local snapshots. Memory
+editing requires an explicit pause between complete frames and is blocked
+while recording or playing back input, during online play, in Hardcore and
+during export. Inspection requests stay local to the emulation session.
 
 ## Verification
 
-See debugger-phase1-verification.json for actual fixture coverage and
-performance measurements. Source/compilation verification is distinct from
-Windows interactive testing, which is performed by the user. Unexecuted media
-paths are not counted as tested games.
+See the [Phase 1 verification](debugger-phase1-verification.md) for snapshot
+coverage and performance measurements. The [roadmap](debugger-plan.md)
+tracks verification of the Phase 3 memory and Link Cable extensions.
+Windows interactive testing is performed by the user.

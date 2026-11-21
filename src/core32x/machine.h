@@ -44,6 +44,7 @@ uint64_t kega32x_machine_cpu_mclk(const Kega32xMachine *, unsigned cpu);
    its own CPUs, CD and video events. Instruction overshoot is retained. */
 void kega32x_machine_run_until(Kega32xMachine *, uint64_t master_clock);
 uint64_t kega32x_machine_next_event(const Kega32xMachine *);
+bool kega32x_machine_peek(Kega32xMachine *, unsigned cpu, uint32_t address, uint8_t *value);
 /* SH2 memory callbacks also usable by DMA; all words are numeric big-endian. */
 uint32_t kega32x_machine_read(Kega32xMachine *, unsigned cpu, uint32_t address, unsigned size);
 void kega32x_machine_write(Kega32xMachine *, unsigned cpu, uint32_t address, uint32_t value, unsigned size);

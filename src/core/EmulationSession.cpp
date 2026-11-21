@@ -183,6 +183,15 @@ void EmulationSession::requestInspection(const DebugInspectionRequest& request) 
         inspectionSnapshotPending_ = false;
     }
 }
+bool EmulationSession::writeDebugMemory(const DebugMemoryWrite& request) {
+    if (request.after.isEmpty() || request.after.size() > KR_INSPECT_MAX_WRITE ||
+        request.before.size() != request.after.size()) return false;
+    std::lock_guard<std::mutex> lock(inspectionMutex_);
+    if (inspectionWrite_) return false;
+    inspectionWrite_ = request;
+    inspectionWriteRequested_.store(true);
+    return true;
+}
 bool EmulationSession::takeInspection(DebugInspectionSnapshot& snapshot) {
     std::lock_guard<std::mutex> lock(inspectionMutex_);
     if (!inspectionSnapshotPending_) return false;
@@ -1103,7 +1112,32 @@ void EmulationSession::run() {
         refreshMegaLdSide();
         return true;
     };
+    const auto canWriteDebugMemory = [&] {
+        return host.loaded() && paused && !frameRequested && !rewind_.load() &&
+               !host.debuggerFramePending() && !achievementHardcore && !networkMode &&
+               !movie.active() && !videoExport;
+    };
     auto processInspection = [&] {
+        if (inspectionWriteRequested_.load()) {
+            std::optional<DebugMemoryWrite> write;
+            {
+                std::lock_guard<std::mutex> lock(inspectionMutex_);
+                write.swap(inspectionWrite_);
+                inspectionWriteRequested_.store(false);
+            }
+            if (write) {
+                QString error;
+                if (!canWriteDebugMemory()) {
+                    error = Localization::text(QStringLiteral(
+                        "Изменение доступно на паузе, вне записи и воспроизведения ввода."));
+                } else if (host.writeInspectionMemory(*write, error)) {
+                    clearHistory();
+                    clearAudio();
+                    inspectionRequested_.store(true);
+                }
+                emit debugMemoryWriteFinished(error);
+            }
+        }
         if (inspectionRequested_.load()) {
             DebugInspectionRequest request;
             {
@@ -1122,6 +1156,7 @@ void EmulationSession::run() {
                         : QStringLiteral("Просмотр состояния недоступен при экспорте видео."));
                 } else {
                     snapshot = host.inspect(request);
+                    snapshot.canEdit = !snapshot.writableDomains.isEmpty() && canWriteDebugMemory();
                 }
                 bool notify = false;
                 {
@@ -1144,6 +1179,10 @@ void EmulationSession::run() {
     auto publishDebugger = [&](const QString& error = QString()) {
         auto snapshot=host.debuggerSnapshot();
         if (snapshot.attached && !snapshot.partialFrame && paused && !host.debuggerRunRequested()) snapshot.stopped=true;
+        const bool editAllowed=paused && !achievementHardcore && !networkMode && !videoExport && !movie.active();
+        snapshot.canEdit=snapshot.canEdit && editAllowed;
+        if(!snapshot.canEdit)snapshot.writableRegisters.clear();
+        snapshot.linkSupported=snapshot.linkSupported && !achievementHardcore && !networkMode && !videoExport && !movie.active();
         if (!error.isEmpty()) snapshot.status=error;
         bool notify;
         {
@@ -1251,7 +1290,32 @@ void EmulationSession::run() {
                 continue;
             }
             QString error;
+            if ((command.kind==DebuggerCommand::WriteRegister || command.kind==DebuggerCommand::SetLink) &&
+                (movie.active() || (command.kind==DebuggerCommand::WriteRegister && !paused))) {
+                publishDebugger(Localization::text(QStringLiteral(
+                    "Изменение доступно на паузе, вне записи и воспроизведения ввода.")));
+                continue;
+            }
+            if(command.kind==DebuggerCommand::SetLink) {
+                host.finishDebugFrame();finishFramePipeline();
+                const bool attached=host.debuggerAttached();
+                if(!host.setLinkCableEnabled(command.linkEnabled,error)) {publishDebugger(error);continue;}
+                clearHistory();clearAudio();resetMetrics();pacer.reset(nowNs());
+                rewind_.store(false);rewindStatus(false);frameRequested=false;
+                host.setLinkPresentationRole(1);
+                loaded_.store(host.loaded());
+                if(!host.loaded())emit gameClosed();
+                else {
+                    emit stateSlotsChanged(-1,host.occupiedStateSlots());
+                    if(!host.frame().isNull())presentHostFrame();
+                }
+                if(attached)host.debuggerAttach(error);
+                publishDebugger(error);continue;
+            }
             if (!host.debuggerCommand(command,error)) {publishDebugger(error);continue;}
+            if(command.kind==DebuggerCommand::WriteRegister) {
+                clearHistory();clearAudio();resetMetrics();
+            }
             if (command.kind==DebuggerCommand::Continue) {
                 paused=false;emit pausedChanged(false);clearAudio();pacer.reset(nowNs());
             } else if (command.kind==DebuggerCommand::Pause || command.kind==DebuggerCommand::StepInto ||

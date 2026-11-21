@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QMap>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QtGlobal>
 
@@ -15,12 +16,15 @@ struct DebuggerBreakpoint {
 };
 struct DebuggerCommand {
     enum Kind { Attach, Detach, Pause, Continue, StepInto, StepOver, StepOut,
-                Refresh, Configure, Navigate };
+                Refresh, Configure, Navigate, SetLink, WriteRegister };
     Kind kind = Refresh;
     quint32 cpu = 1, address = 0;
     bool followPc = true;
+    bool linkEnabled = false;
     QVector<DebuggerBreakpoint> breakpoints;
     quint32 editedBreakpointId = 0;
+    QString registerName;
+    quint32 registerValue = 0, registerMask = 0xffffffffu;
 };
 struct DebuggerSnapshot {
     quint64 generation = 0, frame = 0;
@@ -28,9 +32,13 @@ struct DebuggerSnapshot {
     quint32 selectedCpu = 1, eventCpu = 0, event = 0, address = 0, value = 0, accessSize = 0;
     QString status;
     QVector<kr_debug_cpu> cpus;
+    QVector<kr_debug_target> targets;
     QVector<kr_debug_instruction> instructions;
     QByteArray stack, stackValid;
     quint32 stackAddress = 0;
     QVector<DebuggerBreakpoint> breakpoints;
     QString gameKey;
+    bool canEdit = false;
+    QStringList writableRegisters;
+    bool linkSupported = false, linkEnabled = false;
 };

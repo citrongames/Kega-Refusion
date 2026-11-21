@@ -482,3 +482,37 @@ int kega32x_machine_set_state(Kega32xMachine *m,const Kega32xMachineState *state
     okay=kega32x_pwm_set_state(&m->pwm,&s->pwm);assert(okay);
     return okay;
 }
+
+
+/* Inspection never advances bus time, acknowledges MMIO, or synchronizes peers. */
+bool kega32x_machine_peek(Kega32xMachine *m,unsigned c,uint32_t address,uint8_t *value) {
+    uint32_t a=address>=0xc0000000?address:address&0xc7ffffff,off,v;
+    if(!m || c>1 || !value)return false;
+    if(a>=0xc0000000 && a<0xe0000000) {
+        *value=(uint8_t)read_words((uint16_t *)(void *)kega_sh2_native(m->cpu[c])->data_array,a&0xfff,1);
+        return true;
+    }
+    if(a&0xc0000000)return false;
+    switch(a&0x06000000) {
+    case 0:
+        off=a&0x3ffff;
+        if(off>=(c?1024u:2048u))return false;
+        *value=m->bios[c][off];return true;
+    case 0x02000000:
+        off=a&0x3fffff;
+        if(m->host.rom_pages && m->host.rom_pages[off>>16])
+            v=m->host.rom_pages[off>>16][(off&0xffff)>>1];
+        else {
+            if(!m->host.rom_read16 || !m->host.rom_fetch_is_pure ||
+               !m->host.rom_fetch_is_pure(m->host.userdata,off&~1u,2))return false;
+            v=m->host.rom_read16(m->host.userdata,off&~1u);
+        }
+        *value=(uint8_t)(v>>((off&1)?0:8));return true;
+    case 0x04000000:
+        v=kega32x_fb_read16(&m->bus,a);
+        *value=(uint8_t)(v>>((a&1)?0:8));return true;
+    case 0x06000000:
+        *value=(uint8_t)read_words(m->memory.sdram,a&0x3ffff,1);return true;
+    }
+    return false;
+}

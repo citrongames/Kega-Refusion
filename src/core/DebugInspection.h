@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QString>
+#include <QVector>
 #include <QtGlobal>
 
 // Copied snapshots only. MainWindow and the core worker share no live pointers.
@@ -12,6 +13,7 @@ struct DebugInspectionRequest {
     quint32 domain = KR_MEM_RAM;
     quint32 offset = 0;
     quint32 length = 256;
+    quint32 instance = 0;
 };
 struct DebugInspectionSnapshot {
     quint64 serial = 0;
@@ -23,5 +25,15 @@ struct DebugInspectionSnapshot {
     quint32 memoryDomain = 0, memoryOffset = 0;
     QByteArray memory;
     QHash<quint32, QByteArray> blocks; // requested video domains only
+    quint32 instance = 0, instanceCount = 1;
+    bool canEdit = false;
+    QVector<quint32> writableDomains;
     bool available() const { return status.isEmpty() && info.version == KR_INSPECT_VERSION; }
+};
+
+
+struct DebugMemoryWrite {
+    quint64 generation = 0;
+    quint32 instance = 0, domain = 0, offset = 0;
+    QByteArray before, after;
 };

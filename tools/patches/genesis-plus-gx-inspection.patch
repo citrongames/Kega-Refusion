@@ -279,12 +279,13 @@ diff --git a/core/sound/ym2612.c b/core/sound/ym2612.c
 diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
 --- a/core/vdp_ctrl.c
 +++ b/core/vdp_ctrl.c
-@@ -4026,3 +4026,37 @@
+@@ -4026,3 +4026,38 @@
      }
    }
  }
 +
 +#include "kegainspect/values.h"
++#include "kegainspect/vdp_write.inc"
 +
 +void kr_inspect_vdp(kr_inspect_info *info)
 +{

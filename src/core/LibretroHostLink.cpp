@@ -59,6 +59,7 @@ struct LibretroHost::LinkPair {
             host[i]->api_->link_connect(host[1-i]->api_->link_io(),yield,&endpoint[i]);
     }
     void run(bool video,bool audio) {
+        control=co_active();
         auto* previous=current;current=this;failure=nullptr;
         cycles[0]=cycles[1]=0;done[0]=done[1]=false;
         for(unsigned i=0;i<2;++i) {
@@ -90,9 +91,12 @@ const QImage& LibretroHost::spriteOwnership() const {
     return linkPeer_&&linkPresentationRole_==2?linkPeer_->spriteOwnership_:spriteOwnership_;
 }
 const QByteArray& LibretroHost::audio() const {
+    static const QByteArray pendingAudio;
+    if (debuggerFramePending()) return pendingAudio;
     return linkPeer_&&linkPresentationRole_==2?linkPeer_->audio_:audio_;
 }
 const QImage& LibretroHost::frameForLinkRole(int role) const {
+    if (const auto* previous = debuggerFramePreview(role)) return *previous;
     return linkPeer_&&role==2?linkPeer_->frame_:frame_;
 }
 double LibretroHost::aspectRatioForLinkRole(int role) const {
@@ -122,6 +126,7 @@ bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     if(!enabled) {
         stopLinkedPair();linkRequested_=false;buttons_.fill(0);
         if(loaded_) {applyControllerPorts(true);refreshRecordingIdentity();}
+        if (debugger_) { QString ignored; debuggerAttach(ignored); }
         return true;
     }
     linkRequested_=true;
@@ -129,9 +134,11 @@ bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     if(hardReset(error))return true;
     stopLinkedPair();linkRequested_=false;
     if(loaded_) {applyControllerPorts(true);refreshRecordingIdentity();}
+    if (debugger_) { QString ignored; debuggerAttach(ignored); }
     return false;
 }
 void LibretroHost::stopLinkedPair() {
+    debuggerDisconnectPeer();
     if(api_&&api_->link_connect)api_->link_connect(nullptr,nullptr,nullptr);
     if(linkPeer_&&linkPeer_->api_->link_connect)linkPeer_->api_->link_connect(nullptr,nullptr,nullptr);
     linkPair_.reset();

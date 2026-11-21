@@ -1,0 +1,147 @@
+diff --git a/core/cart_hw/svp/ssp16.c b/core/cart_hw/svp/ssp16.c
+--- a/core/cart_hw/svp/ssp16.c
++++ b/core/cart_hw/svp/ssp16.c
+@@ -342,6 +342,21 @@
+ static ssp1601_t *ssp = NULL;
+ static unsigned short *PC;
+ static int g_cycles;
++
++#include "../../kegadebug/hooks.h"
++
++/* The live PC is a native interpreter pointer while a slice runs. Keep the
++ * debugger view separate from the SSP register layout used by save states. */
++static int kr_debug_ssp_at_instruction;
++static unsigned kr_debug_ssp_slice_ticks;
++
++static void kr_debug_ssp_before_opcode(int allowance)
++{
++  kr_debug_ssp_at_instruction = 1;
++  kr_debug_ssp_slice_ticks = (unsigned)(allowance - g_cycles);
++  kr_debug_notify(KR_DEBUG_SSP1601, KR_DEBUG_EXEC, (uint16_t)GET_PC(), 0, 0);
++  kr_debug_ssp_at_instruction = 0;
++}
+ 
+ #ifdef USE_DEBUGGER
+ static int running = 0;
+@@ -1093,6 +1108,8 @@
+     int op;
+     u32 tmpv;
+ 
++    if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_EXEC))
++      kr_debug_ssp_before_opcode(cycles);
+     op = *PC++;
+ #ifdef USE_DEBUGGER
+     debug(GET_PC()-1, op);
+@@ -1328,3 +1345,112 @@
+ #endif
+ }
+ 
++
++static void kr_debug_ssp_register(kr_debug_cpu *out, const char *name,
++                                  unsigned digits, uint32_t value)
++{
++  kr_debug_reg *reg = &out->regs[out->count++];
++  snprintf(reg->name, sizeof(reg->name), "%s", name);
++  reg->value = value;
++  reg->digits = digits;
++}
++
++void kr_debug_ssp_state(kr_debug_cpu *out)
++{
++  const ssp1601_t *state = &svp->ssp1601;
++  const ssp_reg_t *gr = state->gr;
++  out->pc = kr_debug_ssp_at_instruction ? (uint16_t)GET_PC() : gr[SSP_PC].byte.h;
++  out->sp = gr[SSP_STACK].byte.h;
++  out->cycles = (mcycles_vdp / MCYCLES_PER_LINE) * (uint64_t)SVP_cycles;
++  if (kr_debug_ssp_at_instruction)
++    out->cycles += kr_debug_ssp_slice_ticks;
++
++  kr_debug_ssp_register(out, "X", 4, gr[SSP_X].byte.h);
++  kr_debug_ssp_register(out, "Y", 4, gr[SSP_Y].byte.h);
++  kr_debug_ssp_register(out, "A", 8, gr[SSP_A].v);
++  kr_debug_ssp_register(out, "AL", 4, gr[SSP_A].byte.l);
++  kr_debug_ssp_register(out, "ST", 4, gr[SSP_ST].byte.h);
++  kr_debug_ssp_register(out, "PC", 4, out->pc);
++  kr_debug_ssp_register(out, "SP", 1, out->sp);
++  kr_debug_ssp_register(out, "P", 8,
++      (uint32_t)((int64_t)(int16_t)gr[SSP_X].byte.h * (int16_t)gr[SSP_Y].byte.h * 2));
++  kr_debug_ssp_register(out, "PM0", 4, gr[SSP_PM0].byte.h);
++  kr_debug_ssp_register(out, "PM1", 4, gr[SSP_PM1].byte.h);
++  kr_debug_ssp_register(out, "PM2", 4, gr[SSP_PM2].byte.h);
++  kr_debug_ssp_register(out, "PM4", 4, gr[SSP_PM4].byte.h);
++  kr_debug_ssp_register(out, "XST", 4, gr[SSP_XST].byte.h);
++  kr_debug_ssp_register(out, "PMC", 8, gr[SSP_PMC].v);
++  kr_debug_ssp_register(out, "WAIT", 4, state->emu_status & SSP_WAIT_MASK);
++  for (unsigned i = 0; i < 8; ++i)
++  {
++    char name[] = {'R', (char)('0' + i), '\0'};
++    kr_debug_ssp_register(out, name, 2, state->ptr.r[i]);
++  }
++  for (unsigned i = 0; i < 6; ++i)
++  {
++    char name[] = {'S', (char)('0' + i), '\0'};
++    kr_debug_ssp_register(out, name, 4, state->stack[i]);
++  }
++}
++
++uint8_t kr_debug_ssp_peek(uint32_t byte_address)
++{
++  return READ_BYTE(svp->iram_rom, byte_address & 0x1ffff);
++}
++
++enum kr_debug_ssp_register_id {
++  KR_DEBUG_SSP_ACC = 8, KR_DEBUG_SSP_ACC_LOW, KR_DEBUG_SSP_X, KR_DEBUG_SSP_Y,
++  KR_DEBUG_SSP_STATUS, KR_DEBUG_SSP_PC, KR_DEBUG_SSP_SP, KR_DEBUG_SSP_INVALID
++};
++
++static unsigned kr_debug_ssp_register_id(const char *name)
++{
++  if (name[0] == 'R' && name[1] >= '0' && name[1] <= '7' && !name[2])
++    return (unsigned)(name[1] - '0');
++  if (!strcmp(name, "A")) return KR_DEBUG_SSP_ACC;
++  if (!strcmp(name, "AL")) return KR_DEBUG_SSP_ACC_LOW;
++  if (!strcmp(name, "X")) return KR_DEBUG_SSP_X;
++  if (!strcmp(name, "Y")) return KR_DEBUG_SSP_Y;
++  if (!strcmp(name, "ST")) return KR_DEBUG_SSP_STATUS;
++  if (!strcmp(name, "PC")) return KR_DEBUG_SSP_PC;
++  if (!strcmp(name, "SP")) return KR_DEBUG_SSP_SP;
++  return KR_DEBUG_SSP_INVALID;
++}
++
++bool kr_debug_ssp_writable(const char *name)
++{
++  return kr_debug_ssp_register_id(name) != KR_DEBUG_SSP_INVALID;
++}
++
++bool kr_debug_ssp_write(const char *name, uint32_t value)
++{
++  ssp1601_t *state = &svp->ssp1601;
++  const unsigned reg = kr_debug_ssp_register_id(name);
++  if (reg < KR_DEBUG_SSP_ACC)
++  {
++    if (value > 0xff) return false;
++    state->ptr.r[reg] = value;
++    return true;
++  }
++
++  if (reg != KR_DEBUG_SSP_ACC && value > 0xffff) return false;
++  switch (reg)
++  {
++    case KR_DEBUG_SSP_ACC: state->gr[SSP_A].v = value; break;
++    case KR_DEBUG_SSP_ACC_LOW: state->gr[SSP_A].byte.l = value; break;
++    case KR_DEBUG_SSP_X: state->gr[SSP_X].byte.h = value; break;
++    case KR_DEBUG_SSP_Y: state->gr[SSP_Y].byte.h = value; break;
++    case KR_DEBUG_SSP_STATUS: state->gr[SSP_ST].byte.h = value; break;
++    case KR_DEBUG_SSP_PC:
++      state->gr[SSP_PC].byte.h = value;
++      if (kr_debug_ssp_at_instruction) SET_PC(value);
++      break;
++    case KR_DEBUG_SSP_SP:
++      if (value > sizeof(state->stack) / sizeof(state->stack[0])) return false;
++      state->gr[SSP_STACK].byte.h = value;
++      break;
++    default:
++      return false;
++  }
++  return true;
++}

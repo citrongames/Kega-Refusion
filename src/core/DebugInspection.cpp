@@ -10,16 +10,21 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
     out.parts = request.parts & 15u;
     out.generation = inspectionGeneration_;
     out.frame = runClock_.frames;
+    out.instance = request.instance;
+    out.instanceCount = linkPeer_ ? 2u : 1u;
     if (!loaded_) {
         out.status = Localization::text(QStringLiteral("Игра не загружена"));
         return out;
     }
-    if (linkCableEnabled()) {
-        out.status = Localization::text(QStringLiteral("Просмотр связанных консолей пока не поддерживается."));
+    const auto* target = request.instance == 0 ? this : request.instance == 1 ? linkPeer_.get() : nullptr;
+    if (!target || !target->loaded_) {
+        out.status = Localization::text(QStringLiteral("Выбранная консоль недоступна."));
         return out;
     }
-    if (!api_->inspect_info || !api_->inspect_read ||
-        !api_->inspect_info(KR_INSPECT_VERSION,out.parts,&out.info,sizeof(out.info)) ||
+    const Activation scope(const_cast<LibretroHost*>(target));
+    const auto& api = *target->api_;
+    if (!api.inspect_info || !api.inspect_read ||
+        !api.inspect_info(KR_INSPECT_VERSION,out.parts,&out.info,sizeof(out.info)) ||
         out.info.version != KR_INSPECT_VERSION || out.info.struct_size != sizeof(out.info) ||
         out.info.domain_count > KR_INSPECT_MAX_DOMAINS ||
         out.info.value_count > KR_INSPECT_MAX_VALUES) {
@@ -28,8 +33,13 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
         return out;
     }
     out.info.system[sizeof(out.info.system)-1] = 0;
-    for (unsigned i=0; i<out.info.domain_count; ++i)
-        out.info.domains[i].name[sizeof(out.info.domains[i].name)-1] = 0;
+    for (unsigned i=0; i<out.info.domain_count; ++i) {
+        auto& domain = out.info.domains[i];
+        domain.name[sizeof(domain.name)-1] = 0;
+        if ((out.parts & KR_INSPECT_MEMORY) && api.inspect_write && api.inspect_writable &&
+            api.inspect_writable(domain.id))
+            out.writableDomains.append(domain.id);
+    }
     for (unsigned i=0; i<out.info.value_count; ++i) {
         auto& value = out.info.values[i];
         value.device[sizeof(value.device)-1] = 0;
@@ -40,7 +50,7 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
         if (offset >= domain.size || !length) return QByteArray{};
         const auto size = std::min({length,domain.size-offset,quint32(KR_INSPECT_MAX_READ)});
         QByteArray bytes(qsizetype(size),Qt::Uninitialized);
-        const auto actual = api_->inspect_read(domain.id,offset,bytes.data(),size);
+        const auto actual = api.inspect_read(domain.id,offset,bytes.data(),size);
         if (actual > size) return QByteArray{};
         bytes.resize(qsizetype(actual));
         return bytes;
@@ -72,4 +82,38 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
         }
     }
     return out;
+}
+
+
+bool LibretroHost::writeInspectionMemory(const DebugMemoryWrite& request, QString& error) {
+    error.clear();
+    if (!loaded_ || debuggerFramePending() || request.generation != inspectionGeneration_) {
+        error = Localization::text(QStringLiteral("Обновите снимок памяти перед записью."));
+        return false;
+    }
+    auto* target = request.instance == 0 ? this : request.instance == 1 ? linkPeer_.get() : nullptr;
+    if (!target || !target->loaded_) {
+        error = Localization::text(QStringLiteral("Выбранная консоль недоступна."));
+        return false;
+    }
+    const Activation scope(target);
+    const auto& api = *target->api_;
+    const auto length = request.after.size();
+    if (length <= 0 || length > KR_INSPECT_MAX_WRITE || request.before.size() != length ||
+        !api.inspect_writable || !api.inspect_read || !api.inspect_write || !api.inspect_writable(request.domain)) {
+        error = Localization::text(QStringLiteral("Эта область памяти доступна только для чтения."));
+        return false;
+    }
+    char before[KR_INSPECT_MAX_WRITE];
+    if (api.inspect_read(request.domain, request.offset, before, size_t(length)) != size_t(length) ||
+        std::memcmp(before, request.before.constData(), size_t(length)) != 0) {
+        error = Localization::text(QStringLiteral("Байты памяти изменились. Обновите снимок."));
+        return false;
+    }
+    if (api.inspect_write(request.domain, request.offset, request.after.constData(), size_t(length)) != size_t(length)) {
+        error = Localization::text(QStringLiteral("Значение не подходит для выбранной области памяти."));
+        return false;
+    }
+    ++inspectionGeneration_;
+    return true;
 }

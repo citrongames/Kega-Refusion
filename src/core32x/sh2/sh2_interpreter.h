@@ -11,6 +11,12 @@ extern "C" {
 
 typedef struct KegaSh2 KegaSh2;
 struct SH2_;
+/* Runtime-only debugger attachment; events 1/2/4 = execute/read/write.
+ * A callback may suspend its same-thread stack, never recurse into this CPU.
+ * Non-null selects the instruction interpreter until detached. */
+typedef void (*KegaSh2DebugCallback)(void *, unsigned, uint32_t, uint32_t, unsigned);
+void kega_sh2_set_debug(KegaSh2 *, KegaSh2DebugCallback, void *, unsigned);
+
 
 /* Memory callbacks use SH-2 logical addresses and numeric big-endian values.
  * They may query cycles, add bus wait cycles, change IRQs, or end this slice.

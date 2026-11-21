@@ -33,11 +33,17 @@ struct LibretroHost::Api {
     unsigned (*sms_pause_state_version)() = nullptr;
     bool (*sms_irata_flash_active)() = nullptr;
     bool (*debug_connect)(kr_debug_callback,void*,unsigned,unsigned) = nullptr;
+    size_t (*debug_targets)(unsigned,kr_debug_target*,size_t) = nullptr;
+    bool (*debug_connect_v2)(kr_debug_callback,void*,const unsigned*,size_t) = nullptr;
+    bool (*debug_register_writable)(unsigned,const char*) = nullptr;
+    bool (*debug_write_register)(unsigned,const char*,uint32_t) = nullptr;
     bool (*debug_state)(unsigned,kr_debug_cpu*,size_t) = nullptr;
     size_t (*debug_peek)(unsigned,uint32_t,uint8_t*,uint8_t*,size_t) = nullptr;
     bool (*debug_disassemble)(unsigned,uint32_t,kr_debug_instruction*,size_t) = nullptr;
     bool (*inspect_info)(unsigned,unsigned,kr_inspect_info*,size_t) = nullptr;
     size_t (*inspect_read)(unsigned,uint32_t,void*,size_t) = nullptr;
+    bool (*inspect_writable)(unsigned) = nullptr;
+    size_t (*inspect_write)(unsigned,uint32_t,const void*,size_t) = nullptr;
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
     void (*debug_backdrop)(uint32_t) = nullptr;
     bool (*multitap)(unsigned, unsigned, unsigned) = nullptr;

@@ -21,9 +21,12 @@ public:
     DebugInspectionRequest request() const;
     void setSnapshot(const DebugInspectionSnapshot& snapshot);
     void navigateTo(quint32 domain, quint32 offset);
+    void finishMemoryWrite(const QString& error);
 
 signals:
     void inspectionChanged();
+    void writeRequested(const DebugMemoryWrite& request);
+    void inspectionInstanceChanged();
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -31,6 +34,10 @@ protected:
 
 private:
     void changeOffset(quint32 offset);
+    void changeInstance(quint32 instance);
+    bool canWrite(int width) const;
+    void editMemory(int width);
+    bool watchBigEndian() const;
     void updatePage(const QByteArray& bytes);
     void updateNavigation();
     void updateWatch();
@@ -39,9 +46,12 @@ private:
     DebugStateInspector* hardware_ = nullptr;
     QLabel* status_ = nullptr;
     QComboBox* domains_ = nullptr;
+    QComboBox* instances_ = nullptr;
     QLineEdit* offset_ = nullptr;
     QPushButton* previous_ = nullptr;
     QPushButton* next_ = nullptr;
+    QPushButton* edit_ = nullptr;
+    QLabel* editStatus_ = nullptr;
     QLabel* value_ = nullptr;
     QComboBox* width_ = nullptr;
     QComboBox* order_ = nullptr;
@@ -52,6 +62,8 @@ private:
     quint32 size_ = 0;
     quint32 selection_ = 0;
     quint32 page_ = 0;
+    quint32 instance_ = 0;
+    bool canEdit_ = false, writable_ = false, writePending_ = false;
     bool bigEndian_ = false;
     bool available_ = false;
 };

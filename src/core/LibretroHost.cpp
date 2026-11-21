@@ -220,11 +220,17 @@ bool LibretroHost::initialize(QString& error) {
     api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
     api_->debug_connect = reinterpret_cast<decltype(api_->debug_connect)>(library_.resolve("retro_kegarefusion_debug_connect"));
+    api_->debug_targets = reinterpret_cast<decltype(api_->debug_targets)>(library_.resolve("retro_kegarefusion_debug_targets_v2"));
+    api_->debug_connect_v2 = reinterpret_cast<decltype(api_->debug_connect_v2)>(library_.resolve("retro_kegarefusion_debug_connect_v2"));
+    api_->debug_register_writable = reinterpret_cast<decltype(api_->debug_register_writable)>(library_.resolve("retro_kegarefusion_debug_register_writable_v2"));
+    api_->debug_write_register = reinterpret_cast<decltype(api_->debug_write_register)>(library_.resolve("retro_kegarefusion_debug_write_register_v2"));
     api_->debug_state = reinterpret_cast<decltype(api_->debug_state)>(library_.resolve("retro_kegarefusion_debug_state"));
     api_->debug_peek = reinterpret_cast<decltype(api_->debug_peek)>(library_.resolve("retro_kegarefusion_debug_peek"));
     api_->debug_disassemble = reinterpret_cast<decltype(api_->debug_disassemble)>(library_.resolve("retro_kegarefusion_debug_disassemble"));
     api_->inspect_info = reinterpret_cast<decltype(api_->inspect_info)>(library_.resolve("retro_kegarefusion_inspect_info"));
     api_->inspect_read = reinterpret_cast<decltype(api_->inspect_read)>(library_.resolve("retro_kegarefusion_inspect_read"));
+    api_->inspect_writable = reinterpret_cast<decltype(api_->inspect_writable)>(library_.resolve("retro_kegarefusion_inspect_writable"));
+    api_->inspect_write = reinterpret_cast<decltype(api_->inspect_write)>(library_.resolve("retro_kegarefusion_inspect_write"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
     api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
     api_->multitap = reinterpret_cast<decltype(api_->multitap)>(library_.resolve("retro_kegarefusion_multitap"));

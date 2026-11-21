@@ -41,6 +41,7 @@ public:
     void setGameGearLcd(bool enabled);
     void requestInspection(const DebugInspectionRequest& request);
     bool takeInspection(DebugInspectionSnapshot& snapshot);
+    bool writeDebugMemory(const DebugMemoryWrite& request);
     void debuggerCommand(const DebuggerCommand& command);
     bool takeDebuggerSnapshot(DebuggerSnapshot& snapshot);
     void setDebugMasks(quint32 video, quint64 audio);
@@ -137,6 +138,7 @@ public:
     bool hasGame() const { return loaded_.load(); }
 signals:
     void debuggerReady();
+    void debugMemoryWriteFinished(const QString& error);
     void networkQualityChanged(const QJsonObject& quality);
     void networkModeFailed(const QString& error);
     void networkModeApplied(int mode);
@@ -226,6 +228,8 @@ private:
     DebuggerSnapshot debuggerSnapshot_;
     bool debuggerSnapshotPending_ = false;
     DebugInspectionRequest inspectionRequest_;
+    std::optional<DebugMemoryWrite> inspectionWrite_;
+    std::atomic_bool inspectionWriteRequested_{false};
     DebugInspectionSnapshot inspectionSnapshot_;
     std::atomic_bool inspectionRequested_{false};
     bool inspectionSnapshotPending_ = false;

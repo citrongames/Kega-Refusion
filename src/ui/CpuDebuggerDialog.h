@@ -9,6 +9,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QGroupBox;
 class QHideEvent;
 class QLabel;
 class QLineEdit;
@@ -45,8 +46,17 @@ private:
     void followProgramCounter();
     void updateControls();
     void updateCpuChoices();
+    void updateBreakEventAvailability();
+    QString cpuName(quint32 cpu) const;
+    int addressDigits(quint32 cpu) const;
+    quint32 addressMask(quint32 cpu) const;
     void updateCode();
     void updateState();
+    void updateFlags(const kr_debug_cpu* state, const kr_debug_target* target);
+    bool canEditRegister(const QString& name) const;
+    void editRegister(int row);
+    void editFlag(size_t flag, bool checked);
+    void writeRegister(const QString& name, quint32 value, quint32 mask);
     void updateBreakpoints();
     void editBreakpoint(const DebuggerBreakpoint* breakpoint);
     void saveBreakpoint();
@@ -62,6 +72,7 @@ private:
     QLabel* feedback_ = nullptr;
     QLabel* cpuLabel_ = nullptr;
     QComboBox* cpu_ = nullptr;
+    QCheckBox* link_ = nullptr;
     std::array<QPushButton*, 5> execution_{};
     QLineEdit* address_ = nullptr;
     QPushButton* go_ = nullptr;
@@ -69,7 +80,10 @@ private:
     QPushButton* import_ = nullptr;
     QComboBox* bookmarks_ = nullptr;
     QTableWidget* code_ = nullptr;
+    QTabWidget* stateTabs_ = nullptr;
     QTableWidget* registers_ = nullptr;
+    QGroupBox* flags_ = nullptr;
+    std::array<QCheckBox*, 8> flagBits_{};
     QPlainTextEdit* stack_ = nullptr;
     QTableWidget* breakpoints_ = nullptr;
     QWidget* breakpointEditor_ = nullptr;

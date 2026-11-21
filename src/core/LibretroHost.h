@@ -76,6 +76,7 @@ public:
     struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
     DebugCapabilities debugCapabilities() const;
     DebugInspectionSnapshot inspect(const DebugInspectionRequest& request) const;
+    bool writeInspectionMemory(const DebugMemoryWrite& request, QString& error);
     bool debuggerAttach(QString& error);
     void debuggerDetach();
     bool debuggerAttached() const;
@@ -203,6 +204,8 @@ private:
     struct DebugExecution;
     struct DebugExecutionDeleter { void operator()(DebugExecution*) const; };
     std::unique_ptr<DebugExecution,DebugExecutionDeleter> debugger_;
+    void debuggerDisconnectPeer();
+    const QImage* debuggerFramePreview(int role) const;
     struct LinkPair;
     std::unique_ptr<LibretroHost> linkPeer_;
     struct LinkPairDeleter { void operator()(LinkPair*) const; };
