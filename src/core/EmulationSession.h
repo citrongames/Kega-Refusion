@@ -1,6 +1,7 @@
 #pragma once
 #include "ExpansionMode.h"
 #include "DebugInspection.h"
+#include "DebugExecution.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -40,6 +41,8 @@ public:
     void setGameGearLcd(bool enabled);
     void requestInspection(const DebugInspectionRequest& request);
     bool takeInspection(DebugInspectionSnapshot& snapshot);
+    void debuggerCommand(const DebuggerCommand& command);
+    bool takeDebuggerSnapshot(DebuggerSnapshot& snapshot);
     void setDebugMasks(quint32 video, quint64 audio);
     void setDebugBackdrop(quint32 rgb);
     void setDebugAudioGain(unsigned channel, unsigned percent);
@@ -133,6 +136,7 @@ public:
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void debuggerReady();
     void networkQualityChanged(const QJsonObject& quality);
     void networkModeFailed(const QString& error);
     void networkModeApplied(int mode);
@@ -217,6 +221,10 @@ private:
                       const QRectF& inputViewport = {});
     QString corePath_, dataPath_;
     std::mutex mutex_, videoMutex_, inspectionMutex_;
+    std::mutex debuggerMutex_;
+    std::deque<DebuggerCommand> debuggerCommands_;
+    DebuggerSnapshot debuggerSnapshot_;
+    bool debuggerSnapshotPending_ = false;
     DebugInspectionRequest inspectionRequest_;
     DebugInspectionSnapshot inspectionSnapshot_;
     std::atomic_bool inspectionRequested_{false};

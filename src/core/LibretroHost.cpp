@@ -219,6 +219,10 @@ bool LibretroHost::initialize(QString& error) {
     api_->set_firecore_dmc_pcm = reinterpret_cast<decltype(api_->set_firecore_dmc_pcm)>(library_.resolve("retro_kegarefusion_set_firecore_dmc_pcm"));
     api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
+    api_->debug_connect = reinterpret_cast<decltype(api_->debug_connect)>(library_.resolve("retro_kegarefusion_debug_connect"));
+    api_->debug_state = reinterpret_cast<decltype(api_->debug_state)>(library_.resolve("retro_kegarefusion_debug_state"));
+    api_->debug_peek = reinterpret_cast<decltype(api_->debug_peek)>(library_.resolve("retro_kegarefusion_debug_peek"));
+    api_->debug_disassemble = reinterpret_cast<decltype(api_->debug_disassemble)>(library_.resolve("retro_kegarefusion_debug_disassemble"));
     api_->inspect_info = reinterpret_cast<decltype(api_->inspect_info)>(library_.resolve("retro_kegarefusion_inspect_info"));
     api_->inspect_read = reinterpret_cast<decltype(api_->inspect_read)>(library_.resolve("retro_kegarefusion_inspect_read"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
@@ -780,6 +784,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     return true;
 }
 void LibretroHost::unload() {
+    debuggerDetach();
     ++inspectionGeneration_;
     while (rewindPreviewDepth_) endRewindPreview();
     runClock_ = {};
@@ -974,6 +979,7 @@ void LibretroHost::runRewindPreviewFrame(bool renderVideo, bool singleFieldFallb
     }
 }
 void LibretroHost::reset() {
+    finishDebugFrame();
     ++inspectionGeneration_;
     runClock_ = {};
     spriteOwnership_ = {};
@@ -1032,6 +1038,7 @@ bool LibretroHost::isMasterSystem() const {
     return contentExtension_=="sms";
 }
 bool LibretroHost::hardReset(QString& error, bool applyPending) {
+    finishDebugFrame();
     ++inspectionGeneration_;
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
@@ -1127,6 +1134,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
             if (bytes) std::memcpy(bytes,peerBattery[i].constData(),size_t(peerBattery[i].size()));
         }
     }
+    if (debugger_) { QString ignored; debuggerAttach(ignored); }
     return true;
 }
 Cheats::Platform LibretroHost::cheatPlatform() const {

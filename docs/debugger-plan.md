@@ -2,7 +2,7 @@
 
 Agreed with the user on 2026-11-20. This is the implementation roadmap, not a
 description of shipped features. The user authorized starting implementation on
-2026-11-21; the current batch is Phase 1.
+2026-11-21; the current batch is Phase 2.
 
 Planning baseline: release 0.28.0, repository a5edb31. The plan was committed as
 28c61f9 before implementation. See [debug-inspection.md](debug-inspection.md)
@@ -13,13 +13,18 @@ for the delivered interface and explicit scope limitations.
 - [x] Research reference debuggers and inspect the current architecture.
 - [x] Agree on scope, architecture and delivery order; preserve this plan.
 - [x] Phase 1: common inspection interface and memory, graphics and audio viewers.
-- [ ] Phase 2: 68000/Z80 debugger with resumable execution.
+- [x] Phase 2: 68000/Z80 debugger with resumable execution.
 - [ ] Phase 3: coordinated debugging of expansions, special hardware and link peers.
 - [ ] Phase 4: integrated tracing, hardware timeline, code/data coverage and pixel provenance.
 
 Phase 1 completed on 2026-11-21 with the scope and limits recorded in
 [debug-inspection.md](debug-inspection.md) and
-[verification](debugger-phase1-verification.md). Next task when requested: Phase 2.
+[verification](debugger-phase1-verification.md).
+Phase 2 completed on 2026-11-21; see [CPU debugger](debug-execution.md) and
+[verification](debugger-phase2-verification.md). Next task when requested: Phase 3.
+Memory/register writes, physical-bank-aware labels, persistent debug projects,
+scanline/interrupt run controls and reverse-instruction execution remain later
+work; current CPU controls and safe peeks do not imply those features exist.
 Update this checklist and
 append concrete verification evidence after each completed phase. Do not mark a
 whole phase complete on the basis of one representative system. Preserve

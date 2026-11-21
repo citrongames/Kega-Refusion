@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "MainWindow.h"
+#include "CpuDebuggerDialog.h"
 #include "DebugDialogs.h"
 #include "DebugInspectorWidgets.h"
 #include "AudioOutput.h"
@@ -366,11 +367,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateMovieActions();
         updateGameSpeedActions();
         updateGunPresentation();
+        updateCpuDebugger();
         updateInputEnabled();
     });
     connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) {
         updateGunPresentation();
         updateGameSpeedActions();
+        updateCpuDebugger();
     });
     debugAudioGains_.fill(100);
     buildMenus();
@@ -387,6 +390,16 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             debugGraphicsDialog_->setSnapshot(snapshot);
         if (debugAudioDialog_ && debugAudioDialog_->isVisible())
             debugAudioDialog_->setSnapshot(snapshot);
+    });
+    debuggerTimer_ = new QTimer(this);
+    debuggerTimer_->setInterval(100);
+    connect(debuggerTimer_, &QTimer::timeout, this, &MainWindow::refreshCpuDebugger);
+    connect(&session_, &EmulationSession::debuggerReady, this, [this] {
+        DebuggerSnapshot snapshot;
+        if (!session_.takeDebuggerSnapshot(snapshot) || !cpuDebuggerDialog_ ||
+            !cpuDebuggerDialog_->isVisible() || !cpuDebuggerBlockedReason().isEmpty()) return;
+        if (!snapshot.attached && !snapshot.status.isEmpty()) debuggerTimer_->stop();
+        cpuDebuggerDialog_->setSnapshot(snapshot);
     });
     refreshCommandShortcuts();
     connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
@@ -758,6 +771,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 }
 
 MainWindow::~MainWindow() {
+    if (debuggerTimer_) debuggerTimer_->stop();
+    if (cpuDebuggerDialog_) {
+        disconnect(cpuDebuggerDialog_, nullptr, this, nullptr);
+        DebuggerCommand request;
+        request.kind = DebuggerCommand::Detach;
+        session_.debuggerCommand(request);
+    }
     if (inspectionTimer_) inspectionTimer_->stop();
     session_.requestInspection({});
 #ifdef Q_OS_WIN
@@ -1336,6 +1356,10 @@ void MainWindow::buildMenus() {
     debugMenu_ = menuBar()->addMenu(Localization::text(QStringLiteral("&Отладка")));
     debugMenu_->setObjectName(QStringLiteral("debugMenu"));
     debugMenu_->menuAction()->setVisible(false);
+    cpuDebuggerAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Отладчик процессоров…")));
+    cpuDebuggerAction_->setObjectName(QStringLiteral("cpuDebuggerAction"));
+    cpuDebuggerAction_->setEnabled(false);
+    connect(cpuDebuggerAction_, &QAction::triggered, this, &MainWindow::showCpuDebugger);
     debugGraphicsAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Графика…")));
     debugGraphicsAction_->setObjectName(QStringLiteral("debugGraphicsAction"));
     connect(debugGraphicsAction_, &QAction::triggered, this, &MainWindow::showDebugGraphics);
@@ -1453,6 +1477,7 @@ void MainWindow::applyDebugMasks() {
 }
 
 void MainWindow::updateDebugDialogs() {
+    updateCpuDebugger();
     if (debugMemoryAction_)
         debugMemoryAction_->setEnabled(session_.hasGame() && !loading_ &&
                                        !videoExporting_ && !achievementsHardcore_);
@@ -1540,6 +1565,69 @@ void MainWindow::showDebugMemory() {
     debugMemoryDialog_->raise();
     debugMemoryDialog_->activateWindow();
     scheduleInspection();
+}
+
+QString MainWindow::cpuDebuggerBlockedReason() const {
+    if (loading_) return Localization::text(QStringLiteral("Загрузка…"));
+    if (!session_.hasGame()) return Localization::text(QStringLiteral("Игра не загружена"));
+    if (achievementsHardcore_ || videoExporting_ || session_.networkActive() ||
+        (netplay_ && netplay_->active()))
+        return Localization::text(QStringLiteral("Отладчик недоступен в Hardcore, сетевой игре и при экспорте видео."));
+    return {};
+}
+
+void MainWindow::showCpuDebugger() {
+    if (!cpuDebuggerBlockedReason().isEmpty()) return;
+    if (!cpuDebuggerDialog_) {
+        cpuDebuggerDialog_ = new CpuDebuggerDialog(this);
+        connect(cpuDebuggerDialog_, &CpuDebuggerDialog::command, this, [this](const DebuggerCommand& command) {
+            if (command.kind == DebuggerCommand::Detach) {
+                debuggerTimer_->stop();
+            } else if (!cpuDebuggerBlockedReason().isEmpty()) {
+                return;
+            } else if (command.kind == DebuggerCommand::Attach) {
+                debuggerTimer_->start();
+            }
+            session_.debuggerCommand(command);
+        });
+    }
+    cpuDebuggerDialog_->show();
+    cpuDebuggerDialog_->raise();
+    cpuDebuggerDialog_->activateWindow();
+}
+
+void MainWindow::updateCpuDebugger() {
+    const QString blocked = cpuDebuggerBlockedReason();
+    if (cpuDebuggerAction_) cpuDebuggerAction_->setEnabled(blocked.isEmpty());
+    if (!debuggerTimer_ || !cpuDebuggerDialog_ || !cpuDebuggerDialog_->isVisible()) return;
+    if (!blocked.isEmpty()) {
+        if (debuggerTimer_->isActive()) {
+            debuggerTimer_->stop();
+            DebuggerCommand request;
+            request.kind = DebuggerCommand::Detach;
+            session_.debuggerCommand(request);
+        }
+        DebuggerSnapshot snapshot;
+        snapshot.status = blocked;
+        cpuDebuggerDialog_->setSnapshot(snapshot);
+    } else if (!debuggerTimer_->isActive()) {
+        auto request = cpuDebuggerDialog_->refreshCommand();
+        request.kind = DebuggerCommand::Attach;
+        session_.debuggerCommand(request);
+        debuggerTimer_->start();
+    }
+}
+
+void MainWindow::refreshCpuDebugger() {
+    if (!cpuDebuggerDialog_ || !cpuDebuggerDialog_->isVisible()) {
+        debuggerTimer_->stop();
+        return;
+    }
+    if (!cpuDebuggerBlockedReason().isEmpty()) {
+        updateCpuDebugger();
+        return;
+    }
+    session_.debuggerCommand(cpuDebuggerDialog_->refreshCommand());
 }
 
 void MainWindow::scheduleInspection() {
@@ -3385,7 +3473,8 @@ void MainWindow::updateInputEnabled() {
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
     bool debugWindowActive = false;
     for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
-        if (active == debugGraphicsDialog_ || active == debugAudioDialog_ || active == debugMemoryDialog_) {
+        if (active == debugGraphicsDialog_ || active == debugAudioDialog_ ||
+            active == debugMemoryDialog_ || active == cpuDebuggerDialog_) {
             debugWindowActive = true;
             break;
         }

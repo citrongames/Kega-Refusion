@@ -64,3 +64,12 @@ The x86-64 context switch implementation is libco by byuu (public domain), from 
 ## Minimal FFmpeg recording runtime
 
 FFmpeg 7.1.2, LGPL-2.1-or-later, source: https://github.com/FFmpeg/FFmpeg/tree/n7.1.2. Both platforms build only PNG/AAC encoders and the MOV muxer (plus its upstream internal dependencies), with x86 assembly and runtime CPU dispatch. No GPL or nonfree options are enabled. Pinned source hashes and configuration are in `tools/prepare-video.py`; the distribution includes `licenses/ffmpeg` with LGPL text, source and rebuild instructions, and actual build configuration. PNG uses zlib. Qt multimedia plugins are not distributed; native Qt audio remains available.
+
+
+## Guest CPU debugger
+
+The read-only instruction decoders use Karl Stenerud's Musashi MC68000
+disassembler (MIT-style terms) and Juergen Buchmueller's MAME Z80 opcode
+tables (BSD-3-Clause). Pinned revisions, original file hashes, adaptation
+notes and upstream links are in [src/coredebug/PROVENANCE.md](src/coredebug/PROVENANCE.md).
+Both binary packages include the full notices under `licenses/cpu-debugger`.

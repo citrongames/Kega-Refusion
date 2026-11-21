@@ -157,6 +157,20 @@ void EmulationSession::enqueue(Command command) {
         commands_.push_back(std::move(command));
     }
 }
+void EmulationSession::debuggerCommand(const DebuggerCommand& command) {
+    if (command.breakpoints.size()>128) return;
+    std::lock_guard<std::mutex> lock(debuggerMutex_);
+    if (!debuggerCommands_.empty() && debuggerCommands_.back().kind==command.kind &&
+        (command.kind==DebuggerCommand::Refresh || command.kind==DebuggerCommand::Navigate ||
+         command.kind==DebuggerCommand::Configure)) debuggerCommands_.back()=command;
+    else if (debuggerCommands_.size()<64) debuggerCommands_.push_back(command);
+}
+bool EmulationSession::takeDebuggerSnapshot(DebuggerSnapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(debuggerMutex_);
+    if (!debuggerSnapshotPending_) return false;
+    snapshot=std::move(debuggerSnapshot_);debuggerSnapshot_={};
+    debuggerSnapshotPending_=false;return true;
+}
 void EmulationSession::requestInspection(const DebugInspectionRequest& request) {
     // A single replaceable request, separate from gameplay/network commands.
     std::lock_guard<std::mutex> lock(inspectionMutex_);
@@ -1089,6 +1103,118 @@ void EmulationSession::run() {
         refreshMegaLdSide();
         return true;
     };
+    auto processInspection = [&] {
+        if (inspectionRequested_.load()) {
+            DebugInspectionRequest request;
+            {
+                std::lock_guard<std::mutex> lock(inspectionMutex_);
+                request = inspectionRequest_;
+                inspectionRequested_.store(false);
+            }
+            if (request.parts) {
+                DebugInspectionSnapshot snapshot;
+                if (achievementHardcore || videoExport) {
+                    snapshot.serial = request.serial;
+                    snapshot.parts = request.parts;
+                    snapshot.generation = host.inspectionGeneration();
+                    snapshot.status = Localization::text(achievementHardcore
+                        ? QStringLiteral("Просмотр состояния недоступен в Hardcore.")
+                        : QStringLiteral("Просмотр состояния недоступен при экспорте видео."));
+                } else {
+                    snapshot = host.inspect(request);
+                }
+                bool notify = false;
+                {
+                    std::lock_guard<std::mutex> lock(inspectionMutex_);
+                    // Discard a result if its viewer closed or changed meanwhile.
+                    if (inspectionRequest_.parts && inspectionRequest_.serial == request.serial) {
+                        inspectionSnapshot_ = std::move(snapshot);
+                        notify = !inspectionSnapshotPending_;
+                        inspectionSnapshotPending_ = true;
+                    }
+                }
+                if (notify) emit inspectionReady();
+            }
+        }
+    };
+    struct PendingDebugFrame {
+        bool active=false, manual=false, fast=false, present=true;
+        int speedPercent=100, factor=1;
+    } debugFrame;
+    auto publishDebugger = [&](const QString& error = QString()) {
+        auto snapshot=host.debuggerSnapshot();
+        if (snapshot.attached && !snapshot.partialFrame && paused && !host.debuggerRunRequested()) snapshot.stopped=true;
+        if (!error.isEmpty()) snapshot.status=error;
+        bool notify;
+        {
+            std::lock_guard<std::mutex> lock(debuggerMutex_);
+            debuggerSnapshot_=std::move(snapshot);
+            notify=!debuggerSnapshotPending_;debuggerSnapshotPending_=true;
+        }
+        if (notify) emit debuggerReady();
+    };
+    auto finishFramePipeline = [&] {
+        if (!debugFrame.active) return;
+        const auto context=debugFrame;debugFrame.active=false;
+        if (context.manual) {
+            captureVideo();
+            if (!achievementSuppressed && !networkMode) achievements.frame();
+            afterFrame();
+            if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
+            if (optionsPending) optionsPending = false;
+            if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
+                history.clear(); historyHealthy = false;
+            }
+            presentHostFrame();
+            clearAudio(); pacer.reset(nowNs());
+            if (host.debuggerRunRequested()) waiter.waitUntil(nowNs()+qint64(1000000000.0/host.fps()));
+            return;
+        }
+        const bool fast=context.fast, present=context.present;
+        const int speedPercent=context.speedPercent, factor=context.factor;
+        captureVideo();
+        if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
+        if (!achievementSuppressed && !networkMode) achievements.frame();
+        afterFrame();
+        if (host.isCd() && host.discEjected() != lastDiscEjected) {
+            clearHistory(); discStatus();
+        }
+        if (optionsPending) {
+            optionsPending = false; clearAudio(); pacer.reset(nowNs());
+        }
+        if (!fast && historyEnabled && historyHealthy) {
+            if (!recordHistory()) {
+                history.clear(); historyHealthy = false;
+                emit notification(Localization::text(QStringLiteral("История перемотки недоступна для текущей игры.")));
+            }
+        }
+        if (present) {
+            presentHostFrame();
+            nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
+        }
+        if (!fast && !paused && !host.audio().isEmpty()) {
+            if (speedPercent == 100) emit audioSamples(host.audio(),host.sampleRate());
+            else if (speedPercent > 100) emit audioSamples(resampler.convert(host.audio(),speedPercent),host.sampleRate());
+            else slowAudio = resampler.convert(host.audio(),speedPercent);
+        } else slowAudio.clear();
+        const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
+            audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
+        if (factor != 0) {
+            const auto period = qint64(100000000000.0 * clockScale / (host.fps() * factor * speedPercent));
+            const auto deadline = pacer.next(nowNs(),period);
+            if (speedPercent < 100 && !paused) {
+                slowDeadlineNs = deadline;
+                slowStartNs = deadline - period;
+                slowOffset = 0;
+            } else waiter.waitUntil(deadline);
+        } else pacer.reset(nowNs());
+    };
+    auto stoppedInDebugger = [&] {
+        paused=true;emit pausedChanged(true);
+        if (!effectivePaused) {effectivePaused=true;emit effectivePauseChanged(true);}
+        clearAudio();pacer.reset(nowNs());
+        resetMetrics();publishDebugger();
+    };
     while (!quitting_.load()) {
         std::deque<Command> pending;
         {
@@ -1101,11 +1227,60 @@ void EmulationSession::run() {
                 if (!networkMode && pending.back().type == Type::FrameAdvance) break;
             }
         }
+        if(!networkMode)frameRequested=false;
+        // A suspended retro_run retains its entire CPU/device stack. Complete
+        // that frame before state changes; never serialize an in-flight stack.
+        const bool boundaryRequested=!pending.empty() || rewind_.load() || frameBackHeld_.load();
+        if (host.debuggerAttached() && boundaryRequested) {
+            host.finishDebugFrame();finishFramePipeline();
+        }
+        std::deque<DebuggerCommand> debugCommands;
+        {
+            std::lock_guard<std::mutex> lock(debuggerMutex_);
+            debugCommands.swap(debuggerCommands_);
+        }
+        for (const auto& command:debugCommands) {
+            if (command.kind==DebuggerCommand::Detach) {
+                host.finishDebugFrame();finishFramePipeline();
+                host.debuggerDetach();publishDebugger();continue;
+            }
+            if (achievementHardcore || networkMode || videoExport) {
+                host.finishDebugFrame();finishFramePipeline();host.debuggerDetach();
+                publishDebugger(Localization::text(QStringLiteral(
+                    "Отладчик недоступен в Hardcore, сетевой игре и при экспорте видео.")));
+                continue;
+            }
+            QString error;
+            if (!host.debuggerCommand(command,error)) {publishDebugger(error);continue;}
+            if (command.kind==DebuggerCommand::Continue) {
+                paused=false;emit pausedChanged(false);clearAudio();pacer.reset(nowNs());
+            } else if (command.kind==DebuggerCommand::Pause || command.kind==DebuggerCommand::StepInto ||
+                       command.kind==DebuggerCommand::StepOver || command.kind==DebuggerCommand::StepOut) {
+                paused=true;emit pausedChanged(true);frameRequested=host.debuggerRunRequested();
+                clearAudio();pacer.reset(nowNs());
+            }
+            publishDebugger();
+        }
+        if (host.debuggerFramePending()) {
+            if (!host.debuggerStopped()) {
+                frameRequested=false;
+                if (host.runDebugFrame()) {
+                    finishFramePipeline();publishDebugger();
+                } else {stoppedInDebugger();}
+            }
+            if (host.debuggerFramePending()) {
+                // No battery writes, preview frames or background hardware
+                // setters while a CPU hook holds the native execution stack.
+                processInspection();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+        }
+        if (paused && host.debuggerRunRequested() && !host.debuggerStopped()) frameRequested=true;
         // Read after the command boundary so a GUI shader switch preceding a
         // queued load/step applies to that frame, including while paused.
         // Presentation-only: never enters recordings or network commands.
         host.setSpriteOwnershipEnabled(spriteOwnershipEnabled_.load());
-        if(!networkMode)frameRequested=false;
         for (const auto& command : pending) {
             QString error;
             // Export is a read-only pass over a fixed recording. GUI changes,
@@ -1866,40 +2041,13 @@ void EmulationSession::run() {
                 emit controllerTopologyChanged(effectiveAdapter,playerCount);
             }
         }
+        if (!pending.empty() && host.debuggerAttached()) publishDebugger();
+        if (host.debuggerAttached() && (achievementHardcore || networkMode || videoExport)) {
+            host.debuggerDetach();publishDebugger();
+        }
         // Between complete frame executions, after all queued state changes.
         // An inactive inspector costs one atomic check; no timer or memory copy.
-        if (inspectionRequested_.load()) {
-            DebugInspectionRequest request;
-            {
-                std::lock_guard<std::mutex> lock(inspectionMutex_);
-                request = inspectionRequest_;
-                inspectionRequested_.store(false);
-            }
-            if (request.parts) {
-                DebugInspectionSnapshot snapshot;
-                if (achievementHardcore || videoExport) {
-                    snapshot.serial = request.serial;
-                    snapshot.parts = request.parts;
-                    snapshot.generation = host.inspectionGeneration();
-                    snapshot.status = Localization::text(achievementHardcore
-                        ? QStringLiteral("Просмотр состояния недоступен в Hardcore.")
-                        : QStringLiteral("Просмотр состояния недоступен при экспорте видео."));
-                } else {
-                    snapshot = host.inspect(request);
-                }
-                bool notify = false;
-                {
-                    std::lock_guard<std::mutex> lock(inspectionMutex_);
-                    // Discard a result if its viewer closed or changed meanwhile.
-                    if (inspectionRequest_.parts && inspectionRequest_.serial == request.serial) {
-                        inspectionSnapshot_ = std::move(snapshot);
-                        notify = !inspectionSnapshotPending_;
-                        inspectionSnapshotPending_ = true;
-                    }
-                }
-                if (notify) emit inspectionReady();
-            }
-        }
+        processInspection();
         if (videoPending && videoRecorder.completed()) {
             const auto result = videoRecorder.result();
             host.setRecordingVideoEnabled(false);
@@ -2122,17 +2270,12 @@ void EmulationSession::run() {
             }
             if (!beforeFrame()) continue;
             frameRequested=false;networkStepAnnounced=false;
-            host.runFrame(true,videoPending && videoRecorder.accepting()); // Capture PCM for video, never queue a playback burst.
-            captureVideo();
-            if (!achievementSuppressed && !networkMode) achievements.frame();
-            afterFrame();
-            if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
-            if (optionsPending) optionsPending = false;
-            if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
-                history.clear(); historyHealthy = false;
+            debugFrame={true,true,false,true,100,1};
+            if (!host.runDebugFrame(true,videoPending && videoRecorder.accepting())) {
+                stoppedInDebugger();continue;
             }
-            presentHostFrame();
-            clearAudio(); pacer.reset(nowNs());
+            finishFramePipeline();
+            if (host.debuggerAttached()) publishDebugger();
             continue;
         }
         if (!host.loaded() || nowPaused || networkRemoteRewinding) { std::this_thread::sleep_for(std::chrono::milliseconds(4)); continue; }
@@ -2181,44 +2324,13 @@ void EmulationSession::run() {
         // Fast-forward omits unseen rendering, PCM copies and rewind recording.
         // Emulated CPU/audio state still advances normally.
         const bool capture = videoPending && videoRecorder.accepting();
-        host.runFrame(!fast || present || optionsPending || capture, !fast || capture);
-        captureVideo();
-        if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
-        if (!achievementSuppressed && !networkMode) achievements.frame();
-        afterFrame();
-        if (host.isCd() && host.discEjected() != lastDiscEjected) {
-            clearHistory(); discStatus();
+        debugFrame={true,false,fast,present,speedPercent,factor};
+        if (!host.runDebugFrame(!fast || present || optionsPending || capture, !fast || capture)) {
+            stoppedInDebugger();continue;
         }
-        if (optionsPending) {
-            optionsPending = false; clearAudio(); pacer.reset(nowNs());
-        }
-        if (!fast && historyEnabled && historyHealthy) {
-            if (!recordHistory()) {
-                history.clear(); historyHealthy = false;
-                emit notification(Localization::text(QStringLiteral("История перемотки недоступна для текущей игры.")));
-            }
-        }
-        if (present) {
-            presentHostFrame();
-            nextPresentationNs = nowNs() + 16666667; // Fast-forward display stays near60Hz, independent of emulation speed.
-        }
-        if (!fast && !paused && !host.audio().isEmpty()) {
-            if (speedPercent == 100) emit audioSamples(host.audio(),host.sampleRate());
-            else if (speedPercent > 100) emit audioSamples(resampler.convert(host.audio(),speedPercent),host.sampleRate());
-            else slowAudio = resampler.convert(host.audio(),speedPercent);
-        } else slowAudio.clear();
-        const double clockScale = fast ? 1.0 : pacer.audioPeriodScale(nowNs(),audioFeedbackNs_.load(),
-            audioQueueUs_.load(),audioTargetUs_.load(),audioClockAvailable_.load());
-        if (factor != 0) {
-            const auto period = qint64(100000000000.0 * clockScale / (host.fps() * factor * speedPercent));
-            const auto deadline = pacer.next(nowNs(),period);
-            if (speedPercent < 100 && !paused) {
-                slowDeadlineNs = deadline;
-                slowStartNs = deadline - period;
-                slowOffset = 0;
-            } else waiter.waitUntil(deadline);
-        } else pacer.reset(nowNs());
+        finishFramePipeline();
     }
+    host.finishDebugFrame();finishFramePipeline();host.debuggerDetach();
     finishVideo();
     // The encoder drains its bounded queue in its own destructor, after core shutdown.
     QString movieError;

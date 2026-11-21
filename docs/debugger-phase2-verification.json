@@ -1,0 +1,165 @@
+{
+  "timing": {
+    "sonic2": {
+      "normal": {
+        "framerate_hz": 59.922743,
+        "backend": "mame (ym2612)",
+        "before_fps_median": 1844.486,
+        "after_fps_median": 1911.354,
+        "pair_deltas_percent": [
+          1.684,
+          3.625,
+          2.645
+        ],
+        "median_pair_delta_percent": 2.645,
+        "before_median_rss_kib": 38680,
+        "after_median_rss_kib": 38420,
+        "before_rendered": 6000,
+        "after_rendered": 6000,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      },
+      "fast": {
+        "framerate_hz": 59.922743,
+        "backend": "mame (ym2612)",
+        "before_fps_median": 2895.449,
+        "after_fps_median": 2935.153,
+        "pair_deltas_percent": [
+          1.889,
+          1.236,
+          -0.63
+        ],
+        "median_pair_delta_percent": 1.236,
+        "before_median_rss_kib": 38960,
+        "after_median_rss_kib": 38700,
+        "before_rendered": 188,
+        "after_rendered": 188,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      }
+    },
+    "bomberman": {
+      "normal": {
+        "framerate_hz": 49.701459,
+        "backend": "mame (ym2612)",
+        "before_fps_median": 2099.124,
+        "after_fps_median": 2086.757,
+        "pair_deltas_percent": [
+          -1.692,
+          -0.376,
+          -0.589
+        ],
+        "median_pair_delta_percent": -0.589,
+        "before_median_rss_kib": 38620,
+        "after_median_rss_kib": 38436,
+        "before_rendered": 6000,
+        "after_rendered": 6000,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      },
+      "fast": {
+        "framerate_hz": 49.701459,
+        "backend": "mame (ym2612)",
+        "before_fps_median": 3133.46,
+        "after_fps_median": 3063.902,
+        "pair_deltas_percent": [
+          -3.27,
+          -2.657,
+          -1.419
+        ],
+        "median_pair_delta_percent": -2.657,
+        "before_median_rss_kib": 38644,
+        "after_median_rss_kib": 38544,
+        "before_rendered": 188,
+        "after_rendered": 188,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      }
+    }
+  },
+  "expansions": {
+    "sega-cd": {
+      "normal": {
+        "framerate_hz": 59.922743,
+        "frames": 900,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      },
+      "fast": {
+        "framerate_hz": 59.922743,
+        "frames": 900,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      }
+    },
+    "32x": {
+      "normal": {
+        "framerate_hz": 59.922743,
+        "frames": 900,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      },
+      "fast": {
+        "framerate_hz": 59.922743,
+        "frames": 900,
+        "matching": {
+          "pixel_sha256": true,
+          "audio_sha256": true,
+          "native_state_sha256": true
+        }
+      }
+    }
+  },
+  "baseline_commit": "38ad2e2",
+  "timing_scope": "Closed debugger; same Linux host, MAME YM2612; intro/title/attract demo, not uninterrupted gameplay.",
+  "post_timing_change": "Cold MC68000 disassembler dispatch for short -1 branches (0x6xFF), no execution logic changes. No repeated timing claimed for this decoder-only update.",
+  "validation": {
+    "native_models": [
+      "Mega Drive",
+      "Master System",
+      "Game Gear",
+      "SG-1000"
+    ],
+    "dma_irq": true,
+    "session_save_restore_rewind_movie_shutdown": true,
+    "windows_runtime_tested": false
+  },
+  "deployment": {
+    "destination": "/mnt/d/emulation/Sega Mega Drive/emu/KegaRefusion/testbuild",
+    "matching_staged_sha256": {
+      "KegaRefusion.exe": "31b42442d1701f6bea9c744d79b98b121ac1800b00fa08b5ec56d2c7407851e2",
+      "cores/genesis_plus_gx_libretro.dll": "00f70ab922d1712b02c6c27d6557c07a5871e23e4501ca17a6ea6c462d1e0a61",
+      "cores/genesis_plus_gx_libretro_linkpeer.dll": "00f70ab922d1712b02c6c27d6557c07a5871e23e4501ca17a6ea6c462d1e0a61",
+      "languages/en.json": "1b72a585e33ecf6c06c355f1d6ab3d1e1399c5447321a987de7c3f167b092997",
+      "languages/ru.json": "f969d26a74de87df0862248d44e2683bc692f269fcdcb560549684df559a395f",
+      "licenses/cpu-debugger/Musashi-LICENSE.txt": "e3ed479a77010812720820251034aeb21e9c9d9fdd5d1744d898026d82d85804",
+      "licenses/cpu-debugger/Z80-LICENSE.txt": "6ecbac69fd40db15e68c7efe434f520646c1b1bedab6fe399d3bf857df8eb138",
+      "licenses/cpu-debugger/PROVENANCE.md": "1ab5633770e59f5e5ce0764433269da1dbc7939993c4805b68d8738830f1035b"
+    }
+  },
+  "final_core_sha256": {
+    "linux": "e8bccd7ba26703779561f0d0b67270ec27055b4f3fd7c6bddc619755997c0cfc",
+    "windows": "c3f0cfead05c7979e0f29d6a3df9d384aa58d5e5f640b8248bfa8432e67e41a5"
+  }
+}

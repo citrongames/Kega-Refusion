@@ -1,6 +1,7 @@
 #pragma once
 #include "ExpansionMode.h"
 #include "DebugInspection.h"
+#include "DebugExecution.h"
 #include "InputDisplay.h"
 #include <QByteArray>
 #include <QImage>
@@ -75,6 +76,16 @@ public:
     struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
     DebugCapabilities debugCapabilities() const;
     DebugInspectionSnapshot inspect(const DebugInspectionRequest& request) const;
+    bool debuggerAttach(QString& error);
+    void debuggerDetach();
+    bool debuggerAttached() const;
+    bool debuggerStopped() const;
+    bool debuggerRunRequested() const;
+    bool debuggerFramePending() const;
+    bool runDebugFrame(bool renderVideo = true, bool captureAudio = true);
+    void finishDebugFrame();
+    bool debuggerCommand(const DebuggerCommand&, QString& error);
+    DebuggerSnapshot debuggerSnapshot() const;
     quint64 inspectionGeneration() const { return inspectionGeneration_; }
     void setDebugMasks(quint32 video, quint64 audio);
     void setDebugBackdrop(quint32 rgb);
@@ -189,6 +200,9 @@ public:
     std::function<void(const QString&)> message;
 private:
     struct Activation { LibretroHost* previous; explicit Activation(LibretroHost* h) : previous(active_) { active_=h; } ~Activation() { active_=previous; } };
+    struct DebugExecution;
+    struct DebugExecutionDeleter { void operator()(DebugExecution*) const; };
+    std::unique_ptr<DebugExecution,DebugExecutionDeleter> debugger_;
     struct LinkPair;
     std::unique_ptr<LibretroHost> linkPeer_;
     struct LinkPairDeleter { void operator()(LinkPair*) const; };

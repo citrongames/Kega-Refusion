@@ -21,6 +21,15 @@ def copy_core32x_notices(root: Path, notices: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
+    debugger = notices / "cpu-debugger"
+    debugger.mkdir(parents=True, exist_ok=True)
+    for name in ("PROVENANCE.md", "Z80-LICENSE.txt"):
+        shutil.copy2(root / "src/coredebug" / name, debugger / name)
+    musashi = (root / "src/coredebug/musashi_disasm.c").read_text(encoding="utf-8")
+    start = musashi.index("/*\n * Kega Refusion adaptation:")
+    end = musashi.index(" */", start) + 3
+    (debugger / "Musashi-LICENSE.txt").write_text(musashi[start:end] + "\n", encoding="utf-8")
+
     # GPX's bundled license does not include Buchmueller's separate SH2 terms,
     # the DRC authors' notices or the ares ISC notice retained by our SoC.
     parts = []

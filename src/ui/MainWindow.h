@@ -29,6 +29,7 @@ class QTimer;
 class AudioOutput;
 class AchievementNetwork;
 class EmulationSession;
+class CpuDebuggerDialog;
 class DebugGraphicsDialog;
 class DebugMemoryDialog;
 class CheatSearchDialog;
@@ -81,6 +82,10 @@ private:
     void showDebugGraphics();
     void showDebugAudio();
     void showDebugMemory();
+    void showCpuDebugger();
+    void updateCpuDebugger();
+    void refreshCpuDebugger();
+    QString cpuDebuggerBlockedReason() const;
     void scheduleInspection();
     void refreshInspection();
     void openGameDialog();
@@ -170,6 +175,9 @@ private:
     DebugAudioDialog* debugAudioDialog_ = nullptr;
     DebugMemoryDialog* debugMemoryDialog_ = nullptr;
     QAction* debugMemoryAction_ = nullptr;
+    QAction* cpuDebuggerAction_ = nullptr;
+    CpuDebuggerDialog* cpuDebuggerDialog_ = nullptr;
+    QTimer* debuggerTimer_ = nullptr;
     QTimer* inspectionTimer_ = nullptr;
     quint64 inspectionSerial_ = 0;
     bool inspectionRefreshQueued_ = false;
