@@ -10,6 +10,7 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
     out.parts = request.parts & 15u;
     out.generation = inspectionGeneration_;
     out.frame = runClock_.frames;
+    if (loaded_) out.gameKey = gamePath_ + QLatin1Char('\n') + contentName_;
     out.instance = request.instance;
     out.instanceCount = linkPeer_ ? 2u : 1u;
     if (!loaded_) {
@@ -78,6 +79,43 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
                 if (d.size <= KR_INSPECT_MAX_READ) out.blocks.insert(d.id,read(d,0,d.size));
                 break;
             default: break;
+            }
+        }
+    }
+    if (request.watchCatalog || !request.watches.isEmpty()) {
+        // One safe catalog per actual console, then only the requested 1–4 byte
+        // values. No bus handlers, whole-memory scan or per-frame subscription.
+        out.watchValues.reserve(std::min(request.watches.size(), qsizetype(DebugWatchLimit)));
+        for (int i=0; i<request.watches.size() && i<DebugWatchLimit; ++i)
+            out.watchValues.push_back({request.watches[i].id, {}, false});
+        for (quint32 side=0; side<out.instanceCount; ++side) {
+            const auto* console=side==0?this:linkPeer_.get();
+            if (!console || !console->loaded_) continue;
+            const Activation owner(const_cast<LibretroHost*>(console));
+            const auto& native=*console->api_;
+            kr_inspect_info info{};
+            if (side==request.instance) info=out.info;
+            else if (!native.inspect_info ||
+                     !native.inspect_info(KR_INSPECT_VERSION,KR_INSPECT_MEMORY,&info,sizeof(info)))
+                continue;
+            if (info.version!=KR_INSPECT_VERSION || info.struct_size!=sizeof(info) ||
+                info.domain_count>KR_INSPECT_MAX_DOMAINS || !native.inspect_read) continue;
+            for (unsigned d=0; d<info.domain_count; ++d) {
+                auto domain=info.domains[d];
+                domain.name[sizeof(domain.name)-1]=0;
+                if (request.watchCatalog) out.watchDomains.push_back({side,domain});
+                for (int i=0; i<out.watchValues.size(); ++i) {
+                    const auto& watch=request.watches[i];
+                    if (watch.instance!=side || watch.domain!=domain.id || !watch.id ||
+                        (watch.width!=1 && watch.width!=2 && watch.width!=4) ||
+                        watch.offset>=domain.size || watch.width>domain.size-watch.offset)
+                        continue;
+                    char bytes[4]{};
+                    if (native.inspect_read(domain.id,watch.offset,bytes,watch.width)==watch.width) {
+                        out.watchValues[i].bytes=QByteArray(bytes,int(watch.width));
+                        out.watchValues[i].bigEndian=domain.big_endian!=0;
+                    }
+                }
             }
         }
     }

@@ -3,6 +3,8 @@
 
 #include <QAbstractItemView>
 #include <QAbstractTableModel>
+#include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QEvent>
 #include <QFontDatabase>
@@ -14,6 +16,7 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -21,6 +24,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QShowEvent>
+#include <QShortcut>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QTableView>
@@ -241,7 +245,13 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     pageModel_ = new DebugMemoryPageModel(hex_);
     hex_->setModel(pageModel_);
     hex_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    hex_->setSelectionMode(QAbstractItemView::SingleSelection);
+    hex_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    hex_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(hex_, &QTableView::customContextMenuRequested, this, &DebugMemoryDialog::showMemoryMenu);
+    auto* copy = new QShortcut(QKeySequence::Copy, hex_);
+    copy->setObjectName(QStringLiteral("debugMemoryCopy"));
+    copy->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(copy, &QShortcut::activated, this, &DebugMemoryDialog::copySelectedBytes);
     hex_->setAlternatingRowColors(true);
     hex_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     hex_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
@@ -254,6 +264,7 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
 
     auto* findRow = new QHBoxLayout;
     auto* find = new QLineEdit(this);
+    find->setObjectName(QStringLiteral("debugMemoryFind"));
     find->setAccessibleName(trText("Байты в hex"));
     find->setMaxLength(64);
     find->setPlaceholderText(QStringLiteral("00 FF"));
@@ -281,6 +292,18 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     connect(find, &QLineEdit::returnPressed, this, findNext);
     connect(find, &QLineEdit::textChanged, findStatus, &QLabel::clear);
     connect(this, &DebugMemoryDialog::inspectionChanged, findStatus, &QLabel::clear);
+    auto* goTo = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_G), this);
+    connect(goTo, &QShortcut::activated, this, [this] {
+        tabs_->setCurrentIndex(0);
+        offset_->setFocus(Qt::ShortcutFocusReason);
+        offset_->selectAll();
+    });
+    auto* findShortcut = new QShortcut(QKeySequence::Find, this);
+    connect(findShortcut, &QShortcut::activated, this, [this, find] {
+        tabs_->setCurrentIndex(0);
+        find->setFocus(Qt::ShortcutFocusReason);
+        find->selectAll();
+    });
 
     auto* watch = new QHBoxLayout;
     auto* valueLabel = new QLabel(trText("Значение"), this);
@@ -308,6 +331,11 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     edit_->setObjectName(QStringLiteral("debugMemoryEdit"));
     edit_->setAutoDefault(false);
     watch->addWidget(edit_);
+    watch_ = new QPushButton(trText("Добавить наблюдение"), this);
+    watch_->setObjectName(QStringLiteral("debugMemoryAddWatch"));
+    watch_->setAutoDefault(false);
+    watch->addWidget(watch_);
+    connect(watch_, &QPushButton::clicked, this, &DebugMemoryDialog::addWatch);
     layout->addLayout(watch);
     editStatus_ = new QLabel(this);
     editStatus_->setObjectName(QStringLiteral("debugMemoryWriteStatus"));
@@ -605,6 +633,7 @@ void DebugMemoryDialog::updateWatch() {
     const int type = width_->currentData().toInt();
     const int width = qAbs(type);
     edit_->setEnabled(canWrite(width));
+    watch_->setEnabled(hasSample(width));
     edit_->setToolTip(writable_
         ? trText("Изменение доступно на паузе, вне записи и воспроизведения ввода.")
         : trText("Эта область памяти доступна только для чтения."));
@@ -629,10 +658,61 @@ bool DebugMemoryDialog::watchBigEndian() const {
     return order == 0 ? bigEndian_ : order == 2;
 }
 
-bool DebugMemoryDialog::canWrite(int width) const {
-    return isVisible() && tabs_->currentIndex() == 0 && available_ && canEdit_ && writable_ &&
-           !writePending_ && (width == 1 || width == 2 || width == 4) &&
+bool DebugMemoryDialog::hasSample(int width) const {
+    return isVisible() && tabs_->currentIndex() == 0 && available_ &&
+           (width == 1 || width == 2 || width == 4) &&
+           quint64(selection_) + width <= size_ &&
            quint64(selection_ - page_) + width <= quint64(pageModel_->bytes().size());
+}
+
+bool DebugMemoryDialog::canWrite(int width) const {
+    return canEdit_ && writable_ && !writePending_ && hasSample(width);
+}
+
+void DebugMemoryDialog::addWatch() {
+    const int type = width_->currentData().toInt();
+    const int width = qAbs(type);
+    if (!hasSample(width)) return;
+    DebugWatchEntry entry;
+    entry.instance = instance_;
+    entry.domain = domain_;
+    entry.offset = selection_;
+    entry.width = width;
+    entry.format = type < 0 ? DebugWatchEntry::Signed : DebugWatchEntry::Unsigned;
+    const int order = order_->currentData().toInt();
+    entry.order = order == 1 ? DebugWatchEntry::Little
+        : order == 2 ? DebugWatchEntry::Big : DebugWatchEntry::Native;
+    emit watchRequested(entry);
+}
+
+void DebugMemoryDialog::showMemoryMenu(const QPoint& point) {
+    const QModelIndex index = hex_->indexAt(point);
+    if (!index.isValid() || !(index.flags() & Qt::ItemIsSelectable)) return;
+    if (!hex_->selectionModel()->isSelected(index)) hex_->setCurrentIndex(index);
+    else hex_->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+    QMenu menu(this);
+    menu.addAction(trText("Копировать адрес"), this, [this] {
+        if (hasSample(1)) QApplication::clipboard()->setText(QStringLiteral("0x%1").arg(hexNumber(selection_)));
+    });
+    menu.addAction(trText("Копировать байты"), this, &DebugMemoryDialog::copySelectedBytes);
+    auto* add = menu.addAction(trText("Добавить наблюдение"), this, &DebugMemoryDialog::addWatch);
+    add->setEnabled(hasSample(qAbs(width_->currentData().toInt())));
+    menu.exec(hex_->viewport()->mapToGlobal(point));
+}
+
+void DebugMemoryDialog::copySelectedBytes() {
+    if (!available_ || tabs_->currentIndex() != 0) return;
+    auto selected = hex_->selectionModel()->selectedIndexes();
+    std::sort(selected.begin(), selected.end(), [](const QModelIndex& a, const QModelIndex& b) {
+        return a.row() != b.row() ? a.row() < b.row() : a.column() < b.column();
+    });
+    QByteArray bytes;
+    const auto& page = pageModel_->bytes();
+    for (const auto& index : selected) {
+        const int relative = index.row() * rowBytes + index.column();
+        if (index.column() < rowBytes && relative < page.size()) bytes += page.at(relative);
+    }
+    if (!bytes.isEmpty()) QApplication::clipboard()->setText(QString::fromLatin1(bytes.toHex(' ').toUpper()));
 }
 
 void DebugMemoryDialog::editMemory(int width) {

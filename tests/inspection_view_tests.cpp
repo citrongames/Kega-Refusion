@@ -3,6 +3,9 @@
 
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QClipboard>
+#include <QItemSelectionModel>
+#include <QShortcut>
 #include <QBrush>
 #include <QComboBox>
 #include <QDir>
@@ -233,6 +236,21 @@ void verifyMemoryEditing() {
     width->setCurrentIndex(width->findData(2));
     order->setCurrentIndex(order->findData(1));
     check(edit->isEnabled(), "paused writable domain permits edit");
+
+    DebugWatchEntry watch;
+    QObject::connect(&dialog, &DebugMemoryDialog::watchRequested, &dialog,
+                     [&](const DebugWatchEntry& entry) { watch = entry; });
+    named<QPushButton>(dialog, "debugMemoryAddWatch")->click();
+    check(watch.instance == 1 && watch.domain == KR_MEM_RAM && watch.offset == 0 && watch.width == 2 &&
+          watch.order == DebugWatchEntry::Little && watch.format == DebugWatchEntry::Unsigned,
+          "memory adds watch for selected physical bytes, signedness and order");
+    auto* hexView = named<QTableView>(dialog, "debugMemoryHex");
+    const QItemSelection firstTwo(hexView->model()->index(0, 0), hexView->model()->index(0, 1));
+    hexView->selectionModel()->select(firstTwo, QItemSelectionModel::ClearAndSelect);
+    auto* copyShortcut = dialog.findChild<QShortcut*>(QStringLiteral("debugMemoryCopy"));
+    check(copyShortcut != nullptr, "memory copy shortcut");
+    emit copyShortcut->activated();
+    check(QApplication::clipboard()->text() == QStringLiteral("AA BB"), "copy selected raw bytes in address order");
 
     DebugMemoryWrite write;
     QObject::connect(&dialog, &DebugMemoryDialog::writeRequested, &dialog,

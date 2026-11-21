@@ -29,6 +29,7 @@ public:
 signals:
     void inspectionChanged();
     void writeRequested(const DebugMemoryWrite& request);
+    void watchRequested(const DebugWatchEntry& entry);
     void inspectionInstanceChanged();
 
 protected:
@@ -41,6 +42,10 @@ private:
     void changeInstance(quint32 instance);
     bool canWrite(int width) const;
     void editMemory(int width);
+    bool hasSample(int width) const;
+    void addWatch();
+    void showMemoryMenu(const QPoint& point);
+    void copySelectedBytes();
     bool watchBigEndian() const;
     void updatePage(const QByteArray& bytes, bool comparePrevious = true);
     void resizePageColumns();
@@ -56,6 +61,7 @@ private:
     QPushButton* previous_ = nullptr;
     QPushButton* next_ = nullptr;
     QPushButton* edit_ = nullptr;
+    QPushButton* watch_ = nullptr;
     QLabel* editStatus_ = nullptr;
     QLabel* value_ = nullptr;
     QComboBox* width_ = nullptr;

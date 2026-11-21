@@ -4,6 +4,9 @@
 #include "ControlsPage.h"
 #include "input/ControllerTopology.h"
 #include "../core/Cheats.h"
+#include "../core/DebugProject.h"
+#include <memory>
+#include <optional>
 #include "../core/Achievements.h"
 #include <array>
 
@@ -34,6 +37,8 @@ class TraceDialog;
 class CoverageDialog;
 class DebugGraphicsDialog;
 class DebugMemoryDialog;
+class DebugWatchDialog;
+struct DebugProjectOperation;
 class CheatSearchDialog;
 class DebugAudioDialog;
 class InputManager;
@@ -84,7 +89,18 @@ private:
     void showDebugGraphics();
     void showDebugAudio();
     void showDebugMemory();
+    void ensureCpuDebugger();
     void showCpuDebugger();
+    void ensureDebugWatch();
+    void showDebugWatch();
+    void openDebugProject();
+    void saveDebugProjectFile(bool choosePath);
+    void startDebugProjectIo(const QString& path, bool save, DebugProject project = {});
+    void pollDebugProjectIo();
+    void updateDebugProjectActions();
+    void debugProjectChanged();
+    void clearDebugProjectForGame(const QString& path, const QString& name);
+    void finishDebugProjectApply(bool accepted);
     void updateCpuDebugger();
     void refreshCpuDebugger();
     QString cpuDebuggerBlockedReason() const;
@@ -187,6 +203,17 @@ private:
     DebugAudioDialog* debugAudioDialog_ = nullptr;
     DebugMemoryDialog* debugMemoryDialog_ = nullptr;
     QAction* debugMemoryAction_ = nullptr;
+    DebugWatchDialog* debugWatchDialog_ = nullptr;
+    QAction* debugWatchAction_ = nullptr;
+    QAction* debugProjectOpenAction_ = nullptr;
+    QAction* debugProjectSaveAction_ = nullptr;
+    QAction* debugProjectSaveAsAction_ = nullptr;
+    QAction* debugProjectStatus_ = nullptr;
+    QString debugProjectGame_, debugProjectRom_, debugProjectPath_, debugProjectPendingPath_;
+    quint64 debugProjectRevision_ = 0, debugProjectContext_ = 0;
+    bool debugProjectDirty_ = false, debugProjectApplying_ = false;
+    std::optional<DebugProject> debugProjectPending_;
+    std::shared_ptr<DebugProjectOperation> debugProjectOperation_;
     QAction* cpuDebuggerAction_ = nullptr;
     CpuDebuggerDialog* cpuDebuggerDialog_ = nullptr;
     QTimer* debuggerTimer_ = nullptr;

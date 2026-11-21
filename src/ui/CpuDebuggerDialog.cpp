@@ -1,7 +1,9 @@
 #include "CpuDebuggerDialog.h"
 #include "i18n/Localization.h"
 
+#include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QFile>
 #include <QFileDialog>
@@ -19,6 +21,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
+#include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -28,11 +31,14 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <utility>
 
 namespace {
 constexpr qsizetype maxBreakpoints = 128;
 constexpr qsizetype maxSymbols = 4096;
+constexpr int maxLabelLength = 96, maxCommentLength = 512, maxConditionLength = 256;
 constexpr qsizetype maxSymbolFile = 512 * 1024;
+enum CodeColumn { BreakMarker, PcMarker, CodeAddress, CodeBytes, CodeInstruction, CodeAnnotation };
 constexpr std::array<quint32, 3> eventBits{KR_DEBUG_EXEC, KR_DEBUG_READ, KR_DEBUG_WRITE};
 constexpr std::array<DebuggerCommand::Kind, 5> executionActions{
     DebuggerCommand::Pause, DebuggerCommand::Continue, DebuggerCommand::StepInto,
@@ -123,6 +129,29 @@ const DebuggerBreakpoint* findBreakpoint(const QVector<DebuggerBreakpoint>& brea
     for (const auto& breakpoint : breakpoints)
         if (breakpoint.id == id) return &breakpoint;
     return nullptr;
+}
+
+bool sameBreakpoint(const DebuggerBreakpoint& a, const DebuggerBreakpoint& b) {
+    return a.id == b.id && a.cpu == b.cpu && a.events == b.events &&
+           a.first == b.first && a.last == b.last && a.condition == b.condition &&
+           a.ignoreHits == b.ignoreHits && a.oneShot == b.oneShot;
+}
+
+bool sameTargets(const QVector<kr_debug_target>& first, const QVector<kr_debug_target>& second) {
+    return first.size() == second.size() && std::equal(first.cbegin(), first.cend(), second.cbegin(),
+        [](const auto& a, const auto& b) {
+            return a.cpu == b.cpu && a.address_bits == b.address_bits && a.capabilities == b.capabilities;
+        });
+}
+
+quint32 fallbackAddressBits(quint32 cpu) {
+    switch (cpu & 0xffu) {
+    case KR_DEBUG_Z80:
+    case KR_DEBUG_SSP1601: return 16;
+    case KR_DEBUG_M68K:
+    case KR_DEBUG_SUB68K: return 24;
+    default: return 32;
+    }
 }
 
 quint32 newBreakpointId(const QVector<DebuggerBreakpoint>& breakpoints) {
@@ -250,7 +279,7 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
     address_ = named(new QLineEdit(codePage), "debugCpuAddress");
     address_->setPlaceholderText(text("Адрес (hex) или метка"));
     address_->setAccessibleName(address_->placeholderText());
-    address_->setMaxLength(96);
+    address_->setMaxLength(maxLabelLength);
     go_ = button(text("Перейти"), codePage, "debugCpuNavigate");
     follow_ = button(QStringLiteral("PC"), codePage, "debugCpuFollowPc");
     follow_->setCheckable(true);
@@ -270,9 +299,13 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
     code_ = named(new QTableWidget(split), "debugCpuDisassembly");
     code_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     code_->setContextMenuPolicy(Qt::CustomContextMenu);
-    setupTable(code_, {text("Адрес"), text("Байты"), text("Инструкция"), text("Метка / комментарий")});
-    code_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive);
-    code_->setColumnWidth(2, 170);
+    setupTable(code_, {QStringLiteral("●"), QStringLiteral("PC"), text("Адрес"), text("Байты"),
+                       text("Инструкция"), text("Метка / комментарий")});
+    code_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    code_->horizontalHeaderItem(BreakMarker)->setToolTip(text("Точки останова"));
+    code_->horizontalHeaderItem(PcMarker)->setToolTip(text("Текущая инструкция"));
+    code_->horizontalHeader()->setSectionResizeMode(CodeInstruction, QHeaderView::Interactive);
+    code_->setColumnWidth(CodeInstruction, 170);
     split->addWidget(code_);
     stateTabs_ = named(new QTabWidget(split), "debugCpuStateTabs");
     auto* registerPage = new QWidget(stateTabs_);
@@ -362,7 +395,7 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
     editor->addWidget(breakIgnore_, 1, 3);
 
     breakCondition_ = named(new QLineEdit(breakpointEditor_), "debugBreakCondition");
-    breakCondition_->setMaxLength(160);
+    breakCondition_->setMaxLength(maxConditionLength);
     breakCondition_->setPlaceholderText(QStringLiteral("ADDR >= $C000   /   VALUE & $FF == 5"));
     breakCondition_->setToolTip(text("Регистр, ADDR, VALUE, SIZE или HIT, затем необязательная маска & и сравнение с числом. Префиксы $ и 0x задают hex."));
     auto* condition = new QLabel(text("Условие"), breakpointEditor_);
@@ -411,12 +444,42 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
         if (index > 0) navigateTo(cpuId_, bookmarks_->itemData(index).toUInt());
         bookmarks_->setCurrentIndex(0);
     });
-    connect(code_, &QTableWidget::cellDoubleClicked, this, [this](int row) { toggleExecuteBreakpoint(row); });
+    connect(code_, &QTableWidget::cellClicked, this, [this](int row, int column) {
+        if (column == BreakMarker) toggleExecuteBreakpoint(row);
+    });
+    auto* copy = new QShortcut(QKeySequence::Copy, code_);
+    copy->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(copy, &QShortcut::activated, this, &CpuDebuggerDialog::copyDisassembly);
+
+    const auto shortcut = [this](const QKeySequence& keys, auto action) {
+        auto* binding = new QShortcut(keys, this);
+        binding->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(binding, &QShortcut::activated, this, action);
+    };
+    shortcut(QKeySequence(Qt::Key_F5), [this] { execution_[snapshot_.stopped ? 1 : 0]->click(); });
+    shortcut(QKeySequence(Qt::Key_F7), [this] { execution_[2]->click(); });
+    shortcut(QKeySequence(Qt::Key_F8), [this] { execution_[3]->click(); });
+    shortcut(QKeySequence(Qt::SHIFT | Qt::Key_F8), [this] { execution_[4]->click(); });
+    shortcut(QKeySequence(Qt::CTRL | Qt::Key_G), [this] {
+        if (!address_->isEnabled()) return;
+        pages_->setCurrentIndex(0);
+        address_->setFocus(Qt::ShortcutFocusReason);
+        address_->selectAll();
+    });
+    execution_[0]->setToolTip(QStringLiteral("F5"));
+    execution_[1]->setToolTip(QStringLiteral("F5"));
+    execution_[2]->setToolTip(QStringLiteral("F7"));
+    execution_[3]->setToolTip(QStringLiteral("F8"));
+    execution_[4]->setToolTip(QStringLiteral("Shift+F8"));
+    go_->setToolTip(QStringLiteral("Ctrl+G"));
     connect(code_, &QTableWidget::customContextMenuRequested, this, &CpuDebuggerDialog::showCodeMenu);
     connect(breakpoints_, &QTableWidget::currentCellChanged, this, [this](int row) {
         if (row < 0 || !breakpoints_->item(row, 0)) return;
         const auto id = breakpoints_->item(row, 0)->data(Qt::UserRole).toUInt();
-        editBreakpoint(findBreakpoint(snapshot_.breakpoints, id));
+        const auto* saved = findBreakpoint(savedBreakpoints_, id);
+        if (!saved) return;
+        const auto displayed = displayedBreakpoint(*saved);
+        editBreakpoint(&displayed);
     });
     connect(breakNew_, &QPushButton::clicked, this, [this] {
         const QSignalBlocker block(breakpoints_);
@@ -455,6 +518,7 @@ void CpuDebuggerDialog::showEvent(QShowEvent* event) {
 void CpuDebuggerDialog::hideEvent(QHideEvent* event) {
     QDialog::hideEvent(event);
     send(DebuggerCommand::Detach);
+    lastConfigureResult_ = 0;
     setSnapshot({});
 }
 
@@ -511,10 +575,18 @@ void CpuDebuggerDialog::goToInput() {
 }
 
 void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
+    if (!isVisible() && pendingConfiguration_ && pendingConfiguration_->requestId &&
+        snapshot.configureRequestId == pendingConfiguration_->requestId) {
+        snapshot_.configureRequestId = snapshot.configureRequestId;
+        snapshot_.configureAccepted = snapshot.configureAccepted;
+        snapshot_.configureError = snapshot.configureError;
+        snapshot_.status = snapshot.status;
+        reconcileConfiguration();
+        return;
+    }
     if (!isVisible() && snapshot.attached) return;
     const bool changedGeneration = snapshot.generation && generation_ && snapshot.generation != generation_;
     const bool changedGame = !snapshot.gameKey.isEmpty() && !gameKey_.isEmpty() && snapshot.gameKey != gameKey_;
-    if (changedGame) symbols_.clear();
     if (!snapshot.gameKey.isEmpty()) gameKey_ = snapshot.gameKey;
     if (changedGeneration || changedGame) {
         feedback_->hide();
@@ -526,13 +598,14 @@ void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
          snapshot.eventCpu != snapshot_.eventCpu || snapshot.address != snapshot_.address);
     const quint32 previousCpu = cpuId_;
     const bool wasAttached = snapshot_.attached;
-    if (snapshot.attached && !snapshot.linkEnabled) {
-        for (auto symbol = symbols_.begin(); symbol != symbols_.end();) {
-            if (symbol.key() >> 8) symbol = symbols_.erase(symbol);
-            else ++symbol;
-        }
-    }
+    const bool changedTargets = !sameTargets(snapshot_.targets, snapshot.targets);
+    const bool olderConfiguration = wasAttached && snapshot.attached &&
+                                    snapshot.configureRequestId < lastConfigureResult_;
+    const auto previousRuntime = olderConfiguration ? snapshot_.breakpoints : QVector<DebuggerBreakpoint>{};
     snapshot_ = snapshot;
+    if (olderConfiguration) snapshot_.breakpoints = previousRuntime;
+    if (snapshot_.attached && (!wasAttached || changedTargets))
+        needsConfiguration_ = true;
     if (snapshot_.attached && !snapshot_.targets.isEmpty()) {
         const quint32 stopCpu = snapshot_.eventCpu ? snapshot_.eventCpu : snapshot_.selectedCpu;
         if (newTrap && findTarget(snapshot_, stopCpu)) {
@@ -547,7 +620,8 @@ void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
         }
     }
     updateCpuChoices();
-    if (changedGeneration || changedGame || !snapshot_.attached) editBreakpoint(nullptr);
+    if (changedGame || !snapshot_.attached) editBreakpoint(nullptr);
+    reconcileConfiguration();
     updateControls();
     if (!snapshot_.attached || pages_->currentIndex() == 0) {
         updateCode();
@@ -557,23 +631,199 @@ void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
     if (changedGame || previousCpu != cpuId_ || wasAttached != snapshot_.attached) updateBookmarks();
 }
 
+bool CpuDebuggerDialog::projectPending() const {
+    return pendingConfiguration_.has_value() || queuedProject_.has_value();
+}
+
+QString CpuDebuggerDialog::projectError() const {
+    return feedback_->text();
+}
+
+void CpuDebuggerDialog::publishProjectState() {
+    const bool pending = projectPending();
+    if (reportedProjectPending_ == pending) return;
+    reportedProjectPending_ = pending;
+    emit projectStateChanged();
+}
+
+DebugProject CpuDebuggerDialog::exportProject() const {
+    DebugProject project;
+    project.game = gameKey_;
+    project.breakpoints = savedBreakpoints_;
+    auto cpus = symbols_.keys();
+    std::sort(cpus.begin(), cpus.end());
+    for (const auto cpu : cpus) {
+        const auto entries = symbols_.constFind(cpu);
+        for (auto symbol = entries->cbegin(); symbol != entries->cend(); ++symbol)
+            project.symbols.append({cpu, symbol.key(), symbol->label, symbol->comment, symbol->bookmarked});
+    }
+    return project;
+}
+
+void CpuDebuggerDialog::replaceSymbols(const QVector<DebugProjectSymbol>& imported) {
+    symbols_.clear();
+    for (const auto& symbol : imported)
+        symbols_[symbol.cpu].insert(symbol.address, {symbol.label, symbol.comment, symbol.bookmarked});
+}
+
+qsizetype CpuDebuggerDialog::symbolCount() const {
+    qsizetype count = 0;
+    for (const auto& entries : symbols_) count += entries.size();
+    return count;
+}
+
+void CpuDebuggerDialog::applyProject(const DebugProject& project) {
+    auto breakpoints = project.breakpoints;
+    for (auto& breakpoint : breakpoints) breakpoint.hits = 0;
+    if (pendingConfiguration_) {
+        queuedProject_ = DebugProject{project.game, std::move(breakpoints), project.symbols, {}};
+        publishProjectState();
+        return;
+    }
+
+    pendingConfiguration_.emplace();
+    pendingConfiguration_->breakpoints = std::move(breakpoints);
+    pendingConfiguration_->importedSymbols = project.symbols;
+    pendingConfiguration_->resetHits = true;
+    pendingConfiguration_->validateOnly = !isVisible() || !snapshot_.attached || snapshot_.targets.isEmpty();
+    feedback_->hide();
+    publishProjectState();
+    sendPendingConfiguration();
+    updateControls();
+}
+
+void CpuDebuggerDialog::cancelProjectImport() {
+    const bool staged = pendingConfiguration_ && pendingConfiguration_->importedSymbols;
+    if (!queuedProject_ && !staged) return;
+    queuedProject_.reset();
+    if (staged) pendingConfiguration_.reset();
+    updateControls();
+    publishProjectState();
+    emit projectApplied(false);
+}
+
+void CpuDebuggerDialog::clearProject() {
+    const bool importing = queuedProject_.has_value() ||
+                           (pendingConfiguration_ && pendingConfiguration_->importedSymbols);
+    pendingConfiguration_.reset();
+    queuedProject_.reset();
+    savedBreakpoints_.clear();
+    snapshot_.breakpoints.clear();
+    symbols_.clear();
+    gameKey_.clear();
+    needsConfiguration_ = resetNextHits_ = false;
+    lastConfigureResult_ = 0;
+    editBreakpoint(nullptr);
+    updateControls();
+    updateBreakpoints();
+    updateCode();
+    updateBookmarks();
+    publishProjectState();
+    if (importing) emit projectApplied(false);
+}
+
+DebuggerBreakpoint CpuDebuggerDialog::displayedBreakpoint(const DebuggerBreakpoint& breakpoint) const {
+    const auto* runtime = findBreakpoint(snapshot_.breakpoints, breakpoint.id);
+    return runtime && sameBreakpoint(breakpoint, *runtime) ? *runtime : breakpoint;
+}
+
+void CpuDebuggerDialog::sendPendingConfiguration() {
+    if (!pendingConfiguration_ || pendingConfiguration_->requestId) return;
+    auto& pending = *pendingConfiguration_;
+    if (!pending.validateOnly && (!snapshot_.attached || snapshot_.targets.isEmpty() || !isVisible())) return;
+    auto request = refreshCommand();
+    request.kind = pending.validateOnly ? DebuggerCommand::Validate : DebuggerCommand::Configure;
+    request.configureRequestId = pending.requestId = ++nextConfigureRequest_;
+    request.editedBreakpointId = pending.editedId;
+    request.resetBreakpointHits = pending.resetHits && !pending.validateOnly;
+    request.gameKey = gameKey_;
+    if (pending.validateOnly) {
+        request.breakpoints = pending.breakpoints;
+    } else {
+        for (const auto& breakpoint : pending.breakpoints)
+            if (findTarget(snapshot_, breakpoint.cpu)) request.breakpoints.append(breakpoint);
+    }
+    emit command(request);
+}
+
+void CpuDebuggerDialog::reconcileConfiguration() {
+    if (pendingConfiguration_ && pendingConfiguration_->requestId &&
+        snapshot_.configureRequestId == pendingConfiguration_->requestId) {
+        auto settled = std::move(*pendingConfiguration_);
+        pendingConfiguration_.reset();
+        lastConfigureResult_ = snapshot_.configureRequestId;
+        const bool accepted = snapshot_.configureAccepted;
+        if (accepted) {
+            savedBreakpoints_ = std::move(settled.breakpoints);
+            if (settled.importedSymbols) {
+                replaceSymbols(*settled.importedSymbols);
+                if (settled.validateOnly) needsConfiguration_ = resetNextHits_ = true;
+                if (isVisible()) {
+                    editBreakpoint(nullptr);
+                    updateBookmarks();
+                }
+            } else if (editingBreakpoint_ && !findBreakpoint(savedBreakpoints_, editingBreakpoint_)) {
+                editBreakpoint(nullptr);
+            }
+        } else {
+            const auto detail = snapshot_.configureError.isEmpty() ? snapshot_.status : snapshot_.configureError;
+            feedback_->setText(detail.isEmpty() ? text("Не удалось применить точки останова.") : detail);
+            feedback_->show();
+        }
+        if (settled.importedSymbols) emit projectApplied(accepted);
+        else if (accepted && settled.edited) emit projectChanged();
+    }
+    if (!pendingConfiguration_ && queuedProject_) {
+        auto project = std::move(*queuedProject_);
+        queuedProject_.reset();
+        applyProject(project);
+    }
+    publishProjectState();
+    if (!snapshot_.attached || !isVisible() || snapshot_.targets.isEmpty()) return;
+    if (!pendingConfiguration_ && needsConfiguration_) {
+        needsConfiguration_ = false;
+        const bool reset = std::exchange(resetNextHits_, false);
+        QVector<DebuggerBreakpoint> available;
+        for (const auto& point : savedBreakpoints_)
+            if (findTarget(snapshot_, point.cpu)) available.append(point);
+        const bool same = available.size() == snapshot_.breakpoints.size() &&
+            std::equal(available.cbegin(), available.cend(), snapshot_.breakpoints.cbegin(), sameBreakpoint);
+        if (!same || (reset && !available.isEmpty())) {
+            pendingConfiguration_.emplace();
+            pendingConfiguration_->breakpoints = savedBreakpoints_;
+            pendingConfiguration_->resetHits = reset;
+        }
+    }
+    publishProjectState();
+    sendPendingConfiguration();
+}
+
 QString CpuDebuggerDialog::cpuName(quint32 cpu) const {
     const auto* target = findTarget(snapshot_, cpu);
-    if (!target) return QStringLiteral("—");
-    const QString name = Localization::text(QString::fromUtf8(target->name));
-    if (!snapshot_.linkEnabled) return name;
+    const char* fallback = nullptr;
+    switch (cpu & 0xffu) {
+    case KR_DEBUG_M68K: fallback = "Main 68000"; break;
+    case KR_DEBUG_Z80: fallback = "Z80"; break;
+    case KR_DEBUG_SUB68K: fallback = "Sub 68000"; break;
+    case KR_DEBUG_SH2_MASTER: fallback = "SH-2 master"; break;
+    case KR_DEBUG_SH2_SLAVE: fallback = "SH-2 slave"; break;
+    case KR_DEBUG_SSP1601: fallback = "SVP SSP1601"; break;
+    }
+    const auto name = target ? Localization::text(QString::fromUtf8(target->name)) :
+                               fallback ? text(fallback) : QStringLiteral("—");
+    if (!snapshot_.linkEnabled && !(cpu >> 8)) return name;
     const QString console = cpu >> 8 ? text("Консоль B") : text("Консоль A");
     return QStringLiteral("%1 · %2").arg(console, name);
 }
 
 int CpuDebuggerDialog::addressDigits(quint32 cpu) const {
     const auto* target = findTarget(snapshot_, cpu);
-    return target ? (std::clamp(target->address_bits, 1u, 32u) + 3) / 4 : 8;
+    return (std::clamp(target ? target->address_bits : fallbackAddressBits(cpu), 1u, 32u) + 3) / 4;
 }
 
 quint32 CpuDebuggerDialog::addressMask(quint32 cpu) const {
     const auto* target = findTarget(snapshot_, cpu);
-    return bitMask(target ? target->address_bits : 32);
+    return bitMask(target ? target->address_bits : fallbackAddressBits(cpu));
 }
 
 void CpuDebuggerDialog::updateControls() {
@@ -594,13 +844,14 @@ void CpuDebuggerDialog::updateControls() {
         ? text("Адрес слова (hex) или метка") : text("Адрес (hex) или метка");
     address_->setPlaceholderText(addressPrompt);
     address_->setAccessibleName(addressPrompt);
-    for (auto* control : {go_, follow_, import_}) control->setEnabled(connected);
+    for (auto* control : {go_, follow_}) control->setEnabled(connected);
+    import_->setEnabled(connected && !pendingConfiguration_);
     address_->setEnabled(connected);
     follow_->setChecked(followPc_);
     bookmarks_->setEnabled(connected);
-    breakpointEditor_->setEnabled(connected);
-    const bool editing = findBreakpoint(snapshot_.breakpoints, editingBreakpoint_) != nullptr;
-    breakRemove_->setEnabled(connected && editing);
+    breakpointEditor_->setEnabled(connected && !pendingConfiguration_);
+    const bool editing = findBreakpoint(savedBreakpoints_, editingBreakpoint_) != nullptr;
+    breakRemove_->setEnabled(connected && !pendingConfiguration_ && editing);
     breakSave_->setText(editing ? text("Применить") : text("Добавить"));
     updateBreakEventAvailability();
 
@@ -651,8 +902,10 @@ void CpuDebuggerDialog::updateCpuChoices() {
         }
     }
     cpu_->setCurrentIndex(cpu_->findData(cpuId_));
-    const int edited = breakCpu_->findData(previousBreakCpu);
-    breakCpu_->setCurrentIndex(edited >= 0 ? edited : breakCpu_->findData(cpuId_));
+    const auto* configured = findBreakpoint(savedBreakpoints_, editingBreakpoint_);
+    const auto preferred = previousBreakCpu ? previousBreakCpu : configured ? configured->cpu : cpuId_;
+    const int edited = breakCpu_->findData(preferred);
+    breakCpu_->setCurrentIndex(edited >= 0 || configured ? edited : breakCpu_->findData(cpuId_));
     const bool multiple = cpu_->count() > 1 || snapshot_.linkEnabled;
     cpu_->setVisible(multiple);
     cpuLabel_->setVisible(multiple);
@@ -663,9 +916,9 @@ void CpuDebuggerDialog::updateBreakEventAvailability() {
     const quint32 events = target ? target->capabilities & 7u : 0;
     for (size_t i = 0; i < breakEvents_.size(); ++i) {
         breakEvents_[i]->setEnabled(events & eventBits[i]);
-        if (!(events & eventBits[i])) breakEvents_[i]->setChecked(false);
+        if (target && !(events & eventBits[i])) breakEvents_[i]->setChecked(false);
     }
-    breakSave_->setEnabled(snapshot_.attached && events != 0);
+    breakSave_->setEnabled(snapshot_.attached && !pendingConfiguration_ && events != 0);
 }
 
 void CpuDebuggerDialog::updateCode() {
@@ -676,23 +929,40 @@ void CpuDebuggerDialog::updateCode() {
     const auto* state = findCpu(snapshot_, cpuId_);
     const auto codeSymbols = symbols_.constFind(cpuId_);
     code_->setRowCount(snapshot_.instructions.size());
+    struct ExecuteMarker { quint32 first, last; bool armed; };
+    std::array<ExecuteMarker, maxBreakpoints> executionPoints;
+    size_t executionCount = 0;
+    for (const auto& point : savedBreakpoints_) {
+        if (point.cpu != cpuId_ || !(point.events & KR_DEBUG_EXEC)) continue;
+        const auto* runtime = findBreakpoint(snapshot_.breakpoints, point.id);
+        if (executionCount == executionPoints.size()) break;
+        executionPoints[executionCount++] = {point.first, point.last,
+            runtime && sameBreakpoint(point, *runtime) && runtime->enabled};
+    }
     int row = 0;
     for (const auto& instruction : snapshot_.instructions) {
         const bool current = state && state->pc == instruction.address;
-        const bool breakpoint = std::any_of(snapshot_.breakpoints.cbegin(), snapshot_.breakpoints.cend(),
-            [&](const DebuggerBreakpoint& bp) {
-                return bp.enabled && bp.cpu == cpuId_ && (bp.events & KR_DEBUG_EXEC) &&
-                       instruction.address >= bp.first && instruction.address <= bp.last;
-            });
-        QString address;
-        if (breakpoint) address += QStringLiteral("● ");
-        if (current) address += QStringLiteral("▶ ");
-        address += hex(instruction.address, addressDigits(cpuId_));
-        auto* addressCell = cell(code_, row, 0, address);
+        bool breakpoint = false, enabled = false;
+        for (size_t i = 0; i < executionCount; ++i) {
+            const auto& point = executionPoints[i];
+            if (instruction.address < point.first || instruction.address > point.last) continue;
+            breakpoint = true;
+            if (point.armed) {
+                enabled = true;
+                break;
+            }
+        }
+        auto* marker = cell(code_, row, BreakMarker,
+                            enabled ? QStringLiteral("●") : breakpoint ? QStringLiteral("○") : QString());
+        auto* pc = cell(code_, row, PcMarker, current ? QStringLiteral("▶") : QString());
+        for (auto* item : {marker, pc})
+            if (item->textAlignment() != Qt::AlignCenter) item->setTextAlignment(Qt::AlignCenter);
+        auto* addressCell = cell(code_, row, CodeAddress, hex(instruction.address, addressDigits(cpuId_)));
         if (addressCell->data(Qt::UserRole).toUInt() != instruction.address)
             addressCell->setData(Qt::UserRole, instruction.address);
-        cell(code_, row, 1, instruction.valid ? codeBytes(instruction) : QStringLiteral("??"));
-        cell(code_, row, 2, instruction.valid ? QString::fromLatin1(instruction.text) : text("Команда недоступна"));
+        cell(code_, row, CodeBytes, instruction.valid ? codeBytes(instruction) : QStringLiteral("??"));
+        cell(code_, row, CodeInstruction, instruction.valid ? QString::fromLatin1(instruction.text) :
+                                                             text("Команда недоступна"));
         QString annotation;
         if (codeSymbols != symbols_.cend()) {
             const auto symbol = codeSymbols->constFind(instruction.address);
@@ -705,10 +975,28 @@ void CpuDebuggerDialog::updateCode() {
                 }
             }
         }
-        cell(code_, row++, 3, annotation);
+        cell(code_, row++, CodeAnnotation, annotation);
     }
     if (followPc_ && state && !address_->hasFocus())
         address_->setText(hex(state->pc, addressDigits(cpuId_)));
+}
+
+void CpuDebuggerDialog::copyDisassembly() {
+    auto rows = code_->selectionModel()->selectedRows(CodeAddress);
+    if (rows.isEmpty()) return;
+    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.row() < b.row(); });
+    QStringList lines;
+    lines.reserve(rows.size());
+    for (const auto& index : rows) {
+        const int row = index.row();
+        QStringList fields;
+        for (const int column : {CodeAddress, CodeBytes, CodeInstruction, CodeAnnotation}) {
+            const auto* item = code_->item(row, column);
+            if (item && !item->text().isEmpty()) fields.append(item->text());
+        }
+        lines.append(fields.join(QLatin1Char('\t')));
+    }
+    QApplication::clipboard()->setText(lines.join(QLatin1Char('\n')));
 }
 
 void CpuDebuggerDialog::updateState() {
@@ -833,12 +1121,18 @@ void CpuDebuggerDialog::writeRegister(const QString& name, quint32 value, quint3
 
 void CpuDebuggerDialog::updateBreakpoints() {
     const QSignalBlocker block(breakpoints_);
-    const auto& list = snapshot_.breakpoints;
-    breakpoints_->setRowCount(snapshot_.attached ? list.size() : 0);
+    const auto& list = savedBreakpoints_;
+    breakpoints_->setRowCount(list.size());
     int selectedRow = -1;
-    for (int row = 0; snapshot_.attached && row < list.size(); ++row) {
-        const auto& bp = list.at(row);
-        auto* enabled = cell(breakpoints_, row, 0, bp.enabled ? QStringLiteral("✓") : QStringLiteral("—"));
+    for (int row = 0; row < list.size(); ++row) {
+        const auto& configured = list.at(row);
+        const auto bp = displayedBreakpoint(configured);
+        const auto* runtime = findBreakpoint(snapshot_.breakpoints, bp.id);
+        const bool installed = runtime && sameBreakpoint(configured, *runtime);
+        auto* enabled = cell(breakpoints_, row, 0, installed && bp.enabled ? QStringLiteral("✓") :
+                                                   configured.enabled ? QStringLiteral("○") : QStringLiteral("—"));
+        const QString availability = installed ? QString() : text("Точка останова пока не активна.");
+        if (enabled->toolTip() != availability) enabled->setToolTip(availability);
         if (enabled->data(Qt::UserRole).toUInt() != bp.id) enabled->setData(Qt::UserRole, bp.id);
         if (bp.id == editingBreakpoint_) selectedRow = row;
         cell(breakpoints_, row, 1, cpuName(bp.cpu));
@@ -873,8 +1167,8 @@ void CpuDebuggerDialog::editBreakpoint(const DebuggerBreakpoint* bp) {
 }
 
 void CpuDebuggerDialog::saveBreakpoint() {
-    if (!snapshot_.attached || breakCpu_->currentIndex() < 0) return;
-    auto list = snapshot_.breakpoints;
+    if (!snapshot_.attached || pendingConfiguration_ || breakCpu_->currentIndex() < 0) return;
+    auto list = savedBreakpoints_;
     const auto* existing = findBreakpoint(list, editingBreakpoint_);
     if (!existing && list.size() >= maxBreakpoints) {
         feedback_->setText(text("Можно задать не более %1 точек останова.").arg(maxBreakpoints));
@@ -917,23 +1211,23 @@ void CpuDebuggerDialog::saveBreakpoint() {
 }
 
 void CpuDebuggerDialog::removeBreakpoint() {
-    if (!snapshot_.attached || !editingBreakpoint_) return;
-    auto list = snapshot_.breakpoints;
+    if (!snapshot_.attached || pendingConfiguration_ || !editingBreakpoint_) return;
+    auto list = savedBreakpoints_;
     const auto id = editingBreakpoint_;
     const auto end = std::remove_if(list.begin(), list.end(),
                                    [id](const DebuggerBreakpoint& bp) { return bp.id == id; });
     if (end == list.end()) return;
     list.erase(end, list.end());
-    editBreakpoint(nullptr);
     configure(std::move(list));
 }
 
 void CpuDebuggerDialog::toggleExecuteBreakpoint(int row) {
     const auto* target = findTarget(snapshot_, cpuId_);
-    if (!snapshot_.attached || snapshot_.selectedCpu != cpuId_ || !target ||
-        !(target->capabilities & KR_DEBUG_CAP_EXEC) || !code_->item(row, 0)) return;
-    const auto addr = code_->item(row, 0)->data(Qt::UserRole).toUInt();
-    auto list = snapshot_.breakpoints;
+    const auto* address = code_->item(row, CodeAddress);
+    if (!snapshot_.attached || pendingConfiguration_ || snapshot_.selectedCpu != cpuId_ || !target ||
+        !(target->capabilities & KR_DEBUG_CAP_EXEC) || !address) return;
+    const auto addr = address->data(Qt::UserRole).toUInt();
+    auto list = savedBreakpoints_;
     for (auto& bp : list) {
         if (bp.cpu == cpuId_ && bp.events == KR_DEBUG_EXEC && bp.first == addr && bp.last == addr &&
             bp.condition.isEmpty() && !bp.ignoreHits && !bp.oneShot) {
@@ -957,12 +1251,17 @@ void CpuDebuggerDialog::toggleExecuteBreakpoint(int row) {
 }
 
 void CpuDebuggerDialog::configure(QVector<DebuggerBreakpoint> breakpoints, quint32 editedId) {
+    if (pendingConfiguration_) return;
     feedback_->hide();
-    DebuggerCommand request = refreshCommand();
-    request.kind = DebuggerCommand::Configure;
-    request.editedBreakpointId = editedId;
-    request.breakpoints = std::move(breakpoints);
-    emit command(request);
+    pendingConfiguration_.emplace();
+    pendingConfiguration_->edited = breakpoints.size() != savedBreakpoints_.size() ||
+        !std::equal(breakpoints.cbegin(), breakpoints.cend(), savedBreakpoints_.cbegin(),
+                    [](const auto& a, const auto& b) { return sameBreakpoint(a, b) && a.enabled == b.enabled; });
+    pendingConfiguration_->breakpoints = std::move(breakpoints);
+    pendingConfiguration_->editedId = editedId;
+    publishProjectState();
+    sendPendingConfiguration();
+    updateControls();
 }
 
 void CpuDebuggerDialog::importSymbols() {
@@ -970,7 +1269,7 @@ void CpuDebuggerDialog::importSymbols() {
     const quint64 context = generation_;
     const QString path = QFileDialog::getOpenFileName(this, text("Импорт меток"), {},
         text("Текстовые файлы (*.txt *.sym);;Все файлы (*)"));
-    if (path.isEmpty() || generation_ != context || !snapshot_.attached) return;
+    if (path.isEmpty() || generation_ != context || !snapshot_.attached || pendingConfiguration_) return;
     const auto fail = [this](const QString& message) {
         feedback_->setText(message);
         feedback_->show();
@@ -996,7 +1295,9 @@ void CpuDebuggerDialog::importSymbols() {
         return;
     }
 
-    auto merged = symbols_.value(cpu);
+    const auto original = symbols_.value(cpu);
+    const auto occupied = symbolCount() - original.size();
+    auto merged = original;
     static const QRegularExpression entry(QStringLiteral("^([^\\s]+)\\s+([^\\s#;]+)(?:\\s*[#;]\\s*(.*))?$"));
     qsizetype imported = 0;
     qsizetype lineNumber = 0;
@@ -1007,20 +1308,23 @@ void CpuDebuggerDialog::importSymbols() {
         const auto match = entry.match(trimmed.toString());
         quint32 address = 0;
         if (!match.hasMatch() || !readHex(match.captured(1), addressMask(cpu), address) ||
-            match.capturedLength(2) > 96 || match.capturedLength(3) > 256) {
+            match.capturedLength(2) > maxLabelLength || match.capturedLength(3) > maxCommentLength) {
             fail(text("Ошибка в строке %1 файла меток.").arg(lineNumber));
             return;
         }
         Symbol& symbol = merged[address];
         symbol.label = match.captured(2);
         if (match.hasCaptured(3)) symbol.comment = match.captured(3);
-        if (merged.size() > maxSymbols) {
-            fail(text("Можно задать не более %1 меток для процессора.").arg(maxSymbols));
+        if (occupied + merged.size() > maxSymbols) {
+            fail(text("В проекте можно задать не более %1 меток.").arg(maxSymbols));
             return;
         }
         ++imported;
     }
-    symbols_.insert(cpu, std::move(merged));
+    if (merged != original) {
+        symbols_.insert(cpu, std::move(merged));
+        emit projectChanged();
+    }
     feedback_->setText(text("Загружено %1 меток.").arg(imported));
     feedback_->show();
     updateCode();
@@ -1031,7 +1335,9 @@ void CpuDebuggerDialog::showCodeMenu(const QPoint& point) {
     if (!snapshot_.attached || snapshot_.selectedCpu != cpuId_) return;
     const QModelIndex index = code_->indexAt(point);
     if (!index.isValid()) return;
-    const auto address = code_->item(index.row(), 0)->data(Qt::UserRole).toUInt();
+    const auto* addressCell = code_->item(index.row(), CodeAddress);
+    if (!addressCell) return;
+    const auto address = addressCell->data(Qt::UserRole).toUInt();
     const quint32 cpu = cpuId_;
     const quint64 context = generation_;
     Symbol original;
@@ -1040,40 +1346,56 @@ void CpuDebuggerDialog::showCodeMenu(const QPoint& point) {
     QMenu menu(this);
     auto* breakpoint = menu.addAction(text("Переключить точку останова"));
     const auto* target = findTarget(snapshot_, cpu);
-    breakpoint->setEnabled(target && (target->capabilities & KR_DEBUG_CAP_EXEC));
+    breakpoint->setEnabled(target && (target->capabilities & KR_DEBUG_CAP_EXEC) && !pendingConfiguration_);
     auto* bookmark = menu.addAction(original.bookmarked ? text("Убрать закладку") : text("Добавить закладку"));
+    auto* label = menu.addAction(text("Метка…"));
     auto* comment = menu.addAction(text("Комментарий…"));
+    for (auto* edit : {bookmark, label, comment}) edit->setEnabled(!pendingConfiguration_);
+    menu.addSeparator();
+    auto* copy = menu.addAction(text("Копировать"));
     const auto* action = menu.exec(code_->viewport()->mapToGlobal(point));
     if (!action || !snapshot_.attached || generation_ != context || cpu != cpuId_) return;
-    if (action == breakpoint) {
-        for (int row = 0; row < code_->rowCount(); ++row)
-            if (code_->item(row, 0)->data(Qt::UserRole).toUInt() == address) {
+    if (action == copy || action == breakpoint) {
+        for (int row = 0; row < code_->rowCount(); ++row) {
+            const auto* item = code_->item(row, CodeAddress);
+            if (!item || item->data(Qt::UserRole).toUInt() != address) continue;
+            if (action == copy) {
+                if (!code_->selectionModel()->isRowSelected(row, QModelIndex{})) code_->selectRow(row);
+                copyDisassembly();
+            } else {
                 toggleExecuteBreakpoint(row);
-                break;
             }
+            break;
+        }
         return;
     }
+    if (pendingConfiguration_) return;
 
     Symbol edited = original;
     if (action == bookmark) {
         edited.bookmarked = !original.bookmarked;
-    } else if (action == comment) {
+    } else if (action == label || action == comment) {
         bool ok = false;
-        const QString note = QInputDialog::getText(this, text("Комментарий"),
+        const bool editingLabel = action == label;
+        const QString value = QInputDialog::getText(this, editingLabel ? text("Метка") : text("Комментарий"),
             QStringLiteral("%1 · 0x%2").arg(cpuName(cpu), hex(address, addressDigits(cpu))),
-            QLineEdit::Normal, original.comment, &ok);
-        if (!ok || !snapshot_.attached || generation_ != context) return;
-        edited.comment = note.trimmed().left(256);
+            QLineEdit::Normal, editingLabel ? original.label : original.comment, &ok);
+        if (!ok || !snapshot_.attached || generation_ != context || cpu != cpuId_ || pendingConfiguration_) return;
+        if (editingLabel) edited.label = value.trimmed().left(maxLabelLength);
+        else edited.comment = value.trimmed().left(maxCommentLength);
     }
+    if (edited == original) return;
     auto& symbols = symbols_[cpu];
     if (!edited.bookmarked && edited.label.isEmpty() && edited.comment.isEmpty()) {
         symbols.remove(address);
-    } else if (symbols.size() < maxSymbols || symbols.contains(address)) {
+    } else if (symbols.contains(address) || symbolCount() < maxSymbols) {
         symbols.insert(address, std::move(edited));
     } else {
-        feedback_->setText(text("Можно задать не более %1 меток для процессора.").arg(maxSymbols));
+        feedback_->setText(text("В проекте можно задать не более %1 меток.").arg(maxSymbols));
         feedback_->show();
+        return;
     }
+    emit projectChanged();
     updateCode();
     updateBookmarks();
 }

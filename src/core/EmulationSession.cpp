@@ -225,6 +225,7 @@ void EmulationSession::requestInspection(const DebugInspectionRequest& request) 
     inspectionRequest_ = request;
     inspectionRequest_.parts &= 15u;
     inspectionRequest_.length = std::min(request.length,4096u);
+    inspectionRequest_.watches.resize(std::min(inspectionRequest_.watches.size(), qsizetype(DebugWatchLimit)));
     inspectionRequested_.store(true);
     if (!request.parts) {
         inspectionSnapshot_ = {};
@@ -1293,8 +1294,17 @@ void EmulationSession::run() {
         bool active=false, manual=false, fast=false, present=true;
         int speedPercent=100, factor=1;
     } debugFrame;
+    quint64 configureReplyId = 0;
+    bool configureReplyAccepted = false;
+    QString configureReplyError;
     auto publishDebugger = [&](const QString& error = QString()) {
         auto snapshot=host.debuggerSnapshot();
+        if (configureReplyId) {
+            if (!configureReplyAccepted && configureReplyError.isEmpty() && !error.isEmpty()) configureReplyError=error;
+            snapshot.configureRequestId=configureReplyId;
+            snapshot.configureAccepted=configureReplyAccepted;
+            snapshot.configureError=configureReplyError;
+        }
         if (snapshot.attached && !snapshot.partialFrame && paused && !host.debuggerRunRequested()) snapshot.stopped=true;
         const bool editAllowed=paused && !achievementHardcore && !networkMode && !videoExport && !movie.active();
         snapshot.canEdit=snapshot.canEdit && editAllowed;
@@ -1396,6 +1406,11 @@ void EmulationSession::run() {
             debugCommands.swap(debuggerCommands_);
         }
         for (const auto& command:debugCommands) {
+            if ((command.kind==DebuggerCommand::Configure || command.kind==DebuggerCommand::Validate) && command.configureRequestId) {
+                configureReplyId=command.configureRequestId;
+                configureReplyAccepted=false;
+                configureReplyError.clear();
+            }
             if (command.kind==DebuggerCommand::Detach) {
                 host.finishDebugFrame();finishFramePipeline();
                 host.debuggerDetach();publishDebugger();continue;
@@ -1430,6 +1445,8 @@ void EmulationSession::run() {
                 publishDebugger(error);continue;
             }
             if (!host.debuggerCommand(command,error)) {publishDebugger(error);continue;}
+            if ((command.kind==DebuggerCommand::Configure || command.kind==DebuggerCommand::Validate) && command.configureRequestId)
+                configureReplyAccepted=true;
             if(command.kind==DebuggerCommand::WriteRegister) {
                 clearHistory();clearAudio();resetMetrics();
             }

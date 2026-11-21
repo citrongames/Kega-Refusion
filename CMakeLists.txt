@@ -37,6 +37,9 @@ set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
+    src/core/DebugProject.cpp
+    src/core/DebugProject.h
+    src/core/DebugWatch.h
     src/core/DebugCoverage.cpp src/core/DebugCoverage.h src/core/DebugCoverageAbi.h
     src/core/DebugCoverageMap.cpp src/core/DebugCoverageMap.h
     src/core/DebugTrace.cpp src/core/DebugTrace.h src/core/DebugTraceAbi.h
@@ -138,6 +141,9 @@ add_executable(KegaRefusion WIN32
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/CpuDebuggerDialog.cpp src/ui/CpuDebuggerDialog.h
+    src/ui/MainWindowDebugProject.cpp
+    src/ui/DebugWatchDialog.cpp
+    src/ui/DebugWatchDialog.h
     src/ui/CoverageDialog.cpp src/ui/CoverageDialog.h
     src/ui/TraceDialog.cpp src/ui/TraceDialog.h
     src/ui/DebugInspectorWidgets.cpp src/ui/DebugInspectorWidgets.h
@@ -411,6 +417,16 @@ if(BUILD_TESTING)
     target_link_libraries(debug_coverage_native_tests PRIVATE Qt6::Core)
     add_executable(debug_coverage_host_tests tests/debug_coverage_host_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
     target_link_libraries(debug_coverage_host_tests PRIVATE core_host)
+    add_executable(debug_project_host_tests tests/debug_project_host_tests.cpp)
+    target_link_libraries(debug_project_host_tests PRIVATE core_host)
+    add_executable(debug_project_tests tests/debug_project_tests.cpp)
+    target_link_libraries(debug_project_tests PRIVATE core_host)
+    add_test(NAME debug_project COMMAND debug_project_tests)
+    add_executable(debug_watch_view_tests tests/debug_watch_view_tests.cpp src/ui/DebugWatchDialog.cpp src/ui/DebugWatchDialog.h)
+    target_include_directories(debug_watch_view_tests PRIVATE src)
+    target_link_libraries(debug_watch_view_tests PRIVATE Qt6::Widgets localization)
+    add_test(NAME debug_watch_view COMMAND debug_watch_view_tests)
+    set_tests_properties(debug_watch_view PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(debug_coverage_map_tests tests/debug_coverage_map_tests.cpp)
     target_link_libraries(debug_coverage_map_tests PRIVATE core_host)
     add_test(NAME debug_coverage_map COMMAND debug_coverage_map_tests)

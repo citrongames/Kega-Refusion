@@ -120,8 +120,10 @@ selected CPU. Addresses accept bare hex, `$` and `0x` prefixes. Either `#` or
 `;` starts an inline comment or a standalone comment line. Labels, comments and
 bookmarks refer to logical addresses for the current game. They are retained
 across resets and state loads. Switching banks can change the code at a label.
-[Instruction/event tracing](debug-tracing.md) is available separately. Persistent
-debug projects and physical code/data coverage remain in a later phase.
+[Instruction/event tracing](debug-tracing.md) and
+[physical code/data coverage](debug-coverage.md) are available separately.
+Use [debug projects](debugger-projects.md) to save these logical annotations,
+breakpoint definitions and memory watches together.
 
 ## Cost and lifetime
 

@@ -1,11 +1,12 @@
 #pragma once
 
-#include "core/DebugExecution.h"
+#include "core/DebugProject.h"
 
 #include <QDialog>
 #include <QHash>
 #include <QMap>
 #include <array>
+#include <optional>
 
 class QCheckBox;
 class QComboBox;
@@ -26,9 +27,18 @@ public:
     DebuggerCommand refreshCommand() const;
     void setSnapshot(const DebuggerSnapshot& snapshot);
     void navigateTo(quint32 cpu, quint32 address);
+    DebugProject exportProject() const;
+    void applyProject(const DebugProject& project);
+    void clearProject();
+    void cancelProjectImport();
+    bool projectPending() const;
+    QString projectError() const;
 
 signals:
     void command(const DebuggerCommand& command);
+    void projectChanged();
+    void projectStateChanged();
+    void projectApplied(bool accepted);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -39,6 +49,17 @@ private:
         QString label;
         QString comment;
         bool bookmarked = false;
+        bool operator==(const Symbol& other) const {
+            return label == other.label && comment == other.comment && bookmarked == other.bookmarked;
+        }
+    };
+
+    struct PendingConfiguration {
+        QVector<DebuggerBreakpoint> breakpoints;
+        std::optional<QVector<DebugProjectSymbol>> importedSymbols;
+        quint64 requestId = 0;
+        quint32 editedId = 0;
+        bool edited = false, resetHits = false, validateOnly = false;
     };
 
     void send(DebuggerCommand::Kind action);
@@ -51,6 +72,7 @@ private:
     int addressDigits(quint32 cpu) const;
     quint32 addressMask(quint32 cpu) const;
     void updateCode();
+    void copyDisassembly();
     void updateState();
     void updateFlags(const kr_debug_cpu* state, const kr_debug_target* target);
     bool canEditRegister(const QString& name) const;
@@ -63,6 +85,12 @@ private:
     void removeBreakpoint();
     void toggleExecuteBreakpoint(int row);
     void configure(QVector<DebuggerBreakpoint> breakpoints, quint32 editedId = 0);
+    void sendPendingConfiguration();
+    void reconcileConfiguration();
+    void publishProjectState();
+    void replaceSymbols(const QVector<DebugProjectSymbol>& symbols);
+    qsizetype symbolCount() const;
+    DebuggerBreakpoint displayedBreakpoint(const DebuggerBreakpoint& breakpoint) const;
     void importSymbols();
     void showCodeMenu(const QPoint& point);
     void updateBookmarks();
@@ -100,11 +128,17 @@ private:
     QPushButton* breakRemove_ = nullptr;
 
     DebuggerSnapshot snapshot_;
+    QVector<DebuggerBreakpoint> savedBreakpoints_;
+    std::optional<PendingConfiguration> pendingConfiguration_;
+    std::optional<DebugProject> queuedProject_;
     QHash<quint32, QMap<quint32, Symbol>> symbols_;
     QString gameKey_;
     quint64 generation_ = 0;
+    quint64 nextConfigureRequest_ = 0, lastConfigureResult_ = 0;
     quint32 cpuId_ = KR_DEBUG_M68K;
     quint32 addressValue_ = 0;
     quint32 editingBreakpoint_ = 0;
     bool followPc_ = true;
+    bool needsConfiguration_ = false, resetNextHits_ = false;
+    bool reportedProjectPending_ = false;
 };

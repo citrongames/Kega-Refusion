@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -12,6 +13,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QShortcut>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -89,6 +91,27 @@ DebuggerSnapshot attached() {
     return snapshot;
 }
 
+void acceptConfiguration(CpuDebuggerDialog& dialog, DebuggerSnapshot& snapshot,
+                         const DebuggerCommand& request) {
+    check((request.kind == DebuggerCommand::Configure || request.kind == DebuggerCommand::Validate) &&
+          request.configureRequestId, "worker reply is tied to a configuration request");
+    snapshot.configureRequestId = request.configureRequestId;
+    snapshot.configureAccepted = true;
+    snapshot.configureError.clear();
+    snapshot.breakpoints = request.breakpoints;
+    dialog.setSnapshot(snapshot);
+}
+
+void activateShortcut(QWidget& parent, const QKeySequence& key) {
+    for (auto* shortcut : parent.findChildren<QShortcut*>()) {
+        if (shortcut->key() != key) continue;
+        check(shortcut->context() == Qt::WidgetWithChildrenShortcut, "debugger shortcut has local scope");
+        check(QMetaObject::invokeMethod(shortcut, "activated", Qt::DirectConnection), "activate shortcut");
+        return;
+    }
+    check(false, "debugger shortcut exists");
+}
+
 void verify(const QString& previews) {
     CpuDebuggerDialog dialog;
     QVector<DebuggerCommand> commands;
@@ -115,7 +138,7 @@ void verify(const QString& previews) {
     auto* over = find<QPushButton>(dialog, "debugCpuStepOver");
     auto* out = find<QPushButton>(dialog, "debugCpuStepOut");
     check(cpu->isVisible() && cpu->count() == 2, "two CPU choices for MD");
-    check(code->rowCount() == 1 && code->item(0, 1)->text() == QStringLiteral("4E 71"),
+    check(code->rowCount() == 1 && code->item(0, 3)->text() == QStringLiteral("4E 71"),
           "instruction bytes in guest order");
     check(registers->item(0, 1)->text() == QStringLiteral("0x2704") &&
           find<QGroupBox>(dialog, "debugCpuFlags")->title().contains(QStringLiteral("IPL 7")), "captured SR and flags");
@@ -125,8 +148,8 @@ void verify(const QString& previews) {
     check(stack->isReadOnly() && stack->toPlainText() == QStringLiteral("FF4000 77 ??"), "stack validity");
     stateTabs->setCurrentIndex(0);
     check(pause->isEnabled() && !resume->isEnabled() && !into->isEnabled(), "running controls");
-    pause->click();
-    check(commands.last().kind == DebuggerCommand::Pause, "explicit pause command");
+    activateShortcut(dialog, QKeySequence(Qt::Key_F5));
+    check(commands.last().kind == DebuggerCommand::Pause, "F5 pauses running execution");
 
     snapshot.stopped = true;
     snapshot.partialFrame = true;
@@ -138,7 +161,8 @@ void verify(const QString& previews) {
     dialog.setSnapshot(snapshot);
     check(status->text().contains(QStringLiteral("Z80")) && status->text().contains(QStringLiteral("0xC123")),
           "data stop uses actual event CPU");
-    check(!pause->isEnabled() && resume->isEnabled() && into->isEnabled(), "stopped controls");
+    check(!pause->isEnabled() && resume->isEnabled() && into->isEnabled() &&
+          over->isEnabled() && out->isEnabled(), "stopped controls");
     cpu->setCurrentIndex(cpu->findData(quint32(KR_DEBUG_M68K)));
     check(commands.last().kind == DebuggerCommand::Navigate && commands.last().cpu == KR_DEBUG_M68K &&
           commands.last().followPc, "CPU switch follows its PC");
@@ -149,23 +173,30 @@ void verify(const QString& previews) {
           !dialog.refreshCommand().followPc, "explicit hex navigation");
     find<QPushButton>(dialog, "debugCpuFollowPc")->click();
     check(dialog.refreshCommand().followPc, "PC tracking resumes");
-    into->click();
-    check(commands.last().kind == DebuggerCommand::StepInto, "step into");
-    over->click();
-    check(commands.last().kind == DebuggerCommand::StepOver, "step over");
-    out->click();
-    check(commands.last().kind == DebuggerCommand::StepOut, "step out");
-    resume->click();
-    check(commands.last().kind == DebuggerCommand::Continue, "continue");
+    activateShortcut(dialog, QKeySequence(Qt::Key_F7));
+    check(commands.last().kind == DebuggerCommand::StepInto, "F7 steps into");
+    activateShortcut(dialog, QKeySequence(Qt::Key_F8));
+    check(commands.last().kind == DebuggerCommand::StepOver, "F8 steps over");
+    activateShortcut(dialog, QKeySequence(Qt::SHIFT | Qt::Key_F8));
+    check(commands.last().kind == DebuggerCommand::StepOut, "Shift+F8 steps out");
+    activateShortcut(dialog, QKeySequence(Qt::Key_F5));
+    check(commands.last().kind == DebuggerCommand::Continue, "F5 continues stopped execution");
 
     // Pending break and step actions only affect the UI after the owner sends a snapshot.
     dialog.setSnapshot(snapshot);
-    emit code->cellDoubleClicked(0, 0);
-    check(commands.last().kind == DebuggerCommand::Configure &&
-          commands.last().breakpoints.size() == 1 && commands.last().breakpoints[0].first == 0x102,
-          "double-click enables an execute breakpoint");
-    snapshot.breakpoints = commands.last().breakpoints;
-    dialog.setSnapshot(snapshot);
+    const auto beforeDoubleClick = commands.size();
+    emit code->cellDoubleClicked(0, 4);
+    check(commands.size() == beforeDoubleClick, "double-clicking instructions does not set breakpoints");
+    emit code->cellClicked(0, 0);
+    check(commands.last().kind == DebuggerCommand::Configure && commands.last().configureRequestId &&
+          commands.last().breakpoints.size() == 1 && commands.last().breakpoints[0].first == 0x102 &&
+          commands.last().gameKey == snapshot.gameKey,
+          "clicking the breakpoint margin configures an execute breakpoint for the active game");
+    check(dialog.projectPending() && dialog.exportProject().breakpoints.isEmpty(),
+          "breakpoint edits wait for the worker before committing");
+    acceptConfiguration(dialog, snapshot, commands.last());
+    check(code->item(0, 0)->text() == QStringLiteral("●") && code->item(0, 1)->text() == QStringLiteral("▶"),
+          "current instruction and breakpoint have separate markers");
 
     auto* tabs = find<QTabWidget>(dialog, "debugCpuTabs");
     tabs->setCurrentIndex(1);
@@ -185,8 +216,7 @@ void verify(const QString& previews) {
     check(bp.cpu == KR_DEBUG_M68K && bp.events == KR_DEBUG_WRITE && bp.first == 0xff0000 &&
           bp.last == 0xff0010 && bp.oneShot && bp.ignoreHits == 2 &&
           bp.condition == QStringLiteral("VALUE == $55"), "data breakpoint configuration");
-    snapshot.breakpoints = commands.last().breakpoints;
-    dialog.setSnapshot(snapshot);
+    acceptConfiguration(dialog, snapshot, commands.last());
     check(find<QTableWidget>(dialog, "debugCpuBreakpoints")->rowCount() == 2, "breakpoint list snapshot");
 
     if (!previews.isEmpty()) {
@@ -216,7 +246,14 @@ void verify(const QString& previews) {
     pickerTimeout.start(2000);
     find<QPushButton>(dialog, "debugCpuImportSymbols")->click();
     pickerTimeout.stop();
-    check(code->item(0, 3)->text().contains(QStringLiteral("original fixture")), "symbol and comment annotate code");
+    check(code->item(0, 5)->text().contains(QStringLiteral("original fixture")), "symbol and comment annotate code");
+    code->selectRow(0);
+    activateShortcut(*code, QKeySequence(QKeySequence::Copy));
+    const auto copied = QApplication::clipboard()->text();
+    check(copied == QStringLiteral("000102\t4E 71\tnop\tmain · original fixture"),
+          "copy includes selected address, bytes, instruction and annotation");
+    activateShortcut(dialog, QKeySequence(Qt::CTRL | Qt::Key_G));
+    check(address->selectedText() == address->text(), "Ctrl+G selects the address field");
     address->setText(QStringLiteral("main"));
     find<QPushButton>(dialog, "debugCpuNavigate")->click();
     check(commands.last().kind == DebuggerCommand::Navigate && commands.last().address == 0x102,
@@ -229,12 +266,15 @@ void verify(const QString& previews) {
 
     ++snapshot.generation;
     dialog.setSnapshot(snapshot);
-    check(code->item(0, 3)->text().contains(QStringLiteral("original fixture")), "reset retains same-game symbols");
+    check(code->item(0, 5)->text().contains(QStringLiteral("original fixture")), "reset retains same-game symbols");
     auto nextGame = snapshot;
     ++nextGame.generation;
     nextGame.gameKey = QStringLiteral("second.md\nMD fixture 2");
+    dialog.clearProject();
+    nextGame.breakpoints.clear();
     dialog.setSnapshot(nextGame);
-    check(code->item(0, 3)->text().isEmpty(), "symbols clear on game change");
+    check(code->item(0, 5)->text().isEmpty() && dialog.exportProject().breakpoints.isEmpty(),
+          "game lifecycle clears symbols and breakpoints");
 
     DebuggerSnapshot sms;
     sms.attached = true;
@@ -251,6 +291,151 @@ void verify(const QString& previews) {
     check(commands.last().kind == DebuggerCommand::Detach && code->rowCount() == 0 &&
           registers->rowCount() == 0 && stack->toPlainText().isEmpty(), "closing detaches and clears snapshot");
 }
+void verifyProjectRoundTrip() {
+    CpuDebuggerDialog dialog;
+    QVector<DebuggerCommand> commands;
+    QVector<bool> results;
+    int projectChanges = 0;
+    int pendingChanges = 0;
+    QObject::connect(&dialog, &CpuDebuggerDialog::command, [&](const auto& command) { commands.append(command); });
+    QObject::connect(&dialog, &CpuDebuggerDialog::projectApplied, [&](bool accepted) { results.append(accepted); });
+    QObject::connect(&dialog, &CpuDebuggerDialog::projectChanged, [&] { ++projectChanges; });
+    QObject::connect(&dialog, &CpuDebuggerDialog::projectStateChanged, [&] { ++pendingChanges; });
+
+    auto snapshot = attached();
+    DebugProject saved;
+    saved.game = snapshot.gameKey;
+    DebuggerBreakpoint main;
+    main.id = 31;
+    main.cpu = KR_DEBUG_M68K;
+    main.first = main.last = 0x102;
+    main.hits = 12;
+    DebuggerBreakpoint peer = main;
+    peer.id = 32;
+    peer.cpu = 0x100u | KR_DEBUG_Z80;
+    peer.first = peer.last = 0xf123;
+    saved.breakpoints = {main, peer};
+    saved.symbols = {{main.cpu, main.first, QStringLiteral("main"), {}, false},
+                     {peer.cpu, peer.first, QStringLiteral("peer"), QStringLiteral("peer note"), true}};
+    dialog.applyProject(saved);
+    check(commands.size() == 1 && commands.last().kind == DebuggerCommand::Validate &&
+          commands.last().breakpoints.size() == 2 && !commands.last().resetBreakpointHits &&
+          results.isEmpty() && dialog.projectPending() && dialog.exportProject().breakpoints.isEmpty(),
+          "hidden import validates all definitions without attaching or installing breakpoints");
+    auto detached = DebuggerSnapshot{};
+    acceptConfiguration(dialog, detached, commands.last());
+    const auto hidden = dialog.exportProject();
+    check(commands.size() == 1 && results == QVector<bool>{true} && !dialog.projectPending() &&
+          hidden.breakpoints.size() == 2 && hidden.breakpoints.last().hits == 0 &&
+          hidden.symbols.last().cpu == peer.cpu && hidden.symbols.last().bookmarked,
+          "hidden import commits project metadata after validation");
+
+    auto invalid = saved;
+    invalid.symbols.first().label = QStringLiteral("uncommitted");
+    dialog.applyProject(invalid);
+    check(commands.size() == 2 && commands.last().kind == DebuggerCommand::Validate &&
+          dialog.projectPending(), "a second hidden import still uses validation");
+    detached.configureRequestId = commands.last().configureRequestId;
+    detached.configureAccepted = false;
+    dialog.setSnapshot(detached);
+    check(!dialog.projectPending() && results == QVector<bool>{true, false} &&
+          dialog.exportProject().symbols.first().label == QStringLiteral("main"),
+          "failed hidden validation preserves the saved project");
+
+    dialog.show();
+    check(commands.size() == 3 && commands.last().kind == DebuggerCommand::Attach,
+          "showing the dialog explicitly attaches");
+    dialog.setSnapshot(snapshot);
+    auto request = commands.last();
+    check(dialog.projectPending() && request.kind == DebuggerCommand::Configure &&
+          request.resetBreakpointHits && request.breakpoints.size() == 1 &&
+          request.breakpoints.first().id == main.id,
+          "attaching installs available definitions and preserves offline ones");
+    acceptConfiguration(dialog, snapshot, request);
+    check(!dialog.projectPending() && dialog.exportProject().breakpoints.size() == 2,
+          "the imported Link peer survives primary-only attach");
+
+    auto replacement = saved;
+    replacement.breakpoints.first().first = replacement.breakpoints.first().last = 0x104;
+    replacement.symbols.first().label = QStringLiteral("replacement");
+    dialog.applyProject(replacement);
+    request = commands.last();
+    check(dialog.projectPending() && dialog.exportProject().symbols.first().label == QStringLiteral("main") &&
+          dialog.exportProject().breakpoints.first().first == main.first,
+          "active import leaves the previous project intact while waiting for acknowledgement");
+    dialog.setSnapshot(snapshot);
+    check(dialog.projectPending() && results.size() == 2, "an older snapshot cannot settle a new request");
+    snapshot.configureRequestId = request.configureRequestId;
+    snapshot.configureAccepted = false;
+    snapshot.configureError = QStringLiteral("Rejected fixture configuration");
+    dialog.setSnapshot(snapshot);
+    check(!dialog.projectPending() && results == QVector<bool>{true, false, false} &&
+          dialog.exportProject().symbols.first().label == QStringLiteral("main") &&
+          dialog.projectError() == snapshot.configureError &&
+          find<QLabel>(dialog, "debugCpuFeedback")->text() == snapshot.configureError,
+          "rejected import retains old symbols and definitions and displays the worker error");
+
+    snapshot.linkEnabled = true;
+    snapshot.targets.append(target(peer.cpu, 16, KR_DEBUG_FLAGS_Z80, "Z80"));
+    dialog.setSnapshot(snapshot);
+    request = commands.last();
+    check(request.breakpoints.size() == 2 && request.breakpoints.last().cpu == peer.cpu,
+          "Link attachment installs the dormant peer breakpoint");
+    acceptConfiguration(dialog, snapshot, request);
+    snapshot.linkEnabled = false;
+    snapshot.targets.removeLast();
+    snapshot.breakpoints.removeLast();
+    dialog.setSnapshot(snapshot);
+    check(dialog.exportProject().breakpoints.last().cpu == peer.cpu &&
+          dialog.exportProject().symbols.last().comment == QStringLiteral("peer note"),
+          "disconnecting Link preserves both breakpoints and symbols for console B");
+
+    dialog.applyProject(replacement);
+    request = commands.last();
+    dialog.hide();
+    check(commands.last().kind == DebuggerCommand::Detach && dialog.projectPending(),
+          "closing while an import is pending detaches but keeps the outstanding request");
+    acceptConfiguration(dialog, detached, request);
+    check(!dialog.projectPending() && results == QVector<bool>{true, false, false, true} &&
+          dialog.exportProject().symbols.first().label == QStringLiteral("replacement"),
+          "an acknowledgement after detach completes active project import while hidden");
+
+    dialog.show();
+    snapshot.breakpoints.clear();
+    dialog.setSnapshot(snapshot);
+    acceptConfiguration(dialog, snapshot, commands.last());
+    dialog.applyProject(saved);
+    request = commands.last();
+    dialog.hide();
+    detached.configureRequestId = request.configureRequestId;
+    detached.configureAccepted = false;
+    dialog.setSnapshot(detached);
+    check(!dialog.projectPending() && results == QVector<bool>{true, false, false, true, false} &&
+          dialog.exportProject().symbols.first().label == QStringLiteral("replacement"),
+          "a rejection after detach releases project actions without overwriting the previous project");
+    check(projectChanges == 0 && pendingChanges >= 8, "imports signal application and pending state, not edits");
+
+    dialog.applyProject(saved);
+    request = commands.last();
+    check(dialog.projectPending() && request.kind == DebuggerCommand::Validate,
+          "the next import waits for validation");
+    dialog.cancelProjectImport();
+    const auto resultCount = results.size();
+    check(!dialog.projectPending() && results.last() == false &&
+          dialog.exportProject().symbols.first().label == QStringLiteral("replacement"),
+          "game close can cancel only the staged import and keep the previous project");
+    acceptConfiguration(dialog, detached, request);
+    check(results.size() == resultCount &&
+          dialog.exportProject().symbols.first().label == QStringLiteral("replacement"),
+          "an acknowledgement for a canceled import cannot replace committed data");
+
+    dialog.clearProject();
+    detached.configureAccepted = true;
+    dialog.setSnapshot(detached);
+    check(dialog.exportProject().symbols.isEmpty() && dialog.exportProject().breakpoints.isEmpty() &&
+          !dialog.projectPending(), "clearing the game ignores a late acknowledgement");
+}
+
 void verifyExpansionTargets() {
     CpuDebuggerDialog dialog;
     QVector<DebuggerCommand> commands;
@@ -369,7 +554,8 @@ int main(int argc, char** argv) {
     const QString previews = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
     if (!previews.isEmpty()) check(QDir().mkpath(previews), "create preview directory");
     verify(previews);
+    verifyProjectRoundTrip();
     verifyExpansionTargets();
     verifyRegisterWrites();
-    std::puts("PASS: debugger commands, ranges, symbols, expansion targets, Link Cable and register edits");
+    std::puts("PASS: debugger commands, ranges, symbols, projects, shortcuts, expansion targets, Link Cable and register edits");
 }

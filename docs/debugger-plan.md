@@ -18,7 +18,8 @@ for the delivered interface and explicit scope limitations.
 - [ ] Phase 4: integrated tracing, hardware timeline, code/data coverage and pixel provenance.
   - [x] Instruction/event trace, bounded history, explicit asynchronous file capture.
   - [x] Physical-bank-aware code/data coverage, bounded maps and explicit asynchronous export.
-  - [ ] Exact pixel provenance, profiling and debug projects.
+  - [x] Explicit debug projects and live memory watches.
+  - [ ] Exact pixel provenance and profiling. Deferred at the user's request.
 
 Phase 1 completed on 2026-11-21 with the scope and limits recorded in
 [debug-inspection.md](debug-inspection.md) and
@@ -32,10 +33,14 @@ a measured fix for memory-window update stalls and an interface update audit.
 See [verification](debugger-phase4-verification.md) for its actual scope.
 The second tranche adds [physical code/data coverage](debug-coverage.md);
 its [verification](debugger-coverage-verification.md) records bank/prefetch,
-state/rewind, link-console and performance checks. This does not complete Phase 4.
-Physical-bank-aware labels, persistent debug projects, scanline/interrupt run
-controls and reverse-instruction execution remain later work. Append platform
-and device verification evidence before completing each phase.
+state/rewind, link-console and performance checks.
+The third tranche adds [debug projects and live memory watches](debugger-projects.md).
+[Verification](debugger-projects-verification.md) covers bounded project files,
+physical memory watches and acknowledged application of breakpoint settings.
+Physical-bank-aware labels, scanline/interrupt run controls and reverse-instruction
+execution remain later work. Exact pixel
+provenance and profiling are deferred. Append platform and device verification
+evidence before completing each phase.
 
 ## Scope and interface
 
@@ -45,7 +50,8 @@ core. Use a common backend and connected, modeless windows:
 | Window | Purpose |
 | --- | --- |
 | Debugger | Disassembly, registers, flags, stack, breakpoints and execution controls |
-| Memory | Memory domains, search, editing, watched values and bank mapping |
+| Memory | Memory domains, search, editing and bank mapping |
+| Memory Watch | Named values by console and physical domain, with previous value and change count |
 | Graphics | Extend existing graphics controls with tiles, maps, sprites, palettes, registers and framebuffers |
 | Sound | Extend existing channel controls with chip state, PCM and external-track inspection |
 | Trace | Selected CPU instructions and hardware events |
@@ -265,12 +271,14 @@ per-device limitations are recorded in [Phase 3 verification](debugger-phase3-ve
 
 ### Phase 4
 
-Integrate instruction/event tracing, the hardware timeline, code/data coverage
-and precise pixel provenance. Add optional profiling and debug-project export
-without routine disk activity.
+Integrate instruction/event tracing, the hardware timeline, physical code/data
+coverage, explicit debug projects and live memory watches. Keep file operations
+on demand. Exact pixel provenance and profiling remain deferred.
 
-Acceptance: bounded long capture, explicit overflow behavior, meaningful event
-ordering and accurate pixel provenance in raster/composited scenes.
+Acceptance includes bounded long capture, explicit overflow behavior,
+meaningful event ordering, safe watch snapshots and transactional project files.
+Exact raster and compositing provenance remains an acceptance condition for
+the deferred pixel work.
 
 For each phase measure disabled-tool overhead against the preceding build in
 normal and accelerated play. Hardware-wide changes require at least two games

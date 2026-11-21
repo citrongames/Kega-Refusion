@@ -1,0 +1,79 @@
+{
+  "date": "2026-11-21",
+  "baselineCommit": "76a41318f7b79183fddea21f123b121cec782886",
+  "testedLinuxCoreSha256": "4896170c2c37a5b4efdd61ba72919b4f99ba0ce69f5252725b93a79250637906",
+  "nativeCoreChanged": false,
+  "windowsRuntimeTested": false,
+  "checks": {
+    "serializer": {
+      "status": "passed",
+      "test": "debug_project_tests",
+      "log": "project-tests.log",
+      "evidence": "Strict bounded JSON v1, Unicode, logical A/B IDs, uint64 ignored-hit count, no persisted runtime hits, transactional destination and atomic file replacement."
+    },
+    "realCore": {
+      "status": "passed",
+      "test": "debug_project_host_tests",
+      "log": "project-host-tests.log",
+      "media": "Generated Mega Drive and Game Gear fixtures with an actual isolated Game Gear Link Cable peer.",
+      "evidence": "Canonical 1/2/4-byte reads, safe VDP mirror, range/width/domain/console rejection, host limit, correct A/B values and unchanged state/clock. Configure ACK success/rejection and persistence, actual breakpoint hits, fresh imported hit counts, stale game protection and detached validation."
+    },
+    "watchAndMemoryViews": {
+      "status": "passed",
+      "test": [
+        "debug_watch_view_tests",
+        "inspection_view_tests"
+      ],
+      "log": "watch-ui-tests.log",
+      "evidence": "Qt offscreen format/order decoding, change notifications and native view subscriptions, previous/changes/history semantics, physical navigation, unavailable sources, add/edit and bounds. An unchanged watch snapshot emitted zero model change notifications."
+    },
+    "cpuView": {
+      "status": "passed",
+      "test": "cpu_debugger_view_tests",
+      "log": "cpu-ui-tests.log",
+      "evidence": "Qt offscreen project validation and application, logical symbols, debugger commands, hardware capabilities, register controls and Link Cable."
+    },
+    "finalCpuViewRecheck": {
+      "status": "passed",
+      "log": "cpu-final-tests.log",
+      "evidence": "Qt offscreen rerun passed, including cancel during unload, late acknowledgement rejection and hidden project error reporting."
+    },
+    "linuxApplicationBuild": {
+      "status": "passed",
+      "log": "final-linux-build.log"
+    },
+    "windowsApplicationBuild": {
+      "status": "passed",
+      "log": "windows-build.log"
+    },
+    "windowsTestPackageStaging": {
+      "status": "passed"
+    }
+  },
+  "hostWatchCost": {
+    "method": "Unpaced LibretroHost::inspect on the generated Mega Drive fixture; MEMORY requested without a page or catalog. Timed snapshot creation and destruction.",
+    "snapshots": 1000,
+    "watchesPerSnapshot": 128,
+    "bytesPerWatch": 4,
+    "maximumGuestBytesPerSnapshot": 512,
+    "meanMicrosecondsPerSnapshot": 14.817,
+    "log": "project-host-tests.log"
+  },
+  "deferred": [
+    "physical-bank-qualified symbols",
+    "pixel provenance",
+    "profiling"
+  ],
+  "localEvidenceDirectory": "build/verification/debugger-project",
+  "deployment": {
+    "status": "passed",
+    "version": "0.28.0",
+    "destination": "/mnt/d/emulation/Sega Mega Drive/emu/KegaRefusion/testbuild",
+    "matchedFiles": 73,
+    "sha256": {
+      "KegaRefusion.exe": "5af2e474436eebdd9e0067576ee6f5e1c4260113f7e3b40df538e010104e8340",
+      "cores/genesis_plus_gx_libretro.dll": "b82e0331a2004ed1db87ad048a04506f136a2444cbc59065d15f1d5d32b2c1ea",
+      "cores/genesis_plus_gx_libretro_linkpeer.dll": "b82e0331a2004ed1db87ad048a04506f136a2444cbc59065d15f1d5d32b2c1ea"
+    }
+  }
+}

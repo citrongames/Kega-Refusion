@@ -374,6 +374,9 @@ private:
     bool rewindPreviewBeforeScope_ = false;
     bool recordingVideoEnabled_ = false;
     quint64 inspectionGeneration_ = 1;
+    quint64 debugConfigureId_ = 0;
+    bool debugConfigureAccepted_ = false;
+    QString debugConfigureError_;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;
     bool perGameCdBackup_ = true;

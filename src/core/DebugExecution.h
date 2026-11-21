@@ -16,18 +16,24 @@ struct DebuggerBreakpoint {
 };
 struct DebuggerCommand {
     enum Kind { Attach, Detach, Pause, Continue, StepInto, StepOver, StepOut,
-                Refresh, Configure, Navigate, SetLink, WriteRegister };
+                Refresh, Configure, Navigate, SetLink, WriteRegister, Validate };
     Kind kind = Refresh;
     quint32 cpu = 1, address = 0;
     bool followPc = true;
     bool linkEnabled = false;
     QVector<DebuggerBreakpoint> breakpoints;
     quint32 editedBreakpointId = 0;
+    quint64 configureRequestId = 0;
+    bool resetBreakpointHits = false;
+    QString gameKey;
     QString registerName;
     quint32 registerValue = 0, registerMask = 0xffffffffu;
 };
 struct DebuggerSnapshot {
     quint64 generation = 0, frame = 0;
+    quint64 configureRequestId = 0;
+    bool configureAccepted = false;
+    QString configureError;
     bool attached = false, stopped = false, partialFrame = false;
     quint32 selectedCpu = 1, eventCpu = 0, event = 0, address = 0, value = 0, accessSize = 0;
     QString status;

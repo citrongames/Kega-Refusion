@@ -1,4 +1,6 @@
 #include "LibretroHost.h"
+#include <QSet>
+#include <QScopeGuard>
 #include "LibretroHostApi.h"
 #include "i18n/Localization.h"
 #include <libco.h>
@@ -457,6 +459,17 @@ void LibretroHost::finishDebugFrame() {
 
 bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& error) {
     error.clear();
+    const bool configuration = command.kind == DebuggerCommand::Configure || command.kind == DebuggerCommand::Validate;
+    const bool temporaryInspection = command.kind == DebuggerCommand::Validate && !debuggerAttached();
+    const auto releaseInspection = qScopeGuard([&] { if (temporaryInspection) debuggerDetach(); });
+    const auto configureReply = qScopeGuard([&] {
+        if (configuration && command.configureRequestId)
+            debugConfigureError_ = error;
+    });
+    if (configuration && command.configureRequestId) {
+        debugConfigureId_ = command.configureRequestId;
+        debugConfigureAccepted_ = false;
+    }
     if (command.kind == DebuggerCommand::Detach) { debuggerDetach(); return true; }
     if (command.kind == DebuggerCommand::SetLink) {
         if (moviePlayback_) {
@@ -464,6 +477,11 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
             return false;
         }
         return setLinkCableEnabled(command.linkEnabled, error);
+    }
+    if (configuration && !command.gameKey.isEmpty() &&
+        command.gameKey != gamePath_ + QLatin1Char('\n') + contentName_) {
+        error=tr("Игра изменилась. Обновите проект отладки.");
+        return false;
     }
     if (!debuggerAttach(error)) return false;
     auto& d = *debugger_;
@@ -480,9 +498,11 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
         error = tr("Не удалось прочитать состояние процессора.");
         return false;
     }
-    d.cpu = selected;
-    d.navigate = command.address;
-    d.follow = command.followPc;
+    if (command.kind != DebuggerCommand::Validate) {
+        d.cpu = selected;
+        d.navigate = command.address;
+        d.follow = command.followPc;
+    }
     if (command.kind == DebuggerCommand::Attach || command.kind == DebuggerCommand::Refresh ||
         command.kind == DebuggerCommand::Navigate)
         return true;
@@ -513,35 +533,63 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
         return true;
     }
 
-    if (command.kind == DebuggerCommand::Configure) {
+    if (configuration) {
         if (command.breakpoints.size() > 128) { error = tr("Не более 128 точек остановки."); return false; }
+        QSet<quint32> ids;
         QVector<Condition> compiled;
         compiled.reserve(command.breakpoints.size());
         for (const auto& b : command.breakpoints) {
             const auto* chip = d.target(b.cpu);
             kr_debug_cpu registers{};
             Condition condition;
-            if (!chip || b.first > b.last || b.last > addressMask(*chip) || !b.events ||
+            const unsigned native=nativeCpu(b.cpu);
+            const bool known=instance(b.cpu)<=1 && native && !(native&(native-1)) && native<=KR_DEBUG_SSP1601;
+            if (!chip && command.kind==DebuggerCommand::Validate && known && b.id &&
+                !ids.contains(b.id) && b.first<=b.last && b.events && !(b.events&~debugEvents) &&
+                b.condition.size()<=256) {
+                // A saved absent peer/expansion stays dormant. Its register
+                // condition is checked when that actual target becomes available.
+                const unsigned bits=(native==KR_DEBUG_Z80 || native==KR_DEBUG_SSP1601)?16:
+                    (native==KR_DEBUG_M68K || native==KR_DEBUG_SUB68K)?24:32;
+                if (bits==32 || b.last<=(quint32(1)<<bits)-1) { ids.insert(b.id); continue; }
+            }
+            if (!b.id || ids.contains(b.id) || b.condition.size() > 256 || !chip || b.first > b.last || b.last > addressMask(*chip) || !b.events ||
                 (b.events & ~(debugEvents & chip->capabilities)) || !d.state(b.cpu, registers) ||
                 !condition.compile(b.condition, registers)) {
                 error = tr("Неверная точка остановки или условие.");
                 return false;
             }
+            ids.insert(b.id);
             compiled.push_back(condition);
+        }
+        if (command.kind==DebuggerCommand::Validate) {
+            if (command.configureRequestId) debugConfigureAccepted_=true;
+            return true;
         }
         auto next = command.breakpoints;
         for (auto& b : next) {
             const auto old = std::find_if(d.breaks.cbegin(), d.breaks.cend(),
                 [&](const auto& item) { return item.id == b.id; });
-            if (old != d.breaks.cend() && old->cpu == b.cpu && old->events == b.events &&
+            if (!command.resetBreakpointHits && old != d.breaks.cend() && old->cpu == b.cpu && old->events == b.events &&
                 old->first == b.first && old->last == b.last && old->condition == b.condition &&
                 old->ignoreHits == b.ignoreHits && old->oneShot == b.oneShot) {
                 b.hits = old->hits;
                 if (b.id != command.editedBreakpointId) b.enabled = old->enabled;
             } else b.hits = 0;
         }
+        auto previous = std::move(d.breaks);
+        auto previousConditions = std::move(d.conditions);
         d.breaks = std::move(next);
         d.conditions = std::move(compiled);
+        if (!d.masks()) {
+            d.breaks = std::move(previous);
+            d.conditions = std::move(previousConditions);
+            d.masks();
+            error = tr("Не удалось обновить точки остановки для текущих процессоров.");
+            return false;
+        }
+        if (command.configureRequestId) debugConfigureAccepted_ = true;
+        return true;
     }
     if (command.kind == DebuggerCommand::Pause) {
         if (!d.pending && (d.stepping || d.pauseNext)) {
@@ -597,6 +645,9 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
 
 DebuggerSnapshot LibretroHost::debuggerSnapshot() const {
     DebuggerSnapshot out;
+    out.configureRequestId = debugConfigureId_;
+    out.configureAccepted = debugConfigureAccepted_;
+    out.configureError = debugConfigureError_;
     out.generation = inspectionGeneration_;
     out.frame = runClock_.frames;
     out.linkSupported = loaded_ && supportsLinkCable();
