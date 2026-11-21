@@ -48,3 +48,8 @@
 
 - Follow [the agreed debugger plan](docs/debugger-plan.md) for debugger work; update its phase checklist and evidence as work progresses.
 - The plan distinguishes existing diagnostics from future tools. Recording the plan does not authorize implementation; begin a phase when the user requests it.
+
+## Lua scripting roadmap
+
+- Follow [the preserved Lua scripting plan](docs/lua-scripting-plan.md) for scripting work; update its phase checklist and verification evidence as implementation progresses.
+- The plan describes future features. Saving it does not authorize implementation; start when requested by the user.
