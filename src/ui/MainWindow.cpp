@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "CpuDebuggerDialog.h"
 #include "TraceDialog.h"
+#include "CoverageDialog.h"
 #include "DebugDialogs.h"
 #include "DebugInspectorWidgets.h"
 #include "AudioOutput.h"
@@ -370,6 +371,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateGunPresentation();
         updateCpuDebugger();
         updateTraceDialog();
+        updateCoverageDialog();
         updateInputEnabled();
     });
     connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) {
@@ -377,6 +379,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateGameSpeedActions();
         updateCpuDebugger();
         updateTraceDialog();
+        updateCoverageDialog();
     });
     debugAudioGains_.fill(100);
     buildMenus();
@@ -420,6 +423,19 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         }
         if (traceDialog_ && traceDialog_->isVisible() && traceBlockedReason().isEmpty())
             traceDialog_->setSnapshot(snapshot);
+    });
+    coverageTimer_ = new QTimer(this);
+    coverageTimer_->setInterval(200);
+    connect(coverageTimer_, &QTimer::timeout, this, &MainWindow::refreshCoverageDialog);
+    connect(&session_, &EmulationSession::coverageReady, this, [this] {
+        DebugCoverageSnapshot snapshot;
+        if (!session_.takeCoverageSnapshot(snapshot)) return;
+        if (snapshot.hasCapture != coverageHasCapture_) {
+            coverageHasCapture_ = snapshot.hasCapture;
+            updateCoverageDialog();
+        }
+        if (coverageDialog_ && coverageDialog_->isVisible() && coverageBlockedReason().isEmpty())
+            coverageDialog_->setSnapshot(snapshot);
     });
     refreshCommandShortcuts();
     connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
@@ -791,6 +807,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 }
 
 MainWindow::~MainWindow() {
+    if (coverageTimer_) coverageTimer_->stop();
+    if (coverageDialog_) {
+        disconnect(coverageDialog_, nullptr, this, nullptr);
+        DebugCoverageCommand command;
+        command.kind = DebugCoverageCommand::Stop;
+        session_.coverageCommand(command);
+    }
     if (traceTimer_) traceTimer_->stop();
     if (traceDialog_) {
         disconnect(traceDialog_, nullptr, this, nullptr);
@@ -1391,6 +1414,10 @@ void MainWindow::buildMenus() {
     traceAction_->setObjectName(QStringLiteral("traceAction"));
     traceAction_->setEnabled(false);
     connect(traceAction_, &QAction::triggered, this, &MainWindow::showTraceDialog);
+    coverageAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Покрытие кода и данных…")));
+    coverageAction_->setObjectName(QStringLiteral("coverageAction"));
+    coverageAction_->setEnabled(false);
+    connect(coverageAction_, &QAction::triggered, this, &MainWindow::showCoverageDialog);
     debugGraphicsAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Графика…")));
     debugGraphicsAction_->setObjectName(QStringLiteral("debugGraphicsAction"));
     connect(debugGraphicsAction_, &QAction::triggered, this, &MainWindow::showDebugGraphics);
@@ -1510,6 +1537,7 @@ void MainWindow::applyDebugMasks() {
 void MainWindow::updateDebugDialogs() {
     updateCpuDebugger();
     updateTraceDialog();
+    updateCoverageDialog();
     if (debugMemoryAction_)
         debugMemoryAction_->setEnabled(session_.hasGame() && !loading_ &&
                                        !videoExporting_ && !achievementsHardcore_);
@@ -1669,10 +1697,18 @@ void MainWindow::refreshCpuDebugger() {
     session_.debuggerCommand(cpuDebuggerDialog_->refreshCommand());
 }
 
+bool MainWindow::debugCaptureRestricted() const {
+    return achievementsHardcore_ || videoExporting_ || session_.networkActive() || (netplay_ && netplay_->active());
+}
+
+void MainWindow::updateDebugMenuVisibility() {
+    if (debugMenu_) debugMenu_->menuAction()->setVisible(
+        debugVideoAvailable_ || debugAudioAvailable_ || session_.hasGame() || traceHasRecords_ || coverageHasCapture_);
+}
+
 QString MainWindow::traceBlockedReason() const {
     if (loading_) return Localization::text(QStringLiteral("Загрузка…"));
-    if (achievementsHardcore_ || videoExporting_ || session_.networkActive() ||
-        (netplay_ && netplay_->active()))
+    if (debugCaptureRestricted())
         return Localization::text(QStringLiteral("Трассировка недоступна в Hardcore, сетевой игре и при экспорте видео."));
     return {};
 }
@@ -1705,8 +1741,7 @@ void MainWindow::showTraceDialog() {
 void MainWindow::updateTraceDialog() {
     const QString blocked = traceBlockedReason();
     if (traceAction_) traceAction_->setEnabled(blocked.isEmpty() && (session_.hasGame() || traceHasRecords_));
-    if (debugMenu_) debugMenu_->menuAction()->setVisible(
-        debugVideoAvailable_ || debugAudioAvailable_ || session_.hasGame() || traceHasRecords_);
+    updateDebugMenuVisibility();
     if (!traceTimer_ || !traceDialog_ || !traceDialog_->isVisible()) return;
     if (blocked.isEmpty()) {
         if (!traceTimer_->isActive()) {
@@ -1738,6 +1773,74 @@ void MainWindow::refreshTraceDialog() {
     DebugTraceCommand command;
     command.kind = DebugTraceCommand::Refresh;
     session_.traceCommand(command);
+}
+
+QString MainWindow::coverageBlockedReason() const {
+    if (loading_) return Localization::text(QStringLiteral("Загрузка…"));
+    if (debugCaptureRestricted())
+        return Localization::text(QStringLiteral("Покрытие недоступно в Hardcore, сетевой игре и при экспорте видео."));
+    return {};
+}
+
+void MainWindow::showCoverageDialog() {
+    if (!coverageBlockedReason().isEmpty()) return;
+    if (!coverageDialog_) {
+        coverageDialog_ = new CoverageDialog(this);
+        connect(coverageDialog_, &CoverageDialog::commandRequested, this, [this](const DebugCoverageCommand& command) {
+            if (command.kind == DebugCoverageCommand::Stop) {
+                if (!coverageDialog_->isVisible()) coverageTimer_->stop();
+            } else if (!coverageBlockedReason().isEmpty()) {
+                return;
+            } else if (command.kind == DebugCoverageCommand::Refresh && !coverageTimer_->isActive()) {
+                coverageTimer_->start();
+            }
+            session_.coverageCommand(command);
+        });
+        connect(coverageDialog_, &CoverageDialog::navigateRequested, this,
+                [this](quint32 instance, quint32 domain, quint32 offset) {
+            if (!session_.hasGame() || !coverageBlockedReason().isEmpty()) return;
+            showDebugMemory();
+            debugMemoryDialog_->navigateTo(instance, domain, offset);
+        });
+    }
+    coverageDialog_->show();
+    coverageDialog_->raise();
+    coverageDialog_->activateWindow();
+}
+
+void MainWindow::updateCoverageDialog() {
+    const QString blocked = coverageBlockedReason();
+    if (coverageAction_) coverageAction_->setEnabled(blocked.isEmpty() && (session_.hasGame() || coverageHasCapture_));
+    updateDebugMenuVisibility();
+    if (!coverageTimer_ || !coverageDialog_ || !coverageDialog_->isVisible()) return;
+    if (blocked.isEmpty()) {
+        if (!coverageTimer_->isActive()) {
+            coverageTimer_->start();
+            refreshCoverageDialog();
+        }
+    } else {
+        if (coverageTimer_->isActive()) {
+            coverageTimer_->stop();
+            DebugCoverageCommand command;
+            command.kind = DebugCoverageCommand::Stop;
+            session_.coverageCommand(command);
+        }
+        DebugCoverageSnapshot snapshot;
+        snapshot.status = blocked;
+        coverageDialog_->setSnapshot(snapshot);
+    }
+}
+
+void MainWindow::refreshCoverageDialog() {
+    if (!coverageDialog_ || !coverageDialog_->isVisible()) {
+        coverageTimer_->stop();
+        return;
+    }
+    if (!coverageBlockedReason().isEmpty()) {
+        updateCoverageDialog();
+        return;
+    }
+    session_.coverageCommand(coverageDialog_->refreshCommand());
 }
 
 void MainWindow::scheduleInspection() {
@@ -3584,7 +3687,8 @@ void MainWindow::updateInputEnabled() {
     bool debugWindowActive = false;
     for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
         if (active == debugGraphicsDialog_ || active == debugAudioDialog_ ||
-            active == debugMemoryDialog_ || active == cpuDebuggerDialog_ || active == traceDialog_) {
+            active == debugMemoryDialog_ || active == cpuDebuggerDialog_ || active == traceDialog_ ||
+            active == coverageDialog_) {
             debugWindowActive = true;
             break;
         }

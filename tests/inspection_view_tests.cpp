@@ -257,6 +257,22 @@ void verifyMemoryEditing() {
     detached.instanceCount = 1;
     dialog.setSnapshot(detached);
     check(dialog.request().instance == 0 && !instance->isVisible(), "peer teardown clears memory selection");
+
+    data.instance = 0;
+    dialog.setSnapshot(data);
+    dialog.navigateTo(1, KR_MEM_ROM, 0x21035);
+    check(dialog.request().instance == 1 && dialog.request().domain == KR_MEM_ROM &&
+          dialog.request().offset == 0x21000 && instance->currentData().toUInt() == 1,
+          "physical navigation switches console and keeps offset beyond the old domain size");
+    dialog.setSnapshot(data);
+    check(dialog.request().offset == 0x21000, "old console snapshot can't overwrite requested physical address");
+    data.instance = 1;
+    domain(data, KR_MEM_ROM, 0x40000, "ROM", true);
+    data.memoryDomain = KR_MEM_ROM;
+    data.memoryOffset = 0x21000;
+    dialog.setSnapshot(data);
+    check(dialog.request().domain == KR_MEM_ROM && dialog.request().offset == 0x21000,
+          "peer snapshot resolves the requested physical region and page");
 }
 
 QRgb pixel(DebugVideoInspector& view, QPoint at) {

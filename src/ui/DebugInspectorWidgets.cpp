@@ -382,6 +382,17 @@ DebugInspectionRequest DebugMemoryDialog::request() const {
     return request;
 }
 
+void DebugMemoryDialog::navigateTo(quint32 instance, quint32 domain, quint32 offset) {
+    const int index = instances_->findData(instance);
+    if (index < 0) return;
+    {
+        const QSignalBlocker block(instances_);
+        instances_->setCurrentIndex(index);
+    }
+    changeInstance(instance);
+    navigateTo(domain, offset);
+}
+
 void DebugMemoryDialog::navigateTo(quint32 domain, quint32 offset) {
     tabs_->setCurrentIndex(0);
     if (available_) {
@@ -391,6 +402,8 @@ void DebugMemoryDialog::navigateTo(quint32 domain, quint32 offset) {
         domains_->setCurrentIndex(index);
         size_ = domains_->itemData(index, Qt::UserRole + 1).toUInt();
         bigEndian_ = domains_->itemData(index, Qt::UserRole + 2).toBool();
+    } else {
+        size_ = 0;
     }
     const bool changed = domain_ != domain;
     domain_ = domain;

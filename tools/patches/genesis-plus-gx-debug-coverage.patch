@@ -1,0 +1,697 @@
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -157,6 +157,7 @@
+ #include "../core/kegainspect/libretro.inc"
+ #include "../core/kegadebug/libretro.inc"
+ #include "../core/kegatrace/libretro.inc"
++#include "../core/kegacoverage/libretro.inc"
+ static bool restart_eq = false;
+ static uint8_t temp[0x10000];
+ static int16 soundbuffer[3068];
+@@ -3707,6 +3708,7 @@
+ 
+ bool retro_unserialize(const void *data, size_t size)
+ {
++   ++kr_cov_epoch;
+    kega_sprite_hint_invalidate();
+ #ifdef KEGAREFUSION_32X
+    if (kegarefusion_32x_attached)
+@@ -4236,6 +4238,7 @@
+ 
+ bool retro_load_game(const struct retro_game_info *info)
+ {
++   kr_cov_detach();
+    kr_trace_detach();
+    kr_debug_detach();
+    kr_inspect_content = 0;
+@@ -4573,6 +4576,7 @@
+ 
+ void retro_unload_game(void) 
+ {
++   kr_cov_detach();
+    kr_trace_detach();
+    kr_debug_detach();
+    kr_inspect_content = 0;
+@@ -4724,6 +4728,7 @@
+ 
+ void retro_deinit(void)
+ {
++   kr_cov_detach();
+    kr_trace_detach();
+    kr_debug_detach();
+    kr_inspect_content = 0;
+@@ -4741,6 +4746,7 @@
+ 
+ void retro_reset(void)
+ {
++   ++kr_cov_epoch;
+    kega_sprite_hint_invalidate();
+    kega_recording_frame_ready = false;
+ #ifdef HAVE_OVERCLOCK
+diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -540,6 +540,7 @@
+ /* Map PC-relative reads */
+ #include "../kegadebug/hooks.h"
+ #include "../kegatrace/hooks.h"
++#include "../kegacoverage/hooks.h"
+ 
+ /* This interpreter header is compiled once per CPU. A CD transaction that
+  * holds /DTACK is retried and its placeholder bus value is not an access. */
+@@ -553,29 +554,47 @@
+ #define KR_DEBUG_68K_COMPLETED 1
+ #endif
+ 
++INLINE void kr_cov_68k_direct(unsigned kind, uint address, unsigned width)
++{
++  const uint8_t *base = m68ki_cpu.memory_map[(address >> 16) & 0xff].base;
++  kr_cov_observe(KR_DEBUG_68K_CPU, kind, ADDRESS_68K(address),
++                 base ? base + (address & 0xffff) : NULL, width);
++}
++
++static KR_COV_COLD void kr_cov_68k_observed_pcrel(uint address, uint value, unsigned width)
++{
++  if (KR_DEBUG_68K_MASK & KR_DEBUG_COV_READ)
++  {
++    kr_cov_68k_direct(KR_COV_READ, address, width == 4 ? 2 : width);
++    if (width == 4) kr_cov_68k_direct(KR_COV_READ, address + 2, 2);
++  }
++  if (KR_DEBUG_68K_MASK & KR_DEBUG_READ)
++    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, width);
++}
++
+ /* These are data operands, even though this core sources them from the
+  * same direct map as instruction fetches. Leave opcode prefetch separate. */
+ INLINE uint m68ki_read_pcrel_8(uint address)
+ {
+   const uint value = m68k_read_pcrelative_8(address);
+-  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
+-    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, 1);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & (KR_DEBUG_READ | KR_DEBUG_COV_READ)) && KR_DEBUG_68K_COMPLETED)
++    kr_cov_68k_observed_pcrel(address, value, 1);
+   return value;
+ }
+ 
+ INLINE uint m68ki_read_pcrel_16(uint address)
+ {
+   const uint value = m68k_read_pcrelative_16(address);
+-  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
+-    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, 2);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & (KR_DEBUG_READ | KR_DEBUG_COV_READ)) && KR_DEBUG_68K_COMPLETED)
++    kr_cov_68k_observed_pcrel(address, value, 2);
+   return value;
+ }
+ 
+ INLINE uint m68ki_read_pcrel_32(uint address)
+ {
+   const uint value = m68k_read_pcrelative_32(address);
+-  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
+-    kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, value, 4);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & (KR_DEBUG_READ | KR_DEBUG_COV_READ)) && KR_DEBUG_68K_COMPLETED)
++    kr_cov_68k_observed_pcrel(address, value, 4);
+   return value;
+ }
+ 
+@@ -818,6 +837,54 @@
+ /* Handles all immediate reads, does address error check, function code setting,
+  * and prefetching if they are enabled in m68kconf.h
+  */
++#if M68K_EMULATE_PREFETCH
++#define kr_cov_prefetch (kr_cov_prefetch_tags[KR_DEBUG_68K_CPU == KR_DEBUG_SUB68K])
++
++static void kr_cov_fill_prefetch(void)
++{
++  const uint address = REG_PC;
++  CPU_PREF_ADDR = address;
++  CPU_PREF_DATA = m68k_read_immediate_16(address);
++  const uint8_t *base = m68ki_cpu.memory_map[(address >> 16) & 0xff].base;
++  kr_cov_prefetch.epoch = kr_cov_epoch;
++  kr_cov_prefetch.address = address;
++  kr_cov_prefetch.value = CPU_PREF_DATA;
++  const uint8_t *bytes = base ? base + (address & 0xffff) : NULL;
++  for (unsigned i = 0; i < 2; ++i)
++    kr_cov_prefetch.location[i] = kr_cov_locate(ADDRESS_68K(address + i), bytes ? bytes + i : NULL);
++}
++
++static KR_COV_COLD uint kr_cov_consume_prefetch(unsigned words)
++{
++  if (REG_PC != CPU_PREF_ADDR) kr_cov_fill_prefetch();
++  uint value = CPU_PREF_DATA;
++  if (kr_cov_prefetch.epoch == kr_cov_epoch && kr_cov_prefetch.address == REG_PC &&
++      kr_cov_prefetch.value == value)
++  {
++    const kr_cov_location high = kr_cov_prefetch.location[0], low = kr_cov_prefetch.location[1];
++    if (low.source == high.source && low.offset == high.offset + 1)
++      kr_cov_emit(KR_DEBUG_68K_CPU, KR_COV_EXEC, high, 2);
++    else
++    {
++      kr_cov_emit(KR_DEBUG_68K_CPU, KR_COV_EXEC, high, 1);
++      kr_cov_emit(KR_DEBUG_68K_CPU, KR_COV_EXEC, low, 1);
++    }
++  }
++  else kr_cov_emit(KR_DEBUG_68K_CPU, KR_COV_EXEC, (kr_cov_location){0, ADDRESS_68K(REG_PC)}, 2);
++  REG_PC += 2;
++
++  if (words == 2)
++  {
++    value = (value << 16) | m68k_read_immediate_16(REG_PC);
++    kr_cov_68k_direct(KR_COV_EXEC, REG_PC, 2);
++    REG_PC += 2;
++  }
++
++  kr_cov_fill_prefetch();
++  return value;
++}
++#endif
++
+ INLINE uint m68ki_read_imm_16(void)
+ {
+ #if M68K_EMULATE_PREFETCH
+@@ -826,6 +893,7 @@
+ #if M68K_CHECK_PC_ADDRESS_ERROR
+   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
+ #endif
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_COV_EXEC)) return kr_cov_consume_prefetch(1);
+   if(REG_PC != CPU_PREF_ADDR)
+   {
+     CPU_PREF_ADDR = REG_PC;
+@@ -843,7 +911,10 @@
+   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
+ #endif
+   REG_PC += 2;
+-  return m68k_read_immediate_16(pc);
++  const uint value = m68k_read_immediate_16(pc);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_COV_EXEC))
++    kr_cov_68k_direct(KR_COV_EXEC, pc, 2);
++  return value;
+ #endif /* M68K_EMULATE_PREFETCH */
+ }
+ 
+@@ -855,6 +926,7 @@
+ #if M68K_CHECK_PC_ADDRESS_ERROR
+   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
+ #endif
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_COV_EXEC)) return kr_cov_consume_prefetch(2);
+   if(REG_PC != CPU_PREF_ADDR)
+   {
+     CPU_PREF_ADDR = REG_PC;
+@@ -874,7 +946,13 @@
+   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
+ #endif
+   REG_PC += 4;
+-  return m68k_read_immediate_32(pc);
++  const uint value = m68k_read_immediate_32(pc);
++  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_COV_EXEC))
++  {
++    kr_cov_68k_direct(KR_COV_EXEC, pc, 2);
++    kr_cov_68k_direct(KR_COV_EXEC, pc + 2, 2);
++  }
++  return value;
+ #endif /* M68K_EMULATE_PREFETCH */
+ }
+ 
+@@ -888,17 +966,22 @@
+  * These functions will also check for address error and set the function
+  * code if they are enabled in m68kconf.h.
+  */
+-INLINE uint m68ki_read_8(uint address)
++INLINE KR_COV_ALWAYS_INLINE uint m68ki_read_8_impl(uint address, bool observed, bool cover)
+ {
+   cpu_memory_map *temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
+   uint val;
+ 
+   m68ki_set_fc(FLAG_S | m68ki_get_address_space()) /* auto-disable (see m68kcpu.h) */
+ 
+-  if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
++  uint (*handler)(uint) = temp->read8;
++  kr_cov_access source;
++  if (cover) source = kr_cov_68k_data(KR_DEBUG_68K_CPU, address, 1);
++  if (handler) val = handler(ADDRESS_68K(address));
+   else val = READ_BYTE(temp->base, (address) & 0xffff);
+ 
+-  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++  if (cover && KR_DEBUG_68K_COMPLETED)
++    kr_cov_observe(KR_DEBUG_68K_CPU, KR_COV_READ, ADDRESS_68K(address), source.bytes, source.width);
++  if ((observed || handler) && UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
+     kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, val, 1);
+ 
+ #ifdef HOOK_CPU
+@@ -909,7 +992,19 @@
+   return val;
+ }
+ 
+-INLINE uint m68ki_read_16(uint address)
++static KR_COV_COLD uint m68ki_read_8_observed(uint address)
++{
++  return m68ki_read_8_impl(address, true, (KR_DEBUG_68K_MASK & KR_DEBUG_COV_READ) != 0);
++}
++
++INLINE uint m68ki_read_8(uint address)
++{
++  if (UNLIKELY(KR_DEBUG_68K_MASK & (KR_DEBUG_READ | KR_DEBUG_COV_READ)))
++    return m68ki_read_8_observed(address);
++  return m68ki_read_8_impl(address, false, false);
++}
++
++INLINE KR_COV_ALWAYS_INLINE uint m68ki_read_16_impl(uint address, bool observed, bool cover)
+ {
+   cpu_memory_map *temp;
+   uint val;
+@@ -918,10 +1013,15 @@
+   m68ki_check_address_error(address, MODE_READ, FLAG_S | m68ki_get_address_space()) /* auto-disable (see m68kcpu.h) */
+   
+   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
+-  if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
++  uint (*handler)(uint) = temp->read16;
++  kr_cov_access source;
++  if (cover) source = kr_cov_68k_data(KR_DEBUG_68K_CPU, address, 2);
++  if (handler) val = handler(ADDRESS_68K(address));
+   else val = *(uint16 *)(temp->base + ((address) & 0xffff));
+ 
+-  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++  if (cover && KR_DEBUG_68K_COMPLETED)
++    kr_cov_observe(KR_DEBUG_68K_CPU, KR_COV_READ, ADDRESS_68K(address), source.bytes, source.width);
++  if ((observed || handler) && UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
+     kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, val, 2);
+ 
+ #ifdef HOOK_CPU
+@@ -932,7 +1032,19 @@
+   return val;
+ }
+ 
+-INLINE uint m68ki_read_32(uint address)
++static KR_COV_COLD uint m68ki_read_16_observed(uint address)
++{
++  return m68ki_read_16_impl(address, true, (KR_DEBUG_68K_MASK & KR_DEBUG_COV_READ) != 0);
++}
++
++INLINE uint m68ki_read_16(uint address)
++{
++  if (UNLIKELY(KR_DEBUG_68K_MASK & (KR_DEBUG_READ | KR_DEBUG_COV_READ)))
++    return m68ki_read_16_observed(address);
++  return m68ki_read_16_impl(address, false, false);
++}
++
++INLINE KR_COV_ALWAYS_INLINE uint m68ki_read_32_impl(uint address, bool observed, bool cover)
+ {
+   cpu_memory_map *temp;
+   uint val;
+@@ -941,14 +1053,24 @@
+   m68ki_check_address_error(address, MODE_READ, FLAG_S | m68ki_get_address_space()) /* auto-disable (see m68kcpu.h) */
+ 
+   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
+-  if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address)) << 16;
++  uint (*high_handler)(uint) = temp->read16;
++  kr_cov_access high, low;
++  if (cover) high = kr_cov_68k_data(KR_DEBUG_68K_CPU, address, 2);
++  if (high_handler) val = high_handler(ADDRESS_68K(address)) << 16;
+   else val = m68k_read_immediate_16(address) << 16;
+ 
+   temp = &m68ki_cpu.memory_map[((address+2)>>16)&0xff];
+-  if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
++  uint (*low_handler)(uint) = temp->read16;
++  if (cover) low = kr_cov_68k_data(KR_DEBUG_68K_CPU, address + 2, 2);
++  if (low_handler) val |= low_handler(ADDRESS_68K(address+2));
+   else val |= m68k_read_immediate_16(address+2);
+ 
+-  if (UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
++  if (cover && KR_DEBUG_68K_COMPLETED)
++  {
++    kr_cov_observe(KR_DEBUG_68K_CPU, KR_COV_READ, ADDRESS_68K(address), high.bytes, high.width);
++    kr_cov_observe(KR_DEBUG_68K_CPU, KR_COV_READ, ADDRESS_68K(address + 2), low.bytes, low.width);
++  }
++  if ((observed || high_handler || low_handler) && UNLIKELY(KR_DEBUG_68K_MASK & KR_DEBUG_READ) && KR_DEBUG_68K_COMPLETED)
+     kr_debug_notify(KR_DEBUG_68K_CPU, KR_DEBUG_READ, address, val, 4);
+ 
+ #ifdef HOOK_CPU
+@@ -957,6 +1079,18 @@
+ #endif
+ 
+   return val;
++}
++
++static KR_COV_COLD uint m68ki_read_32_observed(uint address)
++{
++  return m68ki_read_32_impl(address, true, (KR_DEBUG_68K_MASK & KR_DEBUG_COV_READ) != 0);
++}
++
++INLINE uint m68ki_read_32(uint address)
++{
++  if (UNLIKELY(KR_DEBUG_68K_MASK & (KR_DEBUG_READ | KR_DEBUG_COV_READ)))
++    return m68ki_read_32_observed(address);
++  return m68ki_read_32_impl(address, false, false);
+ }
+ 
+ INLINE void m68ki_write_8(uint address, uint value)
+diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
+--- a/core/m68k/m68kcpu.c
++++ b/core/m68k/m68kcpu.c
+@@ -456,8 +456,12 @@
+ 
+   /* Read the initial stack pointer and program counter */
+   m68ki_jump(0);
++  const unsigned coverage = KR_DEBUG_68K_MASK & KR_DEBUG_COV_EXEC;
++  if (coverage) ++kr_cov_epoch;
++  KR_DEBUG_68K_MASK &= ~KR_DEBUG_COV_EXEC;
+   REG_SP = m68ki_read_imm_32();
+   REG_PC = m68ki_read_imm_32();
++  KR_DEBUG_68K_MASK |= coverage;
+   m68ki_jump(REG_PC);
+ 
+ #if M68K_EMULATE_ADDRESS_ERROR
+@@ -599,6 +603,9 @@
+   m68k_set_reg((m68k_register_t)reg, value);
+ #if M68K_EMULATE_PREFETCH
+   if (reg == M68K_REG_PC)
++  {
+     CPU_PREF_ADDR = ~REG_PC;
+-#endif
+-}
++    ++kr_cov_epoch;
++  }
++#endif
++}
+diff --git a/core/m68k/s68kcpu.c b/core/m68k/s68kcpu.c
+--- a/core/m68k/s68kcpu.c
++++ b/core/m68k/s68kcpu.c
+@@ -367,8 +367,12 @@
+ 
+   /* Read the initial stack pointer and program counter */
+   m68ki_jump(0);
++  const unsigned coverage = KR_DEBUG_68K_MASK & KR_DEBUG_COV_EXEC;
++  if (coverage) ++kr_cov_epoch;
++  KR_DEBUG_68K_MASK &= ~KR_DEBUG_COV_EXEC;
+   REG_SP = m68ki_read_imm_32();
+   REG_PC = m68ki_read_imm_32();
++  KR_DEBUG_68K_MASK |= coverage;
+   m68ki_jump(REG_PC);
+ 
+ #if M68K_EMULATE_ADDRESS_ERROR
+@@ -655,6 +659,9 @@
+   s68k_set_reg((m68k_register_t)reg, value);
+ #if M68K_EMULATE_PREFETCH
+   if (reg == M68K_REG_PC)
++  {
+     CPU_PREF_ADDR = ~REG_PC;
+-#endif
+-}
++    ++kr_cov_epoch;
++  }
++#endif
++}
+diff --git a/core/z80/z80.c b/core/z80/z80.c
+--- a/core/z80/z80.c
++++ b/core/z80/z80.c
+@@ -130,6 +130,7 @@
+ #include "z80.h"
+ #include "../kegadebug/hooks.h"
+ #include "../kegatrace/hooks.h"
++#include "../kegacoverage/hooks.h"
+ 
+ /* execute main opcodes inside a big switch statement */
+ #define BIG_SWITCH 1
+@@ -631,8 +632,20 @@
+ /***************************************************************
+  * Read a byte from given memory location
+  ***************************************************************/
++static KR_COV_COLD UINT8 kr_cov_z80_observed_read(UINT32 address)
++{
++  const kr_cov_access source = kr_cov_z80_data(address);
++  const UINT8 value = z80_readmem(address);
++  kr_cov_observe(KR_DEBUG_Z80, KR_COV_READ, address, source.bytes, source.width);
++  if (kr_debug_z80_mask & KR_DEBUG_READ)
++    kr_debug_notify(KR_DEBUG_Z80, KR_DEBUG_READ, address, value, 1);
++  return value;
++}
++
+ INLINE UINT8 RM(UINT32 address)
+ {
++  if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_COV_READ))
++    return kr_cov_z80_observed_read(address);
+   const UINT8 value = z80_readmem(address);
+   if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_READ))
+     kr_debug_notify(KR_DEBUG_Z80, KR_DEBUG_READ, address, value, 1);
+@@ -677,6 +690,8 @@
+   unsigned pc = PCD;
+   PC++;
+   z80_last_fetch = cpu_readop(pc);
++  if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_COV_EXEC) && !HALT)
++    kr_cov_observe(KR_DEBUG_Z80, KR_COV_EXEC, pc, z80_readmap[pc >> 10] + (pc & 0x3ff), 1);
+   return z80_last_fetch;
+ }
+ 
+@@ -690,14 +705,24 @@
+ {
+   unsigned pc = PCD;
+   PC++;
+-  return cpu_readop_arg(pc);
++  const UINT8 value = cpu_readop_arg(pc);
++  if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_COV_EXEC))
++    kr_cov_observe(KR_DEBUG_Z80, KR_COV_EXEC, pc, z80_readmap[pc >> 10] + (pc & 0x3ff), 1);
++  return value;
+ }
+ 
+ INLINE UINT32 ARG16(void)
+ {
+   unsigned pc = PCD;
+   PC += 2;
+-  return cpu_readop_arg(pc) | (cpu_readop_arg((pc+1)&0xffff) << 8);
++  const UINT32 value = cpu_readop_arg(pc) | (cpu_readop_arg((pc+1)&0xffff) << 8);
++  if (UNLIKELY(kr_debug_z80_mask & KR_DEBUG_COV_EXEC))
++  {
++    const unsigned high = (pc + 1) & 0xffff;
++    kr_cov_observe(KR_DEBUG_Z80, KR_COV_EXEC, pc, z80_readmap[pc >> 10] + (pc & 0x3ff), 1);
++    kr_cov_observe(KR_DEBUG_Z80, KR_COV_EXEC, high, z80_readmap[high >> 10] + (high & 0x3ff), 1);
++  }
++  return value;
+ }
+ 
+ /***************************************************************
+diff --git a/core/cart_hw/sms_cart.c b/core/cart_hw/sms_cart.c
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -3090,6 +3090,24 @@
+ }
+ 
+ #include "../kegadebug/hooks.h"
++#include "../kegacoverage/hooks.h"
++
++unsigned kr_cov_sms_bios_size(void)
++{
++  if (!(system_bios & (SYSTEM_SMS | SYSTEM_GG))) return 0;
++  return bios_rom.pages << (bios_rom.mapper == MAPPER_SEGA ? 14 : 10);
++}
++
++kr_cov_access kr_cov_sms_data(uint32_t address)
++{
++  const uint8_t *base = z80_readmap[address >> 10];
++  const bool mapped = z80_readmem == read_mapper_default ||
++      (z80_readmem == read_mapper_none && address >= 0xc000) ||
++      (z80_readmem == read_mapper_93c46 && (address != 0x8000 || !eeprom_93c.enabled)) ||
++      (z80_readmem == read_mapper_terebi && address != 0x8000 && address != 0xa000) ||
++      z80_readmem == read_mapper_korea_8k;
++  return (kr_cov_access){mapped && base ? base + (address & 0x3ff) : NULL, 1};
++}
+ 
+ int kr_debug_peek_sms(uint32_t address, uint8_t *byte)
+ {
+diff --git a/core/cart_hw/md_cart.c b/core/cart_hw/md_cart.c
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -43,6 +43,7 @@
+ 
+ #include "shared.h"
+ #include "../kegatrace/hooks.h"
++#include "../kegacoverage/hooks.h"
+ #include "link_state.h"
+ #include "eeprom_93c.h"
+ #include "eeprom_i2c.h"
+@@ -790,6 +791,20 @@
+           (READ_BYTE(cart.rom, 0x800103) == ' '));
+ }
+ 
++/* Native scratch contents can outlive a particular logical mapping. */
++static uint32 kr_cov_firecore_wrap_base;
++
++bool kr_cov_firecore_location(uint32_t address, const uint8_t *bytes, uint32_t *offset)
++{
++  (void)address;
++  const uintptr_t relative = (uintptr_t)bytes - (uintptr_t)cart.firecore_wrap;
++  if (relative >= sizeof(cart.firecore_wrap)) return false;
++  const unsigned chip_base = kr_cov_firecore_wrap_base & ~firecore_chip_mask;
++  const unsigned within_chip = (kr_cov_firecore_wrap_base + (uint32_t)relative) & firecore_chip_mask;
++  *offset = chip_base | within_chip;
++  return *offset < cart.romsize;
++}
++
+ static void firecore_map(uint32 offset)
+ {
+   unsigned page, copied = 0;
+@@ -812,6 +827,7 @@
+         const unsigned tail = span - start;
+         memcpy(cart.firecore_wrap, chip + start, tail);
+         memcpy(cart.firecore_wrap + tail, chip, 0x10000 - tail);
++        kr_cov_firecore_wrap_base = (uint32)(chip - cart.rom) + start;
+         copied = 1;
+       }
+       base = cart.firecore_wrap;
+diff --git a/core/cd_hw/gfx.c b/core/cd_hw/gfx.c
+--- a/core/cd_hw/gfx.c
++++ b/core/cd_hw/gfx.c
+@@ -755,6 +755,29 @@
+ }
+ 
+ #include "../kegadebug/hooks.h"
++#include "../kegacoverage/hooks.h"
++
++kr_cov_access kr_cov_cd_pixel_data(unsigned cpu, uint32_t address, unsigned width)
++{
++  const unsigned page = address >> 16;
++  const cpu_memory_map *map = (cpu == KR_DEBUG_SUB68K ? s68k.memory_map : m68k.memory_map) + page;
++  unsigned (*read)(unsigned) = cpu == KR_DEBUG_Z80 ? zbank_memory_map[page].read :
++                             width == 1 ? map->read8 : map->read16;
++  if (read == cell_ram_0_read8 || read == cell_ram_1_read8 ||
++      read == cell_ram_0_read16 || read == cell_ram_1_read16)
++  {
++    const unsigned bank = read == cell_ram_1_read8 || read == cell_ram_1_read16;
++    const unsigned offset = gfx.lut_offset[(address >> 2) & 0x7fff] | (address & (width == 1 ? 0x10003 : 0x10002));
++    return (kr_cov_access){scd.word_ram[bank] + offset, width};
++  }
++  if (read == dot_ram_0_read8 || read == dot_ram_1_read8 ||
++      read == dot_ram_0_read16 || read == dot_ram_1_read16)
++  {
++    const unsigned bank = read == dot_ram_1_read8 || read == dot_ram_1_read16;
++    return (kr_cov_access){scd.word_ram[bank] + ((address >> 1) & 0x1ffff), 1};
++  }
++  return (kr_cov_access){NULL, width};
++}
+ 
+ int kr_debug_peek_cd_graphics(unsigned int (*read_byte)(unsigned int),
+                             uint32_t address, uint8_t *byte)
+diff --git a/core/cd_hw/scd.c b/core/cd_hw/scd.c
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -38,6 +38,7 @@
+ 
+ #include "shared.h"
+ #include "../kegatrace/hooks.h"
++#include "../kegacoverage/hooks.h"
+ #include "megald/integration.h"
+ 
+ extern int8 reset_do_not_clear_buffers;
+@@ -2524,6 +2525,30 @@
+ 
+ #include "../kegadebug/hooks.h"
+ 
++kr_cov_access kr_cov_cd_data(unsigned cpu, uint32_t address, unsigned width)
++{
++  unsigned page = address >> 16;
++  const cpu_memory_map *map = cpu == KR_DEBUG_SUB68K ? s68k.memory_map : m68k.memory_map;
++  unsigned (*read)(unsigned) = cpu == KR_DEBUG_Z80 ? zbank_memory_map[page].read :
++                             width == 1 ? map[page].read8 : map[page].read16;
++  if (read == word_ram_s68k_read_byte || read == word_ram_s68k_read_word)
++    page &= 0x0f;
++  else if (read == word_ram_m68k_read_byte || read == word_ram_m68k_read_word ||
++           read == word_ram_z80_read_byte)
++    page &= 0x23;
++  else if (read == prg_ram_m68k_read_byte || read == prg_ram_m68k_read_word ||
++           read == prg_ram_z80_read_byte)
++    page &= 0x03;
++
++  read = cpu == KR_DEBUG_Z80 ? zbank_memory_map[page].read :
++         width == 1 ? map[page].read8 : map[page].read16;
++  if (!read && map[page].base)
++    return (kr_cov_access){map[page].base + (address & 0xffff), width};
++  if (read == bram_read_word || (read == bram_read_byte && (address & 1)))
++    return (kr_cov_access){scd.bram + ((address >> 1) & 0x1fff), 1};
++  return kr_cov_cd_pixel_data(cpu, (page << 16) | (address & 0xffff), width);
++}
++
+ int kr_debug_peek_cd(unsigned cpu, uint32_t address, uint8_t *byte)
+ {
+   unsigned page = address >> 16;
+diff --git a/core/cart_hw/svp/ssp16.c b/core/cart_hw/svp/ssp16.c
+--- a/core/cart_hw/svp/ssp16.c
++++ b/core/cart_hw/svp/ssp16.c
+@@ -345,6 +345,17 @@
+ 
+ #include "../../kegadebug/hooks.h"
+ #include "../../kegatrace/hooks.h"
++#include "../../kegacoverage/hooks.h"
++
++INLINE unsigned short kr_cov_ssp_word(void)
++{
++  const uint32_t address = (uint16_t)GET_PC() << 1;
++  const uint8_t *bytes = (const uint8_t *)PC;
++  const unsigned short word = *PC++;
++  if (UNLIKELY(kr_cov_exec_mask & KR_DEBUG_SSP1601))
++    kr_cov_observe(KR_DEBUG_SSP1601, KR_COV_EXEC, address, bytes, 2);
++  return word;
++}
+ 
+ /* The live PC is a native interpreter pointer while a slice runs. Keep the
+  * debugger view separate from the SSP register layout used by save states. */
+@@ -1111,7 +1122,7 @@
+ 
+     if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_EXEC))
+       kr_debug_ssp_before_opcode(cycles);
+-    op = *PC++;
++    op = kr_cov_ssp_word();
+     if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_SSP1601))
+       kr_trace_exec(KR_DEBUG_SSP1601, (uint16_t)(GET_PC() - 1), (uint16_t)op, 2,
+                     (mcycles_vdp / MCYCLES_PER_LINE) * (int64_t)SVP_cycles + cycles - g_cycles);
+@@ -1142,13 +1153,13 @@
+       case 0x02: tmpv = REG_READ((op & 0xf0) >> 4); ptr1_write(op, tmpv); break;
+ 
+       /* ldi d, imm */
+-      case 0x04: tmpv = *PC++; REG_WRITE((op & 0xf0) >> 4, tmpv); break;
++      case 0x04: tmpv = kr_cov_ssp_word(); REG_WRITE((op & 0xf0) >> 4, tmpv); break;
+ 
+       /* ld d, ((ri)) */
+       case 0x05: tmpv = ptr2_read(op); REG_WRITE((op & 0xf0) >> 4, tmpv); break;
+ 
+       /* ldi (ri), imm */
+-      case 0x06: tmpv = *PC++; ptr1_write(op, tmpv); break;
++      case 0x06: tmpv = kr_cov_ssp_word(); ptr1_write(op, tmpv); break;
+ 
+       /* ld adr, a */
+       case 0x07: ssp->mem.RAM[op & 0x1ff] = rA; break;
+@@ -1169,7 +1180,7 @@
+       case 0x24: {
+         int cond = 0;
+         COND_CHECK
+-        if (cond) { int new_PC = *PC++; write_STACK(GET_PC()); write_PC(new_PC); }
++        if (cond) { int new_PC = kr_cov_ssp_word(); write_STACK(GET_PC()); write_PC(new_PC); }
+         else PC++;
+         break;
+       }
+@@ -1181,7 +1192,7 @@
+       case 0x26: {
+         int cond = 0;
+         COND_CHECK
+-        if (cond) { int new_PC = *PC++; write_PC(new_PC); }
++        if (cond) { int new_PC = kr_cov_ssp_word(); write_PC(new_PC); }
+         else PC++;
+         break;
+       }
+@@ -1269,12 +1280,12 @@
+       case 0x73: tmpv = ssp->mem.RAM[op & 0x1ff]; OP_EORA(tmpv); break;
+ 
+       /* OP a, imm */
+-      case 0x14: tmpv = *PC++; OP_SUBA(tmpv); break;
+-      case 0x34: tmpv = *PC++; OP_CMPA(tmpv); break;
+-      case 0x44: tmpv = *PC++; OP_ADDA(tmpv); break;
+-      case 0x54: tmpv = *PC++; OP_ANDA(tmpv); break;
+-      case 0x64: tmpv = *PC++; OP_ORA (tmpv); break;
+-      case 0x74: tmpv = *PC++; OP_EORA(tmpv); break;
++      case 0x14: tmpv = kr_cov_ssp_word(); OP_SUBA(tmpv); break;
++      case 0x34: tmpv = kr_cov_ssp_word(); OP_CMPA(tmpv); break;
++      case 0x44: tmpv = kr_cov_ssp_word(); OP_ADDA(tmpv); break;
++      case 0x54: tmpv = kr_cov_ssp_word(); OP_ANDA(tmpv); break;
++      case 0x64: tmpv = kr_cov_ssp_word(); OP_ORA (tmpv); break;
++      case 0x74: tmpv = kr_cov_ssp_word(); OP_EORA(tmpv); break;
+ 
+       /* OP a, ((ri)) */
+       case 0x15: tmpv = ptr2_read(op); OP_SUBA(tmpv); break;

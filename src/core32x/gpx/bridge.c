@@ -7,6 +7,7 @@
 #include "bootrom.h"
 #include "DebugExecutionAbi.h"
 #include "../kegatrace/hooks.h"
+#include "../kegacoverage/hooks.h"
 #include "../machine.h"
 #include "../state.h"
 #ifdef KEGA_SH2_DRC
@@ -297,10 +298,17 @@ static void zio_write8(unsigned a,unsigned v)
     t=z80_time();kega32x_machine_run_until(ctx->machine,t);
     kega32x_bus_write8(kega32x_machine_bus(ctx->machine),2,offset,(uint8_t)v,t);
 }
+static void cover_md_framebuffer(unsigned cpu,Kega32xBus *bus,unsigned address,unsigned width)
+{
+    const uint8_t *fb = (const uint8_t *)bus->memory->framebuffer[(bus->s.vdp[5] & 1) ^ 1];
+    kr_cov_observe(cpu,KR_COV_READ,address,fb+((address & 0x1ffff) & ~(width - 1u)),width);
+}
 static unsigned zfb_read8(unsigned a)
 {
-    unsigned v;kega32x_machine_run_until(ctx->machine,z80_time());
-    v=kega32x_fb_read16(kega32x_machine_bus(ctx->machine),a);
+    kega32x_machine_run_until(ctx->machine,z80_time());
+    Kega32xBus *bus=kega32x_machine_bus(ctx->machine);
+    unsigned v=kega32x_fb_read16(bus,a);
+    if (UNLIKELY(kr_cov_read_mask & KR_DEBUG_Z80)) cover_md_framebuffer(KR_DEBUG_Z80,bus,a,1);
     return (v>>((a&1)?0:8))&255;
 }
 static void zfb_write8(unsigned a,unsigned v)
@@ -313,9 +321,21 @@ static void zfb_write8(unsigned a,unsigned v)
     kega32x_fb_write8(b,a,(uint8_t)v);
 }
 static unsigned fb_read8(unsigned a)
-{ unsigned v;sync_device();v=kega32x_fb_read16(kega32x_machine_bus(ctx->machine),a);return (v>>((a&1)?0:8))&255; }
+{
+    sync_device();
+    Kega32xBus *bus=kega32x_machine_bus(ctx->machine);
+    unsigned v=kega32x_fb_read16(bus,a);
+    if (UNLIKELY(kr_cov_read_mask & KR_DEBUG_M68K)) cover_md_framebuffer(KR_DEBUG_M68K,bus,a,1);
+    return (v>>((a&1)?0:8))&255;
+}
 static unsigned fb_read16(unsigned a)
-{ sync_device();return kega32x_fb_read16(kega32x_machine_bus(ctx->machine),a); }
+{
+    sync_device();
+    Kega32xBus *bus=kega32x_machine_bus(ctx->machine);
+    unsigned v=kega32x_fb_read16(bus,a);
+    if (UNLIKELY(kr_cov_read_mask & KR_DEBUG_M68K)) cover_md_framebuffer(KR_DEBUG_M68K,bus,a,2);
+    return v;
+}
 static void fb_write8(unsigned a,unsigned v)
 {
     Kega32xBus *b;sync_device();b=kega32x_machine_bus(ctx->machine);
@@ -339,6 +359,26 @@ static void rom_window_write8(unsigned a,unsigned v) {a=rom_address(a);map_write
 static void rom_window_write16(unsigned a,unsigned v) {a=rom_address(a);map_write16(&ctx->original[a>>16],a,v);}
 static unsigned zrom_window8(unsigned a) {return zmap_read8(rom_address(a));}
 static void zrom_window_write8(unsigned a,unsigned v) {zmap_write8(rom_address(a),v);}
+kr_cov_access kr_cov_32x_md_data(unsigned cpu,uint32_t address,unsigned width)
+{
+    if (!ctx || !ctx->machine) return (kr_cov_access){NULL,width};
+    unsigned page=address>>16;
+    const bool z80=cpu==KR_DEBUG_Z80;
+    unsigned (*read)(unsigned)=z80?zbank_memory_map[page].read:
+                              width==1?m68k.memory_map[page].read8:m68k.memory_map[page].read16;
+    /* These bus handlers synchronize the device before choosing the bank.
+       They report their exact storage themselves, so skip the outer report. */
+    if (read==zfb_read8 || read==fb_read8 || read==fb_read16) return (kr_cov_access){NULL,0};
+    if (read!=zrom_window8 && read!=rom_window8 && read!=rom_window16)
+        return (kr_cov_access){NULL,width};
+
+    address=rom_address(address);
+    page=address>>16;
+    const cpu_memory_map *map=&ctx->original[page];
+    read=z80?ctx->original_zbank[page].read:width==1?map->read8:map->read16;
+    return (kr_cov_access){!read && map->base ? map->base + (address & 0xffff) : NULL,width};
+}
+
 /* Inspect the currently selected 32X overlays without synchronizing the
    SH-2s or invoking an original cartridge handler. */
 bool kr_debug_32x_peek_md(unsigned cpu,uint32_t address,uint8_t *value)
@@ -856,6 +896,57 @@ static KegaSh2 *kr32_cpu(unsigned cpu) {
     if(!ctx || !ctx->machine || (cpu!=KR_DEBUG_SH2_MASTER && cpu!=KR_DEBUG_SH2_SLAVE))return NULL;
     return kega32x_machine_cpu(ctx->machine,cpu==KR_DEBUG_SH2_SLAVE);
 }
+const uint8_t *kr_cov_32x_storage(unsigned id,unsigned *size)
+{
+    if (!ctx || !ctx->machine || !size) return NULL;
+    Kega32xBus *bus=kega32x_machine_bus(ctx->machine);
+    switch (id) {
+        case KR_COV_32X_BOOT:
+            if (!ctx->has_cart_rom) return NULL;
+            *size=sizeof(ctx->boot_page);
+            return ctx->boot_page;
+        case KR_COV_SH2_MASTER_BOOT:
+        case KR_COV_SH2_SLAVE_BOOT:
+            *size=id==KR_COV_SH2_SLAVE_BOOT?1024:2048;
+            return kega32x_machine_boot_rom(ctx->machine,id==KR_COV_SH2_SLAVE_BOOT);
+        case KR_COV_32X_SDRAM:
+            *size=sizeof(bus->memory->sdram);
+            return (const uint8_t *)bus->memory->sdram;
+        case KR_COV_SH2_MASTER_DATA:
+        case KR_COV_SH2_SLAVE_DATA: {
+            SH2 *cpu=kega_sh2_native(kega32x_machine_cpu(ctx->machine,id==KR_COV_SH2_SLAVE_DATA));
+            *size=sizeof(cpu->data_array);
+            return cpu->data_array;
+        }
+        case KR_COV_32X_FB0:
+        case KR_COV_32X_FB1:
+            *size=sizeof(bus->memory->framebuffer[0]);
+            return (const uint8_t *)bus->memory->framebuffer[id==KR_COV_32X_FB1];
+        default:
+            return NULL;
+    }
+}
+
+static void kr32_coverage_event(void *opaque,KegaSh2 *cpu,unsigned kind,
+                                 uint32_t address,const uint8_t *bytes,unsigned width)
+{
+    (void)opaque;
+    const unsigned id=kega_sh2_native(cpu)->is_slave?KR_DEBUG_SH2_SLAVE:KR_DEBUG_SH2_MASTER;
+    kr_cov_observe(id,kind==KEGA_SH2_COV_EXEC?KR_COV_EXEC:KR_COV_READ,address,bytes,width);
+}
+
+void kr_cov_32x_bind(unsigned exec_cpus,unsigned read_cpus)
+{
+    for (unsigned side=0;side<2;++side) {
+        const unsigned id=side?KR_DEBUG_SH2_SLAVE:KR_DEBUG_SH2_MASTER;
+        KegaSh2 *cpu=kr32_cpu(id);
+        if (!cpu) continue;
+        const unsigned mask=((exec_cpus & id)?KEGA_SH2_COV_EXEC:0) |
+                            ((read_cpus & id)?KEGA_SH2_COV_READ:0);
+        kega_sh2_set_coverage(cpu,mask?kr32_coverage_event:NULL,NULL,mask);
+    }
+}
+
 static void kr32_trace_event(void *opaque,KegaSh2 *cpu,unsigned event,
                              uint32_t address,uint32_t value,uint32_t aux)
 {

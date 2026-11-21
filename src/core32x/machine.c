@@ -30,6 +30,8 @@ struct Kega32xMachine {
 };
 static uint64_t master_clock(uint64_t t) { return t*2 + t/3 + (t%3 != 0); }
 Kega32xBus *kega32x_machine_bus(Kega32xMachine *m) { return m?&m->bus:NULL; }
+const uint8_t *kega32x_machine_boot_rom(const Kega32xMachine *m,unsigned cpu)
+{ return m && cpu<2 ? m->bios[cpu] : NULL; }
 Kega32xPwm *kega32x_machine_pwm(Kega32xMachine *m) { return m?&m->pwm:NULL; }
 KegaSh2 *kega32x_machine_cpu(Kega32xMachine *m, unsigned c) { return m && c<2?m->cpu[c]:NULL; }
 uint64_t kega32x_machine_cpu_mclk(const Kega32xMachine *m, unsigned c)
@@ -278,6 +280,53 @@ static uint16_t instruction_fetch16(void *p,KegaSh2 *cpu,uint32_t address)
     }
     return (uint16_t)kega32x_machine_read(m,c,address,2);
 }
+/* This mirrors only the storage-backed choices of the actual board read.
+   Peripheral I/O and unproven host cartridge handlers are reported unknown. */
+static void coverage_origin(void *p,KegaSh2 *cpu,unsigned kind,uint32_t address,unsigned width)
+{
+    Kega32xMachine *m = p;
+    const unsigned c = cpu_index(m,cpu);
+    const uint32_t a = address >= 0xc0000000 ? address : address & 0xc7ffffff;
+    const uint8_t *bytes = NULL;
+    unsigned offset;
+    if (a >= 0xc0000000 && a < 0xe0000000) {
+        bytes = kega_sh2_native(cpu)->data_array + ((a & 0xfff) & ~(width - 1u));
+    } else if (!(a & 0xc0000000)) switch (a & 0x06000000) {
+        case 0:
+            offset = a & 0x3ffff;
+            if (offset + width <= (c ? 1024u : 2048u)) bytes = m->bios[c] + offset;
+            break;
+        case 0x02000000:
+            offset = a & 0x3fffff;
+            if (width == 1) {
+                const uint16_t *page = m->host.rom_pages ? m->host.rom_pages[offset >> 16] : NULL;
+                kega_sh2_cover_storage(cpu,kind,address,page ? (const uint8_t *)page + (offset & 0xffff) : NULL,1);
+                return;
+            }
+            /* The board ROM bus aligns to words and wraps at 4 MiB. */
+            for (unsigned i=0;i<width;i+=2) {
+                const unsigned current = (offset+i)&0x3ffffe;
+                const uint16_t *page = m->host.rom_pages ? m->host.rom_pages[current >> 16] : NULL;
+                kega_sh2_cover_storage(cpu,kind,address+i,page ? (const uint8_t *)page + (current & 0xffff) : NULL,2);
+            }
+            return;
+        case 0x04000000:
+            if (width == 4) {
+                const uint8_t *fb = (const uint8_t *)m->memory.framebuffer[(m->bus.s.vdp[5] & 1) ^ 1];
+                kega_sh2_cover_storage(cpu,kind,address,fb + (a & 0x1fffe),2);
+                kega_sh2_cover_storage(cpu,kind,address+2,fb + ((a+2) & 0x1fffe),2);
+                return;
+            }
+            bytes = (const uint8_t *)m->memory.framebuffer[(m->bus.s.vdp[5] & 1) ^ 1] +
+                    ((a & 0x1ffff) & ~(width - 1u));
+            break;
+        case 0x06000000:
+            bytes = (const uint8_t *)m->memory.sdram + ((a & 0x3ffff) & ~(width - 1u));
+            break;
+    }
+    kega_sh2_cover_storage(cpu,kind,address,bytes,width);
+}
+
 static uint8_t r8(void *p,KegaSh2 *c,uint32_t a) {Kega32xMachine *m=p;return (uint8_t)kega32x_machine_read(m,cpu_index(m,c),a,1);}
 static uint16_t r16(void *p,KegaSh2 *c,uint32_t a) {Kega32xMachine *m=p;return (uint16_t)kega32x_machine_read(m,cpu_index(m,c),a,2);}
 static uint32_t r32(void *p,KegaSh2 *c,uint32_t a) {Kega32xMachine *m=p;return kega32x_machine_read(m,cpu_index(m,c),a,4);}
@@ -304,6 +353,7 @@ Kega32xMachine *kega32x_machine_create(const Kega32xMachineHost *h,const uint8_t
     m->host=*h;memcpy(m->bios[0],mb,ml);memcpy(m->bios[1],sb,sl);
     ch.user=m;ch.read8=r8;ch.read16=r16;ch.read32=r32;ch.write8=w8;ch.write16=w16;ch.write32=w32;
     ch.rom_pages=h->rom_pages;ch.fetch16=instruction_fetch16;ch.can_idle_fetch=can_idle_fetch;
+    ch.coverage_origin=coverage_origin;
     m->cpu[0]=kega_sh2_create(&ch,0);m->cpu[1]=kega_sh2_create(&ch,1);
     if(!m->cpu[0] || !m->cpu[1]) {kega32x_machine_destroy(m);return NULL;}
     /* Shared SDRAM is word-swapped plain storage for the lifetime of this

@@ -32,6 +32,8 @@ struct LibretroHost::Api {
     unsigned (*system_hw)() = nullptr;
     unsigned (*sms_pause_state_version)() = nullptr;
     bool (*sms_irata_flash_active)() = nullptr;
+    size_t (*coverage_sources)(unsigned,kr_cov_source*,size_t) = nullptr;
+    bool (*coverage_bind)(unsigned,uint32_t,uint32_t,kr_cov_callback,void*) = nullptr;
     bool (*trace_bind)(unsigned,uint32_t,uint32_t,kr_trace_callback,void*) = nullptr;
     uint32_t (*trace_capabilities)() = nullptr;
     bool (*trace_decode)(unsigned,uint32_t,const uint8_t*,size_t,kr_debug_instruction*,size_t) = nullptr;

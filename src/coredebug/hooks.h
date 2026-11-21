@@ -4,7 +4,17 @@
 #include "DebugExecutionAbi.h"
 #include <stdbool.h>
 
-extern unsigned kr_debug_event_masks[KR_DEBUG_MAX_CPUS];
+/* Private effective-mask bits shared with the native coverage observer. */
+enum {
+  KR_DEBUG_COV_EXEC = 0x100, KR_DEBUG_COV_READ = 0x200,
+  KR_DEBUG_COV_BITS = KR_DEBUG_COV_EXEC | KR_DEBUG_COV_READ
+};
+#if defined(__GNUC__) && defined(__ELF__)
+#define KR_DEBUG_LOCAL __attribute__((visibility("hidden")))
+#else
+#define KR_DEBUG_LOCAL
+#endif
+extern KR_DEBUG_LOCAL unsigned kr_debug_event_masks[KR_DEBUG_MAX_CPUS];
 #define kr_debug_m68k_mask (kr_debug_event_masks[0])
 #define kr_debug_z80_mask  (kr_debug_event_masks[1])
 #define kr_debug_sub68k_mask (kr_debug_event_masks[2])

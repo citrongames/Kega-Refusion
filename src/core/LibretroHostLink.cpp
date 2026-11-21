@@ -123,8 +123,9 @@ bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     if(enabled && loaded_ && !supportsLinkCable()) {
         error=Localization::text(QStringLiteral("Link Cable доступен для Game Gear и картриджей Mega Drive без Sega CD и 32X."));return false;
     }
-    traceBoundary(KR_TRACE_TOPOLOGY);
+    debugToolsBoundary(KR_TRACE_TOPOLOGY);
     traceStop();
+    coverageStop();
     if(!enabled) {
         stopLinkedPair();linkRequested_=false;buttons_.fill(0);
         if(loaded_) {applyControllerPorts(true);refreshRecordingIdentity();}
@@ -140,6 +141,7 @@ bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     return false;
 }
 void LibretroHost::stopLinkedPair() {
+    coverageDisconnectPeer();
     traceDisconnectPeer();
     debuggerDisconnectPeer();
     if(api_&&api_->link_connect)api_->link_connect(nullptr,nullptr,nullptr);

@@ -3,6 +3,7 @@
 #include "DebugInspection.h"
 #include "DebugExecution.h"
 #include "DebugTrace.h"
+#include "DebugCoverage.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -43,6 +44,8 @@ public:
     void requestInspection(const DebugInspectionRequest& request);
     bool takeInspection(DebugInspectionSnapshot& snapshot);
     bool writeDebugMemory(const DebugMemoryWrite& request);
+    void coverageCommand(const DebugCoverageCommand& command);
+    bool takeCoverageSnapshot(DebugCoverageSnapshot& snapshot);
     void traceCommand(const DebugTraceCommand& command);
     bool takeTraceSnapshot(DebugTraceSnapshot& snapshot);
     void debuggerCommand(const DebuggerCommand& command);
@@ -183,6 +186,7 @@ signals:
     void gameClosed();
     void masterSystemChanged(bool masterSystem);
     void gameGearChanged(bool gameGear);
+    void coverageReady();
     void traceReady();
     void inspectionReady();
     void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
@@ -227,6 +231,11 @@ private:
                       const QRectF& inputViewport = {});
     QString corePath_, dataPath_;
     std::mutex mutex_, videoMutex_, inspectionMutex_;
+    std::mutex coverageMutex_;
+    std::deque<DebugCoverageCommand> coverageCommands_;
+    DebugCoverageSnapshot coverageSnapshot_;
+    bool coverageSnapshotPending_=false;
+    std::atomic_bool coverageRequested_{false};
     std::mutex traceMutex_;
     std::deque<DebugTraceCommand> traceCommands_;
     DebugTraceSnapshot traceSnapshot_;

@@ -3,6 +3,7 @@
 #include "DebugInspection.h"
 #include "DebugExecution.h"
 #include "DebugTrace.h"
+#include "DebugCoverage.h"
 #include "InputDisplay.h"
 #include <QByteArray>
 #include <QImage>
@@ -89,6 +90,11 @@ public:
     bool debuggerCommand(const DebuggerCommand&, QString& error);
     DebuggerSnapshot debuggerSnapshot() const;
     quint64 inspectionGeneration() const { return inspectionGeneration_; }
+    bool coverageCommand(const DebugCoverageCommand&, QString& error);
+    DebugCoverageSnapshot coverageSnapshot() const;
+    bool coverageActive() const;
+    void coverageStop();
+    void debugToolsBoundary(unsigned reason);
     bool traceCommand(const DebugTraceCommand&, QString& error);
     DebugTraceSnapshot traceSnapshot() const;
     bool traceActive() const;
@@ -207,6 +213,12 @@ public:
     std::function<void(const QString&)> message;
 private:
     struct Activation { LibretroHost* previous; explicit Activation(LibretroHost* h) : previous(active_) { active_=h; } ~Activation() { active_=previous; } };
+    struct CoverageExecution;
+    struct CoverageExecutionDeleter { void operator()(CoverageExecution*) const; };
+    std::unique_ptr<CoverageExecution,CoverageExecutionDeleter> coverage_;
+    quint32 coverageViewInstance_=0, coverageViewSource_=0, coverageViewOffset_=0;
+    void coverageBeforeFrame();
+    void coverageDisconnectPeer();
     struct TraceExecution;
     struct TraceExecutionDeleter { void operator()(TraceExecution*) const; };
     std::unique_ptr<TraceExecution,TraceExecutionDeleter> tracer_;

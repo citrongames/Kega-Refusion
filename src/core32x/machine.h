@@ -39,6 +39,7 @@ void kega32x_machine_power_reset(Kega32xMachine *, int pal, int no_cart);
 Kega32xBus *kega32x_machine_bus(Kega32xMachine *);
 KegaSh2 *kega32x_machine_cpu(Kega32xMachine *, unsigned cpu);
 Kega32xPwm *kega32x_machine_pwm(Kega32xMachine *);
+const uint8_t *kega32x_machine_boot_rom(const Kega32xMachine *, unsigned);
 uint64_t kega32x_machine_cpu_mclk(const Kega32xMachine *, unsigned cpu);
 /* Runs only the two SH2s and 32X events; the outer GPX scheduler must interleave
    its own CPUs, CD and video events. Instruction overshoot is retained. */

@@ -1,0 +1,441 @@
+{
+  "date": "2026-11-21",
+  "scope": "Physical code and data coverage, a bounded memory map and explicit asynchronous KCDL export.",
+  "baselineCommit": "bd91e5e57dbd48dad4433cc98deb9b4d213359c5",
+  "candidateLinuxCoreSha256": "4896170c2c37a5b4efdd61ba72919b4f99ba0ce69f5252725b93a79250637906",
+  "windowsRuntimeTested": false,
+  "checks": {
+    "map": {
+      "status": "passed",
+      "test": "debug_coverage_map_tests",
+      "limits": {
+        "packedHistoryMiB": 64,
+        "previewBytes": 256,
+        "maxPhysicalSourceId": 63
+      },
+      "evidence": "Separate physical allocations, packed span flags, known and unknown byte counts, stable revisits, bounded previews, clear during file export, no overwrite."
+    },
+    "nativeBanks": {
+      "status": "passed",
+      "test": "debug_coverage_native_tests",
+      "coreSha256": "cd877e650800c2fb60d2df54dcf0a2e519ef0e18ef06849d4f4f954db3289573",
+      "log": "build/verification/debugger-phase4-coverage/native-bank-coverage.log",
+      "scenes": [
+        "Original SMS Sega 16 KiB bank 1 and bank 3 execution and data reads through the same logical mapping, plus a mirror and operands.",
+        "Original MD SSF 68000 self-switching execution, old-bank prefetched opcode and next new-bank opcode, multiword operands, ROM mirrors, main RAM and unknown VDP reads."
+      ]
+    },
+    "nativeExpansions": {
+      "status": "passed",
+      "coreSha256": "cd877e650800c2fb60d2df54dcf0a2e519ef0e18ef06849d4f4f954db3289573",
+      "log": "build/verification/debugger-phase4-coverage/native-expansion-coverage.log",
+      "scenes": [
+        "SVP exact consumed opcode and immediate words.",
+        "Both SH-2s' SDRAM code and PC-relative data, no missed or spuriously marked fixture bytes.",
+        "Sub-68000 PRG code and canonical Sega CD Word RAM reads through a 2M mirror, 1M bank interleave and the dot view."
+      ],
+      "testMedia": "Generated original ROMs and local Sega CD BIOS. Completed state uses the existing PPC/EA-only SH-2 scratch exceptions; picture, PCM and clock compare exactly."
+    },
+    "hostAndWorker": {
+      "status": "passed",
+      "test": "debug_coverage_host_tests",
+      "coreSha256": "cd877e650800c2fb60d2df54dcf0a2e519ef0e18ef06849d4f4f954db3289573",
+      "evidence": "MD state, picture, PCM and clock match; mapped/aliased ROM and RAM flags, stable revisits, reset/restore union, rendered rewind-preview exclusion, independent trace/breakpoint hooks, current and stale Clear, unload, Game Gear B-only distinct code/data, queued Export then Stop."
+    },
+    "qtOffscreen": {
+      "status": "passed",
+      "test": "coverage_view_tests",
+      "evidence": "CPU/instance capability gating, captured versus target instance, bounded paging, changed and unchanged updates, navigation, stale replies, close stops; English and Russian previews saved."
+    },
+    "linuxAndWindowsBuilds": {
+      "status": "passed",
+      "evidence": "Linux and Windows native cores and applications compiled. No Windows runtime verification."
+    },
+    "optimizedCoreFocusedRecheck": {
+      "status": "passed",
+      "linuxCoreSha256": "4896170c2c37a5b4efdd61ba72919b4f99ba0ce69f5252725b93a79250637906",
+      "logs": {
+        "nativeBankAndPrefetch": "build/verification/debugger-phase4-coverage/optimized-native.log",
+        "svpSh2SegaCd": "build/verification/debugger-phase4-coverage/optimized-expansions.log",
+        "hostAndWorker": "build/verification/debugger-phase4-coverage/optimized-host.log",
+        "existingNativeTrace": "build/verification/debugger-phase4-coverage/optimized-trace-native.log"
+      }
+    }
+  },
+  "closedToolBenchmark": {
+    "method": "Same Linux host, CPU 5, MAME YM2612, debugger/trace/coverage inactive. 180 warm-up frames and fixed inputs. One alternating baseline/candidate pair per title and mode. Normal renders each frame and collects PCM. Fast renders every 32nd and final frame with timed PCM collection off.",
+    "reports": [
+      {
+        "stage": "initial coverage core",
+        "baselineCoreSha256": "91efcdd2314d6031c19cc5ccaa345d56ab213ee47dc7727a15985593c66e73b5",
+        "candidateCoreSha256": "cd877e650800c2fb60d2df54dcf0a2e519ef0e18ef06849d4f4f954db3289573",
+        "harnessSha256": "8994333220aad775333d0a8116c231051ee69f85a68585ef1ce6bf2b0755a487",
+        "games": {
+          "sonic2": {
+            "name": "Sonic 2 (World)",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "Sega logo",
+            "measuredFrames": 6000,
+            "pairs": 1,
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "normal": {
+              "baselineSeconds": 3.249156,
+              "candidateSeconds": 3.333882,
+              "baselineFps": 1846.634,
+              "candidateFps": 1799.704,
+              "changePercent": -2.541381,
+              "baselinePeakRssKiB": 38488,
+              "candidatePeakRssKiB": 38364,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 2.116254,
+              "candidateSeconds": 2.293647,
+              "baselineFps": 2835.198,
+              "candidateFps": 2615.921,
+              "changePercent": -7.734098,
+              "baselinePeakRssKiB": 38768,
+              "candidatePeakRssKiB": 39368,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              }
+            }
+          },
+          "bomberman": {
+            "name": "Mega Bomberman (Europe)",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "title menu",
+            "measuredFrames": 6000,
+            "pairs": 1,
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "normal": {
+              "baselineSeconds": 3.096317,
+              "candidateSeconds": 3.149603,
+              "baselineFps": 1937.786,
+              "candidateFps": 1905.002,
+              "changePercent": -1.691828,
+              "baselinePeakRssKiB": 38720,
+              "candidatePeakRssKiB": 38488,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 1.977948,
+              "candidateSeconds": 2.140863,
+              "baselineFps": 3033.447,
+              "candidateFps": 2802.608,
+              "changePercent": -7.609792,
+              "baselinePeakRssKiB": 38744,
+              "candidatePeakRssKiB": 39232,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              }
+            }
+          },
+          "doom": {
+            "name": "Doom 32X (Japan, USA)",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "start menu with HUD",
+            "measuredFrames": 600,
+            "pairs": 1,
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "normal": {
+              "baselineSeconds": 1.157897,
+              "candidateSeconds": 1.17173,
+              "baselineFps": 518.181,
+              "candidateFps": 512.064,
+              "changePercent": -1.180476,
+              "baselinePeakRssKiB": 47844,
+              "candidatePeakRssKiB": 48048,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "51fc2d98145e2b1afbb75e435bffad43d994e7f7d2e11c370a5e3af2fac8d337",
+                "followingFullOutputFramePcm": "6cb003a321ed3429f6e56042598d693de6c0be39b7763f5327d8085a8a36e9ff",
+                "nativeState": "54249f4ab787c05b659645f5ddfaeb6cbb1d4d0e92227ba7eec5b6352f0290f4"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 0.915614,
+              "candidateSeconds": 0.933001,
+              "baselineFps": 655.298,
+              "candidateFps": 643.086,
+              "changePercent": -1.86358,
+              "baselinePeakRssKiB": 49692,
+              "candidatePeakRssKiB": 50552,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "51fc2d98145e2b1afbb75e435bffad43d994e7f7d2e11c370a5e3af2fac8d337",
+                "followingFullOutputFramePcm": "6cb003a321ed3429f6e56042598d693de6c0be39b7763f5327d8085a8a36e9ff",
+                "nativeState": "54249f4ab787c05b659645f5ddfaeb6cbb1d4d0e92227ba7eec5b6352f0290f4"
+              }
+            }
+          },
+          "darxide": {
+            "name": "Darxide (Europe), 32X",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "language selection, Deutsch",
+            "measuredFrames": 600,
+            "pairs": 1,
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "normal": {
+              "baselineSeconds": 4.208154,
+              "candidateSeconds": 4.192949,
+              "baselineFps": 142.58,
+              "candidateFps": 143.097,
+              "changePercent": 0.362603,
+              "baselinePeakRssKiB": 45228,
+              "candidatePeakRssKiB": 45188,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "31f0802eda86b6a3e364ed0a37ef55625a7700516d4043ed765e5910380ad093",
+                "followingFullOutputFramePcm": "77673f96a35431b4d3b51ab706056d0366a482be88630e4af7caad3e48640bca",
+                "nativeState": "0cbe1acf9812fc6836e5a5ef4c82bfaf37d8c9a036f5dd340bfa2288fadf03f7"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 3.926913,
+              "candidateSeconds": 3.976172,
+              "baselineFps": 152.792,
+              "candidateFps": 150.899,
+              "changePercent": -1.238939,
+              "baselinePeakRssKiB": 46064,
+              "candidatePeakRssKiB": 46660,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "31f0802eda86b6a3e364ed0a37ef55625a7700516d4043ed765e5910380ad093",
+                "followingFullOutputFramePcm": "77673f96a35431b4d3b51ab706056d0366a482be88630e4af7caad3e48640bca",
+                "nativeState": "0cbe1acf9812fc6836e5a5ef4c82bfaf37d8c9a036f5dd340bfa2288fadf03f7"
+              }
+            }
+          }
+        }
+      },
+      {
+        "stage": "after inactive-path optimization",
+        "baselineCoreSha256": "91efcdd2314d6031c19cc5ccaa345d56ab213ee47dc7727a15985593c66e73b5",
+        "candidateCoreSha256": "4896170c2c37a5b4efdd61ba72919b4f99ba0ce69f5252725b93a79250637906",
+        "harnessSha256": "8994333220aad775333d0a8116c231051ee69f85a68585ef1ce6bf2b0755a487",
+        "games": {
+          "sonic2": {
+            "name": "Sonic 2 (World)",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "Sega logo",
+            "measuredFrames": 6000,
+            "pairs": 1,
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "normal": {
+              "baselineSeconds": 3.209239,
+              "candidateSeconds": 3.155189,
+              "baselineFps": 1869.602,
+              "candidateFps": 1901.629,
+              "changePercent": 1.713038,
+              "baselinePeakRssKiB": 38560,
+              "candidatePeakRssKiB": 38736,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 2.128015,
+              "candidateSeconds": 2.076029,
+              "baselineFps": 2819.529,
+              "candidateFps": 2890.133,
+              "changePercent": 2.504106,
+              "baselinePeakRssKiB": 38840,
+              "candidatePeakRssKiB": 39736,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              }
+            }
+          },
+          "bomberman": {
+            "name": "Mega Bomberman (Europe)",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "title menu",
+            "measuredFrames": 6000,
+            "pairs": 1,
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "normal": {
+              "baselineSeconds": 2.990848,
+              "candidateSeconds": 2.886477,
+              "baselineFps": 2006.12,
+              "candidateFps": 2078.659,
+              "changePercent": 3.615885,
+              "baselinePeakRssKiB": 38572,
+              "candidatePeakRssKiB": 38820,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 1.977359,
+              "candidateSeconds": 2.00159,
+              "baselineFps": 3034.35,
+              "candidateFps": 2997.617,
+              "changePercent": -1.210572,
+              "baselinePeakRssKiB": 38596,
+              "candidatePeakRssKiB": 39648,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              }
+            }
+          },
+          "doom": {
+            "name": "Doom 32X (Japan, USA)",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "start menu with HUD",
+            "measuredFrames": 600,
+            "pairs": 1,
+            "order": [
+              "baseline",
+              "candidate"
+            ],
+            "normal": {
+              "baselineSeconds": 1.170253,
+              "candidateSeconds": 1.131858,
+              "baselineFps": 512.71,
+              "candidateFps": 530.102,
+              "changePercent": 3.392171,
+              "baselinePeakRssKiB": 47816,
+              "candidatePeakRssKiB": 47904,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "51fc2d98145e2b1afbb75e435bffad43d994e7f7d2e11c370a5e3af2fac8d337",
+                "followingFullOutputFramePcm": "6cb003a321ed3429f6e56042598d693de6c0be39b7763f5327d8085a8a36e9ff",
+                "nativeState": "54249f4ab787c05b659645f5ddfaeb6cbb1d4d0e92227ba7eec5b6352f0290f4"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 0.918523,
+              "candidateSeconds": 0.919766,
+              "baselineFps": 653.223,
+              "candidateFps": 652.34,
+              "changePercent": -0.135176,
+              "baselinePeakRssKiB": 49660,
+              "candidatePeakRssKiB": 50452,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "51fc2d98145e2b1afbb75e435bffad43d994e7f7d2e11c370a5e3af2fac8d337",
+                "followingFullOutputFramePcm": "6cb003a321ed3429f6e56042598d693de6c0be39b7763f5327d8085a8a36e9ff",
+                "nativeState": "54249f4ab787c05b659645f5ddfaeb6cbb1d4d0e92227ba7eec5b6352f0290f4"
+              }
+            }
+          },
+          "darxide": {
+            "name": "Darxide (Europe), 32X",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "language selection, Deutsch",
+            "measuredFrames": 600,
+            "pairs": 1,
+            "order": [
+              "candidate",
+              "baseline"
+            ],
+            "normal": {
+              "baselineSeconds": 4.125951,
+              "candidateSeconds": 4.116823,
+              "baselineFps": 145.421,
+              "candidateFps": 145.743,
+              "changePercent": 0.221426,
+              "baselinePeakRssKiB": 45100,
+              "candidatePeakRssKiB": 45244,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "31f0802eda86b6a3e364ed0a37ef55625a7700516d4043ed765e5910380ad093",
+                "followingFullOutputFramePcm": "77673f96a35431b4d3b51ab706056d0366a482be88630e4af7caad3e48640bca",
+                "nativeState": "0cbe1acf9812fc6836e5a5ef4c82bfaf37d8c9a036f5dd340bfa2288fadf03f7"
+              }
+            },
+            "fast": {
+              "baselineSeconds": 3.943618,
+              "candidateSeconds": 3.888849,
+              "baselineFps": 152.145,
+              "candidateFps": 154.287,
+              "changePercent": 1.407867,
+              "baselinePeakRssKiB": 45908,
+              "candidatePeakRssKiB": 46652,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "31f0802eda86b6a3e364ed0a37ef55625a7700516d4043ed765e5910380ad093",
+                "followingFullOutputFramePcm": "77673f96a35431b4d3b51ab706056d0366a482be88630e4af7caad3e48640bca",
+                "nativeState": "0cbe1acf9812fc6836e5a5ef4c82bfaf37d8c9a036f5dd340bfa2288fadf03f7"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "optimization": "Shared effective per-CPU instrumentation mask, one direct 68000 read gate, cold read-origin and prefetch helpers, direct ELF mask accesses."
+  },
+  "deferred": [
+    "pixel provenance",
+    "profiling",
+    "debug-project persistence"
+  ],
+  "localEvidenceDirectory": "build/verification/debugger-coverage",
+  "deployment": {
+    "platform": "Windows x86_64",
+    "version": "0.28.0",
+    "destination": "/mnt/d/emulation/Sega Mega Drive/emu/KegaRefusion/testbuild",
+    "verifiedFiles": 73,
+    "sha256": {
+      "KegaRefusion.exe": "a5aa6e54c7977969680e97f97fc56e69a553853d59fd4228ffad9cb8f9aff371",
+      "cores/genesis_plus_gx_libretro.dll": "b82e0331a2004ed1db87ad048a04506f136a2444cbc59065d15f1d5d32b2c1ea",
+      "cores/genesis_plus_gx_libretro_linkpeer.dll": "b82e0331a2004ed1db87ad048a04506f136a2444cbc59065d15f1d5d32b2c1ea"
+    },
+    "interactiveRuntime": "left to user"
+  }
+}

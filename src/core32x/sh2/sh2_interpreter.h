@@ -20,6 +20,12 @@ enum { KEGA_SH2_TRACE_EXEC = 1, KEGA_SH2_TRACE_IRQ = 2 };
 /* A non-yielding observer. Nonzero mask selects the instruction interpreter. */
 typedef void (*KegaSh2TraceCallback)(void *, KegaSh2 *, unsigned, uint32_t, uint32_t, uint32_t);
 void kega_sh2_set_trace(KegaSh2 *, KegaSh2TraceCallback, void *, unsigned);
+enum { KEGA_SH2_COV_EXEC = 1, KEGA_SH2_COV_READ = 2 };
+typedef void (*KegaSh2CoverageCallback)(void *, KegaSh2 *, unsigned, uint32_t,
+                                         const uint8_t *, unsigned);
+void kega_sh2_set_coverage(KegaSh2 *, KegaSh2CoverageCallback, void *, unsigned);
+void kega_sh2_cover_storage(KegaSh2 *, unsigned, uint32_t, const uint8_t *, unsigned);
+
 
 
 
@@ -48,6 +54,10 @@ typedef struct KegaSh2Host {
      * NULL forbids idle batching even when the optimization is enabled. */
     bool (*can_idle_fetch)(void *user, KegaSh2 *cpu, uint32_t address, size_t bytes);
     const uint16_t *const *rom_pages;
+    /* Resolve the actual board bus branch for coverage when the interpreter
+     * cannot use its own direct RAM or cartridge pointer. */
+    void (*coverage_origin)(void *, KegaSh2 *, unsigned, uint32_t, unsigned);
+
 } KegaSh2Host;
 
 #define KEGA_SH2_STATE_VERSION 1u

@@ -32,6 +32,10 @@ struct KegaSh2 {
     KegaSh2TraceCallback trace;
     void *trace_user;
     unsigned trace_mask;
+    KegaSh2CoverageCallback coverage;
+    void *coverage_user;
+    unsigned coverage_mask;
+
 };
 
 static KegaSh2 *owner(SH2 *core) { return (KegaSh2 *)core; }
@@ -59,6 +63,39 @@ static inline const uint16_t *rom_page(SH2 *s, uint32_t a) {
     const uint16_t *const *pages = owner(s)->host.rom_pages;
     return pages && (a & 0xc6000000u) == 0x02000000u ? pages[(a >> 16) & 63] : NULL;
 }
+void kega_sh2_cover_storage(KegaSh2 *c, unsigned kind, uint32_t address,
+                            const uint8_t *bytes, unsigned width)
+{
+    if (c->coverage && c->running)
+        c->coverage(c->coverage_user, c, kind, address, bytes, width);
+}
+
+static void cover_access(KegaSh2 *c, SH2 *s, unsigned kind, uint32_t address, unsigned width)
+{
+    uint32_t offset;
+    const bool fetch = kind == KEGA_SH2_COV_EXEC;
+    const uint8_t *plain = fetch && (address & 1) ? NULL : plain_base(s, address, &offset);
+    if (plain) {
+        kega_sh2_cover_storage(c, kind, address, plain + (offset & ~(width - 1u)), width);
+        return;
+    }
+
+    if (!fetch) {
+        const uint16_t *page = rom_page(s, address);
+        offset = address & 0xffff;
+        if (page && (width != 4 || (offset & ~1u) < 0xfffe)) {
+            if (width != 1) offset &= ~1u;
+            kega_sh2_cover_storage(c, kind, address, (const uint8_t *)page + offset, width);
+            return;
+        }
+    }
+
+    if (c->host.coverage_origin)
+        c->host.coverage_origin(c->host.user, c, kind, address, width);
+    else
+        kega_sh2_cover_storage(c, kind, address, NULL, width);
+}
+
 static uint8_t raw_read8(SH2 *s, uint32_t a) {
     uint32_t offset;
     const void *base=plain_base(s,a,&offset);
@@ -101,20 +138,23 @@ static uint32_t raw_read32(SH2 *s, uint32_t a) {
     KegaSh2 *c = owner(s); return c->host.read32(c->host.user, c, a);
 }
 static uint8_t read8(SH2 *s, uint32_t a) {
-    uint8_t value=raw_read8(s,a);
     KegaSh2 *c=owner(s);
+    if (c->coverage_mask & KEGA_SH2_COV_READ) cover_access(c,s,KEGA_SH2_COV_READ,a,1);
+    uint8_t value=raw_read8(s,a);
     if(__builtin_expect((c->debug_mask & 2u)!=0,0))c->debug(c->debug_user,2,a,value,1);
     return value;
 }
 static uint16_t read16(SH2 *s, uint32_t a) {
-    uint16_t value=raw_read16(s,a);
     KegaSh2 *c=owner(s);
+    if (c->coverage_mask & KEGA_SH2_COV_READ) cover_access(c,s,KEGA_SH2_COV_READ,a,2);
+    uint16_t value=raw_read16(s,a);
     if(__builtin_expect((c->debug_mask & 2u)!=0,0))c->debug(c->debug_user,2,a,value,2);
     return value;
 }
 static uint32_t read32(SH2 *s, uint32_t a) {
-    uint32_t value=raw_read32(s,a);
     KegaSh2 *c=owner(s);
+    if (c->coverage_mask & KEGA_SH2_COV_READ) cover_access(c,s,KEGA_SH2_COV_READ,a,4);
+    uint32_t value=raw_read32(s,a);
     if(__builtin_expect((c->debug_mask & 2u)!=0,0))c->debug(c->debug_user,2,a,value,4);
     return value;
 }
@@ -295,6 +335,8 @@ int sh2_execute_interpreter(SH2 *s, int cycles) {
         }
         if (s->delay) {
             s->ppc = s->delay;
+            if (c->coverage_mask & KEGA_SH2_COV_EXEC)
+                cover_access(c,s,KEGA_SH2_COV_EXEC,s->delay,2);
             opcode = fetch16(s, s->delay);
             if (c->trace_mask & KEGA_SH2_TRACE_EXEC)
                 c->trace(c->trace_user, c, KEGA_SH2_TRACE_EXEC, s->ppc, opcode, 0);
@@ -308,11 +350,13 @@ int sh2_execute_interpreter(SH2 *s, int cycles) {
             s->pc -= 2;
         } else {
             s->ppc = s->pc;
+            if (c->coverage_mask & KEGA_SH2_COV_EXEC)
+                cover_access(c,s,KEGA_SH2_COV_EXEC,s->pc,2);
             opcode = fetch16(s, s->pc);
             if (c->trace_mask & KEGA_SH2_TRACE_EXEC)
                 c->trace(c->trace_user, c, KEGA_SH2_TRACE_EXEC, s->ppc, opcode, 0);
         }
-        if(c->idle_fastpath && !c->debug && !(c->trace_mask & KEGA_SH2_TRACE_EXEC) && !s->delay && s->icount>0 && !c->stop &&
+        if(c->idle_fastpath && !c->debug && !(c->trace_mask & KEGA_SH2_TRACE_EXEC) && !c->coverage_mask && !s->delay && s->icount>0 && !c->stop &&
            opcode==0xaffe && s->pc<=UINT32_MAX-3u && c->host.can_idle_fetch &&
            c->host.can_idle_fetch(c->host.user,c,s->pc,4) &&
            s->pending_level<=(int)((s->sr>>4)&15) && fetch16(s,s->pc+2)==0x0009) {
@@ -408,7 +452,7 @@ uint32_t kega_sh2_run(KegaSh2 *cpu, uint32_t budget) {
     cpu->running = true; cpu->stop = false;
     cpu->core.state |= SH2_STATE_RUN;
     cpu->core.cycles_timeslice = budget;
-    remaining = (cpu->debug || cpu->trace_mask) ? sh2_execute_interpreter(&cpu->core, (int)budget) : cpu->core.run(&cpu->core, (int)budget);
+    remaining = (cpu->debug || cpu->trace_mask || cpu->coverage_mask) ? sh2_execute_interpreter(&cpu->core, (int)budget) : cpu->core.run(&cpu->core, (int)budget);
     done = (uint32_t)((int64_t)cpu->core.cycles_timeslice - remaining);
     cpu->cycles += done;
     cpu->running = false;
@@ -551,4 +595,13 @@ void kega_sh2_set_trace(KegaSh2 *cpu, KegaSh2TraceCallback callback, void *user,
     cpu->trace = callback;
     cpu->trace_user = user;
     cpu->trace_mask = callback ? mask & (KEGA_SH2_TRACE_EXEC | KEGA_SH2_TRACE_IRQ) : 0;
+}
+
+void kega_sh2_set_coverage(KegaSh2 *cpu, KegaSh2CoverageCallback callback, void *user,
+                          unsigned mask)
+{
+    if (!cpu) return;
+    cpu->coverage = callback;
+    cpu->coverage_user = user;
+    cpu->coverage_mask = callback ? (mask & (KEGA_SH2_COV_EXEC | KEGA_SH2_COV_READ)) : 0;
 }

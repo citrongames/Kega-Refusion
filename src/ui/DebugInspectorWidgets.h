@@ -23,6 +23,7 @@ public:
     DebugInspectionRequest request() const;
     void setSnapshot(const DebugInspectionSnapshot& snapshot);
     void navigateTo(quint32 domain, quint32 offset);
+    void navigateTo(quint32 instance, quint32 domain, quint32 offset);
     void finishMemoryWrite(const QString& error);
 
 signals:

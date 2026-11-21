@@ -168,6 +168,8 @@ QByteArray cdRom() {
     MdAssembler code;
     code.start();
     code.write(0x13fc, 0, 0xa12001);            // Hold S68K reset; main owns PRG RAM.
+    code.word(0x3639); code.address(0x600002);  // Read physical word 1 in 2M mode.
+    code.word(0x3639); code.address(0x640002);  // Same word through the main-CPU mirror.
     const auto subWord = [&](quint32 offset, quint16 value) {
         code.write(0x33fc, value, 0x420000 + offset);
     };
@@ -185,6 +187,9 @@ QByteArray cdRom() {
     offset = subHandler;
     for (quint16 value : {0x33fc, 0, 0x00ff, 0x8042,    // CDD command 0 (Get Drive Status).
                           0x33fc, 0, 0x00ff, 0x804a,    // Commit command.
+                          0x13fc, 4, 0x00ff, 0x8003,    // 1M mode, sub CPU gets bank 1.
+                          0x3439, 0x000c, 0x0002,       // Word 1 in bank 1 is physical word 3.
+                          0x1639, 0x0008, 0x0009,       // DOT view reads one physical byte.
                           0x5279, 0x00ff, 0x8028, 0x4e73}) { // Count IRQ2; RTE.
         subWord(offset, value);
         offset += 2;
@@ -373,6 +378,34 @@ bool traced(const DebugTraceSnapshot& snapshot, unsigned cpu, unsigned kind,
     });
 }
 
+void coverage(LibretroHost& host, bool start, unsigned cpu = 0) {
+    DebugCoverageCommand request;
+    request.kind = start ? DebugCoverageCommand::Start : DebugCoverageCommand::Stop;
+    request.config.cpu = cpu;
+    QString error;
+    const bool accepted = host.coverageCommand(request, error);
+    require(accepted, error);
+}
+
+bool covered(LibretroHost& host, const char* name, unsigned offset, unsigned count, unsigned kind) {
+    const auto snapshot = host.coverageSnapshot();
+    const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+        [&](const auto& entry) { return std::strcmp(entry.native.name, name) == 0; });
+    if (source == snapshot.sources.end()) return false;
+    DebugCoverageCommand page;
+    page.kind = DebugCoverageCommand::Refresh;
+    page.source = source->native.id;
+    page.offset = offset;
+    QString error;
+    const bool accepted = host.coverageCommand(page, error);
+    require(accepted, error);
+    const auto view = host.coverageSnapshot();
+    if (view.offset > offset || offset - view.offset + count > unsigned(view.page.size())) return false;
+    for (unsigned i = 0; i < count; ++i)
+        if (!(uint8_t(view.page.at(offset - view.offset + i)) & kind)) return false;
+    return true;
+}
+
 kr_debug_target target(const DebuggerSnapshot& snapshot, unsigned id) {
     const auto found = std::find_if(snapshot.targets.begin(), snapshot.targets.end(),
                                     [id](const auto& item) { return item.cpu == id; });
@@ -542,6 +575,7 @@ void testSvp(const QString& core, const QTemporaryDir& temp) {
     LibretroHost host(core, data + "/debug");
     setup(host, path, data + "/debug", options);
 
+    coverage(host, true, KR_DEBUG_SSP1601);
     trace(host, true, KR_DEBUG_SSP1601);
     command(host, DebuggerCommand::Configure, KR_DEBUG_SSP1601, {
         point(1, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpEntry),
@@ -562,6 +596,10 @@ void testSvp(const QString& core, const QTemporaryDir& temp) {
     const auto& lastSsp = sspTrace.rows.back().record.native;
     require((lastSsp.flags & KR_TRACE_TIME_QUANTIZED) && lastSsp.width == 2,
             "SVP trace distinguishes slice-quantized timing and fetched word width");
+    require(covered(host, "SVP program ROM", 0, 4, KR_COV_EXEC) &&
+            !covered(host, "SVP program ROM", 4, 1, KR_COV_EXEC),
+            "SVP coverage includes the executed opcode and immediate word before the next stop");
+    coverage(host, false);
     trace(host, false);
     command(host, DebuggerCommand::Continue, KR_DEBUG_SSP1601);
     const auto marker = timeline.stop(host, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker);
@@ -630,6 +668,7 @@ void testCd(const QString& core, const QTemporaryDir& temp, const QString& biosD
     Timeline timeline(core, path, data, options, 6);
     LibretroHost host(core, data + "/debug");
     setup(host, path, data + "/debug", options);
+    coverage(host, true);
     trace(host, true, KR_DEBUG_SUB68K, KR_TRACE_INSTRUCTION | KR_TRACE_IRQ | KR_TRACE_DISC);
     command(host, DebuggerCommand::Configure, KR_DEBUG_SUB68K, {
         point(1, KR_DEBUG_SUB68K, KR_DEBUG_EXEC, subHandler),
@@ -653,6 +692,15 @@ void testCd(const QString& core, const QTemporaryDir& temp, const QString& biosD
     command(host, DebuggerCommand::Continue, KR_DEBUG_SUB68K);
     const auto ack = timeline.stop(host, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker);
     require(ack.value == 1 && ack.accessSize == 2, "Main 68000 sees exactly one S68K IRQ acknowledgement");
+    require(covered(host, "CD Program RAM", subHandler, 16, KR_COV_EXEC) &&
+            covered(host, "CD Word RAM", 2, 2, KR_COV_READ) &&
+            covered(host, "CD Word RAM", 6, 2, KR_COV_READ) &&
+            covered(host, "CD Word RAM", 10, 1, KR_COV_READ) &&
+            !covered(host, "CD Word RAM", 11, 1, KR_COV_READ),
+            "CD coverage normalizes 1M/2M Word RAM, including the dot view, and actual PRG RAM code");
+    require(!host.coverageSnapshot().canNavigate,
+            "Physical Word RAM offsets do not navigate to the differently arranged 1M view");
+    coverage(host, false);
     command(host, DebuggerCommand::Continue, KR_DEBUG_M68K);
     timeline.finish(host);
 }
@@ -668,6 +716,9 @@ void test32x(const QString& core, const QTemporaryDir& temp, const QString& diag
     LibretroHost host(core, data + "/debug");
     setup(host, path, data + "/debug", options);
 
+    // Both SH-2s can enter the program while the selected debugger target
+    // is stopped. Keep both under observation from the first frame.
+    coverage(host, true);
     struct Part { unsigned cpu; quint32 entry, marker, value; };
     constexpr Part parts[] = {
         {KR_DEBUG_SH2_MASTER, sh2Master, 0x06000500, 0x12},
@@ -701,6 +752,11 @@ void test32x(const QString& core, const QTemporaryDir& temp, const QString& diag
         require(traced(sh2Trace, part.cpu, KR_TRACE_EXEC, branch, 0xa001) &&
                 traced(sh2Trace, part.cpu, KR_TRACE_EXEC, delaySlot, 0x7001),
                 "Each SH-2 trace retains the actual branch and its separate delay-slot opcode");
+        const unsigned physical = part.entry - 0x06000000;
+        require(covered(host, "32X SDRAM", physical, 8, KR_COV_EXEC) &&
+                covered(host, "32X SDRAM", physical + 0x14, 4, KR_COV_READ) &&
+                !covered(host, "32X SDRAM", physical + 8, 1, KR_COV_EXEC),
+                "Each SH-2 marks executed SDRAM bytes and the actual PC-relative data load");
         trace(host, false);
         command(host, DebuggerCommand::Continue, part.cpu);
         const auto marker = timeline.stop(host, part.cpu, KR_DEBUG_WRITE, part.marker);
@@ -745,6 +801,7 @@ void test32x(const QString& core, const QTemporaryDir& temp, const QString& diag
                 cpu(out, part.cpu).sp == cpu(beforeInto, part.cpu).sp,
                 "Step out passes the nested RTS and stops after the outer return slot");
     }
+    coverage(host, false);
     timeline.detach(host); // Complete and compare the pending frame before returning to plain execution.
     const auto postDebugger = host.captureRewindState();
     const auto savedFrame = host.runClock().frames;

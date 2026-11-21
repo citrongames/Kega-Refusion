@@ -13,7 +13,7 @@ static void kr_debug_detach(void)
 #ifdef KEGAREFUSION_32X
   kr_debug_32x_connect(NULL, NULL, 0, 0);
 #endif
-  memset(kr_debug_event_masks, 0, sizeof(kr_debug_event_masks));
+  for (unsigned i = 0; i < KR_DEBUG_MAX_CPUS; ++i) kr_debug_event_masks[i] &= KR_DEBUG_COV_BITS;
   kr_debug_callback_fn = NULL;
   kr_debug_callback_user = NULL;
 }
@@ -157,9 +157,9 @@ RETRO_API bool retro_kegarefusion_debug_connect_v2(kr_debug_callback callback, v
 
   kr_debug_callback_user = opaque;
   kr_debug_callback_fn = callback;
-  memset(kr_debug_event_masks, 0, sizeof(kr_debug_event_masks));
-  if (count)
-    memcpy(kr_debug_event_masks, masks, count * sizeof(*masks));
+  for (unsigned i = 0; i < KR_DEBUG_MAX_CPUS; ++i)
+    kr_debug_event_masks[i] = (kr_debug_event_masks[i] & KR_DEBUG_COV_BITS) |
+                             (i < count ? masks[i] : 0);
 #ifdef KEGAREFUSION_32X
   if (kegarefusion_32x_attached)
     kr_debug_32x_connect(kr_debug_32x_callback, NULL, kr_debug_sh2_master_mask, kr_debug_sh2_slave_mask);

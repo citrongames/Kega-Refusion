@@ -17,7 +17,8 @@ for the delivered interface and explicit scope limitations.
 - [x] Phase 3: coordinated debugging of expansions, special hardware and link peers.
 - [ ] Phase 4: integrated tracing, hardware timeline, code/data coverage and pixel provenance.
   - [x] Instruction/event trace, bounded history, explicit asynchronous file capture.
-  - [ ] Physical-bank-aware code/data coverage, exact pixel provenance, profiling and debug projects.
+  - [x] Physical-bank-aware code/data coverage, bounded maps and explicit asynchronous export.
+  - [ ] Exact pixel provenance, profiling and debug projects.
 
 Phase 1 completed on 2026-11-21 with the scope and limits recorded in
 [debug-inspection.md](debug-inspection.md) and
@@ -29,6 +30,9 @@ Phase 3 completed on 2026-11-21; see [verification](debugger-phase3-verification
 The first Phase 4 tranche is [instruction/event tracing](debug-tracing.md), alongside
 a measured fix for memory-window update stalls and an interface update audit.
 See [verification](debugger-phase4-verification.md) for its actual scope.
+The second tranche adds [physical code/data coverage](debug-coverage.md);
+its [verification](debugger-coverage-verification.md) records bank/prefetch,
+state/rewind, link-console and performance checks. This does not complete Phase 4.
 Physical-bank-aware labels, persistent debug projects, scanline/interrupt run
 controls and reverse-instruction execution remain later work. Append platform
 and device verification evidence before completing each phase.
@@ -45,6 +49,7 @@ core. Use a common backend and connected, modeless windows:
 | Graphics | Extend existing graphics controls with tiles, maps, sprites, palettes, registers and framebuffers |
 | Sound | Extend existing channel controls with chip state, PCM and external-track inspection |
 | Trace | Selected CPU instructions and hardware events |
+| Code/data coverage | Observed physical bytes by source, bank and selected CPU |
 | Hardware | Active mapper, cartridge devices, ports, link and disc/player state |
 
 Opening or focusing these windows must not itself pause the game. Explicit

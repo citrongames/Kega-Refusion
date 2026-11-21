@@ -157,6 +157,30 @@ void EmulationSession::enqueue(Command command) {
         commands_.push_back(std::move(command));
     }
 }
+void EmulationSession::coverageCommand(const DebugCoverageCommand& command) {
+    std::lock_guard<std::mutex> lock(coverageMutex_);
+    if (!coverageCommands_.empty() && command.kind==DebugCoverageCommand::Refresh &&
+        coverageCommands_.back().kind==DebugCoverageCommand::Refresh) {
+        coverageCommands_.back()=command;return;
+    }
+    if (coverageCommands_.size()>=32 && command.kind!=DebugCoverageCommand::Stop) return;
+    if (command.kind==DebugCoverageCommand::Stop) {
+        coverageCommands_.erase(std::remove_if(coverageCommands_.begin(),coverageCommands_.end(),
+            [](const auto& pending) {
+                return pending.kind==DebugCoverageCommand::Refresh ||
+                       pending.kind==DebugCoverageCommand::Start ||
+                       pending.kind==DebugCoverageCommand::Stop;
+            }),coverageCommands_.end());
+    }
+    coverageCommands_.push_back(command);
+    coverageRequested_.store(true);
+}
+bool EmulationSession::takeCoverageSnapshot(DebugCoverageSnapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(coverageMutex_);
+    if (!coverageSnapshotPending_)return false;
+    snapshot=std::move(coverageSnapshot_);coverageSnapshot_={};
+    coverageSnapshotPending_=false;return true;
+}
 void EmulationSession::traceCommand(const DebugTraceCommand& command) {
     std::lock_guard<std::mutex> lock(traceMutex_);
     if (!traceCommands_.empty() && command.kind==DebugTraceCommand::Refresh &&
@@ -1231,6 +1255,40 @@ void EmulationSession::run() {
         }
         if(notify)emit traceReady();
     };
+    auto processCoverage = [&] {
+        const bool forbidden=achievementHardcore || networkMode || videoExport;
+        if (forbidden && host.coverageActive())host.coverageStop();
+        if (!coverageRequested_.load())return;
+        std::deque<DebugCoverageCommand> commands;
+        {
+            std::lock_guard<std::mutex> lock(coverageMutex_);
+            commands.swap(coverageCommands_);coverageRequested_.store(false);
+        }
+        QString error;
+        for(const auto& command:commands) {
+            if(forbidden && command.kind==DebugCoverageCommand::Start) {
+                error=Localization::text(QStringLiteral(
+                    "Учёт кода и данных недоступен в Hardcore, сетевой игре и при экспорте видео."));
+                continue;
+            }
+            QString failure;
+            if(!host.coverageCommand(command,failure))error=failure;
+        }
+        auto snapshot=host.coverageSnapshot();
+        if(forbidden) {
+            snapshot.available=false;snapshot.canNavigate=false;
+            if(error.isEmpty())error=Localization::text(QStringLiteral(
+                "Учёт кода и данных недоступен в Hardcore, сетевой игре и при экспорте видео."));
+        }
+        if(!error.isEmpty())snapshot.status=error;
+        bool notify;
+        {
+            std::lock_guard<std::mutex> lock(coverageMutex_);
+            coverageSnapshot_=std::move(snapshot);
+            notify=!coverageSnapshotPending_;coverageSnapshotPending_=true;
+        }
+        if(notify)emit coverageReady();
+    };
     struct PendingDebugFrame {
         bool active=false, manual=false, fast=false, present=true;
         int speedPercent=100, factor=1;
@@ -1396,6 +1454,7 @@ void EmulationSession::run() {
                 // setters while a CPU hook holds the native execution stack.
                 processInspection();
                 processTrace();
+                processCoverage();
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 continue;
             }
@@ -2173,6 +2232,7 @@ void EmulationSession::run() {
         // An inactive inspector costs one atomic check; no timer or memory copy.
         processInspection();
         processTrace();
+        processCoverage();
         if (videoPending && videoRecorder.completed()) {
             const auto result = videoRecorder.result();
             host.setRecordingVideoEnabled(false);
