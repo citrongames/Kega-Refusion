@@ -467,3 +467,15 @@ Final archive SHA-256:
 | Corresponding source | `88d58da024f8d06ff65a7a37cabfcd9846690a61786601082c5a96f16e3a2fbc` |
 
 Evidence and final assets are retained under ignored `build/release-0.28.0/`, including updater-check-evidence.zip, source-verification.json, draft-verification.json and public-verification.json. The actual hardware/game checks preceding this packaging-only step are recorded in [the platform audit](platform-accuracy.md) and [accuracy investigation history](mega-drive-accuracy.md).
+
+## 0.29.0 debugger release — 2026-11-21
+
+Released tag v0.29.0 at 5300ac1 with matching Windows, Debian 12 Linux and corresponding-source archives. The focused release audit passed 18 registered checks and eight standalone checks, covering debugger UI, CPU execution, linked consoles, physical coverage, tracing, project/watch application, Firecore snapshots and cheat integration. Two confirmed UI regressions were fixed: switching between archive members with the same display name no longer retains the previous debug project, and hiding Memory no longer resets the linked-console selection of other inspectors.
+
+Windows was cross-built in Release mode; the embedded 0.29.0 version and all 72 package manifest entries were verified without running a Windows executable. Linux was built with Qt 6.4.2 in Debian 12.15; all 175 manifest entries and the glibc requirements of 123 ELF files were checked (maximum 2.36). Both isolated core modules include the debugger exports. This targeted batch is not a full-game or physical-device compatibility claim; prior debugger performance measurements and limitations remain in their feature verification records.
+
+The exact v0.28.0 updater archive code successfully installed both packages in isolated directories, preserving twelve user-data sentinels per platform. After publication, the real 0.28.0 UpdateService discovered the public v0.29.0 release, displayed its English notes, downloaded and verified the Linux package, and used the shipped old helper to install and restart 0.29.0. All 175 installed manifest entries and twelve user-data sentinels matched. The public Windows download was independently streamed and checksum-verified. GitHub latest, update.json, all five assets and their SHA-256 metadata matched the release.
+
+The corresponding-source archive contains the exact 674-file project snapshot, 801 prepared core source files, 94 matching patch receipts and thirty dependency archives. All 1,919 internal checksums were verified, with source/runtime provenance matched to both binaries. No ROMs, BIOS images, credentials or user settings were included.
+
+Evidence and recipes are retained under ignored build/release-0.29.0, including audit-verification.json, linux-archive-verification.json, windows-version-verification.json, source-verification.json, draft-verification.json, public-verification.json, updater-verification.json and updater-check-evidence.zip. Temporary package copies, isolated upgrade installations and updater probe binaries/copied sources were removed; incremental build and dependency caches remain.
