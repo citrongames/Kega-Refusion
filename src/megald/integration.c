@@ -4,6 +4,7 @@
 #include "integration.h"
 #include "player/ld_player.h"
 #include "video_cache.h"
+#include "../kegainspect/values.h"
 #include <limits.h>
 #include <stddef.h>
 
@@ -361,4 +362,41 @@ unsigned kr_megald_restore(const uint8_t *in)
   decoded_frame = -1;
   refresh_view(0);
   return (unsigned)size;
+}
+
+void kr_inspect_megald(kr_inspect_info *info, unsigned parts)
+{
+  if (!kr_megald_active) return;
+  if (parts & KR_INSPECT_HARDWARE)
+  {
+    const unsigned part = KR_INSPECT_HARDWARE;
+    kr_inspect_put(info, part, "MegaLD", "Disc side (one-based)", 0, side_index + 1);
+    kr_inspect_put(info, part, "MegaLD", "Available sides", 0, kr_megald_sides());
+    kr_inspect_put(info, part, "MegaLD", "Drive state", 1, player.currentDriveState);
+    kr_inspect_put(info, part, "MegaLD", "Playback mode", 2, player.currentPlaybackMode);
+    kr_inspect_put(info, part, "MegaLD", "Playback speed code", 2, player.currentPlaybackSpeed);
+    kr_inspect_put(info, part, "MegaLD", "Reverse direction", 0, !!player.currentPlaybackDirection);
+    kr_inspect_put(info, part, "MegaLD", "Seek mode", 2, player.currentSeekMode);
+  }
+  if (parts & KR_INSPECT_VIDEO)
+  {
+    const unsigned part = KR_INSPECT_VIDEO;
+    const kr_ld_video_view current = kr_ld_player_video(&player);
+    kr_inspect_put(info, part, "MegaLD", "Disc video enabled", 0, current.analog_enabled);
+    kr_inspect_put(info, part, "MegaLD", "Disc video blanked", 0, current.blanked);
+    kr_inspect_put(info, part, "MegaLD", "Overlay control", 2, player.inputRegs[1]);
+    kr_inspect_put(info, part, "MegaLD", "Video interlaced", 0, current.interlaced);
+    if (current.file_frame >= 0)
+    {
+      kr_inspect_put(info, part, "MegaLD", "Latched disc frame", 0, current.file_frame);
+      kr_inspect_put(info, part, "MegaLD", "Even field", 0, current.even_field);
+    }
+  }
+  if (parts & KR_INSPECT_AUDIO)
+  {
+    const unsigned part = KR_INSPECT_AUDIO;
+    kr_inspect_put(info, part, "MegaLD audio", "Digital audio", 0, player.disc.digital_audio);
+    kr_inspect_put(info, part, "MegaLD audio", "Left analogue attenuation", 2, player.analogAudioAttenuationLeft);
+    kr_inspect_put(info, part, "MegaLD audio", "Right analogue attenuation", 2, player.analogAudioAttenuationRight);
+  }
 }

@@ -1,0 +1,634 @@
+{
+  "date": "2026-11-21",
+  "real_core_fixture_cases": [
+    "Mega Drive",
+    "Master System",
+    "Game Gear",
+    "SG-1000",
+    "Firecore tiles",
+    "Firecore bitmap",
+    "32X",
+    "Sega CD",
+    "Sega CD + 32X"
+  ],
+  "forced_fm_ym2413": {
+    "Master System": true,
+    "Game Gear": false,
+    "SG-1000": false
+  },
+  "baseline_workspace": "28c61f9",
+  "sha256": {
+    "candidate": "cd0fa88f055002f50dffeccf3e7307d1c95ffb2eb895dcb61ec84c760a78d791",
+    "baseline": "d40a5aeb819e1f17248828f6dc4a1748367cb3574b2779c5904dc6492f44d85d",
+    "benchmark": "cf489a4996b67cb351516967a2fe7c2e2b43c1a24bfbd611d6aa87be3ce4c1f9"
+  },
+  "environment": {
+    "os": "Linux x86_64 in WSL2",
+    "cpu": "AMD Ryzen 7 4800H",
+    "logical_cpu": 5,
+    "fm_backend": "MAME YM2612",
+    "blargg": false,
+    "rewind": false
+  },
+  "warmup_frames": 180,
+  "timed_frames": 600,
+  "timed_input": {
+    "start": "0–3 and 120–123",
+    "right": "180–599",
+    "c": "240–244 and every 60 frames thereafter"
+  },
+  "rounds": 2,
+  "samples_per_mode_per_game": 2,
+  "normal_rendered_frames": 600,
+  "accelerated_rendered_frames": 19,
+  "inspection_interval_frames": 6,
+  "maximum_mem_view_sample_bytes": 256,
+  "games": [
+    {
+      "name": "Sonic the Hedgehog 2",
+      "developer": "Sonic Team and Sega Technical Institute",
+      "region": "NTSC",
+      "ending_scene": "Title screen",
+      "developer_source": "https://www.youtube.com/watch?v=dv_rOiO8Pkg",
+      "samples": [
+        {
+          "condition": "before",
+          "round": 1,
+          "mode": "normal",
+          "seconds": 0.259915,
+          "fps": 2308.449,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 38.524,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37992,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "before",
+          "round": 1,
+          "mode": "fast",
+          "seconds": 0.178363,
+          "fps": 3363.918,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 56.138,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38376,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "before",
+          "round": 2,
+          "mode": "normal",
+          "seconds": 0.263186,
+          "fps": 2279.756,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 38.045,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37956,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "before",
+          "round": 2,
+          "mode": "fast",
+          "seconds": 0.168305,
+          "fps": 3564.964,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 59.493,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38404,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "after",
+          "round": 1,
+          "mode": "normal",
+          "seconds": 0.260775,
+          "fps": 2300.836,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 38.397,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37796,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "after",
+          "round": 1,
+          "mode": "fast",
+          "seconds": 0.172168,
+          "fps": 3484.972,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 58.158,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38116,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "after",
+          "round": 2,
+          "mode": "normal",
+          "seconds": 0.269082,
+          "fps": 2229.801,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 37.211,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37764,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "after",
+          "round": 2,
+          "mode": "fast",
+          "seconds": 0.171175,
+          "fps": 3505.191,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 58.495,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38084,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "inspect",
+          "round": 1,
+          "mode": "normal",
+          "seconds": 0.2638,
+          "fps": 2274.449,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 37.956,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37868,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "inspect",
+          "round": 1,
+          "mode": "fast",
+          "seconds": 0.174403,
+          "fps": 3440.302,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 57.412,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38188,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "inspect",
+          "round": 2,
+          "mode": "normal",
+          "seconds": 0.267765,
+          "fps": 2240.77,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 37.394,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37832,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        },
+        {
+          "condition": "inspect",
+          "round": 2,
+          "mode": "fast",
+          "seconds": 0.174937,
+          "fps": 3429.809,
+          "refresh_hz": 59.922743,
+          "speed_multiple": 57.237,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38152,
+          "sha256_rgba": "223402c7ca7bf8a8864fe56cc281b868c12cfdf381f0963cb1503abb7bb7b046",
+          "sha256_resumed_pcm": "fec25dea2e68a5a6f8da2d20ef9bfd5273927b8ffe43c1850820704d6e2e4117",
+          "sha256_native_state": "4d74e007f03b34ac0bb4d50b7a308a760ee70f9a3f12fdbd987df7276b85dfc8"
+        }
+      ],
+      "refresh_hz": 59.922743
+    },
+    {
+      "name": "Mega Bomberman",
+      "developer": "Westone and Hudson Soft",
+      "region": "PAL",
+      "ending_scene": "Opening planet montage",
+      "developer_source": "https://archive.gamehistory.org/item/efca1d6a-da2c-4988-8ef4-ebce154c06d4",
+      "samples": [
+        {
+          "condition": "before",
+          "round": 1,
+          "mode": "normal",
+          "seconds": 0.262558,
+          "fps": 2285.206,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 45.979,
+          "rendered_frames": 600,
+          "peak_rss_kib": 38052,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "before",
+          "round": 1,
+          "mode": "fast",
+          "seconds": 0.210384,
+          "fps": 2851.924,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 57.381,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38268,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "before",
+          "round": 2,
+          "mode": "normal",
+          "seconds": 0.270432,
+          "fps": 2218.676,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 44.64,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37972,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "before",
+          "round": 2,
+          "mode": "fast",
+          "seconds": 0.199196,
+          "fps": 3012.115,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 60.604,
+          "rendered_frames": 19,
+          "peak_rss_kib": 38188,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "after",
+          "round": 1,
+          "mode": "normal",
+          "seconds": 0.269304,
+          "fps": 2227.966,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 44.827,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37692,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "after",
+          "round": 1,
+          "mode": "fast",
+          "seconds": 0.202279,
+          "fps": 2966.194,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 59.68,
+          "rendered_frames": 19,
+          "peak_rss_kib": 37844,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "after",
+          "round": 2,
+          "mode": "normal",
+          "seconds": 0.28806,
+          "fps": 2082.901,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 41.908,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37780,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "after",
+          "round": 2,
+          "mode": "fast",
+          "seconds": 0.216182,
+          "fps": 2775.44,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 55.842,
+          "rendered_frames": 19,
+          "peak_rss_kib": 37932,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "inspect",
+          "round": 1,
+          "mode": "normal",
+          "seconds": 0.274969,
+          "fps": 2182.061,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 43.903,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37804,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "inspect",
+          "round": 1,
+          "mode": "fast",
+          "seconds": 0.20536,
+          "fps": 2921.691,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 58.785,
+          "rendered_frames": 19,
+          "peak_rss_kib": 37956,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "inspect",
+          "round": 2,
+          "mode": "normal",
+          "seconds": 0.278516,
+          "fps": 2154.274,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 43.344,
+          "rendered_frames": 600,
+          "peak_rss_kib": 37816,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        },
+        {
+          "condition": "inspect",
+          "round": 2,
+          "mode": "fast",
+          "seconds": 0.203591,
+          "fps": 2947.081,
+          "refresh_hz": 49.701459,
+          "speed_multiple": 59.296,
+          "rendered_frames": 19,
+          "peak_rss_kib": 37968,
+          "sha256_rgba": "02281cde6b4401737c9318ae56509769ec3dc1f9d9eff14cbb7a20458ee5e2f3",
+          "sha256_resumed_pcm": "256c22a872565da312487a785cab2c548213d4b4dce2fac43e879768a28e4193",
+          "sha256_native_state": "96b07c2e9f538fa849d1c5d8a52e2cb4a8e2726efec9dedfba1fdef7815225f5"
+        }
+      ],
+      "refresh_hz": 49.701459
+    }
+  ],
+  "mega_bomberman_long_followup": {
+    "refresh_hz": 49.701459,
+    "ending_scene": "Title screen and start menu",
+    "warmup_frames": 180,
+    "timed_frames": 6000,
+    "timed_input": {
+      "start": "0–3 and 120–123",
+      "right": "180–5999",
+      "c": "240–244 and every 60 frames thereafter"
+    },
+    "inspection_enabled": false,
+    "pair_order": [
+      [
+        "before",
+        "after"
+      ],
+      [
+        "after",
+        "before"
+      ],
+      [
+        "before",
+        "after"
+      ]
+    ],
+    "harness_sha256": "c23d052c87306d370a5a508fb8bc5c7e7d0c7681a7b9afcdeb725515c44e6b2c",
+    "paired_changes": {
+      "normal": {
+        "per_pair_percent": [
+          1.961097428401204,
+          2.198182332777754,
+          1.3654457935675213
+        ],
+        "median_pair_percent": 1.961097428401204
+      },
+      "fast": {
+        "per_pair_percent": [
+          0.734433026838488,
+          2.162598676243377,
+          1.4248242583561943
+        ],
+        "median_pair_percent": 1.4248242583561943
+      }
+    },
+    "samples": [
+      {
+        "round": 1,
+        "condition": "before",
+        "mode": "normal",
+        "fps": 2116.621,
+        "seconds": 2.834707,
+        "speed_multiple": 42.587,
+        "rendered_frames": 6000,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 1,
+        "condition": "before",
+        "mode": "fast",
+        "fps": 3152.636,
+        "seconds": 1.903169,
+        "speed_multiple": 63.431,
+        "rendered_frames": 188,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 1,
+        "condition": "after",
+        "mode": "normal",
+        "fps": 2158.13,
+        "seconds": 2.780184,
+        "speed_multiple": 43.422,
+        "rendered_frames": 6000,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 1,
+        "condition": "after",
+        "mode": "fast",
+        "fps": 3175.79,
+        "seconds": 1.889294,
+        "speed_multiple": 63.897,
+        "rendered_frames": 188,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 2,
+        "condition": "before",
+        "mode": "normal",
+        "fps": 2098.734,
+        "seconds": 2.858866,
+        "speed_multiple": 42.227,
+        "rendered_frames": 6000,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 2,
+        "condition": "before",
+        "mode": "fast",
+        "fps": 3125.499,
+        "seconds": 1.919694,
+        "speed_multiple": 62.885,
+        "rendered_frames": 188,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 2,
+        "condition": "after",
+        "mode": "normal",
+        "fps": 2144.868,
+        "seconds": 2.797375,
+        "speed_multiple": 43.155,
+        "rendered_frames": 6000,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 2,
+        "condition": "after",
+        "mode": "fast",
+        "fps": 3193.091,
+        "seconds": 1.879057,
+        "speed_multiple": 64.245,
+        "rendered_frames": 188,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 3,
+        "condition": "before",
+        "mode": "normal",
+        "fps": 2101.365,
+        "seconds": 2.855287,
+        "speed_multiple": 42.28,
+        "rendered_frames": 6000,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 3,
+        "condition": "before",
+        "mode": "fast",
+        "fps": 3128.456,
+        "seconds": 1.917879,
+        "speed_multiple": 62.945,
+        "rendered_frames": 188,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 3,
+        "condition": "after",
+        "mode": "normal",
+        "fps": 2130.058,
+        "seconds": 2.816825,
+        "speed_multiple": 42.857,
+        "rendered_frames": 6000,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      },
+      {
+        "round": 3,
+        "condition": "after",
+        "mode": "fast",
+        "fps": 3173.031,
+        "seconds": 1.890936,
+        "speed_multiple": 63.842,
+        "rendered_frames": 188,
+        "sha256_rgba": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+        "sha256_resumed_pcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+        "sha256_native_state": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+      }
+    ]
+  },
+  "frontend_checks": {
+    "inspection_session_tests": "passed: paused snapshot, replaceable request burst, reset generation, cancel, unload",
+    "inspection_view_tests": "passed on Qt offscreen Linux: memory/type/endian/navigation, decoded formats, hardware/audio, close and blocked snapshots",
+    "debug_menu_tests": "passed on Qt offscreen Linux: existing modeless output controls and menu behavior",
+    "visual_review": "synthetic memory and graphics windows reviewed at their default sizes"
+  },
+  "windows": {
+    "build": "Release MinGW successful",
+    "interactive_testing": "not run; left to user",
+    "destination": "/mnt/d/emulation/Sega Mega Drive/emu/KegaRefusion/testbuild",
+    "package_files": {
+      "KegaRefusion.exe": {
+        "sha256": "3f670cd50f68d5a71fb0adc38943b8a92670350261d4aa12849e5d20b0ab69b8",
+        "bytes": 18639684
+      },
+      "cores/genesis_plus_gx_libretro.dll": {
+        "sha256": "aed3f2a41e0a719b06b5ef40c98c24c7e418363e3a1abc686b4d330e1eaa428a",
+        "bytes": 9470956
+      },
+      "cores/genesis_plus_gx_libretro_linkpeer.dll": {
+        "sha256": "aed3f2a41e0a719b06b5ef40c98c24c7e418363e3a1abc686b4d330e1eaa428a",
+        "bytes": 9470956
+      },
+      "languages/en.json": {
+        "sha256": "2c3149375214db5e5b32f5a295cf03baaaf5e17284ef86289f05a8415473ab2e",
+        "bytes": 131359
+      },
+      "languages/ru.json": {
+        "sha256": "63c11fd246ec9e185b26485f9e5f9f11b0e9aefbdd8aa93b89a9eb4a26bb3bdf",
+        "bytes": 163000
+      }
+    }
+  },
+  "scope_limits": [
+    "No instruction stepping, disassembly, breakpoints, memory editing or tracing in Phase 1",
+    "Linked-console inspection is not yet exposed",
+    "Firecore bitmap/YUV and interlaced six-bit graphics previews explicitly unavailable; raw memory/registers/palette are available",
+    "MegaLD and Pico inspection paths were reviewed/built but not runtime-tested on real media in this batch"
+  ]
+}

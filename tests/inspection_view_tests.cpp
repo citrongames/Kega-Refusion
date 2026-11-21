@@ -1,0 +1,312 @@
+#include "ui/DebugDialogs.h"
+#include "ui/DebugInspectorWidgets.h"
+
+#include <QApplication>
+#include <QComboBox>
+#include <QDir>
+#include <QImage>
+#include <QLabel>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QtEndian>
+
+#include <cstdio>
+#include <cstdlib>
+
+namespace {
+void check(bool condition, const char* message) {
+    if (condition) return;
+    std::fprintf(stderr, "FAIL: %s\n", message);
+    std::exit(1);
+}
+
+template<typename T>
+T* named(QWidget& widget, const char* name) {
+    auto* child = widget.findChild<T*>(QString::fromLatin1(name));
+    check(child != nullptr, name);
+    return child;
+}
+
+DebugInspectionSnapshot snapshot(quint32 part, quint32 hardware, quint32 format) {
+    DebugInspectionSnapshot result;
+    result.generation = 1;
+    result.parts = part;
+    result.info.version = KR_INSPECT_VERSION;
+    result.info.hardware = hardware;
+    result.info.video_format = format;
+    result.info.height = hardware & KR_HW_MD ? 224 : 192;
+    qstrncpy(result.info.system, "Fixture", sizeof(result.info.system));
+    return result;
+}
+
+void domain(DebugInspectionSnapshot& snapshot, quint32 id, quint32 size,
+            const char* name, bool bigEndian = false) {
+    auto& item = snapshot.info.domains[snapshot.info.domain_count++];
+    item.id = id;
+    item.size = size;
+    item.big_endian = bigEndian;
+    qstrncpy(item.name, name, sizeof(item.name));
+}
+
+void value(DebugInspectionSnapshot& snapshot, quint32 part, const char* device,
+           const char* name, quint64 data, quint32 digits = 0) {
+    auto& entry = snapshot.info.values[snapshot.info.value_count++];
+    entry.part = part;
+    entry.digits = digits;
+    entry.value = data;
+    qstrncpy(entry.device, device, sizeof(entry.device));
+    qstrncpy(entry.name, name, sizeof(entry.name));
+}
+
+void putWord(QByteArray& bytes, int address, quint16 value) {
+    qToBigEndian(value, bytes.data() + address);
+}
+
+void verifyWindow(const QDialog& window) {
+    check(!window.isModal(), "inspection windows are modeless");
+    check(window.windowFlags().testFlag(Qt::WindowCloseButtonHint), "close button available");
+    check(!window.windowFlags().testFlag(Qt::WindowMinimizeButtonHint) &&
+          !window.windowFlags().testFlag(Qt::WindowMaximizeButtonHint), "no minimize/maximize buttons");
+}
+
+void verifyMemory(const QString& previewDirectory) {
+    DebugMemoryDialog dialog;
+    verifyWindow(dialog);
+    check(dialog.request().parts == 0, "hidden memory does not subscribe");
+    dialog.show();
+    check(dialog.request().parts == KR_INSPECT_MEMORY, "memory subscribes on show");
+
+    auto data = snapshot(KR_INSPECT_MEMORY, KR_HW_MD, KR_VIDEO_MD);
+    domain(data, KR_MEM_ROM, 8192, "ROM", true);
+    domain(data, KR_MEM_RAM, 0x10000, "RAM", true);
+    data.memoryDomain = KR_MEM_RAM;
+    data.memory = QByteArray(259, '\0');
+    putWord(data.memory, 255, 0x1234);
+    dialog.setSnapshot(data);
+    auto* hex = named<QTableWidget>(dialog, "debugMemoryHex");
+    auto* number = named<QLabel>(dialog, "debugMemoryValue");
+    auto* width = named<QComboBox>(dialog, "debugMemoryWidth");
+    auto* order = named<QComboBox>(dialog, "debugMemoryByteOrder");
+    dialog.navigateTo(KR_MEM_RAM, 255);
+    width->setCurrentIndex(width->findData(2));
+    check(number->text().contains(QStringLiteral("0x1234")), "watch reads across page boundary");
+    order->setCurrentIndex(order->findData(1));
+    check(number->text().contains(QStringLiteral("0x3412")), "watch little-endian override");
+    data.memory[255] = char(0xff);
+    data.memory[256] = char(0xff);
+    dialog.setSnapshot(data);
+    width->setCurrentIndex(width->findData(-2));
+    check(number->text().contains(QStringLiteral("(-1)")), "signed watch");
+    check(hex->item(15, 15)->background().style() != Qt::NoBrush, "changed byte highlighted");
+    check(hex->editTriggers() == QAbstractItemView::NoEditTriggers, "page is read-only");
+    if (!previewDirectory.isEmpty()) {
+        QApplication::processEvents();
+        check(dialog.grab().save(QDir(previewDirectory).filePath(QStringLiteral("memory.png"))),
+              "save memory preview");
+    }
+
+    auto* tabs = named<QTabWidget>(dialog, "debugMemoryTabs");
+    tabs->setCurrentIndex(1);
+    check(dialog.request().parts == KR_INSPECT_HARDWARE, "hardware tab drops memory subscription");
+    auto hardware = snapshot(KR_INSPECT_HARDWARE, KR_HW_MD, KR_VIDEO_MD);
+    value(hardware, KR_INSPECT_HARDWARE, "Mapper", "Bank", 4);
+    dialog.setSnapshot(hardware);
+    auto* state = named<QTableWidget>(dialog, "debugHardwareState");
+    check(state->rowCount() == 1 && state->item(0, 2)->text() == QStringLiteral("4"), "hardware value");
+    dialog.navigateTo(KR_MEM_RAM, 0x234);
+    check(tabs->currentIndex() == 0 && dialog.request().offset == 0x200, "memory link navigates to page");
+
+    auto blocked = DebugInspectionSnapshot{};
+    blocked.status = QStringLiteral("Hardcore");
+    dialog.setSnapshot(blocked);
+    check(number->text() == QStringLiteral("—") && hex->item(15, 15)->text().isEmpty(), "blocked data cleared");
+    auto sms = snapshot(KR_INSPECT_MEMORY, KR_HW_SMS, KR_VIDEO_SMS);
+    sms.generation = 2;
+    domain(sms, KR_MEM_ROM, 8192, "ROM");
+    domain(sms, KR_MEM_ZRAM, 8192, "CPU RAM");
+    dialog.setSnapshot(sms);
+    check(dialog.request().domain == KR_MEM_ZRAM && dialog.request().offset == 0, "eight-bit RAM fallback");
+    dialog.hide();
+    check(dialog.request().parts == 0, "closing memory drops subscription");
+}
+
+QRgb pixel(DebugVideoInspector& view, QPoint at) {
+    auto* image = named<QWidget>(view, "debugVideoSnapshotImage");
+    check(image->rect().contains(at), "preview bounds");
+    return image->grab(QRect(at, QSize(1, 1))).toImage().pixel(0, 0);
+}
+
+void verifyGraphics(const QString& previewDirectory) {
+    DebugGraphicsDialog window;
+    verifyWindow(window);
+    window.show();
+    auto* tabs = named<QTabWidget>(window, "debugGraphicsTabs");
+    check(window.request().parts == 0, "controls page does not subscribe");
+    tabs->setCurrentIndex(1);
+    check(window.request().parts == KR_INSPECT_VIDEO, "tiles subscribe");
+    auto md = snapshot(KR_INSPECT_VIDEO, KR_HW_MD, KR_VIDEO_MD);
+    auto& vram = md.blocks[KR_MEM_VRAM];
+    vram = QByteArray(65536, '\0');
+    for (int i = 0; i < 32; ++i) vram[i] = char(0x11);
+    auto& colors = md.blocks[KR_MEM_CRAM];
+    colors = QByteArray(128, '\0');
+    putWord(colors, 2, 7);
+    domain(md, KR_MEM_VDP_REGS, 24, "VDP registers");
+    window.setSnapshot(md);
+    auto* tiles = qobject_cast<DebugVideoInspector*>(tabs->currentWidget());
+    check(tiles != nullptr && pixel(*tiles, {5, 5}) == qRgb(255, 0, 0), "MD packed tile and CRAM");
+    quint32 domainId = 0, offset = ~quint32(0);
+    QObject::connect(&window, &DebugGraphicsDialog::memoryRequested, &window,
+                     [&](quint32 id, quint32 address) { domainId = id; offset = address; });
+    auto* link = named<QLabel>(*tiles, "debugVideoSelection");
+    check(link->text().contains(QStringLiteral("href=\"4/0\"")), "tile VRAM link");
+    emit link->linkActivated(QStringLiteral("4/0"));
+    check(domainId == KR_MEM_VRAM && offset == 0, "VRAM link reaches owning window");
+    if (!previewDirectory.isEmpty()) {
+        QApplication::processEvents();
+        check(window.grab().save(QDir(previewDirectory).filePath(QStringLiteral("tiles.png"))),
+              "save graphics preview");
+    }
+
+    tabs->setCurrentIndex(2);
+    auto* map = qobject_cast<DebugVideoInspector*>(tabs->currentWidget());
+    check(map != nullptr, "map tab exists");
+    md.info.vdp_regs[2] = 0x10;
+    putWord(md.blocks[KR_MEM_VRAM], 0x4000, 0x8800);
+    window.setSnapshot(md);
+    check(pixel(*map, {4, 4}) == qRgb(255, 0, 0), "MD map entry decodes referenced tile");
+    check(named<QLabel>(*map, "debugVideoSelection")->text().contains(QStringLiteral("href=\"4/16384\"")),
+          "map entry links to canonical table offset");
+
+    tabs->setCurrentIndex(3);
+    md.info.vdp_regs[5] = 0x40;
+    putWord(md.blocks[KR_MEM_VRAM], 0x8000, 130);
+    putWord(md.blocks[KR_MEM_VRAM], 0x8002, 0x0502);
+    putWord(md.blocks[KR_MEM_VRAM], 0x8006, 140);
+    window.setSnapshot(md);
+    auto* sprites = named<QTableWidget>(*tabs->currentWidget(), "debugVideoSpriteList");
+    check(sprites->rowCount() == 2 && sprites->item(1, 0)->text() == QStringLiteral("2"), "linked sprite order");
+    check(sprites->item(0, 1)->text() == QStringLiteral("12") &&
+          sprites->item(0, 3)->text() == QStringLiteral("16×16"), "sprite coordinates and dimensions");
+
+    tabs->setCurrentIndex(5);
+    window.setSnapshot(md);
+    auto* registers = named<QTableWidget>(*tabs->currentWidget(), "debugVideoRegisters");
+    check(registers->rowCount() == 24, "VDP registers visible");
+    window.hide();
+    check(window.request().parts == 0 && registers->rowCount() == 0, "hidden graphics clears data");
+}
+
+void verifyOtherFormats() {
+    DebugVideoInspector tiles(DebugVideoInspector::Tiles);
+    tiles.resize(360, 300);
+    tiles.show();
+    auto sms = snapshot(KR_INSPECT_VIDEO, KR_HW_SMS, KR_VIDEO_SMS);
+    auto& vram = sms.blocks[KR_MEM_VRAM];
+    vram = QByteArray(0x4000, '\0');
+    for (int row = 0; row < 8; ++row) vram[row * 4] = char(0xff);
+    auto& colors = sms.blocks[KR_MEM_CRAM];
+    colors = QByteArray(32, '\0');
+    colors[1] = char(3 << 2);
+    tiles.setSnapshot(sms);
+    check(pixel(tiles, {5, 5}) == qRgb(0, 255, 0), "SMS bit planes and 6-bit CRAM");
+    auto gg = sms;
+    gg.info.hardware = KR_HW_GG;
+    gg.blocks[KR_MEM_CRAM] = QByteArray(64, '\0');
+    gg.blocks[KR_MEM_CRAM][3] = char(0x0f);
+    tiles.setSnapshot(gg);
+    check(pixel(tiles, {5, 5}) == qRgb(0, 0, 255), "GG little-endian 12-bit CRAM");
+
+    auto sg = snapshot(KR_INSPECT_VIDEO, KR_HW_SG, KR_VIDEO_SG);
+    sg.blocks[KR_MEM_VRAM] = QByteArray(0x4000, '\0');
+    sg.info.vdp_regs[1] = 8; // Multicolor: two four-pixel blocks per byte.
+    sg.blocks[KR_MEM_VRAM][0] = char(0x2f);
+    tiles.setSnapshot(sg);
+    check(pixel(tiles, {5, 5}) == qRgb(0x21, 0xc8, 0x42), "SG Multicolor left nibble");
+    check(pixel(tiles, {11, 5}) == qRgb(255, 255, 255), "SG Multicolor right nibble");
+    sg.info.vdp_regs[1] = 0x10; // Text: six pixels per tile, colors from register 7.
+    sg.info.vdp_regs[7] = 0xf1;
+    sg.blocks[KR_MEM_VRAM].fill(char(0xff));
+    tiles.setSnapshot(sg);
+    check(named<QWidget>(tiles, "debugVideoSnapshotImage")->width() == 16 * 6 * 2,
+          "SG Text uses six-pixel cells");
+
+    auto firecore = snapshot(KR_INSPECT_VIDEO, KR_HW_MD | KR_HW_FIRECORE, KR_VIDEO_MD);
+    firecore.info.vdp_regs[0x18] = 0x80;
+    auto& patterns = firecore.blocks[KR_MEM_VRAM];
+    patterns = QByteArray(0x20000, '\0');
+    constexpr quint64 packed = 0x041041041041ULL; // eight pixels of color 1
+    for (int row = 0; row < 8; ++row)
+        for (int i = 0; i < 6; ++i)
+            patterns[row * 6 + (i ^ 1)] = char((packed >> (8 * i)) & 255);
+    auto& extended = firecore.blocks[KR_MEM_CRAM];
+    extended = QByteArray(2048, '\0');
+    extended[4] = 25;
+    extended[5] = 50;
+    extended[7] = 75;
+    tiles.setSnapshot(firecore);
+    check(pixel(tiles, {5, 5}) == qRgb(50, 25, 75), "Firecore six-bit patterns and RGB888 CRAM");
+    firecore.info.video_format = KR_VIDEO_FIRECORE_BITMAP;
+    tiles.setSnapshot(firecore);
+    check(named<QWidget>(tiles, "debugVideoSnapshotImage")->size().isEmpty(),
+          "Firecore bitmap does not show a fabricated tile image");
+}
+
+void verifyFramebuffer() {
+    DebugVideoInspector view(DebugVideoInspector::Framebuffer);
+    view.resize(480, 340);
+    view.show();
+    auto addon = snapshot(KR_INSPECT_VIDEO, KR_HW_MD | KR_HW_32X, KR_VIDEO_MD);
+    value(addon, KR_INSPECT_VIDEO, "32X VDP", "Mode", 2);
+    value(addon, KR_INSPECT_VIDEO, "32X VDP", "Height", 224);
+    auto& page = addon.blocks[KR_MEM_32X_FB0];
+    page = QByteArray(0x20000, '\0');
+    putWord(page, 8, 0x100);
+    putWord(page, 0x208, 31);
+    view.setSnapshot(addon);
+    check(pixel(view, {4, 4}) == qRgb(255, 0, 0), "32X direct-color line table");
+
+    auto& palette = addon.blocks[KR_MEM_32X_CRAM];
+    palette = QByteArray(512, '\0');
+    putWord(palette, 4, 0x03e0);
+    addon.info.values[0].value = 1;
+    addon.blocks[KR_MEM_32X_FB0][0x204] = 2;
+    view.setSnapshot(addon);
+    check(pixel(view, {4, 4}) == qRgb(0, 255, 0), "32X packed pixel line");
+
+    addon.info.values[0].value = 3;
+    putWord(addon.blocks[KR_MEM_32X_FB0], 0x200, 0xff02);
+    view.setSnapshot(addon);
+    check(pixel(view, {4, 4}) == qRgb(0, 255, 0), "32X RLE line");
+}
+
+void verifyAudio() {
+    DebugAudioDialog dialog;
+    verifyWindow(dialog);
+    dialog.show();
+    check(dialog.request().parts == 0, "audio controls do not subscribe");
+    named<QTabWidget>(dialog, "debugAudioTabs")->setCurrentIndex(1);
+    check(dialog.request().parts == KR_INSPECT_AUDIO, "audio state subscribes");
+    auto data = snapshot(KR_INSPECT_AUDIO, KR_HW_MD, KR_VIDEO_MD);
+    value(data, KR_INSPECT_AUDIO, "PSG", "Period", 312);
+    value(data, KR_INSPECT_AUDIO, "YM2612", "Status", 42, 2);
+    dialog.setSnapshot(data);
+    auto* table = named<QTableWidget>(dialog, "debugAudioState");
+    check(table->rowCount() == 2 && table->item(0, 2)->text() == QStringLiteral("312") &&
+          table->item(1, 2)->text() == QStringLiteral("0x2A"), "audio decimal and hexadecimal values");
+    dialog.hide();
+    check(dialog.request().parts == 0 && table->rowCount() == 0, "closing audio clears data");
+}
+} // namespace
+
+int main(int argc, char** argv) {
+    QApplication app(argc, argv);
+    const QString previewDirectory = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
+    if (!previewDirectory.isEmpty()) check(QDir().mkpath(previewDirectory), "preview directory");
+    verifyMemory(previewDirectory);
+    verifyGraphics(previewDirectory);
+    verifyOtherFormats();
+    verifyFramebuffer();
+    verifyAudio();
+    std::puts("PASS: read-only viewer subscriptions, watch, links, video formats and sound state");
+}

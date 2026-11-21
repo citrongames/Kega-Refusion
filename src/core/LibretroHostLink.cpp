@@ -109,6 +109,7 @@ bool LibretroHost::supportsLinkCable() const {
         !(api_->paprium_active && api_->paprium_active());
 }
 bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
+    ++inspectionGeneration_;
     error.clear();
     if(linkParent_) {error=QStringLiteral("A cable peer cannot own another console");return false;}
     if(enabled && controllerAdapter() != ControllerAdapter::None) {
@@ -271,6 +272,7 @@ QByteArray LibretroHost::captureLinkedState() const {
     return out;
 }
 bool LibretroHost::restoreLinkedState(const QByteArray& state,bool transactional) {
+    ++inspectionGeneration_;
     if (!linkPeer_ || state.size()!=serializedSize()) return false;
     const auto wireBytes = linkPair_->wireBytes;
     if (!state.startsWith(wireBytes ? "KRGGLK01" : "KRLINK01")) return false;

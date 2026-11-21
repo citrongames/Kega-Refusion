@@ -1,5 +1,6 @@
 #pragma once
 #include "ExpansionMode.h"
+#include "DebugInspection.h"
 #include "InputDisplay.h"
 #include <QByteArray>
 #include <QImage>
@@ -73,6 +74,8 @@ public:
     bool smsPauseStateSupported() const;
     struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; };
     DebugCapabilities debugCapabilities() const;
+    DebugInspectionSnapshot inspect(const DebugInspectionRequest& request) const;
+    quint64 inspectionGeneration() const { return inspectionGeneration_; }
     void setDebugMasks(quint32 video, quint64 audio);
     void setDebugBackdrop(quint32 rgb);
     void setDebugAudioGain(unsigned channel, unsigned percent);
@@ -330,6 +333,7 @@ private:
     unsigned rewindPreviewDepth_ = 0;
     bool rewindPreviewBeforeScope_ = false;
     bool recordingVideoEnabled_ = false;
+    quint64 inspectionGeneration_ = 1;
     bool initialized_ = false, loaded_ = false, saveRamWritable_ = true;
     bool networkReadOnly_ = false;
     bool perGameCdBackup_ = true;

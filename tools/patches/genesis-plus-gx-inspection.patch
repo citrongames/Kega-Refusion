@@ -1,0 +1,362 @@
+diff --git a/core/cart_hw/md_cart.c b/core/cart_hw/md_cart.c
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -3433,3 +3433,54 @@
+   if (address & 0x0e) mapper_512k_w(address, data);
+   else mapper_sega_w(data);
+ }
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_md_cart(kr_inspect_info *info, unsigned parts)
++{
++  if (parts & KR_INSPECT_HARDWARE)
++  {
++    const unsigned part = KR_INSPECT_HARDWARE;
++    if (kr_firecore_active)
++    {
++      kr_inspect_put(info, part, "Firecore", "ROM window offset", 8, firecore_offset);
++      kr_inspect_put(info, part, "Firecore", "GPIO latch", 4, firecore_gpio);
++      kr_inspect_put(info, part, "Firecore", "Z80 clock register", 4, firecore_z80_clock);
++      kr_inspect_put(info, part, "Firecore", "68000 divider register", 4, firecore_m68k_divider);
++    }
++    if (cart.hw.regs_r || cart.hw.regs_w)
++    {
++      for (unsigned i = 0; i < 4; ++i)
++      {
++        char name[24];
++        snprintf(name, sizeof(name), "Register shadow %u", i);
++        kr_inspect_put(info, part, "MD cartridge", name, 2, cart.hw.regs[i]);
++      }
++    }
++    if (sram.on)
++    {
++      kr_inspect_put(info, part, "Cartridge save", "Storage type", 0, sram.type);
++      if (sram.type == DEFAULT_SRAM)
++      {
++        kr_inspect_put(info, part, "Cartridge save", "Mapped start", 6, sram.start);
++        kr_inspect_put(info, part, "Cartridge save", "Mapped end", 6, sram.end);
++      }
++    }
++  }
++  if ((parts & KR_INSPECT_AUDIO) && kr_firecore_active)
++    kr_inspect_put(info, KR_INSPECT_AUDIO, "Firecore audio", "DMC PCM option", 0, !!kr_firecore_dmc_pcm);
++  if ((parts & KR_INSPECT_AUDIO) && paprium_active())
++  {
++    const unsigned part = KR_INSPECT_AUDIO;
++    kr_inspect_put(info, part, "Paprium music", "External track", 0, (uint8)punchium_s.music_track);
++    kr_inspect_put(info, part, "Paprium music", "Decoded source available", 0, punchium_track.total_samples != 0);
++    if (punchium_track.total_samples)
++    {
++      kr_inspect_put(info, part, "Paprium music", "Position (frames)", 0, (uint32)punchium_s.music_pos);
++      kr_inspect_put(info, part, "Paprium music", "Track length (frames)", 0, punchium_track.total_samples);
++      kr_inspect_put(info, part, "Paprium music", "Sample rate (Hz)", 0, punchium_track.sample_rate);
++    }
++    kr_inspect_put(info, part, "Paprium music", "Music volume", 2, (uint32)punchium_s.music_volume);
++    kr_inspect_put(info, part, "Paprium music", "SFX volume", 2, (uint32)punchium_s.sfx_volume);
++  }
++}
+diff --git a/core/cart_hw/sms_cart.c b/core/cart_hw/sms_cart.c
+--- a/core/cart_hw/sms_cart.c
++++ b/core/cart_hw/sms_cart.c
+@@ -3069,3 +3069,19 @@
+   /* return last fetched z80 instruction / data */
+   return z80_last_fetch;
+ }
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_sms_cart(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_HARDWARE;
++  kr_inspect_put(info, part, "Z80 cartridge", "Cartridge mapper ID", 2, cart_rom.mapper);
++  if (!slot.pages || !slot.fcr) return;
++  kr_inspect_put(info, part, "Z80 cartridge", "Active slot mapper ID", 2, slot.mapper);
++  for (unsigned i = 0; i < 4; ++i)
++  {
++    char name[24];
++    snprintf(name, sizeof(name), "Bank register %u", i);
++    kr_inspect_put(info, part, "Z80 cartridge", name, 2, slot.fcr[i]);
++  }
++}
+diff --git a/core/cart_hw/yx5200.c b/core/cart_hw/yx5200.c
+--- a/core/cart_hw/yx5200.c
++++ b/core/cart_hw/yx5200.c
+@@ -510,3 +510,21 @@
+   yx5200.playbackEnabled = 0;
+   yx5200.trackIndex = 0;
+ }
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_yx5200(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_AUDIO;
++  const char *device = "YX5200 MP3";
++  kr_inspect_put(info, part, device, "Track", 0, yx5200.trackIndex);
++  kr_inspect_put(info, part, device, "Playing", 0, yx5200.playbackEnabled);
++  kr_inspect_put(info, part, device, "Repeat", 0, yx5200.playbackLoop);
++  kr_inspect_put(info, part, device, "Volume", 0, yx5200.playbackVolume);
++  kr_inspect_put(info, part, device, "DAC enabled", 0, yx5200.audioEnabled);
++  if (mp3io.read_data)
++  {
++    kr_inspect_put(info, part, device, "Decoded samples", 0, mp3dec.cur_sample);
++    kr_inspect_put(info, part, device, "Decoder error", 8, (uint32)mp3dec.last_error);
++  }
++}
+diff --git a/core/sound/psg.c b/core/sound/psg.c
+--- a/core/sound/psg.c
++++ b/core/sound/psg.c
+@@ -569,3 +569,41 @@
+     psg.polarity[i] = polarity;
+   }
+ }  
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_psg(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_AUDIO;
++  static const char *const names[8] = {
++    "Tone 1 period", "Tone 1 attenuation", "Tone 2 period", "Tone 2 attenuation",
++    "Tone 3 period", "Tone 3 attenuation", "Noise control", "Noise attenuation"
++  };
++  for (unsigned i = 0; i < 8; ++i)
++  {
++    int value = psg.regs[i];
++    unsigned digits = 3;
++    if (i & 1)
++    {
++      /* The synthesis state retains the amplitude, not the written nibble. */
++      const unsigned levels = sizeof(chanVolume) / sizeof(chanVolume[0]);
++      unsigned attenuation = 0;
++      while (attenuation < levels && chanVolume[attenuation] != value)
++        ++attenuation;
++      if (attenuation == levels)
++        continue;
++      value = attenuation;
++      digits = 1;
++    }
++    else if (i == 6)
++    {
++      value &= 7;
++      digits = 1;
++    }
++    kr_inspect_put(info, part, "PSG", names[i], digits, value);
++  }
++  kr_inspect_put(info, part, "PSG", "Register latch", 1, psg.latch);
++  kr_inspect_put(info, part, "PSG", "Noise shift register", 4, psg.noiseShiftValue);
++  if (system_hw == SYSTEM_GG)
++    kr_inspect_put(info, part, "PSG", "Stereo control", 2, io_reg[6]);
++}
+diff --git a/core/sound/sound.c b/core/sound/sound.c
+--- a/core/sound/sound.c
++++ b/core/sound/sound.c
+@@ -858,3 +858,63 @@
+     }
+   }
+ }
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_fm(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_AUDIO;
++  if ((system_hw & SYSTEM_PBC) == SYSTEM_MD)
++  {
++#ifdef HAVE_YM3438_CORE
++    if (config.ym3438)
++    {
++      const char *device = config.ym3438 == 1 ? "YM2612 (Nuked)" : "YM3438 (Nuked)";
++      kr_inspect_put(info, part, device, "Timer flags", 2,
++          ym3438.timer_a_overflow_flag | (ym3438.timer_b_overflow_flag << 1));
++      kr_inspect_put(info, part, device, "Timer A reload", 3, ym3438.timer_a_reg);
++      kr_inspect_put(info, part, device, "Timer B reload", 2, ym3438.timer_b_reg);
++      kr_inspect_put(info, part, device, "Channel 3 mode", 1, ym3438.mode_ch3);
++      kr_inspect_put(info, part, device, "DAC enabled", 0, !!ym3438.dacen);
++      kr_inspect_put(info, part, device, "DAC data latch", 2, ((ym3438.dacdata >> 1) ^ 0x80) & 0xff);
++      for (unsigned i = 0; i < 6; ++i)
++      {
++        char name[24];
++        const unsigned keys = ym3438.mode_kon[i] | (ym3438.mode_kon[i + 12] << 1) |
++            (ym3438.mode_kon[i + 6] << 2) | (ym3438.mode_kon[i + 18] << 3);
++        snprintf(name, sizeof(name), "%s ch %u", config.ym3438 == 1 ? "YM2612" : "YM3438", i + 1);
++        kr_inspect_put(info, part, name, "F-number", 3, ym3438.fnum[i]);
++        kr_inspect_put(info, part, name, "Block", 0, ym3438.block[i]);
++        kr_inspect_put(info, part, name, "Algorithm", 0, ym3438.connect[i]);
++        kr_inspect_put(info, part, name, "Operator key mask", 1, keys);
++        kr_inspect_put(info, part, name, "Stereo mask (L:R)", 1, (ym3438.pan_l[i] << 1) | ym3438.pan_r[i]);
++      }
++      return;
++    }
++#endif
++    kr_inspect_ym2612(info);
++    return;
++  }
++
++  if ((system_hw != SYSTEM_MARKIII && system_hw != SYSTEM_SMS &&
++       system_hw != SYSTEM_SMS2 && system_hw != SYSTEM_PBC) ||
++      !(config.ym2413 & 1) || !YM_Update)
++    return;
++#ifdef HAVE_OPLL_CORE
++  if (config.opll)
++  {
++    kr_inspect_put(info, part, "YM2413 (Nuked)", "Rhythm register", 2, opll.rhythm);
++    for (unsigned i = 0; i < 9; ++i)
++    {
++      char device[24];
++      snprintf(device, sizeof(device), "YM2413 ch %u", i + 1);
++      kr_inspect_put(info, part, device, "F-number", 3, opll.fnum[i]);
++      kr_inspect_put(info, part, device, "Block", 0, opll.block[i]);
++      kr_inspect_put(info, part, device, "Instrument / volume register", 2, (opll.inst[i] << 4) | opll.vol[i]);
++      kr_inspect_put(info, part, device, "Melodic key on", 0, opll.kon[i]);
++    }
++    return;
++  }
++#endif
++  kr_inspect_ym2413(info);
++}
+diff --git a/core/sound/ym2413.c b/core/sound/ym2413.c
+--- a/core/sound/ym2413.c
++++ b/core/sound/ym2413.c
+@@ -1885,3 +1885,21 @@
+   return sizeof(YM2413) == 5984 && sizeof(YM2413_OPLL_SLOT) == 84 &&
+          sizeof(YM2413_OPLL_CH) == 184 && offsetof(YM2413, clock) == 5968;
+ }
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_ym2413(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_AUDIO;
++  kr_inspect_put(info, part, "YM2413 (MAME)", "Rhythm register", 2, ym2413.rhythm);
++  for (unsigned i = 0; i < 9; ++i)
++  {
++    char device[24];
++    const YM2413_OPLL_CH *ch = &ym2413.P_CH[i];
++    snprintf(device, sizeof(device), "YM2413 ch %u", i + 1);
++    kr_inspect_put(info, part, device, "F-number", 3, ch->block_fnum & 0x1ff);
++    kr_inspect_put(info, part, device, "Block", 0, (ch->block_fnum >> 9) & 7);
++    kr_inspect_put(info, part, device, "Instrument / volume register", 2, ym2413.instvol_r[i]);
++    kr_inspect_put(info, part, device, "Melodic key on", 0, ch->SLOT[0].key & 1);
++  }
++}
+diff --git a/core/sound/ym2612.c b/core/sound/ym2612.c
+--- a/core/sound/ym2612.c
++++ b/core/sound/ym2612.c
+@@ -2309,3 +2309,31 @@
+          offsetof(FM_SLOT, DT) == 0 && sizeof(FM_CH) == 400 &&
+          offsetof(FM_CH, connect1) == 336;
+ }
++
++#include "../kegainspect/values.h"
++
++void kr_inspect_ym2612(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_AUDIO;
++  const FM_ST *state = &ym2612.OPN.ST;
++  kr_inspect_put(info, part, "YM2612 (MAME)", "Timer flags", 2, state->status & 3);
++  kr_inspect_put(info, part, "YM2612 (MAME)", "Timer A reload", 3, state->TA);
++  kr_inspect_put(info, part, "YM2612 (MAME)", "Timer B reload", 2, state->TB);
++  kr_inspect_put(info, part, "YM2612 (MAME)", "Channel 3 mode", 1, (state->mode >> 6) & 3);
++  kr_inspect_put(info, part, "YM2612 (MAME)", "DAC enabled", 0, !!ym2612.dacen);
++  kr_inspect_put(info, part, "YM2612 (MAME)", "DAC data latch", 2, (ym2612.dacout / 64 + 0x80) & 0xff);
++  for (unsigned i = 0; i < 6; ++i)
++  {
++    char device[24];
++    const FM_CH *ch = &ym2612.CH[i];
++    const unsigned keys = ch->SLOT[SLOT1].key | (ch->SLOT[SLOT2].key << 1) |
++                         (ch->SLOT[SLOT3].key << 2) | (ch->SLOT[SLOT4].key << 3);
++    snprintf(device, sizeof(device), "YM2612 ch %u", i + 1);
++    kr_inspect_put(info, part, device, "F-number", 3, ch->block_fnum & 0x7ff);
++    kr_inspect_put(info, part, device, "Block", 0, ch->block_fnum >> 11);
++    kr_inspect_put(info, part, device, "Algorithm", 0, ch->ALGO);
++    kr_inspect_put(info, part, device, "Operator key mask", 1, keys);
++    kr_inspect_put(info, part, device, "Stereo mask (L:R)", 1,
++        (!!ym2612.OPN.pan[2 * i] << 1) | !!ym2612.OPN.pan[2 * i + 1]);
++  }
++}
+diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -4026,3 +4026,37 @@
+     }
+   }
+ }
++
++#include "kegainspect/values.h"
++
++void kr_inspect_vdp(kr_inspect_info *info)
++{
++  const unsigned part = KR_INSPECT_VIDEO;
++  const int mode5 = info->video_format == KR_VIDEO_MD ||
++                    info->video_format == KR_VIDEO_FIRECORE_BITMAP;
++  kr_inspect_put(info, part, "VDP", "Status latch", 4, status);
++  kr_inspect_put(info, part, "VDP", "Address latch", 5, addr);
++  kr_inspect_put(info, part, "VDP", "Access code", 2, code);
++  kr_inspect_put(info, part, "VDP", "Command half pending", 0, !!pending);
++  kr_inspect_put(info, part, "VDP", "Counter line", 0, v_counter);
++  kr_inspect_put(info, part, "VDP", "Active lines", 0, bitmap.viewport.h);
++  kr_inspect_put(info, part, "VDP", "Line IRQ pending", 0, !!hint_pending);
++  kr_inspect_put(info, part, "VDP", "Frame IRQ pending", 0, !!vint_pending);
++  if (mode5)
++  {
++    kr_inspect_put(info, part, "VDP", "Plane A table", 5, ntab);
++    kr_inspect_put(info, part, "VDP", "Plane B table", 5, ntbb);
++    kr_inspect_put(info, part, "VDP", "Window table", 5, ntwb);
++    kr_inspect_put(info, part, "VDP", "Sprite table", 5, satb);
++    kr_inspect_put(info, part, "VDP", "Horizontal scroll table", 5, hscb);
++    kr_inspect_put(info, part, "VDP", "DMA remaining", 0, dma_length);
++    kr_inspect_put(info, part, "VDP", "DMA type", 2, dma_type);
++    kr_inspect_put(info, part, "VDP", "FIFO write slot", 0, fifo_idx);
++    for (unsigned i = 0; i < 4; ++i)
++    {
++      char name[16];
++      snprintf(name, sizeof(name), "FIFO word %u", i);
++      kr_inspect_put(info, part, "VDP", name, 4, fifo[i]);
++    }
++  }
++}
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -154,6 +154,7 @@
+ uint8_t cart_size;
+ 
+ static bool is_running = 0;
++#include "../core/kegainspect/libretro.inc"
+ static bool restart_eq = false;
+ static uint8_t temp[0x10000];
+ static int16 soundbuffer[3068];
+@@ -4233,6 +4234,7 @@
+ 
+ bool retro_load_game(const struct retro_game_info *info)
+ {
++   kr_inspect_content = 0;
+    firecore_close();
+    kega_sprite_hint_release();
+    int i;
+@@ -4534,6 +4536,7 @@
+ 
+    init_frameskip();
+ 
++   kr_inspect_content = 1;
+    return true;
+ 
+ error:
+@@ -4566,6 +4569,7 @@
+ 
+ void retro_unload_game(void) 
+ {
++   kr_inspect_content = 0;
+    firecore_close();
+    if (kr_megald_active) cdd_unload();
+    kega_sprite_hint_release();
+@@ -4714,6 +4718,7 @@
+ 
+ void retro_deinit(void)
+ {
++   kr_inspect_content = 0;
+    firecore_close();
+    retro_kegarefusion_sprite_hint_enable(false);
+    retro_kegarefusion_recording_video(false);

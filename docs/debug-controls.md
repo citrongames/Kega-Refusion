@@ -56,3 +56,6 @@ gains and backdrop are never written to settings.
 
 The agreed roadmap for future CPU debugging, memory and graphics viewers, and
 tracing is in [debugger-plan.md](debugger-plan.md). These are planned features.
+
+Read-only memory, graphics and audio inspector tabs are documented in
+[debug-inspection.md](debug-inspection.md); existing output-control semantics above are preserved.

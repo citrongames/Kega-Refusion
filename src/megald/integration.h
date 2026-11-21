@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 extern int kr_megald_active;
+struct kr_inspect_info;
+void kr_inspect_megald(struct kr_inspect_info *info, unsigned parts);
 int kr_megald_mount(const char *path, char *header);
 void kr_megald_close(void);
 int kr_megald_japanese(void);

@@ -219,6 +219,8 @@ bool LibretroHost::initialize(QString& error) {
     api_->set_firecore_dmc_pcm = reinterpret_cast<decltype(api_->set_firecore_dmc_pcm)>(library_.resolve("retro_kegarefusion_set_firecore_dmc_pcm"));
     api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
+    api_->inspect_info = reinterpret_cast<decltype(api_->inspect_info)>(library_.resolve("retro_kegarefusion_inspect_info"));
+    api_->inspect_read = reinterpret_cast<decltype(api_->inspect_read)>(library_.resolve("retro_kegarefusion_inspect_read"));
     api_->debug_masks = reinterpret_cast<decltype(api_->debug_masks)>(library_.resolve("retro_kegarefusion_debug_masks"));
     api_->debug_backdrop = reinterpret_cast<decltype(api_->debug_backdrop)>(library_.resolve("retro_kegarefusion_debug_backdrop"));
     api_->multitap = reinterpret_cast<decltype(api_->multitap)>(library_.resolve("retro_kegarefusion_multitap"));
@@ -539,6 +541,7 @@ bool LibretroHost::loadMegaLd(const QString& path, QString& error) {
     return true;
 }
 bool LibretroHost::setDiscEjected(bool ejected, QString& error, bool* timelineChanged) {
+    ++inspectionGeneration_;
     error.clear();
     if (timelineChanged) *timelineChanged = false;
     if (isCd() && disk_.get_eject_state && discEjected() == ejected) return true;
@@ -549,6 +552,7 @@ bool LibretroHost::setDiscEjected(bool ejected, QString& error, bool* timelineCh
     audio_.clear(); return true;
 }
 bool LibretroHost::selectDisc(int index, QString& error, bool* timelineChanged) {
+    ++inspectionGeneration_;
     error.clear();
     if (timelineChanged) *timelineChanged = false;
     if (isMegaLd()) {
@@ -592,6 +596,7 @@ bool LibretroHost::selectDisc(int index, QString& error, bool* timelineChanged) 
     return setDiscEjected(false,error);
 }
 bool LibretroHost::changeDisc(const QString& path, QString& error, bool* timelineChanged) {
+    ++inspectionGeneration_;
     error.clear();
     if (timelineChanged) *timelineChanged = false;
     if (!isCd()) { error = Localization::text(QStringLiteral("Игра Sega CD не запущена.")); return false; }
@@ -775,6 +780,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     return true;
 }
 void LibretroHost::unload() {
+    ++inspectionGeneration_;
     while (rewindPreviewDepth_) endRewindPreview();
     runClock_ = {};
     stopLinkedPair();
@@ -968,6 +974,7 @@ void LibretroHost::runRewindPreviewFrame(bool renderVideo, bool singleFieldFallb
     }
 }
 void LibretroHost::reset() {
+    ++inspectionGeneration_;
     runClock_ = {};
     spriteOwnership_ = {};
     if (linkPeer_) { resetLinkedPair(); return; }
@@ -1025,6 +1032,7 @@ bool LibretroHost::isMasterSystem() const {
     return contentExtension_=="sms";
 }
 bool LibretroHost::hardReset(QString& error, bool applyPending) {
+    ++inspectionGeneration_;
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
     const int selectedMegaLdSide = isMegaLd() ? discIndex() : 0;
@@ -1747,6 +1755,7 @@ bool LibretroHost::unserialize(const QByteArray& state) {
     return restoreCore(state.constData(),state.size());
 }
 bool LibretroHost::restoreCore(const char* data, qsizetype size, bool transactional) {
+    ++inspectionGeneration_;
     const auto nativeSize = serializedSize();
     if (!loaded_ || !nativeSize) return false;
     RunClock clock;

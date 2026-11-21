@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include <stddef.h>
 extern int kegarefusion_32x_attached;
+
+/* Bounded inspection copies from these views on the owning emulation thread. */
+struct Kega32xBus;
+struct Kega32xPwmState;
+const struct Kega32xBus *kegarefusion_32x_inspect_bus(void);
+const struct Kega32xPwmState *kegarefusion_32x_inspect_pwm(void);
 unsigned kegarefusion_32x_features(void);
 void kegarefusion_32x_invalidate_code(void);
 void kegarefusion_32x_cart_reads_changed(unsigned first, unsigned count);

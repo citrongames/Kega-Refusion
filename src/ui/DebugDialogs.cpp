@@ -1,4 +1,5 @@
 #include "DebugDialogs.h"
+#include "DebugInspectorWidgets.h"
 #include "i18n/Localization.h"
 
 #include <QCheckBox>
@@ -12,9 +13,11 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QVBoxLayout>
 
 namespace {
@@ -30,7 +33,14 @@ DebugGraphicsDialog::DebugGraphicsDialog(QWidget* parent)
     setWindowTitle(Localization::text(QStringLiteral("Графика")));
     setWindowModality(Qt::NonModal);
     setMinimumWidth(280);
-    auto* layout = new QVBoxLayout(this);
+    resize(610, 450);
+    auto* outer = new QVBoxLayout(this);
+    tabs_ = new QTabWidget(this);
+    tabs_->setObjectName(QStringLiteral("debugGraphicsTabs"));
+    outer->addWidget(tabs_);
+    auto* controls = new QWidget(tabs_);
+    auto* layout = new QVBoxLayout(controls);
+    tabs_->addTab(controls, Localization::text(QStringLiteral("Управление")));
     placeholder_ = new QLabel(Localization::text(QStringLiteral("Игра не загружена")), this);
     placeholder_->setObjectName(QStringLiteral("debugGraphicsEmpty"));
     layout->addWidget(placeholder_);
@@ -83,6 +93,31 @@ DebugGraphicsDialog::DebugGraphicsDialog(QWidget* parent)
     });
     layout->addLayout(colorRow);
     layout->addStretch();
+    const std::array<DebugVideoInspector::View, 5> modes{
+        DebugVideoInspector::Tiles, DebugVideoInspector::Map, DebugVideoInspector::Sprites,
+        DebugVideoInspector::Palette, DebugVideoInspector::Framebuffer
+    };
+    const std::array<QString, 5> labels{
+        Localization::text(QStringLiteral("Тайлы")),
+        Localization::text(QStringLiteral("Карта")),
+        Localization::text(QStringLiteral("Спрайты")),
+        Localization::text(QStringLiteral("Палитра")),
+        Localization::text(QStringLiteral("Буфер 32X"))
+    };
+    for (size_t i = 0; i < modes.size(); ++i) {
+        views_[i] = new DebugVideoInspector(modes[i], tabs_);
+        tabs_->addTab(views_[i], labels[i]);
+        connect(views_[i], &DebugVideoInspector::memoryRequested, this, &DebugGraphicsDialog::memoryRequested);
+    }
+    registers_ = new DebugStateInspector(KR_INSPECT_VIDEO, tabs_);
+    tabs_->insertTab(tabs_->indexOf(views_.back()), registers_,
+                     Localization::text(QStringLiteral("Регистры")));
+    connect(tabs_, &QTabWidget::currentChanged, this, [this] {
+        for (auto* view : views_)
+            if (view != tabs_->currentWidget()) view->setSnapshot({});
+        if (registers_ != tabs_->currentWidget()) registers_->setSnapshot({});
+        emit inspectionChanged();
+    });
     updateBackdropIcon();
     setControls(0, 0, false, false, backdrop_);
 }
@@ -90,6 +125,7 @@ DebugGraphicsDialog::DebugGraphicsDialog(QWidget* parent)
 void DebugGraphicsDialog::setControls(quint32 available, quint32 disabled,
                                       bool hardcore, bool ready, QColor backdrop) {
     available_ = available;
+    tabs_->setTabVisible(tabs_->indexOf(views_.back()), (available & (1u << 5)) != 0);
     disabled_ = disabled & available;
     backdrop_ = backdrop;
     placeholder_->setVisible(available == 0);
@@ -138,9 +174,37 @@ void DebugGraphicsDialog::showColorPicker() {
     colorDialog_->activateWindow();
 }
 
+DebugInspectionRequest DebugGraphicsDialog::request() const {
+    DebugInspectionRequest request;
+    if (isVisible() && tabs_->currentIndex() > 0) request.parts = KR_INSPECT_VIDEO;
+    return request;
+}
+
+void DebugGraphicsDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
+    if (!snapshot.available()) {
+        for (auto* view : views_) view->setSnapshot(snapshot);
+        registers_->setSnapshot(snapshot);
+        return;
+    }
+    if (!(snapshot.parts & KR_INSPECT_VIDEO) || !isVisible()) return;
+    if (tabs_->currentWidget() == registers_) {
+        registers_->setSnapshot(snapshot);
+    } else {
+        for (auto* view : views_)
+            if (view == tabs_->currentWidget()) view->setSnapshot(snapshot);
+    }
+}
+
+void DebugGraphicsDialog::showEvent(QShowEvent* event) {
+    QDialog::showEvent(event);
+    emit inspectionChanged();
+}
+
 void DebugGraphicsDialog::hideEvent(QHideEvent* event) {
     if (colorDialog_) colorDialog_->hide();
     QDialog::hideEvent(event);
+    setSnapshot({});
+    emit inspectionChanged();
 }
 
 DebugAudioDialog::DebugAudioDialog(QWidget* parent)
@@ -150,7 +214,13 @@ DebugAudioDialog::DebugAudioDialog(QWidget* parent)
     setWindowModality(Qt::NonModal);
     resize(540, 560);
     gains_.fill(100);
-    auto* layout = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    tabs_ = new QTabWidget(this);
+    tabs_->setObjectName(QStringLiteral("debugAudioTabs"));
+    outer->addWidget(tabs_);
+    auto* controls = new QWidget(tabs_);
+    tabs_->addTab(controls, Localization::text(QStringLiteral("Управление")));
+    auto* layout = new QVBoxLayout(controls);
     placeholder_ = new QLabel(Localization::text(QStringLiteral("Игра не загружена")), this);
     placeholder_->setObjectName(QStringLiteral("debugAudioEmpty"));
     layout->addWidget(placeholder_);
@@ -257,6 +327,12 @@ DebugAudioDialog::DebugAudioDialog(QWidget* parent)
         resetGains_->setEnabled(false);
     });
     layout->addLayout(buttonRow);
+    state_ = new DebugStateInspector(KR_INSPECT_AUDIO, tabs_);
+    tabs_->addTab(state_, Localization::text(QStringLiteral("Состояние")));
+    connect(tabs_, &QTabWidget::currentChanged, this, [this] {
+        if (tabs_->currentWidget() != state_) state_->setSnapshot({});
+        emit inspectionChanged();
+    });
     setControls(0, 0, false, gains_);
 }
 
@@ -289,4 +365,27 @@ void DebugAudioDialog::setControls(quint64 available, quint64 disabled, bool rea
     for (unsigned channel = 0; channel < gains.size(); ++channel)
         anyGain |= (available & (quint64(1) << channel)) && gains[channel] != 100;
     resetGains_->setEnabled(ready && anyGain);
+}
+
+
+DebugInspectionRequest DebugAudioDialog::request() const {
+    DebugInspectionRequest request;
+    if (isVisible() && tabs_->currentWidget() == state_) request.parts = KR_INSPECT_AUDIO;
+    return request;
+}
+
+void DebugAudioDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
+    if (!snapshot.available() || (isVisible() && tabs_->currentWidget() == state_))
+        state_->setSnapshot(snapshot);
+}
+
+void DebugAudioDialog::showEvent(QShowEvent* event) {
+    QDialog::showEvent(event);
+    emit inspectionChanged();
+}
+
+void DebugAudioDialog::hideEvent(QHideEvent* event) {
+    QDialog::hideEvent(event);
+    setSnapshot({});
+    emit inspectionChanged();
 }

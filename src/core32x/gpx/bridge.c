@@ -801,3 +801,13 @@ int kegarefusion_32x_stats(uint64_t *out,size_t count)
     (void)out;(void)count;return 0;
 #endif
 }
+
+const Kega32xBus *kegarefusion_32x_inspect_bus(void)
+{
+    return ctx && ctx->machine ? kega32x_machine_bus(ctx->machine) : NULL;
+}
+
+const Kega32xPwmState *kegarefusion_32x_inspect_pwm(void)
+{
+    return ctx && ctx->machine ? &kega32x_machine_pwm(ctx->machine)->s : NULL;
+}

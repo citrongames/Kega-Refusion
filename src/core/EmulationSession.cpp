@@ -157,6 +157,26 @@ void EmulationSession::enqueue(Command command) {
         commands_.push_back(std::move(command));
     }
 }
+void EmulationSession::requestInspection(const DebugInspectionRequest& request) {
+    // A single replaceable request, separate from gameplay/network commands.
+    std::lock_guard<std::mutex> lock(inspectionMutex_);
+    inspectionRequest_ = request;
+    inspectionRequest_.parts &= 15u;
+    inspectionRequest_.length = std::min(request.length,4096u);
+    inspectionRequested_.store(true);
+    if (!request.parts) {
+        inspectionSnapshot_ = {};
+        inspectionSnapshotPending_ = false;
+    }
+}
+bool EmulationSession::takeInspection(DebugInspectionSnapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(inspectionMutex_);
+    if (!inspectionSnapshotPending_) return false;
+    snapshot = std::move(inspectionSnapshot_);
+    inspectionSnapshot_ = {};
+    inspectionSnapshotPending_ = false;
+    return true;
+}
 void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue({Type::Load,path,archiveIndex}); }
 void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry) {
     enqueue({Type::Load,path,archiveEntry.index,archiveEntry});
@@ -1844,6 +1864,40 @@ void EmulationSession::run() {
             if (controllerAdapter_.exchange(effectiveAdapter) != effectiveAdapter || controllerPlayerCount_.load() != playerCount) {
                 controllerPlayerCount_.store(playerCount);
                 emit controllerTopologyChanged(effectiveAdapter,playerCount);
+            }
+        }
+        // Between complete frame executions, after all queued state changes.
+        // An inactive inspector costs one atomic check; no timer or memory copy.
+        if (inspectionRequested_.load()) {
+            DebugInspectionRequest request;
+            {
+                std::lock_guard<std::mutex> lock(inspectionMutex_);
+                request = inspectionRequest_;
+                inspectionRequested_.store(false);
+            }
+            if (request.parts) {
+                DebugInspectionSnapshot snapshot;
+                if (achievementHardcore || videoExport) {
+                    snapshot.serial = request.serial;
+                    snapshot.parts = request.parts;
+                    snapshot.generation = host.inspectionGeneration();
+                    snapshot.status = Localization::text(achievementHardcore
+                        ? QStringLiteral("Просмотр состояния недоступен в Hardcore.")
+                        : QStringLiteral("Просмотр состояния недоступен при экспорте видео."));
+                } else {
+                    snapshot = host.inspect(request);
+                }
+                bool notify = false;
+                {
+                    std::lock_guard<std::mutex> lock(inspectionMutex_);
+                    // Discard a result if its viewer closed or changed meanwhile.
+                    if (inspectionRequest_.parts && inspectionRequest_.serial == request.serial) {
+                        inspectionSnapshot_ = std::move(snapshot);
+                        notify = !inspectionSnapshotPending_;
+                        inspectionSnapshotPending_ = true;
+                    }
+                }
+                if (notify) emit inspectionReady();
             }
         }
         if (videoPending && videoRecorder.completed()) {

@@ -32,6 +32,8 @@ struct LibretroHost::Api {
     unsigned (*system_hw)() = nullptr;
     unsigned (*sms_pause_state_version)() = nullptr;
     bool (*sms_irata_flash_active)() = nullptr;
+    bool (*inspect_info)(unsigned,unsigned,kr_inspect_info*,size_t) = nullptr;
+    size_t (*inspect_read)(unsigned,uint32_t,void*,size_t) = nullptr;
     void (*debug_masks)(uint32_t,uint64_t) = nullptr;
     void (*debug_backdrop)(uint32_t) = nullptr;
     bool (*multitap)(unsigned, unsigned, unsigned) = nullptr;

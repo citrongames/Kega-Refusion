@@ -1,6 +1,7 @@
 #include "i18n/Localization.h"
 #include "MainWindow.h"
 #include "DebugDialogs.h"
+#include "DebugInspectorWidgets.h"
 #include "AudioOutput.h"
 #include "ControlsPage.h"
 #include "CheatsDialog.h"
@@ -373,6 +374,20 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     });
     debugAudioGains_.fill(100);
     buildMenus();
+    inspectionTimer_ = new QTimer(this);
+    inspectionTimer_->setInterval(100);
+    connect(inspectionTimer_, &QTimer::timeout, this, &MainWindow::refreshInspection);
+    connect(&session_, &EmulationSession::inspectionReady, this, [this] {
+        DebugInspectionSnapshot snapshot;
+        if (!session_.takeInspection(snapshot) || snapshot.serial != inspectionSerial_ ||
+            loading_ || videoExporting_ || achievementsHardcore_) return;
+        if (debugMemoryDialog_ && debugMemoryDialog_->isVisible())
+            debugMemoryDialog_->setSnapshot(snapshot);
+        if (debugGraphicsDialog_ && debugGraphicsDialog_->isVisible())
+            debugGraphicsDialog_->setSnapshot(snapshot);
+        if (debugAudioDialog_ && debugAudioDialog_->isVisible())
+            debugAudioDialog_->setSnapshot(snapshot);
+    });
     refreshCommandShortcuts();
     connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
     updateService_ = new UpdateService(this);
@@ -743,6 +758,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 }
 
 MainWindow::~MainWindow() {
+    if (inspectionTimer_) inspectionTimer_->stop();
+    session_.requestInspection({});
 #ifdef Q_OS_WIN
     qApp->removeNativeEventFilter(this);
 #endif
@@ -1325,6 +1342,9 @@ void MainWindow::buildMenus() {
     debugAudioAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Звуковые каналы…")));
     debugAudioAction_->setObjectName(QStringLiteral("debugAudioAction"));
     connect(debugAudioAction_, &QAction::triggered, this, &MainWindow::showDebugAudio);
+    debugMemoryAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Память…")));
+    debugMemoryAction_->setObjectName(QStringLiteral("debugMemoryAction"));
+    connect(debugMemoryAction_, &QAction::triggered, this, &MainWindow::showDebugMemory);
     exportBlockedMenus_ = {emulationMenu, onlineMenu, settingsMenu, debugMenu_};
     updateVideoActions();
     QMenu* helpMenu = menuBar()->addMenu(Localization::text(QStringLiteral("&Справка")));
@@ -1433,6 +1453,10 @@ void MainWindow::applyDebugMasks() {
 }
 
 void MainWindow::updateDebugDialogs() {
+    if (debugMemoryAction_)
+        debugMemoryAction_->setEnabled(session_.hasGame() && !loading_ &&
+                                       !videoExporting_ && !achievementsHardcore_);
+    scheduleInspection();
     if (debugMenu_) debugMenu_->menuAction()->setVisible(
         debugVideoAvailable_ || debugAudioAvailable_);
     if (debugGraphicsAction_) {
@@ -1454,6 +1478,13 @@ void MainWindow::updateDebugDialogs() {
 void MainWindow::showDebugGraphics() {
     if (!debugGraphicsDialog_) {
         debugGraphicsDialog_ = new DebugGraphicsDialog(this);
+        connect(debugGraphicsDialog_, &DebugGraphicsDialog::inspectionChanged,
+                this, &MainWindow::scheduleInspection);
+        connect(debugGraphicsDialog_, &DebugGraphicsDialog::memoryRequested,
+                this, [this](quint32 domain, quint32 offset) {
+            showDebugMemory();
+            debugMemoryDialog_->navigateTo(domain,offset);
+        });
         connect(debugGraphicsDialog_, &DebugGraphicsDialog::maskChanged, this,
                 [this](quint32 disabled) {
             if (loading_) return;
@@ -1477,6 +1508,8 @@ void MainWindow::showDebugGraphics() {
 void MainWindow::showDebugAudio() {
     if (!debugAudioDialog_) {
         debugAudioDialog_ = new DebugAudioDialog(this);
+        connect(debugAudioDialog_, &DebugAudioDialog::inspectionChanged,
+                this, &MainWindow::scheduleInspection);
         connect(debugAudioDialog_, &DebugAudioDialog::maskChanged, this,
                 [this](quint64 disabled) {
             if (loading_) return;
@@ -1495,6 +1528,62 @@ void MainWindow::showDebugAudio() {
     debugAudioDialog_->show();
     debugAudioDialog_->raise();
     debugAudioDialog_->activateWindow();
+}
+
+void MainWindow::showDebugMemory() {
+    if (!debugMemoryDialog_) {
+        debugMemoryDialog_ = new DebugMemoryDialog(this);
+        connect(debugMemoryDialog_, &DebugMemoryDialog::inspectionChanged,
+                this, &MainWindow::scheduleInspection);
+    }
+    debugMemoryDialog_->show();
+    debugMemoryDialog_->raise();
+    debugMemoryDialog_->activateWindow();
+    scheduleInspection();
+}
+
+void MainWindow::scheduleInspection() {
+    if (!inspectionTimer_ || inspectionRefreshQueued_) return;
+    inspectionRefreshQueued_ = true;
+    ++inspectionSerial_; // Reject queued data immediately when context/selection changes.
+    QTimer::singleShot(0,this,[this] {
+        inspectionRefreshQueued_ = false;
+        refreshInspection();
+    });
+}
+
+void MainWindow::refreshInspection() {
+    DebugInspectionRequest request;
+    if (debugMemoryDialog_ && debugMemoryDialog_->isVisible())
+        request = debugMemoryDialog_->request();
+    if (debugGraphicsDialog_ && debugGraphicsDialog_->isVisible())
+        request.parts |= debugGraphicsDialog_->request().parts;
+    if (debugAudioDialog_ && debugAudioDialog_->isVisible())
+        request.parts |= debugAudioDialog_->request().parts;
+    const bool blocked = !session_.hasGame() || loading_ || videoExporting_ || achievementsHardcore_;
+    if (blocked || !request.parts) {
+        inspectionTimer_->stop();
+        if (inspectionActive_) {
+            ++inspectionSerial_;
+            session_.requestInspection({});
+            inspectionActive_ = false;
+        }
+        if (blocked) {
+            DebugInspectionSnapshot empty;
+            empty.status = Localization::text(achievementsHardcore_
+                ? QStringLiteral("Просмотр состояния недоступен в Hardcore.")
+                : videoExporting_ ? QStringLiteral("Просмотр состояния недоступен при экспорте видео.")
+                : loading_ ? QStringLiteral("Загрузка…") : QStringLiteral("Игра не загружена"));
+            if (debugMemoryDialog_) debugMemoryDialog_->setSnapshot(empty);
+            if (debugGraphicsDialog_) debugGraphicsDialog_->setSnapshot(empty);
+            if (debugAudioDialog_) debugAudioDialog_->setSnapshot(empty);
+        }
+        return;
+    }
+    request.serial = ++inspectionSerial_;
+    inspectionActive_ = true;
+    session_.requestInspection(request);
+    if (!inspectionTimer_->isActive()) inspectionTimer_->start();
 }
 
 bool MainWindow::applyShaderPreset(const QString& path, int blarggFilter) {
@@ -3296,7 +3385,7 @@ void MainWindow::updateInputEnabled() {
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
     bool debugWindowActive = false;
     for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
-        if (active == debugGraphicsDialog_ || active == debugAudioDialog_) {
+        if (active == debugGraphicsDialog_ || active == debugAudioDialog_ || active == debugMemoryDialog_) {
             debugWindowActive = true;
             break;
         }

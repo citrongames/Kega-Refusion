@@ -37,6 +37,7 @@ set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
+    src/core/DebugInspection.cpp src/core/DebugInspection.h src/core/DebugInspectionAbi.h
     src/core/CartridgeProfile.h
     src/core/Cheats.cpp src/core/Cheats.h
     src/core/CheatImport.cpp src/core/CheatImport.h
@@ -131,6 +132,7 @@ add_executable(KegaRefusion WIN32
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
+    src/ui/DebugInspectorWidgets.cpp src/ui/DebugInspectorWidgets.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(KegaRefusion PRIVATE src/ui/LinuxDesktopEntry.cpp src/ui/LinuxDesktopEntry.h)
@@ -360,6 +362,17 @@ if(BUILD_TESTING)
     target_link_libraries(speed_benchmark PRIVATE core_host)
     add_executable(rewind_benchmark tools/rewind-benchmark.cpp)
     target_link_libraries(rewind_benchmark PRIVATE core_host)
+    add_executable(inspection_view_tests tests/inspection_view_tests.cpp
+        src/ui/DebugInspectorWidgets.cpp src/ui/DebugInspectorWidgets.h
+        src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h)
+    target_include_directories(inspection_view_tests PRIVATE src)
+    target_link_libraries(inspection_view_tests PRIVATE Qt6::Widgets localization)
+    add_test(NAME inspection_view_tests COMMAND inspection_view_tests)
+    set_tests_properties(inspection_view_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_executable(inspection_core_tests tests/inspection_core_tests.cpp)
+    target_link_libraries(inspection_core_tests PRIVATE core_host)
+    add_executable(inspection_session_tests tests/inspection_session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
+    target_link_libraries(inspection_session_tests PRIVATE core_host)
     add_executable(debug_fm_tests tests/debug_fm_tests.cpp)
     target_link_libraries(debug_fm_tests PRIVATE core_host)
     add_executable(debug_controls_tests tests/debug_controls_tests.cpp)
@@ -376,6 +389,8 @@ if(BUILD_TESTING)
     target_link_libraries(session_tests PRIVATE core_host Qt6::Core)
     set(KEGA_TEST_CORE "" CACHE FILEPATH "Genesis Plus GX libretro binary for integration tests")
     if(KEGA_TEST_CORE)
+        add_test(NAME inspection_core COMMAND inspection_core_tests "${KEGA_TEST_CORE}")
+        add_test(NAME inspection_session COMMAND inspection_session_tests "${KEGA_TEST_CORE}")
         add_test(NAME video_ui COMMAND video_ui_tests "${CMAKE_SOURCE_DIR}" "${KEGA_TEST_CORE}")
         set_tests_properties(video_ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
         find_program(KEGA_FFMPEG_EXECUTABLE ffmpeg)

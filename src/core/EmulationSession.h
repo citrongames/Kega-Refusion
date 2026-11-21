@@ -1,5 +1,6 @@
 #pragma once
 #include "ExpansionMode.h"
+#include "DebugInspection.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -37,6 +38,8 @@ public:
     void setRegion(int region);
     void setBlarggFilter(int filter);
     void setGameGearLcd(bool enabled);
+    void requestInspection(const DebugInspectionRequest& request);
+    bool takeInspection(DebugInspectionSnapshot& snapshot);
     void setDebugMasks(quint32 video, quint64 audio);
     void setDebugBackdrop(quint32 rgb);
     void setDebugAudioGain(unsigned channel, unsigned percent);
@@ -171,6 +174,7 @@ signals:
     void gameClosed();
     void masterSystemChanged(bool masterSystem);
     void gameGearChanged(bool gameGear);
+    void inspectionReady();
     void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
     void discStateChanged(const QStringList& paths, int index, bool ejected, bool megaLd);
     void pausedChanged(bool paused);
@@ -212,7 +216,11 @@ private:
     void publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {},
                       const QRectF& inputViewport = {});
     QString corePath_, dataPath_;
-    std::mutex mutex_, videoMutex_;
+    std::mutex mutex_, videoMutex_, inspectionMutex_;
+    DebugInspectionRequest inspectionRequest_;
+    DebugInspectionSnapshot inspectionSnapshot_;
+    std::atomic_bool inspectionRequested_{false};
+    bool inspectionSnapshotPending_ = false;
     QImage latestFrame_, latestSpriteOwnership_;
     QRectF latestInputViewport_;
     std::atomic_bool spriteOwnershipEnabled_{false};
