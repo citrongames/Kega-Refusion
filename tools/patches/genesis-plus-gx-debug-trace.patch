@@ -1,0 +1,464 @@
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -156,6 +156,7 @@
+ static bool is_running = 0;
+ #include "../core/kegainspect/libretro.inc"
+ #include "../core/kegadebug/libretro.inc"
++#include "../core/kegatrace/libretro.inc"
+ static bool restart_eq = false;
+ static uint8_t temp[0x10000];
+ static int16 soundbuffer[3068];
+@@ -4235,6 +4236,7 @@
+ 
+ bool retro_load_game(const struct retro_game_info *info)
+ {
++   kr_trace_detach();
+    kr_debug_detach();
+    kr_inspect_content = 0;
+    firecore_close();
+@@ -4571,6 +4573,7 @@
+ 
+ void retro_unload_game(void) 
+ {
++   kr_trace_detach();
+    kr_debug_detach();
+    kr_inspect_content = 0;
+    firecore_close();
+@@ -4721,6 +4724,7 @@
+ 
+ void retro_deinit(void)
+ {
++   kr_trace_detach();
+    kr_debug_detach();
+    kr_inspect_content = 0;
+    firecore_close();
+diff --git a/core/m68k/m68kcpu.h b/core/m68k/m68kcpu.h
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -539,6 +539,7 @@
+ 
+ /* Map PC-relative reads */
+ #include "../kegadebug/hooks.h"
++#include "../kegatrace/hooks.h"
+ 
+ /* This interpreter header is compiled once per CPU. A CD transaction that
+  * holds /DTACK is retried and its placeholder bus value is not an access. */
+@@ -1478,6 +1479,9 @@
+ 
+   /* Always use the autovectors. */
+   vector = EXCEPTION_INTERRUPT_AUTOVECTOR+int_level;
++  if (UNLIKELY(kr_trace_filters & KR_TRACE_IRQ))
++    kr_trace_hardware(KR_TRACE_IRQ_ACCEPT, KR_TRACE_CPU, KR_DEBUG_68K_CPU,
++                      m68ki_cpu.cycles, REG_PC & 0xffffff, vector, int_level, 0);
+ 
+   /* Start exception processing */
+   sr = m68ki_init_exception();
+diff --git a/core/m68k/m68kcpu.c b/core/m68k/m68kcpu.c
+--- a/core/m68k/m68kcpu.c
++++ b/core/m68k/m68kcpu.c
+@@ -254,6 +254,8 @@
+       m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
+       m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
+       REG_IR = m68ki_read_imm_16();
++      if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_M68K))
++        kr_trace_exec(KR_DEBUG_M68K, REG_PC - 2, REG_IR, 2, m68k.cycles);
+       m68ki_instruction_jump_table[REG_IR]();
+       m68ki_exception_if_trace() /* auto-disable (see m68kcpu.h) */
+       irq_latency = 0;
+@@ -367,6 +369,8 @@
+       continue;
+     }
+     REG_IR = m68ki_read_imm_16();
++    if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_M68K))
++      kr_trace_exec(KR_DEBUG_M68K, REG_PC - 2, REG_IR, 2, m68k.cycles);
+ 
+     /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
+     if (m68k.cycles >= m68k.refresh_cycles)
+@@ -540,6 +544,8 @@
+       continue;
+     }
+     REG_IR = m68ki_read_imm_16();
++    if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_M68K))
++      kr_trace_exec(KR_DEBUG_M68K, REG_PC - 2, REG_IR, 2, m68k.cycles);
+ 
+     /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
+     if (m68k.cycles >= m68k.refresh_cycles)
+diff --git a/core/m68k/s68kcpu.c b/core/m68k/s68kcpu.c
+--- a/core/m68k/s68kcpu.c
++++ b/core/m68k/s68kcpu.c
+@@ -286,6 +286,8 @@
+ 
+     /* Decode next instruction */
+     REG_IR = m68ki_read_imm_16();
++    if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_SUB68K))
++      kr_trace_exec(KR_DEBUG_SUB68K, REG_PC - 2, REG_IR, 2, s68k.cycles);
+ 
+     /* Execute instruction */
+     m68ki_instruction_jump_table[REG_IR]();
+@@ -620,6 +622,8 @@
+ 
+     /* Decode next instruction */
+     REG_IR = m68ki_read_imm_16();
++    if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_SUB68K))
++      kr_trace_exec(KR_DEBUG_SUB68K, REG_PC - 2, REG_IR, 2, s68k.cycles);
+ 
+     /* Execute instruction */
+     m68ki_instruction_jump_table[REG_IR]();
+diff --git a/core/z80/z80.c b/core/z80/z80.c
+--- a/core/z80/z80.c
++++ b/core/z80/z80.c
+@@ -129,6 +129,7 @@
+ #include "shared.h"
+ #include "z80.h"
+ #include "../kegadebug/hooks.h"
++#include "../kegatrace/hooks.h"
+ 
+ /* execute main opcodes inside a big switch statement */
+ #define BIG_SWITCH 1
+@@ -3252,6 +3253,8 @@
+   LEAVE_HALT;
+ 
+   /* Clear both interrupt flip flops */
++  const unsigned trace_pc = PCD;
++  const int trace_cycles = Z80.cycles;
+   IFF1 = IFF2 = 0;
+ 
+   LOG(("Z80 #%d single int. irq_vector $%02x\n", cpu_getactivecpu(), irq_vector));
+@@ -3309,6 +3312,9 @@
+     }
+   }
+   WZ=PCD;
++  if (UNLIKELY(kr_trace_filters & KR_TRACE_IRQ))
++    kr_trace_hardware(KR_TRACE_IRQ_ACCEPT, KR_TRACE_CPU, KR_DEBUG_Z80,
++                      trace_cycles, trace_pc, PCD, IM, 0);
+ }
+ 
+ /****************************************************************************
+@@ -3432,6 +3438,14 @@
+  * Run until given cycle count 
+  ****************************************************************************/
+ 
++INLINE UINT8 kr_trace_z80_opcode(void)
++{
++  UINT8 opcode = ROP();
++  if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_Z80) && !HALT)
++    kr_trace_exec(KR_DEBUG_Z80, (uint16_t)(PCD - 1), opcode, 1, Z80.cycles);
++  return opcode;
++}
++
+ static int kr_debug_z80_before_opcode(void)
+ {
+   kr_debug_notify(KR_DEBUG_Z80, KR_DEBUG_EXEC, PCD, 0, 0);
+@@ -3473,7 +3487,7 @@
+         continue;
+       Z80.after_ei = FALSE;
+       R++;
+-      EXEC_INLINE(op,ROP());
++      EXEC_INLINE(op,kr_trace_z80_opcode());
+     }
+     return;
+   }
+@@ -3493,7 +3507,7 @@
+       continue;
+     Z80.after_ei = FALSE;
+     R++;
+-    EXEC_INLINE(op,ROP());
++    EXEC_INLINE(op,kr_trace_z80_opcode());
+   }
+ } 
+ 
+@@ -3530,6 +3544,9 @@
+   {
+     LOG(("Z80 #%d take NMI\n", cpu_getactivecpu()));
+     LEAVE_HALT;      /* Check if processor was halted */
++    if (UNLIKELY(kr_trace_filters & KR_TRACE_IRQ))
++      kr_trace_hardware(KR_TRACE_IRQ_ACCEPT, KR_TRACE_CPU, KR_DEBUG_Z80,
++                        Z80.cycles, PCD, 0x66, 0x100, 0);
+ 
+     IFF1 = 0;
+     PUSH( pc );
+diff --git a/core/cart_hw/svp/ssp16.c b/core/cart_hw/svp/ssp16.c
+--- a/core/cart_hw/svp/ssp16.c
++++ b/core/cart_hw/svp/ssp16.c
+@@ -344,6 +344,7 @@
+ static int g_cycles;
+ 
+ #include "../../kegadebug/hooks.h"
++#include "../../kegatrace/hooks.h"
+ 
+ /* The live PC is a native interpreter pointer while a slice runs. Keep the
+  * debugger view separate from the SSP register layout used by save states. */
+@@ -1111,6 +1112,9 @@
+     if (UNLIKELY(kr_debug_ssp_mask & KR_DEBUG_EXEC))
+       kr_debug_ssp_before_opcode(cycles);
+     op = *PC++;
++    if (UNLIKELY(kr_trace_cpu_mask & KR_DEBUG_SSP1601))
++      kr_trace_exec(KR_DEBUG_SSP1601, (uint16_t)(GET_PC() - 1), (uint16_t)op, 2,
++                    (mcycles_vdp / MCYCLES_PER_LINE) * (int64_t)SVP_cycles + cycles - g_cycles);
+ #ifdef USE_DEBUGGER
+     debug(GET_PC()-1, op);
+ #endif
+diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -40,6 +40,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "kegatrace/hooks.h"
+ #include "hvc.h"
+ #include "firecore.h"
+ 
+@@ -140,6 +141,7 @@
+ static void vdp_z80_data_w_sg(unsigned int data);
+ static void vdp_bus_w(unsigned int data, unsigned int cycles);
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles);
++static void vdp_guest_reg_w(unsigned int r, unsigned int d, unsigned int cycles, unsigned int cpu);
+ static void vdp_update_md_rendering_mode(unsigned int cycles);
+ static void vdp_firecore_palette_refresh(void);
+ static void vdp_firecore_cram_w(unsigned int data);
+@@ -907,6 +909,12 @@
+   return count;
+ }
+ 
++static void vdp_trace_dma_start(unsigned int cpu, unsigned int cycles)
++{
++  if (UNLIKELY(kr_trace_filters & KR_TRACE_DMA) && dma_length)
++    kr_trace_hardware(KR_TRACE_DMA_START, KR_TRACE_VDP, cpu, cycles,
++                      addr, dma_length, dma_type | ((code & 0xf) << 8), 0);
++}
+ void vdp_dma_update(unsigned int cycles)
+ {
+   int dma_cycles, dma_bytes;
+@@ -1064,6 +1072,10 @@
+     /* Check if DMA is finished */
+     if (!dma_length)
+     {
++      if (UNLIKELY(kr_trace_filters & KR_TRACE_DMA))
++        kr_trace_hardware(KR_TRACE_DMA_END, KR_TRACE_VDP, 0, dma_endCycles,
++                          addr, dma_bytes, dma_type | ((code & 0xf) << 8), 0);
++
+       /* DMA source address registers are incremented during DMA (even DMA Fill) */
+       uint16 end = reg[21] + (reg[22] << 8) + reg[19] + (reg[20] << 8);
+       reg[21] = end & 0xff;
+@@ -1120,7 +1132,7 @@
+       /* Only sprite phase-2 registers need the issuing Z80 timestamp here.
+          Other control/DMA scheduling retains its existing clock. */
+       const unsigned int r = (data >> 8) & 0x1F;
+-      vdp_reg_w(r, data & 0xFF, (r == 5 || r == 12) ? cycles : m68k.cycles);
++      vdp_guest_reg_w(r, data & 0xFF, (r == 5 || r == 12) ? cycles : m68k.cycles, KR_DEBUG_M68K);
+     }
+     else
+     {
+@@ -1184,6 +1196,7 @@
+             dma_src = (reg[22] << 8) | reg[21];
+ 
+             /* Trigger DMA */
++            vdp_trace_dma_start(KR_DEBUG_M68K, m68k.cycles);
+             vdp_dma_update(m68k.cycles);
+             break;
+           }
+@@ -1217,6 +1230,7 @@
+             }
+ 
+             /* Trigger DMA */
++            vdp_trace_dma_start(KR_DEBUG_M68K, m68k.cycles);
+             vdp_dma_update(m68k.cycles);
+             break;
+           }
+@@ -1273,7 +1287,7 @@
+       if ((code & 0x03) == 0x02)
+       {
+         /* VDP register write */
+-        vdp_reg_w(data & 0x1F, addr_latch, Z80.cycles);
++        vdp_guest_reg_w(data & 0x1F, addr_latch, Z80.cycles, KR_DEBUG_Z80);
+ 
+         /* Clear pending flag  */
+         pending = 0;
+@@ -1357,6 +1371,7 @@
+               dma_src = (reg[22] << 8) | reg[21];
+ 
+               /* Trigger DMA */
++              vdp_trace_dma_start(KR_DEBUG_Z80, Z80.cycles);
+               vdp_dma_update(Z80.cycles);
+               break;
+             }
+@@ -1413,7 +1428,7 @@
+       int mode, prev = (reg[0] & 0x06) | (reg[1] & 0x18);
+ 
+       /* Write VDP register 0-15 */
+-      vdp_reg_w(data & 0x0F, addr_latch, Z80.cycles);
++      vdp_guest_reg_w(data & 0x0F, addr_latch, Z80.cycles, KR_DEBUG_Z80);
+ 
+       /* Check VDP mode changes */
+       mode = (reg[0] & 0x06) | (reg[1] & 0x18);
+@@ -1543,7 +1558,7 @@
+       data &= 0x07;
+ 
+       /* Write VDP register */
+-      vdp_reg_w(data, addr_latch, Z80.cycles);
++      vdp_guest_reg_w(data, addr_latch, Z80.cycles, KR_DEBUG_Z80);
+  
+       /* Check VDP mode changes */
+       if (data < 2)
+@@ -2011,6 +2026,11 @@
+ 
+ static void vdp_reg_w(unsigned int r, unsigned int d, unsigned int cycles)
+ {
++  vdp_guest_reg_w(r, d, cycles, 0);
++}
++
++static void vdp_guest_reg_w(unsigned int r, unsigned int d, unsigned int cycles, unsigned int cpu)
++{
+ #ifdef LOGVDP
+   error("[%d(%d)][%d(%d)] VDP register %d write -> 0x%x (%x)\n", v_counter, (v_counter + (cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, cycles, cycles%MCYCLES_PER_LINE, r, d, m68k_get_reg(M68K_REG_PC));
+ #endif
+@@ -2021,6 +2041,8 @@
+     return;
+   }
+ 
++  const int trace = cpu && UNLIKELY(kr_trace_filters & KR_TRACE_VIDEO);
++  const unsigned trace_register = r, previous = trace ? reg[r] : 0;
+   switch(r)
+   {
+     case 0x18: /* Firecore graphics / bitmap enable and per-layer palette bank. */
+@@ -2739,6 +2761,8 @@
+       break;
+     }
+   }
++  if (trace)
++    kr_trace_hardware(KR_TRACE_VDP_WRITE, KR_TRACE_VDP, cpu, cycles, trace_register, reg[trace_register], previous, 1);
+ }
+ 
+ /*--------------------------------------------------------------------------*/
+@@ -3115,6 +3139,7 @@
+             if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+     /* Trigger DMA */
++    vdp_trace_dma_start(KR_DEBUG_M68K, m68k.cycles);
+     vdp_dma_update(m68k.cycles);
+ 
+     /* Clear DMA Fill pending flag */
+@@ -3448,6 +3473,7 @@
+             if (KR_FIRECORE_VDP_ENABLED) dma_length <<= 1;
+ 
+     /* Trigger DMA */
++    vdp_trace_dma_start(KR_DEBUG_Z80, Z80.cycles);
+     vdp_dma_update(Z80.cycles);
+   }
+ }
+diff --git a/core/cd_hw/scd.c b/core/cd_hw/scd.c
+--- a/core/cd_hw/scd.c
++++ b/core/cd_hw/scd.c
+@@ -37,6 +37,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "../kegatrace/hooks.h"
+ #include "megald/integration.h"
+ 
+ extern int8 reset_do_not_clear_buffers;
+@@ -1546,6 +1547,9 @@
+     {
+       scd.regs[0x4a>>1].w = 0;
+       cdd_process();
++      if (UNLIKELY(kr_trace_filters & KR_TRACE_DISC))
++        kr_trace_hardware(KR_TRACE_DISC_COMMAND, KR_TRACE_CD, KR_DEBUG_SUB68K, s68k.cycles,
++                          0xff804a, scd.regs[0x42 >> 1].byte.h & 0x0f, (uint32_t)cdd.lba, 0);
+ #ifdef LOG_CDD
+       error("CDD command: %02x %02x %02x %02x %02x %02x %02x %02x\n",scd.regs[0x42>>1].byte.h, scd.regs[0x42>>1].byte.l, scd.regs[0x44>>1].byte.h, scd.regs[0x44>>1].byte.l, scd.regs[0x46>>1].byte.h, scd.regs[0x46>>1].byte.l, scd.regs[0x48>>1].byte.h, scd.regs[0x48>>1].byte.l);
+       error("CDD status:  %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",scd.regs[0x38>>1].byte.h, scd.regs[0x38>>1].byte.l, scd.regs[0x3a>>1].byte.h, scd.regs[0x3a>>1].byte.l, scd.regs[0x3c>>1].byte.h, scd.regs[0x3c>>1].byte.l, scd.regs[0x3e>>1].byte.h, scd.regs[0x3e>>1].byte.l, scd.regs[0x40>>1].byte.h, scd.regs[0x40>>1].byte.l);
+diff --git a/core/io_ctrl.c b/core/io_ctrl.c
+--- a/core/io_ctrl.c
++++ b/core/io_ctrl.c
+@@ -40,6 +40,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "kegatrace/hooks.h"
+ #include "gamepad.h"
+ #include "lightgun.h"
+ #include "mouse.h"
+@@ -77,6 +78,9 @@
+   io_link_yield(io_link_user, cycles);
+   th = io_link_peer_th();
+   falling = io_link_previous_th && !th;
++  if (UNLIKELY(kr_trace_filters & KR_TRACE_LINK) && th != io_link_previous_th)
++    kr_trace_hardware(KR_TRACE_LINK_EDGE, KR_TRACE_CABLE, KR_DEBUG_M68K, cycles,
++                      0xa10005, th, io_link_previous_th, 1);
+   io_link_previous_th = th;
+   if (falling && (io_reg[5] & 0x80) && !(io_reg[5] & 0x40) && (reg[11] & 8))
+   {
+diff --git a/core/gg_link.c b/core/gg_link.c
+--- a/core/gg_link.c
++++ b/core/gg_link.c
+@@ -5,6 +5,7 @@
+  * The host owns isolated modules and instruction-boundary cooperative clocks.
+  */
+ #include "shared.h"
++#include "kegatrace/hooks.h"
+ 
+ void (*gg_link_yield)(void *, unsigned int) = 0;
+ static void *gg_user;
+@@ -83,6 +84,9 @@
+   if (cycles >= io_link_deadline) gg_link_yield(gg_user, cycles);
+   pins = gg_peer_pins();
+   th = (pins >> 6) & 1;
++  if (UNLIKELY(kr_trace_filters & KR_TRACE_LINK) && th != gg.previous_th)
++    kr_trace_hardware(KR_TRACE_LINK_EDGE, KR_TRACE_CABLE, KR_DEBUG_Z80, cycles,
++                      1, th, gg.previous_th, 1);
+   if (gg.previous_th && !th && (io_reg[2] & 0xc0) == 0x40) gg.nmi = 1;
+   gg.previous_th = th;
+   rx = (pins >> 5) & 1;
+@@ -110,6 +114,9 @@
+          * There is no separate UART overrun flag on the GG. */
+         io_reg[4] = gg.rx_shift;
+         io_reg[5] = (io_reg[5] & ~4) | 2 | (rx ? 0 : 4);
++        if (UNLIKELY(kr_trace_filters & KR_TRACE_LINK))
++          kr_trace_hardware(KR_TRACE_LINK_EDGE, KR_TRACE_CABLE, KR_DEBUG_Z80,
++                            gg.rx_next - gg.rx_period, 4, gg.rx_shift, !rx, 1);
+         gg.rx_active = 0;
+         gg.rx_next = 0;
+         if (io_reg[5] & 8) gg.nmi = 1;
+diff --git a/core/cart_hw/md_cart.c b/core/cart_hw/md_cart.c
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -42,6 +42,7 @@
+  ****************************************************************************************/
+ 
+ #include "shared.h"
++#include "../kegatrace/hooks.h"
+ #include "link_state.h"
+ #include "eeprom_93c.h"
+ #include "eeprom_i2c.h"
+@@ -835,7 +836,13 @@
+ {
+   const uint16 changed = firecore_gpio ^ value;
+   firecore_gpio = value;
+-  if (changed & 0x20) firecore_map(firecore_offset);
++  if (changed & 0x20)
++  {
++    firecore_map(firecore_offset);
++    if (UNLIKELY(kr_trace_filters & KR_TRACE_MAPPER))
++      kr_trace_hardware(KR_TRACE_BANK_CHANGE, KR_TRACE_CART, KR_DEBUG_M68K, m68k.cycles,
++                        0xa10104, firecore_offset, !(firecore_gpio & 0x20), 0);
++  }
+ }
+ 
+ static unsigned int firecore_io_read(unsigned int address)
+@@ -878,7 +885,13 @@
+     default: return;
+   }
+   offset &= firecore_chip_mask;
+-  if (offset != firecore_offset) firecore_map(offset);
++  if (offset != firecore_offset)
++  {
++    firecore_map(offset);
++    if (UNLIKELY(kr_trace_filters & KR_TRACE_MAPPER))
++      kr_trace_hardware(KR_TRACE_BANK_CHANGE, KR_TRACE_CART, KR_DEBUG_M68K, m68k.cycles,
++                        address & 0xffffff, firecore_offset, !(firecore_gpio & 0x20), 0);
++  }
+ }
+ 
+ void md_cart_firecore_rom_changed(void)

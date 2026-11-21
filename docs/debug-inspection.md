@@ -30,8 +30,8 @@ names and register notation.
 
 Images show captured table and framebuffer storage at the snapshot time.
 Sprite order follows the captured table and links. Raster history, scanline
-sprite evaluation, pixel provenance and a hardware event timeline remain
-later roadmap work.
+sprite evaluation and pixel provenance remain later roadmap work. The separate
+[Trace window](debug-tracing.md) records implemented hardware events.
 
 Firecore six-bit tiles and RGB888 palette are supported. Bitmap/YUV and
 interlaced six-bit tile previews explicitly report unsupported modes;
@@ -56,7 +56,8 @@ remain read-only. The available actions follow actual hardware and mode.
 
 The [CPU debugger](debug-execution.md) provides logical CPU addresses,
 registers, disassembly and execution controls. Full-domain search, persistent
-watch lists and trace capture remain [later work](debugger-plan.md).
+watch lists remain [later work](debugger-plan.md); [trace capture](debug-tracing.md)
+is available separately.
 
 ## Threading and resource limits
 
@@ -93,3 +94,8 @@ See the [Phase 1 verification](debugger-phase1-verification.md) for snapshot
 coverage and performance measurements. The [roadmap](debugger-plan.md)
 tracks verification of the Phase 3 memory and Link Cable extensions.
 Windows interactive testing is performed by the user.
+
+The memory page uses a bounded table model with fixed font-derived columns.
+Unchanged pages send no model notifications; changed bytes are updated in a
+single range. Selection and scrolling are retained. Hidden viewers do not
+request snapshots, and inactive graphics/CPU tabs avoid unnecessary rendering.

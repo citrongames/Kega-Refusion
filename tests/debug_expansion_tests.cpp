@@ -101,8 +101,8 @@ QByteArray mdLinkRom() {
     code.word(0x0800); code.word(3);            // BTST #3,D0; Right selects receiver.
     const auto receiverJump = code.pc;
     code.word(0x6700);
-    code.write(0x13fc, 1, 0xa1000b);            // Port B D0 output.
-    code.write(0x13fc, 0, 0xa10005);            // Drive D0 low to the other console.
+    code.write(0x13fc, 0x21, 0xa1000b);         // Port B D0 and crossed TR output.
+    code.write(0x13fc, 0, 0xa10005);            // Drive D0 and TR low to the other console.
     code.word(0x7031);                          // Sender marker.
     const auto senderJump = code.pc;
     code.word(0x6000);
@@ -142,13 +142,15 @@ QByteArray ggLinkRom() {
     bytes({0xdb, 0, 0xcb, 0x7f});               // IN A,(0); BIT 7,A: Start selects receiver.
     const auto receiverJump = pc;
     bytes({0x28, 0});                          // JR Z,receiver
-    out(1, 0); out(2, 0x7e);                  // Drive PC0 low.
+    out(1, 0); out(2, 0xfe);                  // Drive PC0 low, with NMI disabled.
     bytes({0x3e, 0x31});                       // Sender marker.
     const auto senderJump = pc;
     bytes({0x18, 0});                          // JR store
 
     branch(receiverJump, pc);
-    out(2, 0x7f);                              // Set all pins as inputs.
+    out(1, 0x40); out(2, 0xbf);                // Drive TH high toward A, with NMI disabled.
+    bytes({0x06, 0x40, 0x10, 0xfe});           // Keep TH high across several scanlines.
+    out(1, 0);                                 // Drop TH while still sampling crossed PC0.
     const auto poll = pc;
     bytes({0xdb, 1, 0xcb, 0x57});               // IN A,(1); BIT 2,A (peer PC0).
     const auto retry = pc;
@@ -181,7 +183,9 @@ QByteArray cdRom() {
         offset += 2;
     }
     offset = subHandler;
-    for (quint16 value : {0x5279, 0x00ff, 0x8028, 0x4e73}) { // Count IRQ2; RTE.
+    for (quint16 value : {0x33fc, 0, 0x00ff, 0x8042,    // CDD command 0 (Get Drive Status).
+                          0x33fc, 0, 0x00ff, 0x804a,    // Commit command.
+                          0x5279, 0x00ff, 0x8028, 0x4e73}) { // Count IRQ2; RTE.
         subWord(offset, value);
         offset += 2;
     }
@@ -346,6 +350,27 @@ void command(LibretroHost& host, DebuggerCommand::Kind kind, unsigned cpu,
     const bool accepted = host.debuggerCommand(request, error);
     require(accepted, QStringLiteral("Debugger command %1, target %2 — %3")
                           .arg(unsigned(kind)).arg(cpu).arg(error));
+}
+
+void trace(LibretroHost& host, bool start, unsigned cpu = 0,
+           unsigned filters = KR_TRACE_INSTRUCTION) {
+    DebugTraceCommand request;
+    request.kind = start ? DebugTraceCommand::Start : DebugTraceCommand::Stop;
+    request.config.cpu = cpu;
+    request.config.filters = filters;
+    request.config.memoryMiB = 1;
+    QString error;
+    const bool accepted = host.traceCommand(request, error);
+    require(accepted, error);
+}
+
+bool traced(const DebugTraceSnapshot& snapshot, unsigned cpu, unsigned kind,
+            quint32 address, quint32 value, unsigned instance = 0) {
+    return std::any_of(snapshot.rows.begin(), snapshot.rows.end(), [&](const auto& row) {
+        const auto& item = row.record.native;
+        return row.record.instance == instance && item.cpu == cpu && item.kind == kind &&
+               item.address == address && item.value == value;
+    });
 }
 
 kr_debug_target target(const DebuggerSnapshot& snapshot, unsigned id) {
@@ -517,6 +542,7 @@ void testSvp(const QString& core, const QTemporaryDir& temp) {
     LibretroHost host(core, data + "/debug");
     setup(host, path, data + "/debug", options);
 
+    trace(host, true, KR_DEBUG_SSP1601);
     command(host, DebuggerCommand::Configure, KR_DEBUG_SSP1601, {
         point(1, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpEntry),
         point(2, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker),
@@ -530,6 +556,13 @@ void testSvp(const QString& core, const QTemporaryDir& temp) {
             first.instructions.front().length == 4, "SSP LDI disassembly includes its immediate word");
     command(host, DebuggerCommand::StepInto, KR_DEBUG_SSP1601);
     timeline.stop(host, KR_DEBUG_SSP1601, KR_DEBUG_EXEC, svpLoop);
+    const auto sspTrace = host.traceSnapshot();
+    require(traced(sspTrace, KR_DEBUG_SSP1601, KR_TRACE_EXEC, svpEntry, 0x08b0),
+            "Trace logs the executed SSP opcode at its word address");
+    const auto& lastSsp = sspTrace.rows.back().record.native;
+    require((lastSsp.flags & KR_TRACE_TIME_QUANTIZED) && lastSsp.width == 2,
+            "SVP trace distinguishes slice-quantized timing and fetched word width");
+    trace(host, false);
     command(host, DebuggerCommand::Continue, KR_DEBUG_SSP1601);
     const auto marker = timeline.stop(host, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker);
     require(marker.value == svpMarker && marker.accessSize == 2, "68000 observed the SSP mailbox write");
@@ -551,6 +584,7 @@ void testLink(const QString& core, const QTemporaryDir& temp, bool gg) {
     Timeline timeline(core, path, data, options, 4);
     LibretroHost host(core, data + "/debug");
     setup(host, path, data + "/debug", options);
+    trace(host, true, 0, KR_TRACE_LINK);
     command(host, DebuggerCommand::Configure, peer, {point(1, peer, KR_DEBUG_WRITE, address)});
     const auto received = timeline.stop(host, peer, KR_DEBUG_WRITE, address);
     const auto first = target(received, native);
@@ -562,6 +596,9 @@ void testLink(const QString& core, const QTemporaryDir& temp, bool gg) {
     const quint32 loop = cpu(received, peer).pc;
     command(host, DebuggerCommand::Continue, peer);
     timeline.finish(host);
+    require(traced(host.traceSnapshot(), native, KR_TRACE_LINK_EDGE, gg ? 1 : 0xa10005, 0, gg ? 0 : 1),
+            "The receiving console traces the actual falling edge on the cable");
+    trace(host, false);
 
     // Once a paired frame is suspended, disabling the cable must complete both
     // workers and release the peer before execution can begin on A alone.
@@ -593,6 +630,7 @@ void testCd(const QString& core, const QTemporaryDir& temp, const QString& biosD
     Timeline timeline(core, path, data, options, 6);
     LibretroHost host(core, data + "/debug");
     setup(host, path, data + "/debug", options);
+    trace(host, true, KR_DEBUG_SUB68K, KR_TRACE_INSTRUCTION | KR_TRACE_IRQ | KR_TRACE_DISC);
     command(host, DebuggerCommand::Configure, KR_DEBUG_SUB68K, {
         point(1, KR_DEBUG_SUB68K, KR_DEBUG_EXEC, subHandler),
         point(2, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker),
@@ -603,6 +641,15 @@ void testCd(const QString& core, const QTemporaryDir& temp, const QString& biosD
             (reg(irq, KR_DEBUG_SUB68K, "SR") & 0x2700) == 0x2200 &&
             irq.stack.startsWith(QByteArray::fromHex("2000")),
             "Sega CD IRQ2 stops on the separate S68K exception stack");
+    command(host, DebuggerCommand::StepInto, KR_DEBUG_SUB68K);
+    timeline.stop(host, KR_DEBUG_SUB68K, KR_DEBUG_EXEC, subHandler + 8);
+    command(host, DebuggerCommand::StepInto, KR_DEBUG_SUB68K);
+    timeline.stop(host, KR_DEBUG_SUB68K, KR_DEBUG_EXEC, subHandler + 16);
+    const auto subTrace = host.traceSnapshot();
+    require(traced(subTrace, KR_DEBUG_SUB68K, KR_TRACE_EXEC, subHandler, 0x33fc) &&
+            traced(subTrace, KR_DEBUG_SUB68K, KR_TRACE_DISC_COMMAND, 0xff804a, 0),
+            "Sega CD traces the sub-CPU's real opcode and committed CDD status command");
+    trace(host, false);
     command(host, DebuggerCommand::Continue, KR_DEBUG_SUB68K);
     const auto ack = timeline.stop(host, KR_DEBUG_M68K, KR_DEBUG_WRITE, mdMarker);
     require(ack.value == 1 && ack.accessSize == 2, "Main 68000 sees exactly one S68K IRQ acknowledgement");
@@ -630,6 +677,7 @@ void test32x(const QString& core, const QTemporaryDir& temp, const QString& diag
         const auto branch = part.entry + 4;
         const auto delaySlot = part.entry + 6;
         const auto destination = part.entry + 10;
+        trace(host, true, part.cpu);
         command(host, DebuggerCommand::Configure, part.cpu, {
             point(1, part.cpu, KR_DEBUG_EXEC, branch),
             point(2, part.cpu, KR_DEBUG_WRITE, part.marker),
@@ -649,6 +697,11 @@ void test32x(const QString& core, const QTemporaryDir& temp, const QString& diag
         }
         require(reg(stepped, part.cpu, "R0") == part.value,
                 "Branch executes the delay slot once and skips the fall-through instruction");
+        const auto sh2Trace = host.traceSnapshot();
+        require(traced(sh2Trace, part.cpu, KR_TRACE_EXEC, branch, 0xa001) &&
+                traced(sh2Trace, part.cpu, KR_TRACE_EXEC, delaySlot, 0x7001),
+                "Each SH-2 trace retains the actual branch and its separate delay-slot opcode");
+        trace(host, false);
         command(host, DebuggerCommand::Continue, part.cpu);
         const auto marker = timeline.stop(host, part.cpu, KR_DEBUG_WRITE, part.marker);
         require(marker.accessSize == 1 && marker.value == part.value,
@@ -815,10 +868,35 @@ void testRecordingEditPolicy(const QString& core, const QTemporaryDir& temp, con
             "Worker rejects a register edit during recording");
     require(snapshot.partialFrame && snapshot.stopped && !snapshot.canEdit &&
             reg(snapshot, KR_DEBUG_M68K, "D0") == before, "Rejected recording edit preserves suspended registers");
+    DebugTraceCommand traceRequest;
+    traceRequest.kind=DebugTraceCommand::Start;
+    traceRequest.config.cpu=KR_DEBUG_M68K;
+    traceRequest.config.filters=KR_TRACE_INSTRUCTION;
+    traceRequest.config.memoryMiB=1;
+    session.traceCommand(traceRequest);
+    DebugTraceSnapshot traceSnapshot;
+    waitFor([&] { return session.takeTraceSnapshot(traceSnapshot) && traceSnapshot.active; },
+            "Observation trace is allowed during recorded input at a suspended opcode");
     session.stopMovie();
     waitFor([&] { return movieMode == MovieSession::Off || !error.isEmpty(); },
             "Finish recording after rejecting its register edit");
     require(error.isEmpty(), error);
+    traceRequest.kind=DebugTraceCommand::Refresh;
+    session.traceCommand(traceRequest);
+    waitFor([&] { return session.takeTraceSnapshot(traceSnapshot) && traceSnapshot.total; },
+            "Completing the recorded frame produces a trace without extra guest frames");
+    const auto exported=temp.filePath("worker-trace.tsv");
+    traceRequest.kind=DebugTraceCommand::Export;traceRequest.path=exported;
+    session.traceCommand(traceRequest);
+    traceRequest.kind=DebugTraceCommand::Stop;session.traceCommand(traceRequest);
+    waitFor([&] {
+        if(session.takeTraceSnapshot(traceSnapshot) && !traceSnapshot.active && !traceSnapshot.writing) {
+            QFile result(exported);
+            if(result.open(QIODevice::ReadOnly) && result.readAll().endsWith("# complete\n")) return true;
+        }
+        DebugTraceCommand poll;poll.kind=DebugTraceCommand::Refresh;session.traceCommand(poll);
+        return false;
+    }, "Closing immediately after Export preserves the queued file job");
     session.shutdown();
     MovieTape tape;
     const bool opened = tape.load(movie, error);

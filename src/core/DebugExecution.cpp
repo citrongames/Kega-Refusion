@@ -402,6 +402,7 @@ bool LibretroHost::runDebugFrame(bool video, bool audio) {
             spriteOwnership_ = {};
             if (linkPeer_) linkPeer_->spriteOwnership_ = {};
         }
+        if (tracer_) traceBeforeFrame();
         d.renderVideo = video;
         d.captureAudio = audio;
         d.previousPictures[0] = frame_;
@@ -507,6 +508,7 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
             return false;
         }
         ++inspectionGeneration_;
+        traceBoundary(KR_TRACE_REGISTER_EDIT);
         return true;
     }
 

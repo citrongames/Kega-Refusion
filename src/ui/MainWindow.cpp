@@ -1,6 +1,7 @@
 #include "i18n/Localization.h"
 #include "MainWindow.h"
 #include "CpuDebuggerDialog.h"
+#include "TraceDialog.h"
 #include "DebugDialogs.h"
 #include "DebugInspectorWidgets.h"
 #include "AudioOutput.h"
@@ -368,12 +369,14 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         updateGameSpeedActions();
         updateGunPresentation();
         updateCpuDebugger();
+        updateTraceDialog();
         updateInputEnabled();
     });
     connect(&session_, &EmulationSession::networkRoleChanged, this, [this](int) {
         updateGunPresentation();
         updateGameSpeedActions();
         updateCpuDebugger();
+        updateTraceDialog();
     });
     debugAudioGains_.fill(100);
     buildMenus();
@@ -403,6 +406,20 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
             !cpuDebuggerDialog_->isVisible() || !cpuDebuggerBlockedReason().isEmpty()) return;
         if (!snapshot.attached && !snapshot.status.isEmpty()) debuggerTimer_->stop();
         cpuDebuggerDialog_->setSnapshot(snapshot);
+    });
+    traceTimer_ = new QTimer(this);
+    traceTimer_->setInterval(200);
+    connect(traceTimer_, &QTimer::timeout, this, &MainWindow::refreshTraceDialog);
+    connect(&session_, &EmulationSession::traceReady, this, [this] {
+        DebugTraceSnapshot snapshot;
+        if (!session_.takeTraceSnapshot(snapshot)) return;
+        const bool hasRecords = snapshot.total != 0;
+        if (hasRecords != traceHasRecords_) {
+            traceHasRecords_ = hasRecords;
+            updateTraceDialog();
+        }
+        if (traceDialog_ && traceDialog_->isVisible() && traceBlockedReason().isEmpty())
+            traceDialog_->setSnapshot(snapshot);
     });
     refreshCommandShortcuts();
     connect(input_, &InputManager::commandKeysChanged, this, &MainWindow::refreshCommandShortcuts);
@@ -774,6 +791,13 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
 }
 
 MainWindow::~MainWindow() {
+    if (traceTimer_) traceTimer_->stop();
+    if (traceDialog_) {
+        disconnect(traceDialog_, nullptr, this, nullptr);
+        DebugTraceCommand command;
+        command.kind = DebugTraceCommand::Stop;
+        session_.traceCommand(command);
+    }
     if (debuggerTimer_) debuggerTimer_->stop();
     if (cpuDebuggerDialog_) {
         disconnect(cpuDebuggerDialog_, nullptr, this, nullptr);
@@ -1363,6 +1387,10 @@ void MainWindow::buildMenus() {
     cpuDebuggerAction_->setObjectName(QStringLiteral("cpuDebuggerAction"));
     cpuDebuggerAction_->setEnabled(false);
     connect(cpuDebuggerAction_, &QAction::triggered, this, &MainWindow::showCpuDebugger);
+    traceAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Трассировка…")));
+    traceAction_->setObjectName(QStringLiteral("traceAction"));
+    traceAction_->setEnabled(false);
+    connect(traceAction_, &QAction::triggered, this, &MainWindow::showTraceDialog);
     debugGraphicsAction_ = debugMenu_->addAction(Localization::text(QStringLiteral("Графика…")));
     debugGraphicsAction_->setObjectName(QStringLiteral("debugGraphicsAction"));
     connect(debugGraphicsAction_, &QAction::triggered, this, &MainWindow::showDebugGraphics);
@@ -1481,12 +1509,11 @@ void MainWindow::applyDebugMasks() {
 
 void MainWindow::updateDebugDialogs() {
     updateCpuDebugger();
+    updateTraceDialog();
     if (debugMemoryAction_)
         debugMemoryAction_->setEnabled(session_.hasGame() && !loading_ &&
                                        !videoExporting_ && !achievementsHardcore_);
     scheduleInspection();
-    if (debugMenu_) debugMenu_->menuAction()->setVisible(
-        debugVideoAvailable_ || debugAudioAvailable_);
     if (debugGraphicsAction_) {
         debugGraphicsAction_->setVisible(debugVideoAvailable_ != 0);
         debugGraphicsAction_->setEnabled(!loading_ && !videoExporting_ && !achievementsHardcore_);
@@ -1640,6 +1667,77 @@ void MainWindow::refreshCpuDebugger() {
         return;
     }
     session_.debuggerCommand(cpuDebuggerDialog_->refreshCommand());
+}
+
+QString MainWindow::traceBlockedReason() const {
+    if (loading_) return Localization::text(QStringLiteral("Загрузка…"));
+    if (achievementsHardcore_ || videoExporting_ || session_.networkActive() ||
+        (netplay_ && netplay_->active()))
+        return Localization::text(QStringLiteral("Трассировка недоступна в Hardcore, сетевой игре и при экспорте видео."));
+    return {};
+}
+
+void MainWindow::showTraceDialog() {
+    if (!traceBlockedReason().isEmpty()) return;
+    if (!traceDialog_) {
+        traceDialog_ = new TraceDialog(this);
+        connect(traceDialog_, &TraceDialog::commandRequested, this, [this](const DebugTraceCommand& command) {
+            if (command.kind == DebugTraceCommand::Stop) {
+                if (!traceDialog_->isVisible()) traceTimer_->stop();
+            } else if (!traceBlockedReason().isEmpty()) {
+                return;
+            } else if (command.kind == DebugTraceCommand::Refresh && !traceTimer_->isActive()) {
+                traceTimer_->start();
+            }
+            session_.traceCommand(command);
+        });
+        connect(traceDialog_, &TraceDialog::navigateRequested, this, [this](quint32 cpu, quint32 address) {
+            if (!cpuDebuggerBlockedReason().isEmpty()) return;
+            showCpuDebugger();
+            cpuDebuggerDialog_->navigateTo(cpu, address);
+        });
+    }
+    traceDialog_->show();
+    traceDialog_->raise();
+    traceDialog_->activateWindow();
+}
+
+void MainWindow::updateTraceDialog() {
+    const QString blocked = traceBlockedReason();
+    if (traceAction_) traceAction_->setEnabled(blocked.isEmpty() && (session_.hasGame() || traceHasRecords_));
+    if (debugMenu_) debugMenu_->menuAction()->setVisible(
+        debugVideoAvailable_ || debugAudioAvailable_ || session_.hasGame() || traceHasRecords_);
+    if (!traceTimer_ || !traceDialog_ || !traceDialog_->isVisible()) return;
+    if (blocked.isEmpty()) {
+        if (!traceTimer_->isActive()) {
+            traceTimer_->start();
+            refreshTraceDialog();
+        }
+    } else {
+        if (traceTimer_->isActive()) {
+            traceTimer_->stop();
+            DebugTraceCommand command;
+            command.kind = DebugTraceCommand::Stop;
+            session_.traceCommand(command);
+        }
+        DebugTraceSnapshot snapshot;
+        snapshot.status = blocked;
+        traceDialog_->setSnapshot(snapshot);
+    }
+}
+
+void MainWindow::refreshTraceDialog() {
+    if (!traceDialog_ || !traceDialog_->isVisible()) {
+        traceTimer_->stop();
+        return;
+    }
+    if (!traceBlockedReason().isEmpty()) {
+        updateTraceDialog();
+        return;
+    }
+    DebugTraceCommand command;
+    command.kind = DebugTraceCommand::Refresh;
+    session_.traceCommand(command);
 }
 
 void MainWindow::scheduleInspection() {
@@ -3486,7 +3584,7 @@ void MainWindow::updateInputEnabled() {
     bool debugWindowActive = false;
     for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
         if (active == debugGraphicsDialog_ || active == debugAudioDialog_ ||
-            active == debugMemoryDialog_ || active == cpuDebuggerDialog_) {
+            active == debugMemoryDialog_ || active == cpuDebuggerDialog_ || active == traceDialog_) {
             debugWindowActive = true;
             break;
         }

@@ -119,7 +119,11 @@ void verify(const QString& previews) {
           "instruction bytes in guest order");
     check(registers->item(0, 1)->text() == QStringLiteral("0x2704") &&
           find<QGroupBox>(dialog, "debugCpuFlags")->title().contains(QStringLiteral("IPL 7")), "captured SR and flags");
+    auto* stateTabs = find<QTabWidget>(dialog, "debugCpuStateTabs");
+    check(stack->toPlainText().isEmpty(), "hidden stack is not populated");
+    stateTabs->setCurrentWidget(stack);
     check(stack->isReadOnly() && stack->toPlainText() == QStringLiteral("FF4000 77 ??"), "stack validity");
+    stateTabs->setCurrentIndex(0);
     check(pause->isEnabled() && !resume->isEnabled() && !into->isEnabled(), "running controls");
     pause->click();
     check(commands.last().kind == DebuggerCommand::Pause, "explicit pause command");

@@ -2,7 +2,7 @@
 
 Agreed with the user on 2026-11-20. This is the implementation roadmap, not a
 description of shipped features. The user authorized starting implementation on
-2026-11-21. Phases 1–3 are complete; the next implementation batch is Phase 4.
+2026-11-21. Phases 1–3 are complete; Phase 4 is in progress.
 
 Planning baseline: release 0.28.0, repository a5edb31. The plan was committed as
 28c61f9 before implementation. See [debug-inspection.md](debug-inspection.md)
@@ -16,6 +16,8 @@ for the delivered interface and explicit scope limitations.
 - [x] Phase 2: 68000/Z80 debugger with resumable execution.
 - [x] Phase 3: coordinated debugging of expansions, special hardware and link peers.
 - [ ] Phase 4: integrated tracing, hardware timeline, code/data coverage and pixel provenance.
+  - [x] Instruction/event trace, bounded history, explicit asynchronous file capture.
+  - [ ] Physical-bank-aware code/data coverage, exact pixel provenance, profiling and debug projects.
 
 Phase 1 completed on 2026-11-21 with the scope and limits recorded in
 [debug-inspection.md](debug-inspection.md) and
@@ -24,6 +26,9 @@ Phase 2 completed on 2026-11-21; see [CPU debugger](debug-execution.md) and
 [verification](debugger-phase2-verification.md). Phase 3 includes the
 requested register, flag and bounded physical-memory edits during safe stops.
 Phase 3 completed on 2026-11-21; see [verification](debugger-phase3-verification.md) for per-device coverage and measured limits.
+The first Phase 4 tranche is [instruction/event tracing](debug-tracing.md), alongside
+a measured fix for memory-window update stalls and an interface update audit.
+See [verification](debugger-phase4-verification.md) for its actual scope.
 Physical-bank-aware labels, persistent debug projects, scanline/interrupt run
 controls and reverse-instruction execution remain later work. Append platform
 and device verification evidence before completing each phase.

@@ -1,0 +1,563 @@
+{
+  "date": "2026-11-21",
+  "scope": "First Phase 4 increment: instruction and hardware-event trace, bounded timeline and TSV, memory inspector responsiveness.",
+  "baselineCommit": "41860fac638ac40eed930698de2a78721b0be66d",
+  "baselineLinuxCoreSha256": "dcc7c6d44fa72228a4b0f6afd1428cf4c694f243c9103a11c9fe3528fcee6e21",
+  "correctedLinuxCoreSha256": "91efcdd2314d6031c19cc5ccaa345d56ab213ee47dc7727a15985593c66e73b5",
+  "windowsRuntimeTested": false,
+  "verification": {
+    "traceBuffer": {
+      "status": "passed",
+      "platform": "Linux",
+      "test": "debug_trace_buffer_tests",
+      "ringSizeMiB": [
+        1,
+        64
+      ],
+      "previewLimitRecords": 256,
+      "writerQueueLimitRecords": 32768,
+      "coverage": [
+        "wrapped recent history and exact overwrite counts",
+        "clear while active retains capture",
+        "async stop with partial final batch",
+        "one writer and ring-only export while recording",
+        "existing file unmodified on file-open failure",
+        "queue overflow preserves contiguous prefix and incomplete footer"
+      ]
+    },
+    "nativeMdAndSms": {
+      "status": "passed",
+      "platform": "Linux",
+      "test": "debug_trace_native_tests",
+      "coverage": [
+        "fetched opcode after a debugger PC edit and bounded peek tail",
+        "committed VDP register writes and VRAM fill DMA start/completion",
+        "accepted IRQ ordered before first handler opcode",
+        "Z80 HALT traced once",
+        "independent trace and execution detach and cold decoding"
+      ],
+      "coreSha256": "91efcdd2314d6031c19cc5ccaa345d56ab213ee47dc7727a15985593c66e73b5",
+      "log": "native-trace-focused.log"
+    },
+    "host": {
+      "status": "passed",
+      "platform": "Linux",
+      "test": "debug_trace_host_tests",
+      "coverage": [
+        "traced MD frame matches original native state, image and PCM",
+        "256-row bounded preview and captured-byte disassembly",
+        "Clear preserves sequence, reset/restore/power/unload epoch markers and rebind",
+        "selection and detach of B-side Z80 for two linked Game Gear instances"
+      ]
+    },
+    "expandedActiveTrace": {
+      "status": "passed",
+      "platform": "Linux",
+      "test": "debug_expansion_tests",
+      "coverage": [
+        "SSP1601 actual opcode with quantized time",
+        "MD and Game Gear real receiving-side TH falling edges",
+        "both SH-2 branch and separate delay-slot opcodes",
+        "sub-68000 handler and committed CDD Get Drive Status command",
+        "same fixtures preserve full-frame continuation and output after tracing"
+      ]
+    },
+    "finalSession": {
+      "status": "passed",
+      "test": "debug_expansion_tests",
+      "coverage": [
+        "worker accepts observation trace during input recording at suspended opcode",
+        "closing immediately after Export retains queued file job",
+        "movie still contains exactly one completed frame",
+        "existing register-edit recording policy remains enforced"
+      ],
+      "limits": "Hardcore/netplay/export trace guards reviewed in backend; not exercised against live services or Windows."
+    },
+    "finalQtUi": {
+      "status": "passed",
+      "platform": "Linux offscreen Qt 6.10.2",
+      "tests": [
+        "inspection_view_tests",
+        "cpu_debugger_view_tests",
+        "netplay_quality_ui_tests",
+        "trace_view_tests"
+      ],
+      "visuals": [
+        "memory page with full last row",
+        "Trace layout in English and Russian"
+      ],
+      "coverage": [
+        "stable/sparse/dense memory model notifications",
+        "byte editing/selection/scroll/domain fallback",
+        "active CPU panes and no-op stable widgets",
+        "hidden lobby latest roster and rejected-action correction",
+        "bounded trace table and retained CPU labels",
+        "hardware addresses not treated as code pointers",
+        "new capture revision and close/stop"
+      ]
+    },
+    "linuxNativeCoreBuild": {
+      "status": "passed"
+    },
+    "windowsNativeCoreBuild": {
+      "status": "passed"
+    },
+    "finalApplicationBuildAndDeployment": {
+      "status": "passed",
+      "platforms": [
+        "Linux",
+        "Windows x86-64"
+      ],
+      "destination": "testbuild",
+      "stagedFilesVerified": 73,
+      "deployedSha256": {
+        "KegaRefusion.exe": "e8e902c7b52ddfdcac280124cfaaf867188ddcb5522b12df6d86dce5364bcb60",
+        "cores/genesis_plus_gx_libretro.dll": "2e6bc3181ccaedd08bc440eccd81f8d0f34e68e411887f36391ae4d3a56791af",
+        "cores/genesis_plus_gx_libretro_linkpeer.dll": "2e6bc3181ccaedd08bc440eccd81f8d0f34e68e411887f36391ae4d3a56791af"
+      },
+      "windowsRuntimeTested": false
+    },
+    "standaloneSh2Irq": {
+      "status": "passed",
+      "platform": "Linux",
+      "log": "native-trace-sh2.log",
+      "coverage": "IRQ vector 68 precedes the actual handler opcode across two scheduler budgets."
+    }
+  },
+  "memoryInspector": {
+    "widget": {
+      "method": "WSL Linux Qt 6.10.2, Fusion, offscreen, g++ -O2, same 259-byte synthetic snapshots with event processing, 5 measured opens and 12 measured updates per case after 2 warm-ups.",
+      "baseline": {
+        "openMedianMs": 12.479,
+        "openAndFirstPageMedianMs": 81.582,
+        "steadyMeanMs": 208.168,
+        "sparseMeanMs": 208.985,
+        "denseMeanMs": 658.236,
+        "steadyDataChangedSignals": 3264,
+        "sparseDataChangedSignals": 3288,
+        "denseDataChangedSignals": 6528
+      },
+      "candidate": {
+        "openMedianMs": 9.556,
+        "openAndFirstPageMedianMs": 15.17,
+        "steadyMeanMs": 5.031,
+        "sparseMeanMs": 5.681,
+        "denseMeanMs": 10.768,
+        "steadyDataChangedSignals": 0,
+        "sparseDataChangedSignals": 12,
+        "denseDataChangedSignals": 12
+      }
+    },
+    "hostBaseline": {
+      "method": "2,500 calls per case, includes result destruction, no GUI.",
+      "bomberman": {
+        "refreshHz": 49.701459,
+        "memory": {
+          "bytes": 259,
+          "p50Us": 1.443,
+          "p95Us": 1.492,
+          "p99Us": 1.874
+        },
+        "hardware": {
+          "values": 11,
+          "p50Us": 0.742,
+          "p95Us": 1.052,
+          "p99Us": 1.333
+        },
+        "video": {
+          "bytes": 65768,
+          "p50Us": 29.666,
+          "p95Us": 31.7,
+          "p99Us": 50.677
+        }
+      },
+      "doom": {
+        "refreshHz": 59.922743,
+        "memory": {
+          "bytes": 259,
+          "p50Us": 1.573,
+          "p95Us": 1.624,
+          "p99Us": 2.204
+        },
+        "hardware": {
+          "values": 14,
+          "p50Us": 0.761,
+          "p95Us": 0.822,
+          "p99Us": 1.062
+        },
+        "video": {
+          "bytes": 328424,
+          "p50Us": 141.369,
+          "p95Us": 169.343,
+          "p99Us": 204.751
+        }
+      },
+      "bombermanPeriodicMemory": {
+        "frames": 3000,
+        "frameInterval": 5,
+        "nominalPollHz": 9.940292,
+        "requestsPerSample": 600,
+        "closedTotalMs": [
+          1534.216,
+          1501.535
+        ],
+        "polledTotalMs": [
+          1511.779,
+          1455.089
+        ],
+        "inspectionCostMs": [
+          7.002,
+          5.672
+        ],
+        "stateImagePcmEqual": true
+      }
+    }
+  },
+  "closedTrace": {
+    "method": "Linux, CPU 5, MAME YM2612, fixed input with no shaders/windows, 180 warm-up frames, matching host executable. Normal renders every frame with PCM; fast renders every 32nd and final frame without PCM. Timing is unpaced throughput. Samples alternate before/after order. Discarded the first run overlapping a background build.",
+    "harnessSha256": "565603a26ec0e7a082f1340744b16d37945f38e2d75af5080ff1f38c8195e422",
+    "samples": [
+      {
+        "stage": "before VDP register-index trace correction",
+        "coreSha256": "c9ad96b0b572a459a4a4fc9c6fa7908109857a0b8fc4c99398cd05f79b386046",
+        "games": {
+          "sonic2": {
+            "name": "Sonic The Hedgehog 2 (World)",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "Sega logo",
+            "framesPerSample": 6000,
+            "normal": {
+              "meanPairedChangePercent": -1.996802,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 1828.204,
+                  "candidateFramesPerSecond": 1845.77,
+                  "changePercent": 0.960834,
+                  "baselinePeakRssKiB": 38720,
+                  "candidatePeakRssKiB": 38104
+                },
+                {
+                  "pair": 2,
+                  "baselineFramesPerSecond": 1876.439,
+                  "candidateFramesPerSecond": 1783.472,
+                  "changePercent": -4.954438,
+                  "baselinePeakRssKiB": 38668,
+                  "candidatePeakRssKiB": 38128
+                }
+              ]
+            },
+            "fast": {
+              "meanPairedChangePercent": 0.733698,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 2870.911,
+                  "candidateFramesPerSecond": 2930.22,
+                  "changePercent": 2.06586,
+                  "baselinePeakRssKiB": 39000,
+                  "candidatePeakRssKiB": 38384
+                },
+                {
+                  "pair": 2,
+                  "baselineFramesPerSecond": 2893.912,
+                  "candidateFramesPerSecond": 2876.593,
+                  "changePercent": -0.598463,
+                  "baselinePeakRssKiB": 38948,
+                  "candidatePeakRssKiB": 38408
+                }
+              ]
+            }
+          },
+          "bomberman": {
+            "name": "Mega Bomberman (Europe)",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "title menu",
+            "framesPerSample": 6000,
+            "normal": {
+              "meanPairedChangePercent": 1.05345,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 2068.959,
+                  "candidateFramesPerSecond": 2080.492,
+                  "changePercent": 0.55743,
+                  "baselinePeakRssKiB": 38568,
+                  "candidatePeakRssKiB": 38084
+                },
+                {
+                  "pair": 2,
+                  "baselineFramesPerSecond": 2038.761,
+                  "candidateFramesPerSecond": 2070.351,
+                  "changePercent": 1.54947,
+                  "baselinePeakRssKiB": 38712,
+                  "candidatePeakRssKiB": 37868
+                }
+              ]
+            },
+            "fast": {
+              "meanPairedChangePercent": -0.497002,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 3061.537,
+                  "candidateFramesPerSecond": 3085.734,
+                  "changePercent": 0.790355,
+                  "baselinePeakRssKiB": 38592,
+                  "candidatePeakRssKiB": 38108
+                },
+                {
+                  "pair": 2,
+                  "baselineFramesPerSecond": 2990.542,
+                  "candidateFramesPerSecond": 2937.18,
+                  "changePercent": -1.784359,
+                  "baselinePeakRssKiB": 38736,
+                  "candidatePeakRssKiB": 37892
+                }
+              ]
+            }
+          },
+          "doom": {
+            "name": "Doom (Japan, USA), 32X",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "start menu with HUD",
+            "framesPerSample": 600,
+            "normal": {
+              "meanPairedChangePercent": 2.303169,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "51fc2d98145e2b1afbb75e435bffad43d994e7f7d2e11c370a5e3af2fac8d337",
+                "followingFullOutputFramePcm": "6cb003a321ed3429f6e56042598d693de6c0be39b7763f5327d8085a8a36e9ff",
+                "nativeState": "54249f4ab787c05b659645f5ddfaeb6cbb1d4d0e92227ba7eec5b6352f0290f4"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 506.259,
+                  "candidateFramesPerSecond": 517.919,
+                  "changePercent": 2.303169,
+                  "baselinePeakRssKiB": 47776,
+                  "candidatePeakRssKiB": 47216
+                }
+              ]
+            },
+            "fast": {
+              "meanPairedChangePercent": 1.722319,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "51fc2d98145e2b1afbb75e435bffad43d994e7f7d2e11c370a5e3af2fac8d337",
+                "followingFullOutputFramePcm": "6cb003a321ed3429f6e56042598d693de6c0be39b7763f5327d8085a8a36e9ff",
+                "nativeState": "54249f4ab787c05b659645f5ddfaeb6cbb1d4d0e92227ba7eec5b6352f0290f4"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 640.88,
+                  "candidateFramesPerSecond": 651.918,
+                  "changePercent": 1.722319,
+                  "baselinePeakRssKiB": 49624,
+                  "candidatePeakRssKiB": 49580
+                }
+              ]
+            }
+          },
+          "darxide": {
+            "name": "Darxide (Europe), 32X",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "language selection, Deutsch",
+            "framesPerSample": 600,
+            "normal": {
+              "meanPairedChangePercent": -2.568277,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "31f0802eda86b6a3e364ed0a37ef55625a7700516d4043ed765e5910380ad093",
+                "followingFullOutputFramePcm": "77673f96a35431b4d3b51ab706056d0366a482be88630e4af7caad3e48640bca",
+                "nativeState": "0cbe1acf9812fc6836e5a5ef4c82bfaf37d8c9a036f5dd340bfa2288fadf03f7"
+              },
+              "pairs": [
+                {
+                  "pair": 2,
+                  "baselineFramesPerSecond": 146.791,
+                  "candidateFramesPerSecond": 143.021,
+                  "changePercent": -2.568277,
+                  "baselinePeakRssKiB": 45200,
+                  "candidatePeakRssKiB": 44636
+                }
+              ]
+            },
+            "fast": {
+              "meanPairedChangePercent": 1.378215,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "31f0802eda86b6a3e364ed0a37ef55625a7700516d4043ed765e5910380ad093",
+                "followingFullOutputFramePcm": "77673f96a35431b4d3b51ab706056d0366a482be88630e4af7caad3e48640bca",
+                "nativeState": "0cbe1acf9812fc6836e5a5ef4c82bfaf37d8c9a036f5dd340bfa2288fadf03f7"
+              },
+              "pairs": [
+                {
+                  "pair": 2,
+                  "baselineFramesPerSecond": 146.639,
+                  "candidateFramesPerSecond": 148.66,
+                  "changePercent": 1.378215,
+                  "baselinePeakRssKiB": 46036,
+                  "candidatePeakRssKiB": 45968
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "stage": "after VDP register-index trace correction",
+        "coreSha256": "91efcdd2314d6031c19cc5ccaa345d56ab213ee47dc7727a15985593c66e73b5",
+        "games": {
+          "sonic2": {
+            "name": "Sonic The Hedgehog 2 (World)",
+            "region": "NTSC",
+            "refreshHz": 59.922743,
+            "endCheckpoint": "Sega logo",
+            "framesPerSample": 6000,
+            "normal": {
+              "meanPairedChangePercent": 2.847718,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 1854.678,
+                  "candidateFramesPerSecond": 1907.494,
+                  "changePercent": 2.847718,
+                  "baselinePeakRssKiB": 38776,
+                  "candidatePeakRssKiB": 37884
+                }
+              ]
+            },
+            "fast": {
+              "meanPairedChangePercent": -1.36471,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "fbe885f9cd58f6651cb03307ac8ac890d4308c2956c6986abd1386c7a0e0735a",
+                "followingFullOutputFramePcm": "85e59f7e1bb5b3c5e95cccaa8b311f46d61a630145f38ada2c1c6f8ee0ece90c",
+                "nativeState": "377d1f909c33226a560416b9db7fdac1371afaa4fc6504295a5bfa4b144d2248"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 2940.698,
+                  "candidateFramesPerSecond": 2900.566,
+                  "changePercent": -1.36471,
+                  "baselinePeakRssKiB": 39056,
+                  "candidatePeakRssKiB": 38164
+                }
+              ]
+            }
+          },
+          "bomberman": {
+            "name": "Mega Bomberman (Europe)",
+            "region": "PAL",
+            "refreshHz": 49.701459,
+            "endCheckpoint": "title menu",
+            "framesPerSample": 6000,
+            "normal": {
+              "meanPairedChangePercent": 0.104186,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 2099.139,
+                  "candidateFramesPerSecond": 2101.326,
+                  "changePercent": 0.104186,
+                  "baselinePeakRssKiB": 38676,
+                  "candidatePeakRssKiB": 37888
+                }
+              ]
+            },
+            "fast": {
+              "meanPairedChangePercent": -0.214731,
+              "stateImagePcmEqual": true,
+              "sha256": {
+                "finalImage": "b1e3de716b5c1ef2cf73ba4e2bbc0d2ddcb826397786b07a5e03a2a723b35090",
+                "followingFullOutputFramePcm": "d6fe14413c6bf89241082a88559492addd50b2cd9f2db409c99d04ccb63f55d5",
+                "nativeState": "15d0fc255a2a44b02c0610834d3de0494973266c4a4864e82baeed0cdf89a871"
+              },
+              "pairs": [
+                {
+                  "pair": 1,
+                  "baselineFramesPerSecond": 3100.155,
+                  "candidateFramesPerSecond": 3093.498,
+                  "changePercent": -0.214731,
+                  "baselinePeakRssKiB": 38700,
+                  "candidatePeakRssKiB": 37912
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "deferred": [
+    "code/data coverage (CDL)",
+    "pixel provenance",
+    "profiling",
+    "debug-project persistence"
+  ],
+  "localEvidenceDirectory": "build/verification/debugger-phase4",
+  "uiAudit": {
+    "changed": [
+      "memory model and fixed font-derived columns",
+      "graphics preview dependency comparison",
+      "remove forced repaint of unchanged state/CPU tables",
+      "inactive CPU panes deferred",
+      "hidden/unchanged lobby snapshots deferred",
+      "unchanged or disabled FPS OSD skips redundant repaint",
+      "trace snapshot decoding and model reset skip unchanged records"
+    ],
+    "reviewedWithoutChange": [
+      "Controls",
+      "Cheats",
+      "Achievements",
+      "Updates",
+      "settings dialogs",
+      "gameplay frame/input/audio presentation"
+    ],
+    "limits": "Evidence-based refresh review and focused widget tests, not a claim that every OS/desktop event has been profiled."
+  }
+}

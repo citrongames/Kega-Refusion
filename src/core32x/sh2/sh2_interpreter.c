@@ -29,6 +29,9 @@ struct KegaSh2 {
     KegaSh2DebugCallback debug;
     void *debug_user;
     unsigned debug_mask;
+    KegaSh2TraceCallback trace;
+    void *trace_user;
+    unsigned trace_mask;
 };
 
 static KegaSh2 *owner(SH2 *core) { return (KegaSh2 *)core; }
@@ -260,6 +263,9 @@ static void take_irq(SH2 *s) {
     s->test_irq = 0;
     if (level > (int)((s->sr >> 4) & 15)) {
         unsigned vector = (unsigned)s->irq_callback(s, level);
+        KegaSh2 *c = owner(s);
+        if (c->trace_mask & KEGA_SH2_TRACE_IRQ)
+            c->trace(c->trace_user, c, KEGA_SH2_TRACE_IRQ, s->pc, vector, (uint32_t)level);
         s->sr &= FLAGS;
         s->r[15] -= 4; write32(s, s->r[15], s->sr);
         s->r[15] -= 4; write32(s, s->r[15], s->pc);
@@ -290,6 +296,8 @@ int sh2_execute_interpreter(SH2 *s, int cycles) {
         if (s->delay) {
             s->ppc = s->delay;
             opcode = fetch16(s, s->delay);
+            if (c->trace_mask & KEGA_SH2_TRACE_EXEC)
+                c->trace(c->trace_user, c, KEGA_SH2_TRACE_EXEC, s->ppc, opcode, 0);
             if ((opcode >> 13) == 5) { /* BRA/BSR in a delay slot. */
                 s->r[15] -= 4; write32(s, s->r[15], s->sr);
                 s->r[15] -= 4; write32(s, s->r[15], s->pc);
@@ -301,8 +309,10 @@ int sh2_execute_interpreter(SH2 *s, int cycles) {
         } else {
             s->ppc = s->pc;
             opcode = fetch16(s, s->pc);
+            if (c->trace_mask & KEGA_SH2_TRACE_EXEC)
+                c->trace(c->trace_user, c, KEGA_SH2_TRACE_EXEC, s->ppc, opcode, 0);
         }
-        if(c->idle_fastpath && !c->debug && !s->delay && s->icount>0 && !c->stop &&
+        if(c->idle_fastpath && !c->debug && !(c->trace_mask & KEGA_SH2_TRACE_EXEC) && !s->delay && s->icount>0 && !c->stop &&
            opcode==0xaffe && s->pc<=UINT32_MAX-3u && c->host.can_idle_fetch &&
            c->host.can_idle_fetch(c->host.user,c,s->pc,4) &&
            s->pending_level<=(int)((s->sr>>4)&15) && fetch16(s,s->pc+2)==0x0009) {
@@ -398,7 +408,7 @@ uint32_t kega_sh2_run(KegaSh2 *cpu, uint32_t budget) {
     cpu->running = true; cpu->stop = false;
     cpu->core.state |= SH2_STATE_RUN;
     cpu->core.cycles_timeslice = budget;
-    remaining = cpu->debug ? sh2_execute_interpreter(&cpu->core, (int)budget) : cpu->core.run(&cpu->core, (int)budget);
+    remaining = (cpu->debug || cpu->trace_mask) ? sh2_execute_interpreter(&cpu->core, (int)budget) : cpu->core.run(&cpu->core, (int)budget);
     done = (uint32_t)((int64_t)cpu->core.cycles_timeslice - remaining);
     cpu->cycles += done;
     cpu->running = false;
@@ -533,4 +543,12 @@ int kega_sh2_service_irq(SH2 *s,int remaining) {
 void kega_sh2_set_debug(KegaSh2 *cpu,KegaSh2DebugCallback callback,void *user,unsigned mask) {
     if(!cpu)return;
     cpu->debug=callback;cpu->debug_user=user;cpu->debug_mask=callback ? mask & 7u : 0;
+}
+
+void kega_sh2_set_trace(KegaSh2 *cpu, KegaSh2TraceCallback callback, void *user, unsigned mask)
+{
+    if (!cpu) return;
+    cpu->trace = callback;
+    cpu->trace_user = user;
+    cpu->trace_mask = callback ? mask & (KEGA_SH2_TRACE_EXEC | KEGA_SH2_TRACE_IRQ) : 0;
 }

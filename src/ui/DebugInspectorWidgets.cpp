@@ -2,13 +2,16 @@
 #include "i18n/Localization.h"
 
 #include <QAbstractItemView>
+#include <QAbstractTableModel>
 #include <QComboBox>
+#include <QEvent>
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QHideEvent>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -16,20 +19,26 @@
 #include <QPushButton>
 #include <QRegularExpressionValidator>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QTableView>
 #include <QTableWidget>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QtEndian>
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <functional>
 
 namespace {
 constexpr quint32 pageBytes = 256;
 constexpr int rowBytes = 16;
+constexpr int pageRows = pageBytes / rowBytes;
 
 QString trText(const char* text) {
     return Localization::text(QString::fromUtf8(text));
@@ -69,6 +78,101 @@ QTableWidgetItem* cell(QTableWidget* table, int row, int col, const QString& val
     return item;
 }
 } // namespace
+
+class DebugMemoryPageModel final : public QAbstractTableModel {
+public:
+    explicit DebugMemoryPageModel(QObject* parent) : QAbstractTableModel(parent) {}
+
+    int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : pageRows; }
+    int columnCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : rowBytes + 1; }
+
+    Qt::ItemFlags flags(const QModelIndex& index) const override {
+        if (!index.isValid()) return Qt::NoItemFlags;
+        if (index.column() == rowBytes) return Qt::ItemIsEnabled;
+        return index.row() * rowBytes + index.column() < bytes_.size()
+            ? Qt::ItemIsEnabled | Qt::ItemIsSelectable : Qt::NoItemFlags;
+    }
+
+    QVariant data(const QModelIndex& index, int role) const override {
+        if (!index.isValid()) return {};
+        const int rowOffset = index.row() * rowBytes;
+        if (index.column() == rowBytes) {
+            if (role != Qt::DisplayRole) return {};
+            QString ascii;
+            const auto end = std::min(qsizetype(rowOffset + rowBytes), bytes_.size());
+            ascii.reserve(rowBytes);
+            for (qsizetype i = rowOffset; i < end; ++i) {
+                const auto byte = quint8(bytes_.at(i));
+                ascii += byte >= 32 && byte <= 126 ? QLatin1Char(byte) : QLatin1Char('.');
+            }
+            return ascii;
+        }
+        const int offset = rowOffset + index.column();
+        if (role == Qt::TextAlignmentRole) return int(Qt::AlignCenter);
+        if (offset >= bytes_.size()) return {};
+        if (role == Qt::DisplayRole) {
+            static const auto hexBytes = [] {
+                std::array<QString, 256> labels;
+                for (size_t i = 0; i < labels.size(); ++i) labels[i] = hexNumber(i, 2);
+                return labels;
+            }();
+            return hexBytes[quint8(bytes_.at(offset))];
+        }
+        if (!changed_[offset]) return {};
+        if (role == Qt::BackgroundRole) return QBrush(QColor(233, 190, 80));
+        if (role == Qt::ForegroundRole) return QBrush(Qt::black);
+        if (role == Qt::FontRole) {
+            QFont underline;
+            underline.setUnderline(true);
+            return underline;
+        }
+        return {};
+    }
+
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override {
+        if (role != Qt::DisplayRole) return {};
+        if (orientation == Qt::Horizontal)
+            return section == rowBytes ? QStringLiteral("ASCII") : hexNumber(section, 2);
+        const quint32 row = section * rowBytes;
+        return row < bytes_.size() ? hexNumber(offset_ + row, 6) : QString();
+    }
+
+    const QByteArray& bytes() const { return bytes_; }
+
+    void setPage(quint32 offset, const QByteArray& bytes, bool comparePrevious) {
+        const bool moved = offset_ != offset;
+        if (!moved && bytes_ == bytes && changed_.none()) return;
+
+        const int previousSize = int(std::min(bytes_.size(), qsizetype(pageBytes)));
+        const int nextSize = int(std::min(bytes.size(), qsizetype(pageBytes)));
+        int firstRow = pageRows;
+        int lastRow = -1;
+        std::bitset<pageBytes> changed;
+        for (int i = 0; i < std::max(previousSize, nextSize); ++i) {
+            const bool hadByte = i < previousSize;
+            const bool hasByte = i < nextSize;
+            const bool differing = hadByte && hasByte && bytes_.at(i) != bytes.at(i);
+            changed[i] = comparePrevious && !moved && differing;
+            if (hadByte != hasByte || differing || changed[i] != changed_[i]) {
+                firstRow = std::min(firstRow, i / rowBytes);
+                lastRow = i / rowBytes;
+            }
+        }
+        const auto visibleRows = [](int size) { return (size + rowBytes - 1) / rowBytes; };
+        offset_ = offset;
+        bytes_ = bytes;
+        changed_ = changed;
+
+        if (firstRow <= lastRow) emit dataChanged(index(firstRow, 0), index(lastRow, rowBytes));
+        if ((moved && (previousSize || nextSize)) || visibleRows(previousSize) != visibleRows(nextSize))
+            emit headerDataChanged(Qt::Vertical, 0, pageRows - 1);
+    }
+
+private:
+    QByteArray bytes_;
+    std::bitset<pageBytes> changed_;
+    quint32 offset_ = 0;
+};
 
 DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     : QDialog(parent, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
@@ -131,18 +235,21 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     navigation->addWidget(next_);
     layout->addLayout(navigation);
 
-    hex_ = new QTableWidget(this);
+    hex_ = new QTableView(this);
     hex_->setObjectName(QStringLiteral("debugMemoryHex"));
     hex_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    QStringList columns;
-    for (int i = 0; i < rowBytes; ++i) columns << hexNumber(i, 2);
-    columns << QStringLiteral("ASCII");
-    setupTable(hex_, columns);
-    hex_->setRowCount(pageBytes / rowBytes);
-    hex_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    hex_->horizontalHeader()->setMinimumSectionSize(hex_->fontMetrics().horizontalAdvance(QStringLiteral("FF")) + 12);
+    pageModel_ = new DebugMemoryPageModel(hex_);
+    hex_->setModel(pageModel_);
+    hex_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    hex_->setSelectionMode(QAbstractItemView::SingleSelection);
+    hex_->setAlternatingRowColors(true);
+    hex_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    hex_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     hex_->horizontalHeader()->setStretchLastSection(true);
     hex_->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
+    resizePageColumns();
+    hex_->installEventFilter(this);
+    hex_->horizontalHeader()->installEventFilter(this);
     layout->addWidget(hex_, 1);
 
     auto* findRow = new QHBoxLayout;
@@ -164,7 +271,7 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
         text.remove(QLatin1Char(' '));
         if (text.isEmpty() || text.size() % 2) return;
         const auto pattern = QByteArray::fromHex(text.toLatin1());
-        const QByteArray page = bytes_.left(pageBytes);
+        const QByteArray page = pageModel_->bytes().left(pageBytes);
         auto at = page.indexOf(pattern, selection_ - page_ + 1);
         if (at < 0) at = page.indexOf(pattern);
         if (at >= 0) changeOffset(page_ + quint32(at));
@@ -209,9 +316,10 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     editStatus_->hide();
     layout->addWidget(editStatus_);
     connect(edit_, &QPushButton::clicked, this, [this] { editMemory(qAbs(width_->currentData().toInt())); });
-    connect(hex_, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
-        if (row >= 0 && col >= 0 && col < rowBytes && quint32(row * rowBytes + col) < bytes_.size()) {
-            selection_ = page_ + quint32(row * rowBytes + col);
+    connect(hex_, &QTableView::doubleClicked, this, [this](const QModelIndex& index) {
+        const int relative = index.row() * rowBytes + index.column();
+        if (index.isValid() && index.column() < rowBytes && relative < pageModel_->bytes().size()) {
+            selection_ = page_ + relative;
             editMemory(1);
         }
     });
@@ -239,10 +347,10 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
     });
     connect(previous_, &QPushButton::clicked, this, [this] { changeOffset(page_ - pageBytes); });
     connect(next_, &QPushButton::clicked, this, [this] { changeOffset(page_ + pageBytes); });
-    connect(hex_, &QTableWidget::currentCellChanged, this, [this](int row, int col) {
-        if (row < 0 || col < 0 || col >= rowBytes) return;
-        const auto relative = quint32(row * rowBytes + col);
-        if (relative < bytes_.size()) {
+    connect(hex_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& index) {
+        if (!index.isValid() || index.column() >= rowBytes) return;
+        const int relative = index.row() * rowBytes + index.column();
+        if (relative < pageModel_->bytes().size()) {
             selection_ = page_ + relative;
             updateNavigation();
             updateWatch();
@@ -259,8 +367,8 @@ DebugMemoryDialog::DebugMemoryDialog(QWidget* parent)
         }
         emit inspectionChanged();
     });
-    updatePage({});
     updateNavigation();
+    updateWatch();
 }
 
 DebugInspectionRequest DebugMemoryDialog::request() const {
@@ -361,7 +469,6 @@ void DebugMemoryDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
             domains_->setItemData(index, domain.size, Qt::UserRole + 1);
             domains_->setItemData(index, bool(domain.big_endian), Qt::UserRole + 2);
         }
-        updatePage({});
     }
     available_ = true;
     generation_ = snapshot.generation;
@@ -375,6 +482,8 @@ void DebugMemoryDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
         updateNavigation();
         return;
     }
+    const quint32 requestedDomain = domain_;
+    const quint32 requestedPage = page_;
     const quint32 resolved = domains_->itemData(index).toUInt();
     if (domain_ != resolved) selection_ = 0;
     domain_ = resolved;
@@ -385,11 +494,14 @@ void DebugMemoryDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
     if (size_) selection_ = std::min(selection_, size_ - 1);
     page_ = selection_ - selection_ % pageBytes;
     if (snapshot.memoryDomain == domain_ && snapshot.memoryOffset == page_) {
-        updatePage(snapshot.memory);
+        updatePage(snapshot.memory, !contextChanged && !catalogChanged && requestedDomain == resolved);
     } else {
         updatePage({});
     }
     updateNavigation();
+    // A newly discovered domain or a clamped page needs its own bytes now
+    // rather than after the next periodic refresh.
+    if (requestedDomain != domain_ || requestedPage != page_) emit inspectionChanged();
 }
 
 void DebugMemoryDialog::changeOffset(quint32 offset) {
@@ -406,41 +518,37 @@ void DebugMemoryDialog::changeOffset(quint32 offset) {
     updateWatch();
 }
 
-void DebugMemoryDialog::updatePage(const QByteArray& bytes) {
-    const QSignalBlocker block(hex_);
-    for (int row = 0; row < hex_->rowCount(); ++row) {
-        const quint32 start = row * rowBytes;
-        auto* header = hex_->verticalHeaderItem(row);
-        if (!header) {
-            header = new QTableWidgetItem;
-            hex_->setVerticalHeaderItem(row, header);
-        }
-        const QString address = start < bytes.size() ? hexNumber(page_ + start, 6) : QString();
-        if (header->text() != address) header->setText(address);
-        QString ascii;
-        for (int col = 0; col < rowBytes; ++col) {
-            const quint32 i = start + col;
-            const bool present = i < bytes.size();
-            const unsigned char byte = present ? bytes.at(i) : 0;
-            auto* item = cell(hex_, row, col, present ? hexNumber(byte, 2) : QString());
-            item->setTextAlignment(Qt::AlignCenter);
-            item->setFlags(present ? Qt::ItemIsEnabled | Qt::ItemIsSelectable : Qt::NoItemFlags);
-            const bool changed = present && i < bytes_.size() && bytes_.at(i) != bytes.at(i);
-            const QBrush background = changed
-                ? QBrush(QColor(233, 190, 80)) : QBrush();
-            if (item->background() != background) {
-                item->setBackground(background);
-                item->setForeground(changed ? QBrush(Qt::black) : QBrush());
-                QFont font = hex_->font();
-                font.setUnderline(changed);
-                item->setFont(font);
-            }
-            if (present) ascii.append(byte >= 32 && byte <= 126 ? QLatin1Char(byte) : QLatin1Char('.'));
-        }
-        cell(hex_, row, rowBytes, ascii)->setFlags(Qt::ItemIsEnabled);
-    }
-    bytes_ = bytes;
+void DebugMemoryDialog::updatePage(const QByteArray& bytes, bool comparePrevious) {
+    const QSignalBlocker block(hex_->selectionModel());
+    pageModel_->setPage(page_, bytes, comparePrevious);
     updateWatch();
+}
+
+void DebugMemoryDialog::resizePageColumns() {
+    auto* header = hex_->horizontalHeader();
+    const int margin = std::max(12, 2 * header->style()->pixelMetric(QStyle::PM_HeaderMargin, nullptr, header));
+    const QString byteLabel = QStringLiteral("FF");
+    const int width = std::max(header->fontMetrics().horizontalAdvance(byteLabel),
+                               hex_->fontMetrics().horizontalAdvance(byteLabel));
+    header->setDefaultSectionSize(width + margin);
+    header->resizeSection(rowBytes, hex_->fontMetrics().horizontalAdvance(QString(rowBytes, QLatin1Char('M'))) + margin);
+    hex_->verticalHeader()->setDefaultSectionSize(hex_->fontMetrics().height() + 8);
+}
+
+bool DebugMemoryDialog::eventFilter(QObject* watched, QEvent* event) {
+    switch (event->type()) {
+    case QEvent::FontChange:
+    case QEvent::ApplicationFontChange:
+    case QEvent::StyleChange:
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    case QEvent::DevicePixelRatioChange:
+#endif
+        if (hex_) resizePageColumns();
+        break;
+    default:
+        break;
+    }
+    return QDialog::eventFilter(watched, event);
 }
 
 void DebugMemoryDialog::updateNavigation() {
@@ -451,14 +559,33 @@ void DebugMemoryDialog::updateNavigation() {
     order_->setEnabled(ready);
     previous_->setEnabled(ready && page_ > 0);
     next_->setEnabled(ready && quint64(page_) + pageBytes < size_);
-    if (!offset_->hasFocus() || !offset_->isModified())
-        offset_->setText(ready ? hexNumber(selection_) : QString());
-    const QSignalBlocker block(hex_);
+    if (!offset_->hasFocus() || !offset_->isModified()) {
+        const QString value = ready ? hexNumber(selection_) : QString();
+        if (offset_->text() != value) offset_->setText(value);
+    }
     const quint32 relative = selection_ - page_;
-    if (relative < pageBytes && relative < bytes_.size())
-        hex_->setCurrentCell(relative / rowBytes, relative % rowBytes);
-    else
-        hex_->setCurrentCell(-1, -1);
+    const QModelIndex index = relative < pageBytes && relative < pageModel_->bytes().size()
+        ? pageModel_->index(relative / rowBytes, relative % rowBytes) : QModelIndex{};
+    if (index != hex_->currentIndex()) {
+        const QSignalBlocker block(hex_->selectionModel());
+        if (!index.isValid()) hex_->clearSelection();
+        hex_->setCurrentIndex(index);
+        if (index.isValid()) {
+            hex_->scrollTo(index, QAbstractItemView::EnsureVisible);
+            // Qt can lay out a newly populated header after setting the current
+            // cell. Bring any clipped row into view once that layout has run.
+            QTimer::singleShot(0, this, [this, index] {
+                if (!hex_->isVisible() || hex_->currentIndex() != index) return;
+                hex_->doItemsLayout();
+                const QRect cell = hex_->visualRect(index);
+                auto* scroll = hex_->verticalScrollBar();
+                if (cell.top() < 0)
+                    scroll->setValue(scroll->value() + cell.top());
+                else if (cell.bottom() >= hex_->viewport()->height())
+                    scroll->setValue(scroll->value() + cell.bottom() - hex_->viewport()->height() + 1);
+            });
+        }
+    }
 }
 
 void DebugMemoryDialog::updateWatch() {
@@ -469,12 +596,13 @@ void DebugMemoryDialog::updateWatch() {
         ? trText("Изменение доступно на паузе, вне записи и воспроизведения ввода.")
         : trText("Эта область памяти доступна только для чтения."));
     const quint32 relative = selection_ - page_;
-    if (!width || relative + width > quint64(bytes_.size())) {
+    const auto& bytes = pageModel_->bytes();
+    if (!width || relative + width > quint64(bytes.size())) {
         value_->setText(QStringLiteral("—"));
         return;
     }
     const bool bigEndian = watchBigEndian();
-    const auto* data = bytes_.constData() + relative;
+    const auto* data = bytes.constData() + relative;
     quint32 number = quint8(*data);
     if (width == 2) number = bigEndian ? qFromBigEndian<quint16>(data) : qFromLittleEndian<quint16>(data);
     if (width == 4) number = bigEndian ? qFromBigEndian<quint32>(data) : qFromLittleEndian<quint32>(data);
@@ -491,7 +619,7 @@ bool DebugMemoryDialog::watchBigEndian() const {
 bool DebugMemoryDialog::canWrite(int width) const {
     return isVisible() && tabs_->currentIndex() == 0 && available_ && canEdit_ && writable_ &&
            !writePending_ && (width == 1 || width == 2 || width == 4) &&
-           quint64(selection_ - page_) + width <= quint64(bytes_.size());
+           quint64(selection_ - page_) + width <= quint64(pageModel_->bytes().size());
 }
 
 void DebugMemoryDialog::editMemory(int width) {
@@ -501,7 +629,7 @@ void DebugMemoryDialog::editMemory(int width) {
     request.instance = instance_;
     request.domain = domain_;
     request.offset = selection_;
-    request.before = bytes_.mid(selection_ - page_, width);
+    request.before = pageModel_->bytes().mid(selection_ - page_, width);
     const bool bigEndian = watchBigEndian();
     const auto* data = request.before.constData();
     quint32 previous = quint8(*data);
@@ -602,7 +730,6 @@ void DebugStateInspector::setSnapshot(const DebugInspectionSnapshot& snapshot) {
     for (quint32 i = 0; i < count; ++i)
         if (snapshot.info.values[i].part & part_) ++rows;
     table_->setRowCount(rows);
-    table_->setUpdatesEnabled(false);
     for (int reg = 0; reg < registers; ++reg) {
         cell(table_, reg, 0, QStringLiteral("VDP"));
         cell(table_, reg, 1, QStringLiteral("R%1").arg(hexNumber(reg, 2)));
@@ -617,7 +744,6 @@ void DebugStateInspector::setSnapshot(const DebugInspectionSnapshot& snapshot) {
         cell(table_, row++, 2, value.digits ? QStringLiteral("0x%1").arg(hexNumber(value.value, std::min(value.digits, 16u)))
                                           : QString::number(value.value));
     }
-    table_->setUpdatesEnabled(true);
     if (!rows) status_->setText(trText("Для этого устройства нет данных"));
 }
 
@@ -776,6 +902,12 @@ struct MapLayout {
     int stride = 0;
     int palette = 0;
     bool words = true;
+
+    bool operator==(const MapLayout& other) const {
+        return base == other.base && rowMask == other.rowMask && addressMask == other.addressMask &&
+            columns == other.columns && rows == other.rows && stride == other.stride &&
+            palette == other.palette && words == other.words;
+    }
 
     quint32 address(int x, int y) const {
         const quint32 row = quint32(y * stride);
@@ -1133,28 +1265,52 @@ DebugVideoInspector::DebugVideoInspector(View view, QWidget* parent)
     redraw();
 }
 
+namespace {
+bool sameVideoPreview(DebugVideoInspector::View view, int option,
+                      const DebugInspectionSnapshot& previous, const DebugInspectionSnapshot& next) {
+    if (!previous.available() || !next.available() || previous.generation != next.generation ||
+        previous.instance != next.instance || previous.info.hardware != next.info.hardware ||
+        previous.info.video_format != next.info.video_format) return false;
+
+    const Video before(previous);
+    const Video after(next);
+    if (before.firecore() != after.firecore() || before.interlace() != after.interlace() ||
+        (before.tms() && before.tmsMode() != after.tmsMode())) return false;
+
+    const auto sameBlock = [&](quint32 domain) { return previous.blocks.value(domain) == next.blocks.value(domain); };
+    if (view == DebugVideoInspector::Framebuffer) {
+        for (const char* field : {"Mode", "Height", "Displayed framebuffer", "Pixel shift"})
+            if (fbValue(previous, field) != fbValue(next, field)) return false;
+        const auto domain = option == 0 ? KR_MEM_32X_FB0 : KR_MEM_32X_FB1;
+        const int mode = fbValue(next, "Mode");
+        return sameBlock(domain) && ((mode != 1 && mode != 3) || sameBlock(KR_MEM_32X_CRAM));
+    }
+    if (view == DebugVideoInspector::Palette)
+        return option == 1 ? sameBlock(KR_MEM_32X_CRAM) : before.tms() || before.cram == after.cram;
+    if (before.vram != after.vram || (!before.tms() && before.cram != after.cram)) return false;
+
+    const auto* a = before.reg;
+    const auto* b = after.reg;
+    if (view == DebugVideoInspector::Sprites) {
+        if (before.mode5()) {
+            return a[5] == b[5] && before.h40() == after.h40()
+                && (!before.firecore() || (a[0x18] & 8) == (b[0x18] & 8))
+                && field(previous, "VDP", "Sprite table", 0) == field(next, "VDP", "Sprite table", 0);
+        }
+        return a[0] == b[0] && a[1] == b[1] && a[5] == b[5] && a[6] == b[6]
+            && before.activeLines() == after.activeLines()
+            && field(previous, "VDP", "Sprite table mask", 0) == field(next, "VDP", "Sprite table mask", 0);
+    }
+    if (before.tms() && (a[3] != b[3] || a[4] != b[4] || a[7] != b[7])) return false;
+    return view != DebugVideoInspector::Map || mapLayout(before, option) == mapLayout(after, option);
+}
+} // namespace
+
 void DebugVideoInspector::setSnapshot(const DebugInspectionSnapshot& snapshot) {
     if (snapshot.available() && !(snapshot.parts & KR_INSPECT_VIDEO)) return;
-    const bool graphicsSame = snapshot.available() && snapshot_.available()
-        && snapshot.generation == snapshot_.generation
-        && snapshot.instance == snapshot_.instance
-        && snapshot.info.hardware == snapshot_.info.hardware
-        && snapshot.info.video_format == snapshot_.info.video_format
-        && snapshot.info.height == snapshot_.info.height
-        && std::equal(std::begin(snapshot.info.vdp_regs), std::end(snapshot.info.vdp_regs),
-                      std::begin(snapshot_.info.vdp_regs))
-        && snapshot.blocks == snapshot_.blocks;
-    // A register-derived table base or 32X mode may change with identical VRAM.
-    bool layoutSame = graphicsSame;
-    if (layoutSame) {
-        for (const char* key : {"Plane A table", "Plane B table", "Window table", "Sprite table",
-                                "Name table mask", "Sprite table mask", "Active lines"})
-            layoutSame &= field(snapshot, "VDP", key, 0) == field(snapshot_, "VDP", key, 0);
-        for (const char* key : {"Mode", "Height", "Displayed framebuffer", "Pixel shift", "Priority inversion"})
-            layoutSame &= fbValue(snapshot, key) == fbValue(snapshot_, key);
-    }
+    const bool same = sameVideoPreview(view_, qMax(0, selection_->currentIndex()), snapshot_, snapshot);
     snapshot_ = snapshot;
-    if (layoutSame)
+    if (same)
         status_->setText(QStringLiteral("%1 · %2").arg(stateCaption(snapshot_), modeCaption_));
     else
         redraw();

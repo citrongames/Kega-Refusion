@@ -4,6 +4,7 @@
 
 #include <QDialog>
 
+class DebugMemoryPageModel;
 class DebugStateInspector;
 class QComboBox;
 class QHideEvent;
@@ -11,6 +12,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QShowEvent;
+class QTableView;
 class QTableWidget;
 class QTabWidget;
 
@@ -31,6 +33,7 @@ signals:
 protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void changeOffset(quint32 offset);
@@ -38,7 +41,8 @@ private:
     bool canWrite(int width) const;
     void editMemory(int width);
     bool watchBigEndian() const;
-    void updatePage(const QByteArray& bytes);
+    void updatePage(const QByteArray& bytes, bool comparePrevious = true);
+    void resizePageColumns();
     void updateNavigation();
     void updateWatch();
 
@@ -55,8 +59,8 @@ private:
     QLabel* value_ = nullptr;
     QComboBox* width_ = nullptr;
     QComboBox* order_ = nullptr;
-    QTableWidget* hex_ = nullptr;
-    QByteArray bytes_;
+    QTableView* hex_ = nullptr;
+    DebugMemoryPageModel* pageModel_ = nullptr;
     quint64 generation_ = 0;
     quint32 domain_ = KR_MEM_RAM;
     quint32 size_ = 0;

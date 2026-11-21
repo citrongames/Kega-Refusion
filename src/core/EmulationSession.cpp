@@ -157,6 +157,30 @@ void EmulationSession::enqueue(Command command) {
         commands_.push_back(std::move(command));
     }
 }
+void EmulationSession::traceCommand(const DebugTraceCommand& command) {
+    std::lock_guard<std::mutex> lock(traceMutex_);
+    if (!traceCommands_.empty() && command.kind==DebugTraceCommand::Refresh &&
+        traceCommands_.back().kind==DebugTraceCommand::Refresh) return;
+    if (traceCommands_.size()>=32 && command.kind!=DebugTraceCommand::Stop) return;
+    if (command.kind==DebugTraceCommand::Stop) {
+        // Closing the viewer cancels pending activation/polls, not an explicit
+        // export the user has already requested.
+        traceCommands_.erase(std::remove_if(traceCommands_.begin(),traceCommands_.end(),
+            [](const auto& pending) {
+                return pending.kind==DebugTraceCommand::Refresh ||
+                       pending.kind==DebugTraceCommand::Start ||
+                       pending.kind==DebugTraceCommand::Stop;
+            }),traceCommands_.end());
+    }
+    traceCommands_.push_back(command);
+    traceRequested_.store(true);
+}
+bool EmulationSession::takeTraceSnapshot(DebugTraceSnapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(traceMutex_);
+    if (!traceSnapshotPending_) return false;
+    snapshot=std::move(traceSnapshot_);traceSnapshot_={};
+    traceSnapshotPending_=false;return true;
+}
 void EmulationSession::debuggerCommand(const DebuggerCommand& command) {
     if (command.breakpoints.size()>128) return;
     std::lock_guard<std::mutex> lock(debuggerMutex_);
@@ -1172,6 +1196,41 @@ void EmulationSession::run() {
             }
         }
     };
+    auto processTrace = [&] {
+        const bool forbidden=achievementHardcore || networkMode || videoExport;
+        if (forbidden && host.traceActive()) host.traceStop();
+        if (!traceRequested_.load()) return;
+        std::deque<DebugTraceCommand> commands;
+        {
+            std::lock_guard<std::mutex> lock(traceMutex_);
+            commands.swap(traceCommands_);
+            traceRequested_.store(false);
+        }
+        QString error;
+        for(const auto& command:commands) {
+            if(forbidden && command.kind==DebugTraceCommand::Start) {
+                error=Localization::text(QStringLiteral(
+                    "Трассировка недоступна в Hardcore, сетевой игре и при экспорте видео."));
+                continue;
+            }
+            QString failure;
+            if(!host.traceCommand(command,failure)) error=failure;
+        }
+        auto snapshot=host.traceSnapshot();
+        if(forbidden) {
+            snapshot.available=false;snapshot.canNavigate=false;
+            if(error.isEmpty())error=Localization::text(QStringLiteral(
+                "Трассировка недоступна в Hardcore, сетевой игре и при экспорте видео."));
+        }
+        if(!error.isEmpty())snapshot.status=error;
+        bool notify;
+        {
+            std::lock_guard<std::mutex> lock(traceMutex_);
+            traceSnapshot_=std::move(snapshot);
+            notify=!traceSnapshotPending_;traceSnapshotPending_=true;
+        }
+        if(notify)emit traceReady();
+    };
     struct PendingDebugFrame {
         bool active=false, manual=false, fast=false, present=true;
         int speedPercent=100, factor=1;
@@ -1336,6 +1395,7 @@ void EmulationSession::run() {
                 // No battery writes, preview frames or background hardware
                 // setters while a CPU hook holds the native execution stack.
                 processInspection();
+                processTrace();
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 continue;
             }
@@ -2112,6 +2172,7 @@ void EmulationSession::run() {
         // Between complete frame executions, after all queued state changes.
         // An inactive inspector costs one atomic check; no timer or memory copy.
         processInspection();
+        processTrace();
         if (videoPending && videoRecorder.completed()) {
             const auto result = videoRecorder.result();
             host.setRecordingVideoEnabled(false);

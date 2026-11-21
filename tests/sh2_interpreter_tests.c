@@ -91,7 +91,7 @@ static void start(KegaSh2 *cpu, Fixture *f, uint32_t pc) {
 typedef struct DebugIrq {
     KegaSh2 *cpu;
     uint32_t instructions[2];
-    unsigned instruction_count, read_count;
+    unsigned instruction_count, read_count, accepted_irqs, traced_instructions;
 } DebugIrq;
 
 static void debug_unmask_irq(void *user, unsigned event, uint32_t address,
@@ -113,6 +113,21 @@ static void debug_unmask_irq(void *user, unsigned event, uint32_t address,
     }
 }
 
+static void trace_debug_irq(void *user, KegaSh2 *cpu, unsigned kind,
+                            uint32_t address, uint32_t value, uint32_t aux) {
+    DebugIrq *debug = user;
+    assert(cpu == debug->cpu);
+    if (kind == KEGA_SH2_TRACE_IRQ) {
+        assert(address == 0x800 && value == 68 && aux == 8);
+        assert(debug->traced_instructions == 0);
+        ++debug->accepted_irqs;
+    } else {
+        assert(kind == KEGA_SH2_TRACE_EXEC && debug->accepted_irqs == 1);
+        assert(address == 0x900 && value == 0xe02a);
+        ++debug->traced_instructions;
+    }
+}
+
 static void test_debug_irq(KegaSh2 *cpu, Fixture *f) {
     put16(f, 0x800, 0xe007);
     put16(f, 0x900, 0xe02a);
@@ -124,12 +139,14 @@ static void test_debug_irq(KegaSh2 *cpu, Fixture *f) {
         kega_sh2_set_debug(cpu, debug_unmask_irq, &debug, KR_DEBUG_EXEC | KR_DEBUG_READ);
         assert(kega_sh2_reset(cpu));
         assert(debug.instruction_count == 0 && debug.read_count == 0);
+        kega_sh2_set_trace(cpu, trace_debug_irq, &debug, KEGA_SH2_TRACE_EXEC | KEGA_SH2_TRACE_IRQ);
         f->reported_cycles = 0;
         KegaSh2State s = state(cpu);
         s.pc = 0x800;
         assert(kega_sh2_set_state(cpu, &s) && kega_sh2_set_irq(cpu, 8));
         assert(kega_sh2_run(cpu, budgets[i]) == (i == 0 ? 13 : 14));
         assert(debug.read_count == 1 && debug.instructions[0] == 0x800);
+        assert(debug.accepted_irqs == 1 && debug.traced_instructions == (i == 0 ? 0 : 1));
         s = state(cpu);
         assert(s.r[15] == 0x1ef8 && (s.sr & 0xf0) == 0x80);
         assert(rl(f, cpu, s.r[15]) == 0x800);
@@ -140,6 +157,8 @@ static void test_debug_irq(KegaSh2 *cpu, Fixture *f) {
         }
         assert(debug.instruction_count == 2 && debug.instructions[1] == 0x900);
         assert(s.pc == 0x902 && s.r[0] == 42);
+        assert(debug.traced_instructions == 1);
+        kega_sh2_set_trace(cpu, NULL, NULL, 0);
         kega_sh2_set_debug(cpu, NULL, NULL, 0);
     }
 }

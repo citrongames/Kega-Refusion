@@ -21,6 +21,7 @@ Start with the overview for current features and basic use, or the build guide f
 - [Controllers, light guns, Mouse, Paddle and J-Cart](controller-devices.md)
 - [Team Player, 4 Way Play and Master Tap](multitap.md)
 - [Cheats and memory search](cheats.md)
+- [CPU debugger](debug-execution.md), [memory and hardware inspection](debug-inspection.md), [instruction/event tracing](debug-tracing.md)
 - [Graphics/audio debugging controls](debug-controls.md)
 - [ZIP/7z handling](archive-support.md)
 - [Video aspect ratios](video-aspect-audit.md)

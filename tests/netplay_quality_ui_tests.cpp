@@ -58,13 +58,24 @@ void checkLobby(const QString& language,const QString& projectRoot) {
         .arg(QStringLiteral("—"),QStringLiteral("—"),QStringLiteral("—"),QStringLiteral("0")),"unknown ping or spectator input delay displayed a fake zero");
     const QString beforeHidden=summary->text();lobby.hide();lobby.setNetworkQuality(sample(99,4));
     require(summary->text()==beforeHidden,"hidden lobby updated widgets instead of caching the sample");
+    auto renamedRoster = participants;
+    auto renamedPeer = renamedRoster.at(1).toObject();
+    renamedPeer.insert("nickname", "Renamed peer");
+    renamedRoster.replace(1, renamedPeer);
+    state.insert("participants", renamedRoster);
+    lobby.setLobbyState(state);
+    require(table->item(1,0)->text()==QStringLiteral("Peer"),"hidden lobby rendered a roster update");
     lobby.show();QApplication::processEvents();
+    require(table->item(1,0)->text()==QStringLiteral("Renamed peer"),"reopened lobby lost latest roster");
     require(summary->text().contains("99")&&summary->text().contains("4")&&table->cellWidget(1,1)==role&&table->currentRow()==1,"opening lobby did not apply latest cached sample without rebuilding roles");
     lobby.setNetworkQuality({{"active",false}});
     require(summary->text()==text("Качество связи появится после запуска игры")&&table->item(1,3)->text()==text("%1 мс").arg(88),"inactive quality retained stale game measurements");
     auto* cable=lobby.findChild<QCheckBox*>(QStringLiteral("netplayLinkCable"));
     require(cable&&cable->text().contains(QStringLiteral("Gear-to-Gear"))&&cable->isEnabled(),
         "host cable switch does not expose Game Gear support");
+    QObject::connect(&lobby, &NetplayLobby::linkCableRequested, &lobby, [&] { lobby.setLobbyState(state); });
+    cable->click();
+    require(!cable->isChecked(), "unchanged authoritative state did not undo a rejected action");
     state.insert("linkCable",true);state.insert("playerCount",8);lobby.setLobbyState(state);
     auto* cableRole=qobject_cast<QComboBox*>(table->cellWidget(1,1));
     require(cableRole&&cableRole->count()==3&&

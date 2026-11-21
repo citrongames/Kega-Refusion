@@ -219,6 +219,9 @@ bool LibretroHost::initialize(QString& error) {
     api_->set_firecore_dmc_pcm = reinterpret_cast<decltype(api_->set_firecore_dmc_pcm)>(library_.resolve("retro_kegarefusion_set_firecore_dmc_pcm"));
     api_->ym2612_backend = reinterpret_cast<decltype(api_->ym2612_backend)>(library_.resolve("retro_kegarefusion_ym2612_backend"));
     api_->system_hw = reinterpret_cast<decltype(api_->system_hw)>(library_.resolve("retro_kegarefusion_system_hw"));
+    api_->trace_bind = reinterpret_cast<decltype(api_->trace_bind)>(library_.resolve("retro_kegarefusion_trace_bind_v1"));
+    api_->trace_capabilities = reinterpret_cast<decltype(api_->trace_capabilities)>(library_.resolve("retro_kegarefusion_trace_capabilities_v1"));
+    api_->trace_decode = reinterpret_cast<decltype(api_->trace_decode)>(library_.resolve("retro_kegarefusion_trace_decode_v1"));
     api_->debug_connect = reinterpret_cast<decltype(api_->debug_connect)>(library_.resolve("retro_kegarefusion_debug_connect"));
     api_->debug_targets = reinterpret_cast<decltype(api_->debug_targets)>(library_.resolve("retro_kegarefusion_debug_targets_v2"));
     api_->debug_connect_v2 = reinterpret_cast<decltype(api_->debug_connect_v2)>(library_.resolve("retro_kegarefusion_debug_connect_v2"));
@@ -790,6 +793,8 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     return true;
 }
 void LibretroHost::unload() {
+    traceBoundary(KR_TRACE_UNLOAD);
+    traceStop();
     debuggerDetach();
     ++inspectionGeneration_;
     while (rewindPreviewDepth_) endRewindPreview();
@@ -917,6 +922,7 @@ void LibretroHost::setSpriteOwnershipEnabled(bool enabled) {
 }
 void LibretroHost::runFrame(bool renderVideo, bool captureAudio) {
     if (!loaded_) return;
+    if (tracer_) traceBeforeFrame();
     if (!renderVideo) {
         spriteOwnership_ = {};
         if (linkPeer_) linkPeer_->spriteOwnership_ = {};
@@ -986,6 +992,7 @@ void LibretroHost::runRewindPreviewFrame(bool renderVideo, bool singleFieldFallb
 }
 void LibretroHost::reset() {
     finishDebugFrame();
+    traceBoundary(KR_TRACE_RESET);
     ++inspectionGeneration_;
     runClock_ = {};
     spriteOwnership_ = {};
@@ -1045,6 +1052,7 @@ bool LibretroHost::isMasterSystem() const {
 }
 bool LibretroHost::hardReset(QString& error, bool applyPending) {
     finishDebugFrame();
+    traceBoundary(KR_TRACE_POWER);
     ++inspectionGeneration_;
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
@@ -1787,6 +1795,7 @@ bool LibretroHost::restoreCore(const char* data, qsizetype size, bool transactio
         applyControllerPorts();
     }
     runClock_ = clock;
+    if (!rewindPreview_) traceBoundary(KR_TRACE_RESTORE);
     return true;
 }
 QString LibretroHost::statePath(int slot) const {

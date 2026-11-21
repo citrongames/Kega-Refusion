@@ -6,6 +6,7 @@
 #include "bridge.h"
 #include "bootrom.h"
 #include "DebugExecutionAbi.h"
+#include "../kegatrace/hooks.h"
 #include "../machine.h"
 #include "../state.h"
 #ifdef KEGA_SH2_DRC
@@ -855,6 +856,30 @@ static KegaSh2 *kr32_cpu(unsigned cpu) {
     if(!ctx || !ctx->machine || (cpu!=KR_DEBUG_SH2_MASTER && cpu!=KR_DEBUG_SH2_SLAVE))return NULL;
     return kega32x_machine_cpu(ctx->machine,cpu==KR_DEBUG_SH2_SLAVE);
 }
+static void kr32_trace_event(void *opaque,KegaSh2 *cpu,unsigned event,
+                             uint32_t address,uint32_t value,uint32_t aux)
+{
+    (void)opaque;
+    const unsigned side = !!kega_sh2_native(cpu)->is_slave;
+    const unsigned id = side ? KR_DEBUG_SH2_SLAVE : KR_DEBUG_SH2_MASTER;
+    const int64_t mclk = (int64_t)kega32x_machine_cpu_mclk(ctx->machine,side) -
+                         (int64_t)ctx->frame_base;
+    kr_trace_sh2(id,event == KEGA_SH2_TRACE_EXEC ? KR_TRACE_EXEC : KR_TRACE_IRQ_ACCEPT,
+                 mclk,(int64_t)kega_sh2_cycles(cpu),address,value,aux);
+}
+
+void kr_trace_32x_bind(unsigned instructions,unsigned irq)
+{
+    for(unsigned i=0;i<2;i++) {
+        const unsigned id = i ? KR_DEBUG_SH2_SLAVE : KR_DEBUG_SH2_MASTER;
+        KegaSh2 *cpu = kr32_cpu(id);
+        if (!cpu) continue;
+        const unsigned mask = ((instructions & id) ? KEGA_SH2_TRACE_EXEC : 0) |
+                              (irq ? KEGA_SH2_TRACE_IRQ : 0);
+        kega_sh2_set_trace(cpu,mask ? kr32_trace_event : NULL,NULL,mask);
+    }
+}
+
 void kr_debug_32x_connect(kr_debug_callback callback,void *user,unsigned master_mask,unsigned slave_mask) {
     unsigned i;
     for(i=0;i<2;i++) {

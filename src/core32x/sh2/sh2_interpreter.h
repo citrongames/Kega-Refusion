@@ -16,6 +16,11 @@ struct SH2_;
  * Non-null selects the instruction interpreter until detached. */
 typedef void (*KegaSh2DebugCallback)(void *, unsigned, uint32_t, uint32_t, unsigned);
 void kega_sh2_set_debug(KegaSh2 *, KegaSh2DebugCallback, void *, unsigned);
+enum { KEGA_SH2_TRACE_EXEC = 1, KEGA_SH2_TRACE_IRQ = 2 };
+/* A non-yielding observer. Nonzero mask selects the instruction interpreter. */
+typedef void (*KegaSh2TraceCallback)(void *, KegaSh2 *, unsigned, uint32_t, uint32_t, uint32_t);
+void kega_sh2_set_trace(KegaSh2 *, KegaSh2TraceCallback, void *, unsigned);
+
 
 
 /* Memory callbacks use SH-2 logical addresses and numeric big-endian values.

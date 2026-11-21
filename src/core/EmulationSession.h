@@ -2,6 +2,7 @@
 #include "ExpansionMode.h"
 #include "DebugInspection.h"
 #include "DebugExecution.h"
+#include "DebugTrace.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -42,6 +43,8 @@ public:
     void requestInspection(const DebugInspectionRequest& request);
     bool takeInspection(DebugInspectionSnapshot& snapshot);
     bool writeDebugMemory(const DebugMemoryWrite& request);
+    void traceCommand(const DebugTraceCommand& command);
+    bool takeTraceSnapshot(DebugTraceSnapshot& snapshot);
     void debuggerCommand(const DebuggerCommand& command);
     bool takeDebuggerSnapshot(DebuggerSnapshot& snapshot);
     void setDebugMasks(quint32 video, quint64 audio);
@@ -180,6 +183,7 @@ signals:
     void gameClosed();
     void masterSystemChanged(bool masterSystem);
     void gameGearChanged(bool gameGear);
+    void traceReady();
     void inspectionReady();
     void debugControlsChanged(quint32 videoAvailable, quint64 audioAvailable);
     void discStateChanged(const QStringList& paths, int index, bool ejected, bool megaLd);
@@ -223,6 +227,11 @@ private:
                       const QRectF& inputViewport = {});
     QString corePath_, dataPath_;
     std::mutex mutex_, videoMutex_, inspectionMutex_;
+    std::mutex traceMutex_;
+    std::deque<DebugTraceCommand> traceCommands_;
+    DebugTraceSnapshot traceSnapshot_;
+    bool traceSnapshotPending_=false;
+    std::atomic_bool traceRequested_{false};
     std::mutex debuggerMutex_;
     std::deque<DebuggerCommand> debuggerCommands_;
     DebuggerSnapshot debuggerSnapshot_;

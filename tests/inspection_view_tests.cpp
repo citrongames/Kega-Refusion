@@ -1,7 +1,9 @@
 #include "ui/DebugDialogs.h"
 #include "ui/DebugInspectorWidgets.h"
 
+#include <QAbstractItemModel>
 #include <QApplication>
+#include <QBrush>
 #include <QComboBox>
 #include <QDir>
 #include <QImage>
@@ -9,7 +11,10 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QLabel>
+#include <QHeaderView>
 #include <QTabWidget>
+#include <QTableView>
+#include <QScrollBar>
 #include <QTableWidget>
 #include <QtEndian>
 
@@ -86,7 +91,7 @@ void verifyMemory(const QString& previewDirectory) {
     data.memory = QByteArray(259, '\0');
     putWord(data.memory, 255, 0x1234);
     dialog.setSnapshot(data);
-    auto* hex = named<QTableWidget>(dialog, "debugMemoryHex");
+    auto* hex = named<QTableView>(dialog, "debugMemoryHex");
     auto* number = named<QLabel>(dialog, "debugMemoryValue");
     auto* width = named<QComboBox>(dialog, "debugMemoryWidth");
     auto* order = named<QComboBox>(dialog, "debugMemoryByteOrder");
@@ -100,7 +105,7 @@ void verifyMemory(const QString& previewDirectory) {
     dialog.setSnapshot(data);
     width->setCurrentIndex(width->findData(-2));
     check(number->text().contains(QStringLiteral("(-1)")), "signed watch");
-    check(hex->item(15, 15)->background().style() != Qt::NoBrush, "changed byte highlighted");
+    check(hex->model()->index(15, 15).data(Qt::BackgroundRole).value<QBrush>().style() != Qt::NoBrush, "changed byte highlighted");
     check(hex->editTriggers() == QAbstractItemView::NoEditTriggers, "page is read-only");
     if (!previewDirectory.isEmpty()) {
         QApplication::processEvents();
@@ -122,7 +127,7 @@ void verifyMemory(const QString& previewDirectory) {
     auto blocked = DebugInspectionSnapshot{};
     blocked.status = QStringLiteral("Hardcore");
     dialog.setSnapshot(blocked);
-    check(number->text() == QStringLiteral("—") && hex->item(15, 15)->text().isEmpty(), "blocked data cleared");
+    check(number->text() == QStringLiteral("—") && hex->model()->index(15, 15).data(Qt::DisplayRole).toString().isEmpty(), "blocked data cleared");
     auto sms = snapshot(KR_INSPECT_MEMORY, KR_HW_SMS, KR_VIDEO_SMS);
     sms.generation = 2;
     domain(sms, KR_MEM_ROM, 8192, "ROM");
@@ -131,6 +136,75 @@ void verifyMemory(const QString& previewDirectory) {
     check(dialog.request().domain == KR_MEM_ZRAM && dialog.request().offset == 0, "eight-bit RAM fallback");
     dialog.hide();
     check(dialog.request().parts == 0, "closing memory drops subscription");
+}
+
+void verifyMemoryRefresh() {
+    DebugMemoryDialog dialog;
+    dialog.resize(640, 380);
+    auto* view = named<QTableView>(dialog, "debugMemoryHex");
+    auto* model = view->model();
+    int dataChanges = 0, headerChanges = 0, requests = 0;
+    QModelIndex firstChanged, lastChanged;
+    QObject::connect(model, &QAbstractItemModel::dataChanged, &dialog,
+                     [&](const QModelIndex& first, const QModelIndex& last) {
+        ++dataChanges;
+        firstChanged = first;
+        lastChanged = last;
+    });
+    QObject::connect(model, &QAbstractItemModel::headerDataChanged, &dialog, [&] { ++headerChanges; });
+    QObject::connect(&dialog, &DebugMemoryDialog::inspectionChanged, &dialog, [&] { ++requests; });
+    dialog.show();
+    QApplication::processEvents();
+    check(requests == 1 && dataChanges == 0, "opening empty memory view sends one request and changes no cells");
+
+    auto data = snapshot(KR_INSPECT_MEMORY, KR_HW_SMS, KR_VIDEO_SMS);
+    domain(data, KR_MEM_ZRAM, 8192, "Z80 RAM");
+    dialog.setSnapshot(data);
+    check(requests == 2 && dialog.request().domain == KR_MEM_ZRAM,
+          "first catalog immediately requests bytes from fallback domain");
+    dialog.setSnapshot(data);
+    check(requests == 2 && dataChanges == 0, "unchanged fallback does not loop or mutate blank cells");
+
+    data.memoryDomain = KR_MEM_ZRAM;
+    data.memory = QByteArray(259, char(0));
+    dialog.setSnapshot(data);
+    check(dataChanges == 1 && headerChanges == 1 && requests == 2, "first page updates the model once");
+    dialog.navigateTo(KR_MEM_ZRAM, 254);
+    QApplication::processEvents();
+    const auto selection = view->currentIndex();
+    check(view->visualRect(selection).bottom() <= view->viewport()->rect().bottom(),
+          "navigation brings the whole selected row into view");
+    const int scroll = view->verticalScrollBar()->value();
+
+    ++data.frame;
+    dialog.setSnapshot(data);
+    check(dataChanges == 1 && headerChanges == 1 && requests == 2,
+          "same bytes on a new frame emit no table changes");
+
+    data.memory[75] = char(0xa5);
+    dialog.setSnapshot(data);
+    check(dataChanges == 2 && firstChanged.row() == 4 && lastChanged.row() == 4,
+          "one changed byte repaints one row including ASCII");
+    check(model->index(4, 11).data(Qt::BackgroundRole).isValid(), "changed byte highlighted");
+    data.memory.fill(char(0x36));
+    dialog.setSnapshot(data);
+    check(dataChanges == 3 && firstChanged.row() == 0 && lastChanged.row() == 15,
+          "full page of changing RAM is one model update");
+    check(view->currentIndex() == selection && view->verticalScrollBar()->value() == scroll,
+          "memory refresh preserves selection and scroll");
+    dialog.setSnapshot(data);
+    check(dataChanges == 4 && !model->index(4, 11).data(Qt::BackgroundRole).isValid(),
+          "highlight clears once on an unchanged snapshot");
+    dialog.setSnapshot(data);
+    check(dataChanges == 4 && headerChanges == 1 && requests == 2,
+          "subsequent unchanged page stays idle");
+
+    const int previousWidth = view->horizontalHeader()->sectionSize(0);
+    auto larger = view->font();
+    larger.setPixelSize(view->fontMetrics().height() + 6);
+    view->setFont(larger);
+    QApplication::processEvents();
+    check(view->horizontalHeader()->sectionSize(0) > previousWidth, "hex width follows a font size change");
 }
 
 void verifyMemoryEditing() {
@@ -359,6 +433,7 @@ int main(int argc, char** argv) {
     const QString previewDirectory = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QString();
     if (!previewDirectory.isEmpty()) check(QDir().mkpath(previewDirectory), "preview directory");
     verifyMemory(previewDirectory);
+    verifyMemoryRefresh();
     verifyMemoryEditing();
     verifyGraphics(previewDirectory);
     verifyOtherFormats();

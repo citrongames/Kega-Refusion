@@ -258,7 +258,10 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     linkCable_->setObjectName(QStringLiteral("netplayLinkCable"));
     linkCable_->setToolTip(t("Хост включает кабель в этом лобби: Link Cable для Mega Drive или Gear-to-Gear для Game Gear. Включение перезапускает игру на двух консолях; выключение продолжает игру на консоли A. Игрок 1 управляет консолью A, игрок 2 — консолью B, зрители видят экран консоли A."));
     romLayout->addWidget(linkCable_);
-    connect(linkCable_, &QCheckBox::toggled, this, &NetplayLobby::linkCableRequested);
+    connect(linkCable_, &QCheckBox::toggled, this, [this](bool checked) {
+        lobbyStateDirty_ = true;
+        emit linkCableRequested(checked);
+    });
     progress_ = new QProgressBar(romBox);
     progress_->setObjectName(QStringLiteral("netplayTransferProgress"));
     progress_->setRange(0, 100);
@@ -295,8 +298,14 @@ NetplayLobby::NetplayLobby(QWidget* parent)
     hostLayout->addWidget(allowCommands_);
     hostLayout->addWidget(allowDownloads_);
     layout->addWidget(hostBox);
-    connect(allowCommands_, &QCheckBox::toggled, this, &NetplayLobby::allowCommandsRequested);
-    connect(allowDownloads_, &QCheckBox::toggled, this, &NetplayLobby::allowDownloadsRequested);
+    connect(allowCommands_, &QCheckBox::toggled, this, [this](bool checked) {
+        lobbyStateDirty_ = true;
+        emit allowCommandsRequested(checked);
+    });
+    connect(allowDownloads_, &QCheckBox::toggled, this, [this](bool checked) {
+        lobbyStateDirty_ = true;
+        emit allowDownloadsRequested(checked);
+    });
 
     setLobbyState({});
 }
@@ -425,7 +434,16 @@ void NetplayLobby::showJoinDialog() {
 }
 
 void NetplayLobby::setLobbyState(const QJsonObject& state) {
-    state_ = state;
+    if (state_ != state) {
+        state_ = state;
+        lobbyStateDirty_ = true;
+    }
+    if (lobbyStateDirty_ && isVisible()) applyLobbyState();
+}
+
+void NetplayLobby::applyLobbyState() {
+    lobbyStateDirty_ = false;
+    const auto& state = state_;
     const bool active = state.value(QStringLiteral("active")).toBool();
     const bool host = active && state.value(QStringLiteral("host")).toBool();
     const QString status = state.value(QStringLiteral("status")).toString();
@@ -436,7 +454,7 @@ void NetplayLobby::setLobbyState(const QJsonObject& state) {
     stopWaiting_->setVisible(connectionWaiting);
     stopWaiting_->setEnabled(connectionWaiting);
     const QString invite = host ? state.value(QStringLiteral("invite")).toString() : QString();
-    invite_->setText(invite);
+    if (invite_->text() != invite) invite_->setText(invite);
     invite_->setPlaceholderText(host && invite.isEmpty() ? t("Определение адреса…")
                                                       : t("Доступно после создания сеанса"));
     copyInvite_->setEnabled(!invite.isEmpty());
@@ -526,8 +544,10 @@ void NetplayLobby::updateParticipants(const QJsonObject& state) {
                 participants_->setCellWidget(row, 1, roleBox);
                 connect(roleBox, &QComboBox::currentIndexChanged, this, [this, roleBox, id](int index) {
                     if (index >= 0 && state_.value(QStringLiteral("active")).toBool() &&
-                        state_.value(QStringLiteral("host")).toBool())
+                        state_.value(QStringLiteral("host")).toBool()) {
+                        lobbyStateDirty_ = true;
                         emit roleRequested(id, roleBox->itemData(index).toString());
+                    }
                 });
             }
             const QSignalBlocker roleBlocker(roleBox);
@@ -613,7 +633,11 @@ void NetplayLobby::updateParticipantPings() {
 
 void NetplayLobby::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    updateQualitySummary();updateParticipantPings();
+    if (lobbyStateDirty_) applyLobbyState();
+    else {
+        updateQualitySummary();
+        updateParticipantPings();
+    }
 }
 
 QString NetplayLobby::selectedPeerId() const {

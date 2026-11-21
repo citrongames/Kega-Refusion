@@ -274,7 +274,7 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
     code_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive);
     code_->setColumnWidth(2, 170);
     split->addWidget(code_);
-    stateTabs_ = new QTabWidget(split);
+    stateTabs_ = named(new QTabWidget(split), "debugCpuStateTabs");
     auto* registerPage = new QWidget(stateTabs_);
     auto* registerLayout = new QVBoxLayout(registerPage);
     registerLayout->setContentsMargins(0, 0, 0, 0);
@@ -385,10 +385,23 @@ CpuDebuggerDialog::CpuDebuggerDialog(QWidget* parent)
         if (index < 0) return;
         cpuId_ = cpu_->itemData(index).toUInt();
         updateControls();
-        updateCode();
-        updateState();
+        if (pages_->currentIndex() == 0) {
+            updateCode();
+            updateState();
+        }
         updateBookmarks();
         followProgramCounter();
+    });
+    connect(pages_, &QTabWidget::currentChanged, this, [this](int page) {
+        if (page == 0) {
+            updateCode();
+            updateState();
+        } else {
+            updateBreakpoints();
+        }
+    });
+    connect(stateTabs_, &QTabWidget::currentChanged, this, [this] {
+        if (pages_->currentIndex() == 0) updateState();
     });
     connect(go_, &QPushButton::clicked, this, &CpuDebuggerDialog::goToInput);
     connect(address_, &QLineEdit::returnPressed, this, &CpuDebuggerDialog::goToInput);
@@ -456,6 +469,7 @@ void CpuDebuggerDialog::navigateTo(quint32 cpu, quint32 address) {
     updateBookmarks();
     follow_->setChecked(false);
     feedback_->hide();
+    pages_->setCurrentIndex(0);
     if (isVisible()) send(DebuggerCommand::Navigate);
 }
 
@@ -535,9 +549,11 @@ void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
     updateCpuChoices();
     if (changedGeneration || changedGame || !snapshot_.attached) editBreakpoint(nullptr);
     updateControls();
-    updateCode();
-    updateState();
-    updateBreakpoints();
+    if (!snapshot_.attached || pages_->currentIndex() == 0) {
+        updateCode();
+        updateState();
+    }
+    if (!snapshot_.attached || pages_->currentIndex() != 0) updateBreakpoints();
     if (changedGame || previousCpu != cpuId_ || wasAttached != snapshot_.attached) updateBookmarks();
 }
 
@@ -659,7 +675,6 @@ void CpuDebuggerDialog::updateCode() {
     }
     const auto* state = findCpu(snapshot_, cpuId_);
     const auto codeSymbols = symbols_.constFind(cpuId_);
-    code_->setUpdatesEnabled(false);
     code_->setRowCount(snapshot_.instructions.size());
     int row = 0;
     for (const auto& instruction : snapshot_.instructions) {
@@ -694,34 +709,35 @@ void CpuDebuggerDialog::updateCode() {
     }
     if (followPc_ && state && !address_->hasFocus())
         address_->setText(hex(state->pc, addressDigits(cpuId_)));
-    code_->setUpdatesEnabled(true);
 }
 
 void CpuDebuggerDialog::updateState() {
     const auto* state = snapshot_.attached ? findCpu(snapshot_, cpuId_) : nullptr;
     const auto* target = findTarget(snapshot_, cpuId_);
-    updateFlags(state, target);
     if (!state) {
+        updateFlags(nullptr, target);
         registers_->setRowCount(0);
         stack_->clear();
         return;
     }
-    const auto count = std::min(state->count, KR_DEBUG_MAX_REGS);
-    registers_->setRowCount(count + 1);
-    registers_->setUpdatesEnabled(false);
-    for (quint32 i = 0; i < count; ++i) {
-        const auto& reg = state->regs[i];
-        const QString name = QString::fromLatin1(reg.name);
-        cell(registers_, i, 0, name);
-        auto* item = cell(registers_, i, 1, reg.digits
-                          ? QStringLiteral("0x%1").arg(hex(reg.value, std::min(reg.digits, 8u)))
-                          : QString::number(reg.value));
-        const QString tip = canEditRegister(name) ? text("Двойной щелчок для изменения регистра") : QString();
-        if (item->toolTip() != tip) item->setToolTip(tip);
+    if (stateTabs_->currentWidget() != stack_) {
+        updateFlags(state, target);
+        const auto count = std::min(state->count, KR_DEBUG_MAX_REGS);
+        registers_->setRowCount(count + 1);
+        for (quint32 i = 0; i < count; ++i) {
+            const auto& reg = state->regs[i];
+            const QString name = QString::fromLatin1(reg.name);
+            cell(registers_, i, 0, name);
+            auto* item = cell(registers_, i, 1, reg.digits
+                              ? QStringLiteral("0x%1").arg(hex(reg.value, std::min(reg.digits, 8u)))
+                              : QString::number(reg.value));
+            const QString tip = canEditRegister(name) ? text("Двойной щелчок для изменения регистра") : QString();
+            if (item->toolTip() != tip) item->setToolTip(tip);
+        }
+        cell(registers_, count, 0, text("Такты в кадре"));
+        cell(registers_, count, 1, QString::number(state->cycles))->setToolTip({});
+        return;
     }
-    cell(registers_, count, 0, text("Такты в кадре"));
-    cell(registers_, count, 1, QString::number(state->cycles))->setToolTip({});
-    registers_->setUpdatesEnabled(true);
 
     QString dump;
     if (snapshot_.selectedCpu == cpuId_ && target && (target->capabilities & KR_DEBUG_CAP_STACK)) {
@@ -817,7 +833,6 @@ void CpuDebuggerDialog::writeRegister(const QString& name, quint32 value, quint3
 
 void CpuDebuggerDialog::updateBreakpoints() {
     const QSignalBlocker block(breakpoints_);
-    breakpoints_->setUpdatesEnabled(false);
     const auto& list = snapshot_.breakpoints;
     breakpoints_->setRowCount(snapshot_.attached ? list.size() : 0);
     int selectedRow = -1;
@@ -838,7 +853,6 @@ void CpuDebuggerDialog::updateBreakpoints() {
         cell(breakpoints_, row, 7, bp.oneShot ? QStringLiteral("✓") : QStringLiteral("—"));
     }
     if (selectedRow != breakpoints_->currentRow()) breakpoints_->setCurrentCell(selectedRow, selectedRow < 0 ? -1 : 0);
-    breakpoints_->setUpdatesEnabled(true);
 }
 
 void CpuDebuggerDialog::editBreakpoint(const DebuggerBreakpoint* bp) {

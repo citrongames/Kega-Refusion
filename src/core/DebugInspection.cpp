@@ -115,5 +115,6 @@ bool LibretroHost::writeInspectionMemory(const DebugMemoryWrite& request, QStrin
         return false;
     }
     ++inspectionGeneration_;
+    traceBoundary(KR_TRACE_MEMORY_EDIT);
     return true;
 }

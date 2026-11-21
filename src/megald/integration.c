@@ -5,6 +5,7 @@
 #include "player/ld_player.h"
 #include "video_cache.h"
 #include "../kegainspect/values.h"
+#include "../kegatrace/hooks.h"
 #include <limits.h>
 #include <stddef.h>
 
@@ -189,7 +190,23 @@ static void write_byte(unsigned addr, unsigned data)
 {
   if (addr & 1) {
     sync_timeline();
-    kr_ld_player_write(&player, addr, (uint8_t)data);
+    if (UNLIKELY(kr_trace_filters & KR_TRACE_DISC) && !(addr & 0x80)) {
+      const unsigned index = (addr & 0x3f) >> 1;
+      const unsigned old = player.inputRegs[index];
+      const int was_frozen = player.areInputRegsFrozen;
+      kr_ld_player_write(&player, addr, (uint8_t)data);
+      const unsigned diff = old ^ player.inputRegs[index];
+      const int committed = !player.areInputRegsFrozen &&
+        ((index == 0 && (was_frozen || (diff & 1))) ||
+         (index == 2 && (diff & 0x3f)) || ((index == 3 || index == 6) && diff));
+      if (committed) {
+        const unsigned state = player.currentDriveState | (player.currentPlaybackMode << 8) |
+                               (player.currentSeekMode << 16);
+        kr_trace_hardware(KR_TRACE_DISC_COMMAND, KR_TRACE_MEGALD, KR_DEBUG_SUB68K,
+                          s68k.cycles, addr & 0xffffff, (uint8_t)data, state, 1);
+      }
+    }
+    else kr_ld_player_write(&player, addr, (uint8_t)data);
   }
 }
 static void write_word(unsigned addr, unsigned data) { write_byte(addr | 1, data); }

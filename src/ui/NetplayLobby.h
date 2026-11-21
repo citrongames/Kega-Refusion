@@ -63,12 +63,14 @@ protected:
 
 private:
     QString selectedPeerId() const;
+    void applyLobbyState();
     void updateModerationButtons();
     void updateParticipants(const QJsonObject& state);
     void updateQualitySummary();
     void updateParticipantPings();
 
     QJsonObject state_, networkQuality_;
+    bool lobbyStateDirty_ = true;
     QHash<QString,QPair<int,int>> qualityPings_;
     QLabel* status_ = nullptr;
     QLabel* addressStatus_ = nullptr;

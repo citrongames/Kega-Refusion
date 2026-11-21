@@ -601,8 +601,9 @@ void GameView::setPerformanceMetrics(double emulatedFps, double /* speedPercent 
     gameFpsAvailable_ = gameFpsAvailable;
     metricsReady_ = true;
     if (performanceMetricsEnabled_ || gameFpsEnabled_) {
+        const QStringList previous = metricsLines_;
         rebuildPerformanceMetrics();
-        repaintView();
+        if (osdEnabled_ && previous != metricsLines_) repaintView();
     }
 }
 

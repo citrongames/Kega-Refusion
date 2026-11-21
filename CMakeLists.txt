@@ -37,6 +37,8 @@ set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
+    src/core/DebugTrace.cpp src/core/DebugTrace.h src/core/DebugTraceAbi.h
+    src/core/DebugTraceBuffer.cpp src/core/DebugTraceBuffer.h
     src/core/DebugExecution.cpp src/core/DebugExecution.h src/core/DebugExecutionAbi.h
     src/core/DebugInspection.cpp src/core/DebugInspection.h src/core/DebugInspectionAbi.h
     src/core/CartridgeProfile.h
@@ -134,6 +136,7 @@ add_executable(KegaRefusion WIN32
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/CpuDebuggerDialog.cpp src/ui/CpuDebuggerDialog.h
+    src/ui/TraceDialog.cpp src/ui/TraceDialog.h
     src/ui/DebugInspectorWidgets.cpp src/ui/DebugInspectorWidgets.h
     src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -364,6 +367,11 @@ if(BUILD_TESTING)
     target_link_libraries(speed_benchmark PRIVATE core_host)
     add_executable(rewind_benchmark tools/rewind-benchmark.cpp)
     target_link_libraries(rewind_benchmark PRIVATE core_host)
+    add_executable(trace_view_tests tests/trace_view_tests.cpp src/ui/TraceDialog.cpp src/ui/TraceDialog.h)
+    target_include_directories(trace_view_tests PRIVATE src)
+    target_link_libraries(trace_view_tests PRIVATE Qt6::Widgets localization)
+    add_test(NAME trace_view_tests COMMAND trace_view_tests)
+    set_tests_properties(trace_view_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(inspection_view_tests tests/inspection_view_tests.cpp
         src/ui/DebugInspectorWidgets.cpp src/ui/DebugInspectorWidgets.h
         src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h)
@@ -387,6 +395,14 @@ if(BUILD_TESTING)
     add_executable(debug_expansion_tests tests/debug_expansion_tests.cpp
         src/core/EmulationSession.cpp src/core/EmulationSession.h)
     target_link_libraries(debug_expansion_tests PRIVATE core_host)
+    add_executable(debug_trace_native_tests tests/debug_trace_native_tests.cpp)
+    target_include_directories(debug_trace_native_tests PRIVATE src third_party/libretro)
+    target_link_libraries(debug_trace_native_tests PRIVATE Qt6::Core)
+    add_executable(debug_trace_host_tests tests/debug_trace_host_tests.cpp)
+    target_link_libraries(debug_trace_host_tests PRIVATE core_host)
+    add_executable(debug_trace_buffer_tests tests/debug_trace_buffer_tests.cpp)
+    target_link_libraries(debug_trace_buffer_tests PRIVATE core_host)
+    add_test(NAME debug_trace_buffer COMMAND debug_trace_buffer_tests)
     add_executable(debug_execution_tests tests/debug_execution_tests.cpp)
     target_link_libraries(debug_execution_tests PRIVATE core_host)
     add_executable(inspection_core_tests tests/inspection_core_tests.cpp)

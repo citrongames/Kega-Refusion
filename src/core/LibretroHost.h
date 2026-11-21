@@ -2,6 +2,7 @@
 #include "ExpansionMode.h"
 #include "DebugInspection.h"
 #include "DebugExecution.h"
+#include "DebugTrace.h"
 #include "InputDisplay.h"
 #include <QByteArray>
 #include <QImage>
@@ -88,6 +89,11 @@ public:
     bool debuggerCommand(const DebuggerCommand&, QString& error);
     DebuggerSnapshot debuggerSnapshot() const;
     quint64 inspectionGeneration() const { return inspectionGeneration_; }
+    bool traceCommand(const DebugTraceCommand&, QString& error);
+    DebugTraceSnapshot traceSnapshot() const;
+    bool traceActive() const;
+    void traceStop();
+    void traceBoundary(unsigned reason);
     void setDebugMasks(quint32 video, quint64 audio);
     void setDebugBackdrop(quint32 rgb);
     void setDebugAudioGain(unsigned channel, unsigned percent);
@@ -201,6 +207,11 @@ public:
     std::function<void(const QString&)> message;
 private:
     struct Activation { LibretroHost* previous; explicit Activation(LibretroHost* h) : previous(active_) { active_=h; } ~Activation() { active_=previous; } };
+    struct TraceExecution;
+    struct TraceExecutionDeleter { void operator()(TraceExecution*) const; };
+    std::unique_ptr<TraceExecution,TraceExecutionDeleter> tracer_;
+    void traceBeforeFrame();
+    void traceDisconnectPeer();
     struct DebugExecution;
     struct DebugExecutionDeleter { void operator()(DebugExecution*) const; };
     std::unique_ptr<DebugExecution,DebugExecutionDeleter> debugger_;
