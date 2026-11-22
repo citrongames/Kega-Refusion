@@ -1,0 +1,861 @@
+{
+  "date": "2026-11-22",
+  "method": "Published Windows core, production output sources with diagnostic taps, fixed frame-indexed SOUND00 input, process-specific WASAPI capture",
+  "rom_sha256": "37b3254d63b73d81341069e49909fd8a020cc8fbdb936de34364e19d6722f140",
+  "runs": {
+    "v026-a": {
+      "output": {
+        "accepted_bytes": 5297632,
+        "device": "Наушники (Realtek(R) Audio)",
+        "device_preferred_rate": 48000,
+        "dropped_bytes": 1192,
+        "elapsed_ms": 31386.0878,
+        "errors": [],
+        "fps": 59.92274340431231,
+        "pcm_sha256": "8adde4c7bf9af0c4e1dec670c1183aacdade9af17d98d720c42759c9be46dc89",
+        "qt": "6.10.2",
+        "record_frames": 1800,
+        "sample_rate": 44100,
+        "scope": "Published Windows core; old production AudioOutput+AudioQueue+FramePacer with diagnostic PCM taps; fixed controller tape. No full GUI/GPU/Voicemeeter.",
+        "source_bytes": 5298824,
+        "volume_percent": 20,
+        "ym2612_backend": 1
+      },
+      "loopback": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "sample_format": "float32",
+        "requested_seconds": 38,
+        "frames": 1821600,
+        "silent_frames": 0,
+        "packets": 3795,
+        "discontinuities": 0,
+        "timestamp_errors": 0
+      }
+    },
+    "v026-b": {
+      "output": {
+        "accepted_bytes": 5297632,
+        "device": "Наушники (Realtek(R) Audio)",
+        "device_preferred_rate": 48000,
+        "dropped_bytes": 1192,
+        "elapsed_ms": 31419.9326,
+        "errors": [],
+        "fps": 59.92274340431231,
+        "pcm_sha256": "8adde4c7bf9af0c4e1dec670c1183aacdade9af17d98d720c42759c9be46dc89",
+        "qt": "6.10.2",
+        "record_frames": 1800,
+        "sample_rate": 44100,
+        "scope": "Published Windows core; old production AudioOutput+AudioQueue+FramePacer with diagnostic PCM taps; fixed controller tape. No full GUI/GPU/Voicemeeter.",
+        "source_bytes": 5298824,
+        "volume_percent": 20,
+        "ym2612_backend": 1
+      },
+      "loopback": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "sample_format": "float32",
+        "requested_seconds": 38,
+        "frames": 1821600,
+        "silent_frames": 0,
+        "packets": 3795,
+        "discontinuities": 0,
+        "timestamp_errors": 0
+      }
+    },
+    "v027-a": {
+      "output": {
+        "accepted_bytes": 5297632,
+        "device": "Наушники (Realtek(R) Audio)",
+        "device_preferred_rate": 48000,
+        "dropped_bytes": 1192,
+        "elapsed_ms": 31196.7155,
+        "errors": [],
+        "fps": 59.92274340431231,
+        "pcm_sha256": "8adde4c7bf9af0c4e1dec670c1183aacdade9af17d98d720c42759c9be46dc89",
+        "qt": "6.10.2",
+        "record_frames": 1800,
+        "sample_rate": 44100,
+        "scope": "Published Windows core; old production AudioOutput+AudioQueue+FramePacer with diagnostic PCM taps; fixed controller tape. No full GUI/GPU/Voicemeeter.",
+        "source_bytes": 5298824,
+        "volume_percent": 20,
+        "ym2612_backend": 1
+      },
+      "loopback": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "sample_format": "float32",
+        "requested_seconds": 38,
+        "frames": 1821600,
+        "silent_frames": 0,
+        "packets": 3795,
+        "discontinuities": 0,
+        "timestamp_errors": 0
+      }
+    },
+    "v0301-a": {
+      "output": {
+        "accepted_bytes": 5297632,
+        "accepted_sha256": "4b03ddf432ad2b5812b12af061aefb63c7cd90f7eaa38294f7a86ab72cd57826",
+        "device": "Наушники (Realtek(R) Audio)",
+        "device_preferred_rate": 48000,
+        "diagnostic_pcm_consistent": true,
+        "drop_events": [
+          {
+            "accepted_bytes_before_drop": 0,
+            "bytes": 1192,
+            "ms": 1427
+          }
+        ],
+        "drop_events_complete": true,
+        "dropped_bytes": 1192,
+        "elapsed_ms": 31227.2136,
+        "errors": [],
+        "fps": 59.92274340431231,
+        "frontend_release": "0.30.1",
+        "gui_stall_ms": 0,
+        "gui_stalls": 0,
+        "idle_after_2s": 1,
+        "idle_event_ms": [
+          31489
+        ],
+        "input_bytes": 5298824,
+        "input_sha256": "bc91c6e5964b84984cea9ee58bd8e8da68253dc0af6071cde57328c0d3c6e377",
+        "max_input_gap_ms": 19.6635,
+        "pcm_sha256": "bc91c6e5964b84984cea9ee58bd8e8da68253dc0af6071cde57328c0d3c6e377",
+        "pending_bytes": 0,
+        "qt": "6.10.2",
+        "queue_max_us": 80385,
+        "queue_min_us": 0,
+        "queue_overflow_after_first_accept_bytes": 0,
+        "record_frames": 1800,
+        "sample_rate": 44100,
+        "scope": "0.30.1 release core, threaded AudioOutput/AudioOutputWorker, AudioQueue and FramePacer; diagnostic PCM taps and fixed controller tape. No full GUI, GPU drawing or Voicemeeter.",
+        "sink_buffer_bytes": 7056,
+        "sink_idle_events": 1,
+        "sink_opens": 1,
+        "source_bytes": 5298824,
+        "startup_only_drop_bytes": 1192,
+        "unclassified_missing_bytes": 0,
+        "volume_percent": 20,
+        "write_errors": 0,
+        "ym2612_backend": 1
+      },
+      "loopback": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "sample_format": "float32",
+        "requested_seconds": 38,
+        "frames": 1821600,
+        "silent_frames": 0,
+        "packets": 3795,
+        "discontinuities": 0,
+        "timestamp_errors": 0
+      }
+    },
+    "v0301-gui60": {
+      "output": {
+        "accepted_bytes": 5297632,
+        "accepted_sha256": "4b03ddf432ad2b5812b12af061aefb63c7cd90f7eaa38294f7a86ab72cd57826",
+        "device": "Наушники (Realtek(R) Audio)",
+        "device_preferred_rate": 48000,
+        "diagnostic_pcm_consistent": true,
+        "drop_events": [
+          {
+            "accepted_bytes_before_drop": 0,
+            "bytes": 1192,
+            "ms": 1423
+          }
+        ],
+        "drop_events_complete": true,
+        "dropped_bytes": 1192,
+        "elapsed_ms": 31182.8915,
+        "errors": [],
+        "fps": 59.92274340431231,
+        "frontend_release": "0.30.1",
+        "gui_stall_ms": 60,
+        "gui_stalls": 58,
+        "idle_after_2s": 1,
+        "idle_event_ms": [
+          31440
+        ],
+        "input_bytes": 5298824,
+        "input_sha256": "bc91c6e5964b84984cea9ee58bd8e8da68253dc0af6071cde57328c0d3c6e377",
+        "max_input_gap_ms": 21.5482,
+        "pcm_sha256": "bc91c6e5964b84984cea9ee58bd8e8da68253dc0af6071cde57328c0d3c6e377",
+        "pending_bytes": 0,
+        "qt": "6.10.2",
+        "queue_max_us": 56122,
+        "queue_min_us": 0,
+        "queue_overflow_after_first_accept_bytes": 0,
+        "record_frames": 1800,
+        "sample_rate": 44100,
+        "scope": "0.30.1 release core, threaded AudioOutput/AudioOutputWorker, AudioQueue and FramePacer; diagnostic PCM taps and fixed controller tape. No full GUI, GPU drawing or Voicemeeter.",
+        "sink_buffer_bytes": 7056,
+        "sink_idle_events": 1,
+        "sink_opens": 1,
+        "source_bytes": 5298824,
+        "startup_only_drop_bytes": 1192,
+        "unclassified_missing_bytes": 0,
+        "volume_percent": 20,
+        "write_errors": 0,
+        "ym2612_backend": 1
+      },
+      "loopback": {
+        "sample_rate": 48000,
+        "channels": 2,
+        "sample_format": "float32",
+        "requested_seconds": 38,
+        "frames": 1822080,
+        "silent_frames": 0,
+        "packets": 3796,
+        "discontinuities": 0,
+        "timestamp_errors": 0
+      }
+    }
+  },
+  "old_comparison": {
+    "rate": 48000,
+    "core_rate": 44100,
+    "samples": "WASAPI process loopback Float32 stereo; direct comparison without resampling, gain adjustment or time warping; positive lag means second capture is later",
+    "runs": {
+      "v026-a": {
+        "source_pcm_sha256": "8adde4c7bf9af0c4e1dec670c1183aacdade9af17d98d720c42759c9be46dc89",
+        "qt_accepted_pcm_sha256": "4a5f53e70217642ad583fd32ff508690849e7b57da57c9c4fb0dee45324a850b",
+        "qt_accepted_exact_source_suffix": true,
+        "source_and_accepted_frames": [
+          1324706,
+          1324408
+        ],
+        "difference_frames_at_44100_hz": 298,
+        "prefix_peak_pcm16": 1703,
+        "windows_wav_sha256": "a73d3fb73dda7a62f3429abd74096690403de3dc6807292569ac1aa8f56bc056",
+        "loopback_frames": 1821600,
+        "nonzero_active_start_and_exclusive_end": [
+          73792,
+          1517695
+        ],
+        "active_pcm_sha256": "fc316b9b5e52b9629f5007926434c2a2f1f19380a7de7bc54bbc6a2bd916fd2a",
+        "interior_stereo_zero_runs_at_least_2_samples": 0,
+        "interior_stereo_zero_longest_frames": 0,
+        "packets": 3795,
+        "nonzero_packet_flags": [],
+        "qpc_packet_gap_min_median_max_ms": [
+          10.0,
+          10.0,
+          38.7871
+        ]
+      },
+      "v026-b": {
+        "source_pcm_sha256": "8adde4c7bf9af0c4e1dec670c1183aacdade9af17d98d720c42759c9be46dc89",
+        "qt_accepted_pcm_sha256": "4a5f53e70217642ad583fd32ff508690849e7b57da57c9c4fb0dee45324a850b",
+        "qt_accepted_exact_source_suffix": true,
+        "source_and_accepted_frames": [
+          1324706,
+          1324408
+        ],
+        "difference_frames_at_44100_hz": 298,
+        "prefix_peak_pcm16": 1703,
+        "windows_wav_sha256": "fa934825595baea6e0efd6b57b968a463e9f8a97b921ca7265847433905c3e3a",
+        "loopback_frames": 1821600,
+        "nonzero_active_start_and_exclusive_end": [
+          74592,
+          1518175
+        ],
+        "active_pcm_sha256": "f89bb7639bde35e52a2f8b118370e9e2b2fa5840ffa14296a0a95dc1566e0927",
+        "interior_stereo_zero_runs_at_least_2_samples": 0,
+        "interior_stereo_zero_longest_frames": 0,
+        "packets": 3795,
+        "nonzero_packet_flags": [],
+        "qpc_packet_gap_min_median_max_ms": [
+          10.0,
+          10.0,
+          37.7165
+        ]
+      },
+      "v027-a": {
+        "source_pcm_sha256": "8adde4c7bf9af0c4e1dec670c1183aacdade9af17d98d720c42759c9be46dc89",
+        "qt_accepted_pcm_sha256": "4a5f53e70217642ad583fd32ff508690849e7b57da57c9c4fb0dee45324a850b",
+        "qt_accepted_exact_source_suffix": true,
+        "source_and_accepted_frames": [
+          1324706,
+          1324408
+        ],
+        "difference_frames_at_44100_hz": 298,
+        "prefix_peak_pcm16": 1703,
+        "windows_wav_sha256": "a7b34118655fd600dc7d460e1c0020be892229b0a0bd6c0e8b9c7373f1465b43",
+        "loopback_frames": 1821600,
+        "nonzero_active_start_and_exclusive_end": [
+          64032,
+          1507615
+        ],
+        "active_pcm_sha256": "f89bb7639bde35e52a2f8b118370e9e2b2fa5840ffa14296a0a95dc1566e0927",
+        "interior_stereo_zero_runs_at_least_2_samples": 0,
+        "interior_stereo_zero_longest_frames": 0,
+        "packets": 3795,
+        "nonzero_packet_flags": [],
+        "qpc_packet_gap_min_median_max_ms": [
+          10.0,
+          10.0,
+          43.0901
+        ]
+      }
+    },
+    "pairs": {
+      "v026-a vs v026-b": {
+        "onset_relative_lag_frames": -320,
+        "original_file_lag_frames": 480,
+        "mono_alignment_correlation": 0.9999846638715978,
+        "aligned_origin_in_original_files": [
+          74112,
+          74592
+        ],
+        "whole_overlap": {
+          "frames": 1443583,
+          "byte_identical": false,
+          "different_frames": 1443581,
+          "rho": [
+            0.999946022321294,
+            0.9999461418273049
+          ],
+          "rms_difference_fs": [
+            0.0006741084467988592,
+            0.0006749283969900434
+          ],
+          "rms_difference_dbfs": [
+            -63.42540461951015,
+            -63.41484597868556
+          ],
+          "peak_difference_fs": 0.04920846037566662,
+          "peak_difference_at_frame": 2610,
+          "first_last_unequal_frame": [
+            0,
+            1443582
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "first_second_of_overlap": {
+          "frames": 48000,
+          "byte_identical": false,
+          "different_frames": 48000,
+          "rho": [
+            0.9984464218994581,
+            0.9984501138260866
+          ],
+          "rms_difference_fs": [
+            0.0031928400941565547,
+            0.0031930838555965972
+          ],
+          "rms_difference_dbfs": [
+            -49.916456630554215,
+            -49.915793520569224
+          ],
+          "peak_difference_fs": 0.04920846037566662,
+          "peak_difference_at_frame": 2610,
+          "first_last_unequal_frame": [
+            0,
+            47999
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "overlap_after_first_second": {
+          "frames": 1395583,
+          "byte_identical": false,
+          "different_frames": 1395581,
+          "rho": [
+            0.9999865402553391,
+            0.9999865043399394
+          ],
+          "rms_difference_fs": [
+            0.00034558515661425296,
+            0.0003471595439056133
+          ],
+          "rms_difference_dbfs": [
+            -69.22889838746022,
+            -69.18941781750652
+          ],
+          "peak_difference_fs": 0.003509342670440674,
+          "peak_difference_at_frame": 313858,
+          "first_last_unequal_frame": [
+            0,
+            1395582
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "local_0_5s_integer_lag_measurements": [
+          {
+            "time_into_first_active_s": 1,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999980461699955
+          },
+          {
+            "time_into_first_active_s": 4,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999978364179893
+          },
+          {
+            "time_into_first_active_s": 7,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999941470213445
+          },
+          {
+            "time_into_first_active_s": 10,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999954129751359
+          },
+          {
+            "time_into_first_active_s": 13,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999966358389962
+          },
+          {
+            "time_into_first_active_s": 16,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999986388716056
+          },
+          {
+            "time_into_first_active_s": 19,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999998688083633
+          },
+          {
+            "time_into_first_active_s": 22,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999997868330542
+          },
+          {
+            "time_into_first_active_s": 25,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999975109381067
+          },
+          {
+            "time_into_first_active_s": 28,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999998326739254
+          }
+        ]
+      },
+      "v026-a vs v027-a": {
+        "onset_relative_lag_frames": -320,
+        "original_file_lag_frames": -10080,
+        "mono_alignment_correlation": 0.9999846638715978,
+        "aligned_origin_in_original_files": [
+          74112,
+          64032
+        ],
+        "whole_overlap": {
+          "frames": 1443583,
+          "byte_identical": false,
+          "different_frames": 1443581,
+          "rho": [
+            0.999946022321294,
+            0.9999461418273049
+          ],
+          "rms_difference_fs": [
+            0.0006741084467988592,
+            0.0006749283969900434
+          ],
+          "rms_difference_dbfs": [
+            -63.42540461951015,
+            -63.41484597868556
+          ],
+          "peak_difference_fs": 0.04920846037566662,
+          "peak_difference_at_frame": 2610,
+          "first_last_unequal_frame": [
+            0,
+            1443582
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "first_second_of_overlap": {
+          "frames": 48000,
+          "byte_identical": false,
+          "different_frames": 48000,
+          "rho": [
+            0.9984464218994581,
+            0.9984501138260866
+          ],
+          "rms_difference_fs": [
+            0.0031928400941565547,
+            0.0031930838555965972
+          ],
+          "rms_difference_dbfs": [
+            -49.916456630554215,
+            -49.915793520569224
+          ],
+          "peak_difference_fs": 0.04920846037566662,
+          "peak_difference_at_frame": 2610,
+          "first_last_unequal_frame": [
+            0,
+            47999
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "overlap_after_first_second": {
+          "frames": 1395583,
+          "byte_identical": false,
+          "different_frames": 1395581,
+          "rho": [
+            0.9999865402553391,
+            0.9999865043399394
+          ],
+          "rms_difference_fs": [
+            0.00034558515661425296,
+            0.0003471595439056133
+          ],
+          "rms_difference_dbfs": [
+            -69.22889838746022,
+            -69.18941781750652
+          ],
+          "peak_difference_fs": 0.003509342670440674,
+          "peak_difference_at_frame": 313858,
+          "first_last_unequal_frame": [
+            0,
+            1395582
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "local_0_5s_integer_lag_measurements": [
+          {
+            "time_into_first_active_s": 1,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999980461699955
+          },
+          {
+            "time_into_first_active_s": 4,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999978364179893
+          },
+          {
+            "time_into_first_active_s": 7,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999941470213445
+          },
+          {
+            "time_into_first_active_s": 10,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999954129751359
+          },
+          {
+            "time_into_first_active_s": 13,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999966358389962
+          },
+          {
+            "time_into_first_active_s": 16,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999986388716056
+          },
+          {
+            "time_into_first_active_s": 19,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999998688083633
+          },
+          {
+            "time_into_first_active_s": 22,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999997868330542
+          },
+          {
+            "time_into_first_active_s": 25,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.9999975109381067
+          },
+          {
+            "time_into_first_active_s": 28,
+            "onset_relative_lag_frames": -320,
+            "rho": 0.999998326739254
+          }
+        ]
+      },
+      "v026-b vs v027-a": {
+        "onset_relative_lag_frames": 0,
+        "original_file_lag_frames": -10560,
+        "mono_alignment_correlation": 0.9999999999998324,
+        "aligned_origin_in_original_files": [
+          74592,
+          64032
+        ],
+        "whole_overlap": {
+          "frames": 1443583,
+          "byte_identical": true,
+          "different_frames": 0,
+          "rho": [
+            1.0,
+            1.0
+          ],
+          "rms_difference_fs": [
+            0.0,
+            0.0
+          ],
+          "rms_difference_dbfs": [
+            null,
+            null
+          ],
+          "peak_difference_fs": 0.0,
+          "first_last_unequal_frame": null,
+          "equal_final_suffix_frames": 1443583
+        },
+        "first_second_of_overlap": {
+          "frames": 48000,
+          "byte_identical": true,
+          "different_frames": 0,
+          "rho": [
+            1.0,
+            1.0
+          ],
+          "rms_difference_fs": [
+            0.0,
+            0.0
+          ],
+          "rms_difference_dbfs": [
+            null,
+            null
+          ],
+          "peak_difference_fs": 0.0,
+          "first_last_unequal_frame": null,
+          "equal_final_suffix_frames": 48000
+        },
+        "overlap_after_first_second": {
+          "frames": 1395583,
+          "byte_identical": true,
+          "different_frames": 0,
+          "rho": [
+            1.0,
+            1.0
+          ],
+          "rms_difference_fs": [
+            0.0,
+            0.0
+          ],
+          "rms_difference_dbfs": [
+            null,
+            null
+          ],
+          "peak_difference_fs": 0.0,
+          "first_last_unequal_frame": null,
+          "equal_final_suffix_frames": 1395583
+        },
+        "local_0_5s_integer_lag_measurements": [
+          {
+            "time_into_first_active_s": 1,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999862
+          },
+          {
+            "time_into_first_active_s": 4,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999861
+          },
+          {
+            "time_into_first_active_s": 7,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999868
+          },
+          {
+            "time_into_first_active_s": 10,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999897
+          },
+          {
+            "time_into_first_active_s": 13,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.999999999999987
+          },
+          {
+            "time_into_first_active_s": 16,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999888
+          },
+          {
+            "time_into_first_active_s": 19,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999817
+          },
+          {
+            "time_into_first_active_s": 22,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999852
+          },
+          {
+            "time_into_first_active_s": 25,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999809
+          },
+          {
+            "time_into_first_active_s": 28,
+            "onset_relative_lag_frames": 0,
+            "rho": 0.9999999999999822
+          }
+        ]
+      }
+    }
+  },
+  "current_comparison": {
+    "rate": 48000,
+    "core_rate": 44100,
+    "samples": "WASAPI process loopback Float32 stereo; direct comparison without resampling, gain adjustment or time warping; positive lag means second capture is later",
+    "runs": {
+      "v0301-a": {
+        "source_pcm_sha256": "bc91c6e5964b84984cea9ee58bd8e8da68253dc0af6071cde57328c0d3c6e377",
+        "qt_accepted_pcm_sha256": "4b03ddf432ad2b5812b12af061aefb63c7cd90f7eaa38294f7a86ab72cd57826",
+        "qt_accepted_exact_source_suffix": true,
+        "source_and_accepted_frames": [
+          1324706,
+          1324408
+        ],
+        "difference_frames_at_44100_hz": 298,
+        "prefix_peak_pcm16": 1690,
+        "nonzero_active_start_and_exclusive_end": [
+          65952,
+          1509535
+        ],
+        "active_pcm_sha256": "e8494d33525569fc9096c1b97e5833749f33e4efb6627de829a133d16dd38523",
+        "windows_wav_sha256": "7572606c84a41163ec03c9fd51ac94b83b02a336fc003b949ecd9eae8597f452",
+        "interior_stereo_zero_longest_frames": 0,
+        "interior_stereo_zero_runs_at_least_2_samples": 0,
+        "wasapi_flags_report": {
+          "frames": 1821600,
+          "silent_frames": 0,
+          "packets": 3795,
+          "discontinuities": 0,
+          "timestamp_errors": 0
+        },
+        "app": {
+          "frontend_release": "0.30.1",
+          "record_frames": 1800,
+          "gui_stall_ms": 0,
+          "gui_stalls": 0,
+          "startup_only_drop_bytes": 1192,
+          "queue_overflow_after_first_accept_bytes": 0,
+          "drop_events": [
+            {
+              "accepted_bytes_before_drop": 0,
+              "bytes": 1192,
+              "ms": 1427
+            }
+          ],
+          "pending_bytes": 0,
+          "elapsed_ms": 31227.2136,
+          "errors": [],
+          "write_errors": 0,
+          "idle_event_ms": [
+            31489
+          ],
+          "unclassified_missing_bytes": 0
+        }
+      },
+      "v0301-gui60": {
+        "source_pcm_sha256": "bc91c6e5964b84984cea9ee58bd8e8da68253dc0af6071cde57328c0d3c6e377",
+        "qt_accepted_pcm_sha256": "4b03ddf432ad2b5812b12af061aefb63c7cd90f7eaa38294f7a86ab72cd57826",
+        "qt_accepted_exact_source_suffix": true,
+        "source_and_accepted_frames": [
+          1324706,
+          1324408
+        ],
+        "difference_frames_at_44100_hz": 298,
+        "prefix_peak_pcm16": 1690,
+        "nonzero_active_start_and_exclusive_end": [
+          62752,
+          1506655
+        ],
+        "active_pcm_sha256": "37c9a106019d5f37877f3e97e10eb354748db11bd3fd813d382f816296e7b828",
+        "windows_wav_sha256": "ca56762defebc970ffd973f332b47a323854a6a7e302866ffbf0f9a7f6609df6",
+        "interior_stereo_zero_longest_frames": 0,
+        "interior_stereo_zero_runs_at_least_2_samples": 0,
+        "wasapi_flags_report": {
+          "frames": 1822080,
+          "silent_frames": 0,
+          "packets": 3796,
+          "discontinuities": 0,
+          "timestamp_errors": 0
+        },
+        "app": {
+          "frontend_release": "0.30.1",
+          "record_frames": 1800,
+          "gui_stall_ms": 60,
+          "gui_stalls": 58,
+          "startup_only_drop_bytes": 1192,
+          "queue_overflow_after_first_accept_bytes": 0,
+          "drop_events": [
+            {
+              "accepted_bytes_before_drop": 0,
+              "bytes": 1192,
+              "ms": 1423
+            }
+          ],
+          "pending_bytes": 0,
+          "elapsed_ms": 31182.8915,
+          "errors": [],
+          "write_errors": 0,
+          "idle_event_ms": [
+            31440
+          ],
+          "unclassified_missing_bytes": 0
+        }
+      }
+    },
+    "pairs": {
+      "v0301-a vs v0301-gui60": {
+        "onset_relative_lag_frames": 320,
+        "original_file_lag_frames": -2880,
+        "mono_alignment_correlation": 0.999982179219781,
+        "aligned_origin_in_original_files": [
+          65952,
+          63072
+        ],
+        "whole_overlap": {
+          "frames": 1443583,
+          "byte_identical": false,
+          "different_frames": 1443583,
+          "rho": [
+            0.9999389650671203,
+            0.9999391504340897
+          ],
+          "rms_difference_fs": [
+            0.0007131006833787193,
+            0.0007136108983125971
+          ],
+          "rms_difference_dbfs": [
+            -62.93698294717652,
+            -62.930770520147604
+          ],
+          "peak_difference_fs": 0.04409550782293081,
+          "peak_difference_at_frame": 2613,
+          "first_last_unequal_frame": [
+            0,
+            1443582
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "overlap_after_first_second": {
+          "frames": 1395583,
+          "byte_identical": false,
+          "different_frames": 1395583,
+          "rho": [
+            0.9999834184968354,
+            0.9999832606910848
+          ],
+          "rms_difference_fs": [
+            0.00037618519895565796,
+            0.00037904001370243494
+          ],
+          "rms_difference_dbfs": [
+            -68.49196591618797,
+            -68.42629881842812
+          ],
+          "peak_difference_fs": 0.004485398530960083,
+          "peak_difference_at_frame": 961928,
+          "first_last_unequal_frame": [
+            0,
+            1395582
+          ],
+          "equal_final_suffix_frames": 0
+        },
+        "local_integer_lags_unique": [
+          320
+        ]
+      }
+    }
+  }
+}

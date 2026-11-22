@@ -125,3 +125,14 @@ Normal 44.1-to-48 conversion therefore did not reproduce or explain the supplied
 capture difference in this test. Because the source passage is still unidentified,
 this neither establishes a cause nor excludes a different Windows/Voicemeeter
 processing scenario. No emulation or production output code changed.
+
+
+## Follow-up: native Windows output capture
+
+[Native Windows capture](windows-audio-capture.md) now checks published 0.26/0.27
+with an A/A repeat and 0.30.1's audio worker with GUI-delay stress. The repeated
+0.26 and 0.27 process-loopback signals are byte-identical after a constant time
+shift. All runs expose a small initial queue overflow; current threaded output
+preserves every subsequent PCM byte during the tested GUI stalls. This is a
+controlled Realtek/Windows software-output check, not a reproduction of the
+reporter's Voicemeeter chain or a physical hardware recording.
