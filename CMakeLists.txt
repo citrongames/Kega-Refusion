@@ -147,7 +147,7 @@ add_executable(KegaRefusion WIN32
     src/ui/CoverageDialog.cpp src/ui/CoverageDialog.h
     src/ui/TraceDialog.cpp src/ui/TraceDialog.h
     src/ui/DebugInspectorWidgets.cpp src/ui/DebugInspectorWidgets.h
-    src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
+    src/ui/AudioOutput.cpp src/ui/AudioOutput.h src/ui/AudioOutputWorker.h)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(KegaRefusion PRIVATE src/ui/LinuxDesktopEntry.cpp src/ui/LinuxDesktopEntry.h)
 endif()
@@ -358,14 +358,14 @@ if(BUILD_TESTING)
     target_include_directories(audio_queue_tests PRIVATE src)
     target_link_libraries(audio_queue_tests PRIVATE Qt6::Core)
     add_test(NAME audio_queue_tests COMMAND audio_queue_tests)
-    add_executable(audio_output_tests tests/audio_output_tests.cpp src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
+    add_executable(audio_output_tests tests/audio_output_tests.cpp src/ui/AudioOutput.cpp src/ui/AudioOutput.h src/ui/AudioOutputWorker.h)
     target_include_directories(audio_output_tests PRIVATE src)
     target_link_libraries(audio_output_tests PRIVATE Qt6::Core Qt6::Multimedia localization)
     add_test(NAME audio_output_tests COMMAND audio_output_tests)
     # Explicit real-ROM/device diagnostic, never run automatically by CTest.
     add_executable(audio_load_probe EXCLUDE_FROM_ALL tests/audio_load_probe.cpp
         src/core/EmulationSession.cpp src/core/EmulationSession.h
-        src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
+        src/ui/AudioOutput.cpp src/ui/AudioOutput.h src/ui/AudioOutputWorker.h)
     target_compile_definitions(audio_load_probe PRIVATE KEGA_AUDIO_DIAGNOSTICS)
     target_link_libraries(audio_load_probe PRIVATE core_host Qt6::Multimedia)
 

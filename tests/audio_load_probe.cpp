@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMediaDevices>
+#include <QAudioDevice>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <atomic>

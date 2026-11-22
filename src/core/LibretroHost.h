@@ -110,6 +110,7 @@ public:
     // 2 Composite, 3 S-Video, 4 RGB. Core applies changes on the next frame.
     bool setRegion(int region, QString& error, bool* changed = nullptr);
     bool setBlarggFilter(int filter, QString& error, bool* changed = nullptr);
+    bool setAudioLowPass(bool enabled, QString& error);
     bool setGameGearLcd(bool enabled, QString& error, bool* changed = nullptr);
     bool setScreenBorders(bool enabled, QString& error);
     bool screenBordersSupported() const;

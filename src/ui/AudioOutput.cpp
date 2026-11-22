@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "AudioOutput.h"
+#include "AudioOutputWorker.h"
 
 #include <QAudioDevice>
 #include <QAudioFormat>
@@ -18,64 +19,41 @@ using SinkState = decltype(std::declval<QAudioSink>().state());
 using SinkError = decltype(std::declval<QAudioSink>().error());
 }
 
-AudioOutput::AudioOutput(QObject* parent) : QObject(parent) {
+AudioOutputWorker::AudioOutputWorker(QObject* parent) : QObject(parent) {
     initializeAchievementChime();
     clock_.start();
     pumpTimer_.setInterval(5);
     pumpTimer_.setTimerType(Qt::PreciseTimer);
-    connect(&pumpTimer_, &QTimer::timeout, this, &AudioOutput::pump);
-    devices_ = new QMediaDevices(this);
-    outputDevice_ = resolveOutputDevice();
-    connect(devices_, &QMediaDevices::audioOutputsChanged, this, [this] {
-        refreshOutputDevice();
-        emit outputDevicesChanged();
-    });
+    connect(&pumpTimer_, &QTimer::timeout, this, &AudioOutputWorker::pump);
+    pumpTimer_.setParent(this);
 }
 
-AudioOutput::~AudioOutput() {
+AudioOutputWorker::~AudioOutputWorker() {
     shutdown();
 }
 
-void AudioOutput::shutdown() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (closing_) return;
-        closing_ = true;
-        queue_.clear();
-    }
+void AudioOutputWorker::beginShutdown() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    closing_ = true;
+    queue_.clear();
+}
+
+void AudioOutputWorker::shutdown() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    beginShutdown();
     pumpTimer_.stop();
     releaseSink();
 }
 
-QAudioDevice AudioOutput::resolveOutputDevice() const {
-    if (!outputDeviceId_.isEmpty()) {
-        for (const QAudioDevice& device : QMediaDevices::audioOutputs()) {
-            if (device.id() == outputDeviceId_) return device;
-        }
-    }
-    // Preserve an unavailable explicit preference while using the current
-    // default. The next device notification can restore the preferred output.
-    return QMediaDevices::defaultAudioOutput();
-}
-
-void AudioOutput::refreshOutputDevice() {
-    const QAudioDevice device = resolveOutputDevice();
+void AudioOutputWorker::setOutputDevice(const QAudioDevice& device) {
     const bool changed = device.id() != outputDevice_.id();
-    // QAudioDevice is a snapshot; refresh its capabilities/name even when an
-    // unrelated hotplug notification does not require reopening a live sink.
     outputDevice_ = device;
     if (!changed) return;
     retryAtMs_ = 0;
     clear();
 }
 
-void AudioOutput::setOutputDeviceId(const QByteArray& id) {
-    if (id == outputDeviceId_) return;
-    outputDeviceId_ = id;
-    refreshOutputDevice();
-}
-
-void AudioOutput::requestPumpLocked() {
+void AudioOutputWorker::requestPumpLocked() {
     if (closing_ || wakePending_) return;
     wakePending_ = true;
     QMetaObject::invokeMethod(this, [this] {
@@ -88,7 +66,7 @@ void AudioOutput::requestPumpLocked() {
     }, Qt::QueuedConnection);
 }
 
-void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
+void AudioOutputWorker::play(const QByteArray& pcm, int sampleRate) {
     if (pcm.isEmpty() || sampleRate <= 0) return;
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_) return;
@@ -114,12 +92,15 @@ void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
 #endif
     appendWithAchievementChime(pcm, sampleRate);
 #ifdef KEGA_AUDIO_DIAGNOSTICS
-    droppedBytes_ += previousBytes + pcm.size() - queue_.size();
+    const auto dropped = previousBytes + pcm.size() - queue_.size();
+    droppedBytes_ += dropped;
+    if (dropped && dropEvents_.size() < 64)
+        dropEvents_.append(QJsonObject{{"ms",double(clock_.elapsed())},{"bytes",double(dropped)}});
 #endif
     requestPumpLocked();
 }
 
-void AudioOutput::initializeAchievementChime() {
+void AudioOutputWorker::initializeAchievementChime() {
     constexpr double tau = 6.2831853071795864769;
     for (size_t i = 0; i < chime_.size(); ++i) {
         const double time = double(i) / ChimeRate;
@@ -137,7 +118,7 @@ void AudioOutput::initializeAchievementChime() {
     }
 }
 
-void AudioOutput::appendWithAchievementChime(const QByteArray& pcm, int sampleRate) {
+void AudioOutputWorker::appendWithAchievementChime(const QByteArray& pcm, int sampleRate) {
     if (!chimeActive_ || !sinkReady_ || muted_ || resetPending_) {
         queue_.append(pcm);
         return;
@@ -184,7 +165,7 @@ void AudioOutput::appendWithAchievementChime(const QByteArray& pcm, int sampleRa
     queue_.append(mixed);
 }
 
-void AudioOutput::playAchievementSound() {
+void AudioOutputWorker::playAchievementSound() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_ || muted_ || resetPending_ || !sinkReady_ || !sink_ || !stream_ ||
         queue_.sampleRate() <= 0 || queue_.sampleRate() != sampleRate_ ||
@@ -193,13 +174,13 @@ void AudioOutput::playAchievementSound() {
     chimeActive_ = true;
 }
 
-void AudioOutput::clear() {
+void AudioOutputWorker::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_) return;
     invalidateLocked();
 }
 
-void AudioOutput::setLatencyProfile(AudioQueue::LatencyProfile profile) {
+void AudioOutputWorker::setLatencyProfile(AudioQueue::LatencyProfile profile) {
     profile = AudioQueue::normalizeProfile(int(profile));
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_ || profile == queue_.latencyProfile()) return;
@@ -207,7 +188,7 @@ void AudioOutput::setLatencyProfile(AudioQueue::LatencyProfile profile) {
     invalidateLocked();
 }
 
-void AudioOutput::invalidateLocked() {
+void AudioOutputWorker::invalidateLocked() {
     queue_.clear();
     chimeActive_ = false;
     sinkReady_ = false;
@@ -220,7 +201,7 @@ void AudioOutput::invalidateLocked() {
     requestPumpLocked();
 }
 
-void AudioOutput::releaseSink() {
+void AudioOutputWorker::releaseSink() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         sinkReady_ = false;
@@ -239,14 +220,15 @@ void AudioOutput::releaseSink() {
     delete sink;
 }
 
-void AudioOutput::fail(const QString& message) {
+void AudioOutputWorker::fail(const QString& message, std::uint64_t generation) {
     releaseSink();
-    retryAtMs_ = clock_.elapsed() + 1000;
-    std::uint64_t generation;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // An old device failure must not trim new PCM or defer a replacement
+        // that was requested while a backend open/reset/write was in progress.
+        if (closing_ || generation != generation_ || resetPending_) return;
+        retryAtMs_ = clock_.elapsed() + 1000;
         queue_.keepNewest(queue_.bytesForUsecs(queue_.timing().target));
-        generation = generation_;
     }
     feedback(generation, false);
     if (!notified_) {
@@ -255,11 +237,15 @@ void AudioOutput::fail(const QString& message) {
     }
 }
 
-bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
+bool AudioOutputWorker::configure(int sampleRate, qint64 deviceUsecs, std::uint64_t generation) {
     releaseSink();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (closing_ || generation != generation_ || resetPending_) return false;
+    }
     const QAudioDevice device = outputDevice_;
     if (device.isNull()) {
-        fail(Localization::text(QStringLiteral("Звук недоступен: устройство вывода не найдено")));
+        fail(QStringLiteral("Звук недоступен: устройство вывода не найдено"), generation);
         return false;
     }
 
@@ -268,7 +254,7 @@ bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
     format.setChannelCount(2);
     format.setSampleFormat(QAudioFormat::Int16);
     if (!device.isFormatSupported(format)) {
-        fail(Localization::text(QStringLiteral("Звук недоступен: формат ядра не поддерживается устройством")));
+        fail(QStringLiteral("Звук недоступен: формат ядра не поддерживается устройством"), generation);
         return false;
     }
 
@@ -278,10 +264,10 @@ bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
     sink_->setBufferSize(qMax<qint64>(AudioQueue::FrameBytes, qint64(sampleRate) * AudioQueue::FrameBytes * deviceUsecs / 1000000));
     sink_->setVolume(muted_ ? 0.0 : volume_ / 100.0);
     const std::uint64_t sinkGeneration = sinkGeneration_;
-    connect(sink_, &QAudioSink::stateChanged, this, [this, sinkGeneration](SinkState state) {
+    connect(sink_, &QAudioSink::stateChanged, this, [this, sinkGeneration, generation](SinkState state) {
         if (!sink_ || sinkGeneration != sinkGeneration_) return;
         if (state == SinkState::StoppedState && sink_->error() != SinkError::NoError)
-            fail(Localization::text(QStringLiteral("Устройство звука отключено; повторное подключение…")));
+            fail(QStringLiteral("Устройство звука отключено; повторное подключение…"), generation);
     }, Qt::QueuedConnection);
 #ifdef KEGA_AUDIO_DIAGNOSTICS
     {
@@ -302,7 +288,7 @@ bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
 #endif
     stream_ = sink_->start();
     if (!stream_ || sink_->error() != SinkError::NoError) {
-        fail(Localization::text(QStringLiteral("Не удалось запустить вывод звука; повторная попытка…")));
+        fail(QStringLiteral("Не удалось запустить вывод звука; повторная попытка…"), generation);
         return false;
     }
 #ifdef KEGA_AUDIO_DIAGNOSTICS
@@ -314,7 +300,7 @@ bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
     return true;
 }
 
-void AudioOutput::feedback(std::uint64_t generation, bool available, qint64 deviceBytes) {
+void AudioOutputWorker::feedback(std::uint64_t generation, bool available, qint64 deviceBytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_ || generation != generation_ || resetPending_) return;
 #ifdef KEGA_AUDIO_DIAGNOSTICS
@@ -328,7 +314,8 @@ void AudioOutput::feedback(std::uint64_t generation, bool available, qint64 devi
                        queue_.timing().target, available);
 }
 
-void AudioOutput::pump() {
+void AudioOutputWorker::pump() {
+    Q_ASSERT(QThread::currentThread() == thread());
     int rate;
     std::uint64_t generation;
     bool reset;
@@ -362,11 +349,11 @@ void AudioOutput::pump() {
             feedback(generation, false);
             return;
         }
-        if (!configure(rate, timing.device)) return;
+        if (!configure(rate, timing.device, generation)) return;
     }
     if (sampleRate_ != rate) return;
     if (sink_->state() == SinkState::StoppedState || sink_->state() == SinkState::SuspendedState) {
-        fail(Localization::text(QStringLiteral("Вывод звука остановлен; повторная попытка…")));
+        fail(QStringLiteral("Вывод звука остановлен; повторная попытка…"), generation);
         return;
     }
 
@@ -389,7 +376,7 @@ void AudioOutput::pump() {
     AudioQueue::WriteResult result;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (generation != generation_ || resetPending_) return;
+        if (closing_ || generation != generation_ || resetPending_) return;
         const qint64 highWater = queue_.bytesForUsecs(timing.device);
         const qint64 writable = qMin<qint64>(sink_->bytesFree(), qMax<qint64>(0, highWater - deviceBytes));
         result = queue_.writeTo(writable,
@@ -403,19 +390,19 @@ void AudioOutput::pump() {
             });
     }
     if (result.failed) {
-        fail(Localization::text(QStringLiteral("Ошибка передачи звука; повторная попытка…")));
+        fail(QStringLiteral("Ошибка передачи звука; повторная попытка…"), generation);
         return;
     }
     wroteSamples_ = wroteSamples_ || result.accepted > 0;
     if (result.accepted > 0) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (generation == generation_ && !resetPending_) sinkReady_ = true;
+        if (!closing_ && generation == generation_ && !resetPending_) sinkReady_ = true;
     }
     deviceBytes = qMax<qint64>(0, sink_->bufferSize() - sink_->bytesFree());
     feedback(generation, wroteSamples_, deviceBytes);
 }
 
-void AudioOutput::setMuted(bool muted) {
+void AudioOutputWorker::setMuted(bool muted) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         muted_ = muted;
@@ -424,17 +411,17 @@ void AudioOutput::setMuted(bool muted) {
     if (sink_) sink_->setVolume(muted_ ? 0.0 : volume_ / 100.0);
 }
 
-void AudioOutput::setVolume(int percent) {
+void AudioOutputWorker::setVolume(int percent) {
     volume_ = qBound(0, percent, 100);
     if (sink_) sink_->setVolume(muted_ ? 0.0 : volume_ / 100.0);
 }
 
 #ifdef KEGA_AUDIO_DIAGNOSTICS
-QJsonObject AudioOutput::diagnosticSnapshot() {
+QJsonObject AudioOutputWorker::diagnosticSnapshot() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::lock_guard<std::mutex> diagnosticsLock(diagnosticMutex_);
     return {{"input_bytes",double(inputBytes_)},{"accepted_bytes",double(writtenBytes_)},
-        {"dropped_bytes",double(droppedBytes_)},{"pending_bytes",double(queue_.size())},
+        {"dropped_bytes",double(droppedBytes_)},{"drop_events",dropEvents_},{"pending_bytes",double(queue_.size())},
         {"input_sha256",QString::fromLatin1(inputHash_.result().toHex())},
         {"accepted_sha256",QString::fromLatin1(writtenHash_.result().toHex())},
         {"sink_idle_events",double(idleTransitions_)},{"idle_after_2s",double(idleAfterWarmup_)},{"idle_event_ms",idleTimes_},{"sink_opens",double(sinkOpens_)},
@@ -444,3 +431,101 @@ QJsonObject AudioOutput::diagnosticSnapshot() {
         {"device",outputDevice_.description()},{"sample_rate",sampleRate_}};
 }
 #endif
+
+AudioOutput::AudioOutput(QObject* parent) : QObject(parent), worker_(new AudioOutputWorker) {
+    // Initialize Qt's global media/device integration on the application
+    // thread, as before. Only sink servicing belongs to the worker.
+    devices_ = new QMediaDevices(this);
+    const QAudioDevice initialDevice = QMediaDevices::defaultAudioOutput();
+    connect(devices_, &QMediaDevices::audioOutputsChanged, this, [this] {
+        refreshOutputDevice();
+        emit outputDevicesChanged();
+    });
+    audioThread_.setObjectName(QStringLiteral("Audio output"));
+    worker_->moveToThread(&audioThread_);
+    connect(&audioThread_, &QThread::finished, worker_, &QObject::deleteLater);
+    connect(worker_, &AudioOutputWorker::clockFeedback, this, &AudioOutput::clockFeedback,
+            Qt::DirectConnection);
+    connect(worker_, &AudioOutputWorker::unavailable, this, [this](const QString& source) {
+        emit unavailable(Localization::text(source));
+    });
+    // Device snapshot precedes producer wakes and UI commands.
+    QMetaObject::invokeMethod(worker_, [worker=worker_,initialDevice] {
+        worker->setOutputDevice(initialDevice);
+    }, Qt::QueuedConnection);
+    audioThread_.start();
+}
+AudioOutput::~AudioOutput() { shutdown(); }
+void AudioOutput::shutdown() {
+    AudioOutputWorker* worker;
+    {
+        std::lock_guard<std::mutex> lock(workerAccess_);
+        worker = std::exchange(worker_, nullptr);
+        if (!worker) return;
+        worker->beginShutdown();
+    }
+    // No worker operation waits for the GUI. All multimedia resources are
+    // released on their owning thread before quit/join and deferred deletion.
+    QMetaObject::invokeMethod(worker, &AudioOutputWorker::shutdown, Qt::BlockingQueuedConnection);
+    audioThread_.quit();
+    audioThread_.wait();
+}
+void AudioOutput::play(const QByteArray& pcm, int rate) {
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) worker_->play(pcm,rate);
+}
+void AudioOutput::clear() {
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) worker_->clear();
+}
+void AudioOutput::setLatencyProfile(AudioQueue::LatencyProfile profile) {
+    profile = AudioQueue::normalizeProfile(int(profile));
+    if (profile == profile_) return;
+    profile_ = profile;
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) worker_->setLatencyProfile(profile);
+}
+void AudioOutput::setOutputDeviceId(const QByteArray& id) {
+    if (id == outputDeviceId_) return;
+    outputDeviceId_ = id;
+    refreshOutputDevice();
+}
+void AudioOutput::setMuted(bool muted) {
+    if (muted == muted_) return;
+    muted_ = muted;
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) QMetaObject::invokeMethod(worker_, [worker=worker_,muted] { worker->setMuted(muted); });
+}
+void AudioOutput::setVolume(int percent) {
+    percent = qBound(0,percent,100);
+    if (percent == volume_) return;
+    volume_ = percent;
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) QMetaObject::invokeMethod(worker_, [worker=worker_,percent] { worker->setVolume(percent); });
+}
+void AudioOutput::playAchievementSound() {
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) QMetaObject::invokeMethod(worker_, &AudioOutputWorker::playAchievementSound);
+}
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+QJsonObject AudioOutput::diagnosticSnapshot() {
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    QJsonObject result;
+    if (worker_) QMetaObject::invokeMethod(worker_, [worker=worker_,&result] {
+        result = worker->diagnosticSnapshot();
+    }, Qt::BlockingQueuedConnection);
+    return result;
+}
+#endif
+
+void AudioOutput::refreshOutputDevice() {
+    QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    if (!outputDeviceId_.isEmpty()) {
+        for (const auto& candidate : QMediaDevices::audioOutputs())
+            if (candidate.id() == outputDeviceId_) { device = candidate; break; }
+    }
+    std::lock_guard<std::mutex> lock(workerAccess_);
+    if (worker_) QMetaObject::invokeMethod(worker_, [worker=worker_,device] {
+        worker->setOutputDevice(device);
+    });
+}

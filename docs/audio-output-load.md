@@ -4,6 +4,11 @@ Investigated on 2026-11-22 after [issue #1](https://github.com/citrongames/Kega-
 The current core and accuracy fixes were unchanged. This is an output-path
 investigation, separate from the [Nuked/timing comparison](nuked-audio-issue-1.md).
 
+## Follow-up
+
+The later [audio-worker change](audio-worker.md) removes the GUI-thread dependency.
+The measurements below describe the pre-fix implementation at `dcb4999`.
+
 ## Findings
 
 **Sustained GUI stalls can discard PCM and cause audible gaps without a Qt audio

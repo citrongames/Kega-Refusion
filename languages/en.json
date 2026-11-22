@@ -1297,6 +1297,8 @@
     "Обычный": "Normal",
     "Повышенная устойчивость": "More stable",
     "Задержка звука:": "Audio latency:",
+    "Фильтр низких частот (Low-pass)": "Low-pass filter",
+    "Смягчает высокие частоты, приближая звучание к аналоговому выходу Mega Drive Model 1.": "Softens high frequencies to approximate the analog output of the Mega Drive Model 1.",
     "Применяется сразу, без перезапуска игры. Если слышен треск, выберите повышенную устойчивость. Фактическая задержка также зависит от устройства вывода.": "Applied immediately without restarting the game. If you hear crackling, select More stable. Actual latency also depends on the output device.",
     "Оригинальный код: GPLv3+ с исключением для ядра. Без гарантий.": "Original code: GPLv3+ with a core linking exception. No warranty.",
     "Скорость игры: %1%": "Game speed: %1%",

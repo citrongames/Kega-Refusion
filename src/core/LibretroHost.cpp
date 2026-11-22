@@ -94,6 +94,7 @@ const char* cd32xRamCartOption(Cd32xRamCart cart) {
     }
 }
 constexpr char ym2612Key[] = "genesis_plus_gx_ym2612";
+constexpr char audioFilterKey[] = "genesis_plus_gx_audio_filter";
 constexpr char screenBordersKey[] = "genesis_plus_gx_overscan";
 const char* ym2612Model(bool nuked) { return nuked ? "nuked (ym2612)" : "mame (ym2612)"; }
 constexpr qsizetype runClockBytes = 24;
@@ -1379,6 +1380,13 @@ bool LibretroHost::setFastCdLoading(bool enabled, QString& error, bool* changed)
     // BIOS handshake delay while omitting simulated mechanical seek time.
     return setCoreOption("genesis_plus_gx_cd_latency", enabled ? "disabled" : "enabled", error, changed);
 }
+bool LibretroHost::setAudioLowPass(bool enabled, QString& error) {
+    if (!enabled && !variables_.count(audioFilterKey)) {
+        error.clear();
+        return true;
+    }
+    return setCoreOption(audioFilterKey, enabled ? "low-pass" : "disabled", error);
+}
 bool LibretroHost::applyGameGearLcd(QString& error, bool* changed) {
     return setCoreOption("genesis_plus_gx_lcd_filter", gameGearLcdEnabled() ? "enabled" : "disabled", error, changed);
 }
@@ -2600,7 +2608,9 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         current->second = value;
     }
     // Output processing is a local preference, independent of the recorded
-    // hardware and of the remote host's display settings.
+    // hardware and of the remote host's output settings.
+    if (const auto filter = variables_.find(audioFilterKey); filter != variables_.end())
+        newOptions[audioFilterKey] = filter->second;
     newOptions["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     newOptions["genesis_plus_gx_lcd_filter"] = gameGearLcdEnabled() ? "enabled" : "disabled";
     if (const auto borders = newOptions.find(screenBordersKey); borders != newOptions.end())
@@ -2787,6 +2797,10 @@ bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningHar
         activeFirecoreDmcPcm_ = preMovieFirecoreDmcPcm_;
         if (loaded_ && api_->set_firecore_dmc_pcm)
             api_->set_firecore_dmc_pcm(contentFirecore_ && activeFirecoreDmcPcm_);
+    }
+    if (const auto filter = variables_.find(audioFilterKey); filter != variables_.end()) {
+        preMovieVariables_[audioFilterKey] = filter->second;
+        preMovieOptionOverrides_[audioFilterKey] = filter->second;
     }
     preMovieVariables_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;
     preMovieOptionOverrides_["genesis_plus_gx_blargg_ntsc_filter"] = localBlarggFilter_;

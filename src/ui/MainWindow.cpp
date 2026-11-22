@@ -327,6 +327,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setGameGearLcd(gameGearLcdEnabled_);
     settings_.remove(QStringLiteral("view/showBorders"));
     session_.setSmsFmEnabled(smsFmEnabled_);
+    session_.setAudioLowPass(settings_.value(QStringLiteral("audio/lowPass"), false).toBool());
     session_.setFirecoreDmcPcm(settings_.value(QStringLiteral("audio/firecoreDmcPcm"), true).toBool());
     session_.setNukedYm2612(settings_.value(QStringLiteral("audio/ym2612Core"),
         QStringLiteral("mame")).toString() == QLatin1String("nuked"));
@@ -848,8 +849,7 @@ MainWindow::~MainWindow() {
     if (netplay_) netplay_->leaveSession();
     inputTimer_->stop();
     session_.shutdown();
-    // Qt Multimedia can dispatch queued UI callbacks while releasing the sink.
-    // Stop it after joining the producer, while the window and its children are intact.
+    // Join the PCM producer before stopping the audio worker.
     audio_->shutdown();
     netplay_->finishTemporarySessions();
 }
@@ -2737,6 +2737,16 @@ void MainWindow::editSettings(int initialPage) {
         if (profile == audio_->latencyProfile()) return;
         audio_->setLatencyProfile(profile);
         settings_.setValue(QStringLiteral("audio/latencyProfile"), int(profile));
+    });
+    auto* lowPass = new QCheckBox(Localization::text(QStringLiteral("Фильтр низких частот (Low-pass)")), &dialog);
+    lowPass->setObjectName(QStringLiteral("audioLowPass"));
+    lowPass->setChecked(settings_.value(QStringLiteral("audio/lowPass"), false).toBool());
+    lowPass->setToolTip(Localization::text(QStringLiteral(
+        "Смягчает высокие частоты, приближая звучание к аналоговому выходу Mega Drive Model 1.")));
+    sound->addRow(lowPass);
+    connect(lowPass, &QCheckBox::toggled, &dialog, [this](bool enabled) {
+        settings_.setValue(QStringLiteral("audio/lowPass"), enabled);
+        session_.setAudioLowPass(enabled);
     });
     auto* ym2612Core = new QComboBox(&dialog);
     ym2612Core->setObjectName(QStringLiteral("ym2612Core"));

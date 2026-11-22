@@ -434,6 +434,7 @@ void EmulationSession::setRewindSpeed(bool accelerate, int fixedFactor) {
 void EmulationSession::setRewindMemoryMiB(int mebibytes) { rewindMemoryMiB_.store(std::clamp(mebibytes,16,1024)); }
 void EmulationSession::setFirecoreDmcPcm(bool enabled) { enqueue({Type::FirecoreDmcPcm,{},enabled?1:0}); }
 void EmulationSession::setNukedYm2612(bool enabled) { enqueue({Type::NukedYm2612,{},enabled?1:0}); }
+void EmulationSession::setAudioLowPass(bool enabled) { enqueue({Type::AudioLowPass,{},enabled ? 1 : 0}); }
 void EmulationSession::setSmsFmEnabled(bool enabled) { enqueue({Type::SmsFm,{},enabled?1:0}); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
 void EmulationSession::setRunTimerEnabled(bool enabled) { enqueue({Type::RunTimer,{},int(enabled)}); }
@@ -2129,6 +2130,9 @@ void EmulationSession::run() {
                 } else emit errorOccurred(error);
                 break;
             }
+            case Type::AudioLowPass:
+                if (!host.setAudioLowPass(command.value != 0, error)) emit errorOccurred(error);
+                break;
             case Type::GameGearLcd:
                 if (!host.setGameGearLcd(command.value!=0,error)) emit errorOccurred(error);
                 break;

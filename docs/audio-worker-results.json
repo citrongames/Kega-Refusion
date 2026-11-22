@@ -1,0 +1,183 @@
+{
+  "date": "2026-11-22",
+  "core_unchanged": true,
+  "loopback": {
+    "title-worker-baseline": {
+      "wav_sha256": "28edcacf208e105b0b57244b5ccd5c6ebed312bb536e48f2d652276c5345a056",
+      "wav_sample_rate": 48000,
+      "wav_frames": 1200972,
+      "wav_duration_s": 25.02025,
+      "activity_window_seconds": [
+        3.58,
+        22.459979166666667
+      ],
+      "zero_runs": 0,
+      "total_zero_ms": 0.0,
+      "longest_zero_run_ms": 0.0,
+      "runs_as_start_and_length_stereo_frames": [],
+      "qt_probe": {
+        "frames": 1200,
+        "gui_stall_ms": 0,
+        "gui_stalls": 0,
+        "latency_profile": 0,
+        "elapsed_ms": 20190,
+        "input_bytes": 3532548,
+        "input_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "accepted_bytes": 3532548,
+        "accepted_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "dropped_bytes": 0,
+        "sink_idle_events": 0,
+        "device": "kr_reference Audio/Sink sink",
+        "qt_version": "6.10.2"
+      }
+    },
+    "title-worker-stall250": {
+      "wav_sha256": "b34721751759fb5c2b4d97b7b80c94d73986d6da99bce02a1dd82fd054322794",
+      "wav_sample_rate": 48000,
+      "wav_frames": 1200972,
+      "wav_duration_s": 25.02025,
+      "activity_window_seconds": [
+        3.66,
+        22.54
+      ],
+      "zero_runs": 0,
+      "total_zero_ms": 0.0,
+      "longest_zero_run_ms": 0.0,
+      "runs_as_start_and_length_stereo_frames": [],
+      "qt_probe": {
+        "frames": 1200,
+        "gui_stall_ms": 250,
+        "gui_stalls": 34,
+        "latency_profile": 0,
+        "elapsed_ms": 20193,
+        "input_bytes": 3532548,
+        "input_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "accepted_bytes": 3532548,
+        "accepted_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "dropped_bytes": 0,
+        "sink_idle_events": 0,
+        "device": "kr_reference Audio/Sink sink",
+        "qt_version": "6.10.2"
+      }
+    },
+    "title-worker-stall60": {
+      "wav_sha256": "32242b8759414b84bc66276aaa2e9b9d4fc57f3340ef478c116d550db8f35101",
+      "wav_sample_rate": 48000,
+      "wav_frames": 1200979,
+      "wav_duration_s": 25.020395833333332,
+      "activity_window_seconds": [
+        3.5,
+        22.4
+      ],
+      "zero_runs": 0,
+      "total_zero_ms": 0.0,
+      "longest_zero_run_ms": 0.0,
+      "runs_as_start_and_length_stereo_frames": [],
+      "qt_probe": {
+        "frames": 1200,
+        "gui_stall_ms": 60,
+        "gui_stalls": 34,
+        "latency_profile": 0,
+        "elapsed_ms": 20168,
+        "input_bytes": 3532548,
+        "input_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "accepted_bytes": 3532548,
+        "accepted_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "dropped_bytes": 0,
+        "sink_idle_events": 0,
+        "device": "kr_reference Audio/Sink sink",
+        "qt_version": "6.10.2"
+      }
+    }
+  },
+  "initial_combined_stress": {
+    "accepted_bytes": 31789620,
+    "accepted_sha256": "63d2207776ade284896ed41adb05177066ffe339561f0e4c51c0c1cd3325e916",
+    "backend": "",
+    "burn_threads": 2,
+    "device": "RDP Sink",
+    "dropped_bytes": 3316,
+    "elapsed_ms": 180456,
+    "errors": [],
+    "frames": 10800,
+    "gui_stall_ms": 60,
+    "gui_stalls": 355,
+    "idle_after_2s": 0,
+    "idle_event_ms": [],
+    "input_bytes": 31792936,
+    "input_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+    "invalid_feedback": 9,
+    "latency_profile": 0,
+    "loaded": true,
+    "max_input_gap_ms": 28.666497,
+    "nominal_fps": 59.92274340431231,
+    "pending_bytes": 0,
+    "pulse_server": "unix:/mnt/wslg/PulseServer",
+    "qt_version": "6.10.2",
+    "queue_max_us": 77414,
+    "queue_min_us": 14467,
+    "sample_rate": 44100,
+    "scope": "Real session with rewind and CPU video rendering, no GPU/UI drawing; QAudioSink (muted unless explicit volume); hashes before system mixer.",
+    "sink_buffer_bytes": 7056,
+    "sink_idle_events": 0,
+    "sink_opens": 1,
+    "write_errors": 0
+  },
+  "notes": [
+    "Qt6.10.2 Linux/WSL native and private PipeWire-Pulse monitor, not Windows WASAPI.",
+    "Initial combined stress ran during compilation and had 829 stereo-sample frames lost; exact byte count is authoritative.",
+    "No synthesis/timing/core binary changes; Low-pass default off, existing core output filter only."
+  ],
+  "controlled_combined_stress": {
+    "accepted_bytes": 31792936,
+    "accepted_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+    "backend": "",
+    "burn_threads": 2,
+    "device": "RDP Sink",
+    "drop_events": [],
+    "dropped_bytes": 0,
+    "elapsed_ms": 180465,
+    "errors": [],
+    "frames": 10800,
+    "gui_stall_ms": 60,
+    "gui_stalls": 355,
+    "idle_after_2s": 0,
+    "idle_event_ms": [],
+    "input_bytes": 31792936,
+    "input_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+    "invalid_feedback": 7,
+    "latency_profile": 0,
+    "loaded": true,
+    "max_input_gap_ms": 28.507939,
+    "nominal_fps": 59.92274340431231,
+    "pending_bytes": 0,
+    "pulse_server": "unix:/mnt/wslg/PulseServer",
+    "qt_version": "6.10.2",
+    "queue_max_us": 57460,
+    "queue_min_us": 12312,
+    "sample_rate": 44100,
+    "scope": "Real session with rewind and CPU video rendering, no GPU/UI drawing; QAudioSink (muted unless explicit volume); hashes before system mixer.",
+    "sink_buffer_bytes": 7056,
+    "sink_idle_events": 0,
+    "sink_opens": 1,
+    "write_errors": 0
+  },
+  "windows_deployment": {
+    "KegaRefusion.exe": {
+      "sha256": "ab0411a6fa8f6370a87b98e6abaaeed041b70af3ae4e7da8228af58abbf6cd0d",
+      "bytes": 19285245
+    },
+    "cores/genesis_plus_gx_libretro.dll": {
+      "sha256": "f431f9e1fca023b80cc6675d6c8140be04e67ab0e57c132a6664c2c2b04e40a0",
+      "bytes": 9673227
+    },
+    "languages/en.json": {
+      "sha256": "090862bb80ac42829c8bcf63cc6d48c6988811b590398138c22a236f0a0e664f",
+      "bytes": 157590
+    },
+    "languages/ru.json": {
+      "sha256": "7bfcd70f5b57bde14541d44e883e12ac245e07997e9ebfe2a4e2fa2f058798a5",
+      "bytes": 197288
+    }
+  }
+}

@@ -327,6 +327,62 @@ void requireRejected(bool accepted, const QString& error, const char* descriptio
     require(!accepted && !error.isEmpty(), description);
 }
 
+void testAudioLowPass(const QString& corePath) {
+    QTemporaryDir temp;
+    require(temp.isValid(), "low-pass test directory");
+    const auto path = temp.filePath("original-tone.md");
+    auto rom = makeTestRom();
+    int pc = 0x200;
+    const auto word = [&](quint16 value) {
+        rom[pc++] = char(value >> 8);
+        rom[pc++] = char(value);
+    };
+    // Original ROM: program PSG channel 0 for a high tone, then idle.
+    for (const quint16 value : {0x80, 0x01, 0x90, 0xbf, 0xdf, 0xff}) {
+        word(0x13fc); word(value); word(0x00c0); word(0x0011);
+    }
+    word(0x60fe);
+    writeFile(path, rom);
+
+    QString error;
+    LibretroHost host(corePath, temp.path());
+    require(host.load(path, error), "low-pass test ROM did not load");
+    const auto unfilteredConfiguration = host.movieConfiguration();
+    const auto filterSetting = [&] {
+        return host.movieConfiguration().value("options").toObject()
+            .value("genesis_plus_gx_audio_filter").toString();
+    };
+    require(filterSetting() == QLatin1String("disabled"), "low-pass was enabled by default");
+    const auto measureTone = [&] {
+        for (int frame = 0; frame < 4; ++frame) host.runFrame(false);
+        const auto& pcm = host.audio();
+        require(!pcm.isEmpty() && pcm.size() % 4 == 0, "low-pass test PCM missing");
+        qint64 variation = 0;
+        qint16 previous = 0;
+        for (qsizetype offset = 0; offset < pcm.size(); offset += 4) {
+            qint16 sample;
+            std::memcpy(&sample, pcm.constData() + offset, sizeof(sample));
+            variation += std::abs(int(sample) - int(previous));
+            previous = sample;
+        }
+        return double(variation) / (pcm.size() / 4);
+    };
+    const double unfiltered = measureTone();
+    const double fps = host.fps();
+    const double sampleRate = host.sampleRate();
+    require(unfiltered > 10 && host.setAudioLowPass(true, error), "could not enable low-pass live");
+    require(measureTone() < unfiltered * 0.8, "low-pass did not attenuate high-frequency PCM");
+    require(host.fps() == fps && host.sampleRate() == sampleRate, "low-pass changed audio or frame timing");
+
+    require(host.prepareMovie(unfilteredConfiguration, error), "low-pass movie configuration rejected");
+    require(filterSetting() == QLatin1String("low-pass") && measureTone() < unfiltered * 0.8,
+            "recording overrode the local low-pass preference");
+    require(host.setAudioLowPass(false, error), "could not disable low-pass live");
+    require(measureTone() > unfiltered * 0.9, "disabling low-pass did not restore raw PCM");
+    require(host.restoreMovieConfiguration(error, true), "low-pass movie configuration restore failed");
+    require(filterSetting() == QLatin1String("disabled"), "ending movie reverted the current low-pass setting");
+}
+
 void testCore(const QString& corePath) {
     QTemporaryDir temp;
     require(temp.isValid(), "cannot create temporary test directory");
@@ -2189,6 +2245,7 @@ int main(int argc, char** argv) {
             std::puts("archive core integration passed"); return 0;
         }
         testCore(QString::fromLocal8Bit(argv[1]));
+        testAudioLowPass(QString::fromLocal8Bit(argv[1]));
         testSaveRam(QString::fromLocal8Bit(argv[1]));
         testRewind(QString::fromLocal8Bit(argv[1]));
         testArchiveCore(QString::fromLocal8Bit(argv[1]));
