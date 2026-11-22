@@ -79,3 +79,25 @@ this follow-up, and no new build was needed.
 
 Compact identities and measurements are in [the results](nuked-audio-issue-3-results.json).
 Diagnostic scripts and fuller evidence remain under ignored `build/audio-issue3/`.
+
+
+## Follow-up: Sunset Riders SOUND 00
+
+On the user's request, tested Sunset Riders (USA), ROM SHA-256
+`37b3254d63b73d81341069e49909fd8a020cc8fbdb936de34364e19d6722f140`.
+Cold boot was followed by ordinary controller inputs into Options, selecting
+SOUND 00 and pressing Genesis A. Captured frames confirm the selected menu item.
+Both published cores received the same full input sequence; the test uses Nuked,
+NTSC-U, no filter and the same FM/PSG gain settings as the Batman comparison.
+
+All 3,600 recorded video-frame PCM hashes match between 0.26.0 and 0.27.0.
+The 60.077-second streams contain 2,649,411 stereo sample frames at 44.1 kHz;
+PCM SHA-256 is `2c6bcb17720eff784e00c36c37246338c913f92d2136bd362da536159144fb0a`.
+The two PCM16 WAV files also match byte-for-byte. They were supplied separately
+for listening without gain normalization, resampling or filtering. This is a
+direct Linux core capture, not a Windows output-path capture.
+
+The reporter's excerpts could not be reliably matched within this particular
+minute of SOUND 00 either. The matching positive control recovered a known
+scaled excerpt at exactly 10 seconds. This does not identify the original
+recordings or rule out other passages of the game.

@@ -464,5 +464,386 @@
     "Reporter excerpt origin/scene/settings not reproduced.",
     "Matched spectra do not establish perceptual equality; differing waveforms do not locate the cause.",
     "No rollback, synthesis, timing or output code change."
-  ]
+  ],
+  "sunset_riders_sound00": {
+    "game": "Sunset Riders (USA)",
+    "rom_sha256": "37b3254d63b73d81341069e49909fd8a020cc8fbdb936de34364e19d6722f140",
+    "scenario": "Cold boot, Options, SOUND 00, press Genesis A for 8 frames at frame index909; record next3600 video frames including this press.",
+    "fps": 59.92274340431231,
+    "sample_rate": 44100,
+    "recorded_sample_frames": 2649411,
+    "duration_seconds": 60.07734693877551,
+    "pcm_sha256": "2c6bcb17720eff784e00c36c37246338c913f92d2136bd362da536159144fb0a",
+    "all_3600_frame_hashes_equal": true,
+    "versions": {
+      "0.26.0": {
+        "core_sha256": "88f1902e6f2a00a2203bd9eb9a136ecc2d8a9a8c2124e655c316ee7ab5a39616",
+        "wav": {
+          "filename": "Sunset Riders - SOUND 00 - Kega 0.26.0.wav",
+          "sha256": "ec6604654c51de073ddbbe3c8534bfddd5e8af8162296c316d931f89a6853fe0",
+          "bytes": 10597688
+        }
+      },
+      "0.27.0": {
+        "core_sha256": "87641e4514b00847fbae2459b9398ec40a0102efe8f3fe17f94078684178a6ca",
+        "wav": {
+          "filename": "Sunset Riders - SOUND 00 - Kega 0.27.0.wav",
+          "sha256": "ec6604654c51de073ddbbe3c8534bfddd5e8af8162296c316d931f89a6853fe0",
+          "bytes": 10597688
+        }
+      }
+    },
+    "rms_dbfs": -19.23537560429184,
+    "nonzero_interleaved_samples": 5298235,
+    "sequence": [
+      {
+        "frames": 300,
+        "shot": "boot.png"
+      },
+      {
+        "frames": 1,
+        "buttons": [
+          3
+        ]
+      },
+      {
+        "frames": 90,
+        "shot": "title.png"
+      },
+      {
+        "frames": 180
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          5
+        ]
+      },
+      {
+        "frames": 12
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          5
+        ]
+      },
+      {
+        "frames": 12
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          5
+        ]
+      },
+      {
+        "frames": 12
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          3
+        ]
+      },
+      {
+        "frames": 90,
+        "shot": "options.png"
+      },
+      {
+        "frames": 120,
+        "shot": "options-ready.png"
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          5
+        ]
+      },
+      {
+        "frames": 12
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          5
+        ]
+      },
+      {
+        "frames": 12
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          5
+        ]
+      },
+      {
+        "frames": 12,
+        "shot": "sound-selected.png"
+      },
+      {
+        "frames": 8,
+        "buttons": [
+          1
+        ],
+        "record_start": true
+      },
+      {
+        "frames": 3592,
+        "shot": "music-playing.png"
+      }
+    ],
+    "options": {
+      "genesis_plus_gx_system_hw": "auto",
+      "genesis_plus_gx_region_detect": "ntsc-u",
+      "genesis_plus_gx_bios": "disabled",
+      "genesis_plus_gx_add_on": "none",
+      "genesis_plus_gx_32x_add_on": "disconnected",
+      "genesis_plus_gx_ym2612": "nuked (ym2612)",
+      "genesis_plus_gx_sound_output": "stereo",
+      "genesis_plus_gx_audio_filter": "disabled",
+      "genesis_plus_gx_fm_preamp": "100",
+      "genesis_plus_gx_psg_preamp": "150",
+      "genesis_plus_gx_vdp_mode": "auto",
+      "genesis_plus_gx_system_bram": "per bios",
+      "genesis_plus_gx_cart_bram": "per cart",
+      "genesis_plus_gx_cart_size": "4meg",
+      "genesis_plus_gx_lock_on": "disabled",
+      "genesis_plus_gx_aspect_ratio": "auto",
+      "genesis_plus_gx_overscan": "disabled",
+      "genesis_plus_gx_left_border": "disabled",
+      "genesis_plus_gx_gg_extra": "disabled",
+      "genesis_plus_gx_blargg_ntsc_filter": "disabled",
+      "genesis_plus_gx_lcd_filter": "disabled",
+      "genesis_plus_gx_render": "single field",
+      "genesis_plus_gx_frameskip": "disabled",
+      "genesis_plus_gx_frameskip_threshold": "33",
+      "genesis_plus_gx_ym2413": "auto",
+      "genesis_plus_gx_ym2413_core": "mame",
+      "genesis_plus_gx_lowpass_range": "60",
+      "genesis_plus_gx_cdda_volume": "100",
+      "genesis_plus_gx_pcm_volume": "100",
+      "genesis_plus_gx_audio_eq_low": "100",
+      "genesis_plus_gx_audio_eq_mid": "100",
+      "genesis_plus_gx_audio_eq_high": "100",
+      "genesis_plus_gx_gun_input": "lightgun",
+      "genesis_plus_gx_gun_cursor": "disabled",
+      "genesis_plus_gx_invert_mouse": "disabled",
+      "genesis_plus_gx_no_sprite_limit": "disabled",
+      "genesis_plus_gx_enhanced_vscroll": "disabled",
+      "genesis_plus_gx_enhanced_vscroll_limit": "8",
+      "genesis_plus_gx_overclock": "100",
+      "genesis_plus_gx_force_dtack": "enabled",
+      "genesis_plus_gx_addr_error": "enabled",
+      "genesis_plus_gx_cd_latency": "enabled",
+      "genesis_plus_gx_cd_precache": "disabled",
+      "genesis_plus_gx_psg_channel_0_volume": "100",
+      "genesis_plus_gx_psg_channel_1_volume": "100",
+      "genesis_plus_gx_psg_channel_2_volume": "100",
+      "genesis_plus_gx_psg_channel_3_volume": "100",
+      "genesis_plus_gx_md_channel_0_volume": "100",
+      "genesis_plus_gx_md_channel_1_volume": "100",
+      "genesis_plus_gx_md_channel_2_volume": "100",
+      "genesis_plus_gx_md_channel_3_volume": "100",
+      "genesis_plus_gx_md_channel_4_volume": "100",
+      "genesis_plus_gx_md_channel_5_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_0_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_1_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_2_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_3_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_4_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_5_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_6_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_7_volume": "100",
+      "genesis_plus_gx_sms_fm_channel_8_volume": "100"
+    },
+    "scope": "Published Linux cores, direct PCM callback; no Qt output/Windows/Voicemeeter capture."
+  },
+  "sunset_reporter_matching": {
+    "known_sunset_10s_excerpt_scaled_0.75": {
+      "start_s": 10.0,
+      "onset_rho": 0.9907453765573776
+    },
+    "attachment_pair_coarse_onset_rho": 0.725464839721258,
+    "decoded_source_0.26_equals_0.27": true,
+    "decoded_source_seconds": {
+      "sunset_0.26": 60.077375,
+      "sunset_0.27": 60.077375
+    },
+    "sunset_0.26": {
+      "attachment_0.26": {
+        "onsets": [
+          {
+            "offset_s": 11.78,
+            "rho": 0.07733944303591343,
+            "fine_waveform": {
+              "offset_s": 11.747875,
+              "signed_rho": 0.053004206398845385
+            }
+          },
+          {
+            "offset_s": 5.34,
+            "rho": 0.06625501681586364,
+            "fine_waveform": {
+              "offset_s": 5.3779375,
+              "signed_rho": -0.05250147365073529
+            }
+          },
+          {
+            "offset_s": 44.82,
+            "rho": 0.06501940080716759,
+            "fine_waveform": {
+              "offset_s": 44.8039375,
+              "signed_rho": -0.039463306016458685
+            }
+          },
+          {
+            "offset_s": 24.24,
+            "rho": 0.05840597499759666,
+            "fine_waveform": {
+              "offset_s": 24.223875,
+              "signed_rho": -0.03213590038327081
+            }
+          },
+          {
+            "offset_s": 51.44,
+            "rho": 0.0581756456572,
+            "fine_waveform": {
+              "offset_s": 51.37775,
+              "signed_rho": 0.04044815597848277
+            }
+          }
+        ],
+        "spectral_shape": [
+          {
+            "offset_s": 49.44,
+            "rho": 0.16525586912497225,
+            "fine_waveform": {
+              "offset_s": 49.427625,
+              "signed_rho": -0.03106927174724025
+            }
+          },
+          {
+            "offset_s": 47.9,
+            "rho": 0.15415790790627923,
+            "fine_waveform": {
+              "offset_s": 47.937,
+              "signed_rho": -0.03303376806415138
+            }
+          },
+          {
+            "offset_s": 4.12,
+            "rho": 0.1053850058314321,
+            "fine_waveform": {
+              "offset_s": 4.1224375,
+              "signed_rho": -0.0441746485088869
+            }
+          },
+          {
+            "offset_s": 14.76,
+            "rho": 0.10497280446783583,
+            "fine_waveform": {
+              "offset_s": 14.715875,
+              "signed_rho": 0.03918402786658495
+            }
+          },
+          {
+            "offset_s": 10.16,
+            "rho": 0.10227526103008618,
+            "fine_waveform": {
+              "offset_s": 10.15775,
+              "signed_rho": 0.04097500177836257
+            }
+          }
+        ]
+      },
+      "attachment_0.27": {
+        "onsets": [
+          {
+            "offset_s": 11.78,
+            "rho": 0.07870386606301505,
+            "fine_waveform": {
+              "offset_s": 11.747625,
+              "signed_rho": 0.04565352645563525
+            }
+          },
+          {
+            "offset_s": 44.82,
+            "rho": 0.06404312863668155,
+            "fine_waveform": {
+              "offset_s": 44.8225625,
+              "signed_rho": -0.0382144363415403
+            }
+          },
+          {
+            "offset_s": 5.34,
+            "rho": 0.06351647673103043,
+            "fine_waveform": {
+              "offset_s": 5.377875,
+              "signed_rho": -0.05454215160470518
+            }
+          },
+          {
+            "offset_s": 51.44,
+            "rho": 0.061295395135677125,
+            "fine_waveform": {
+              "offset_s": 51.377625,
+              "signed_rho": 0.039157913431982466
+            }
+          },
+          {
+            "offset_s": 25.94,
+            "rho": 0.05819829580396324,
+            "fine_waveform": {
+              "offset_s": 25.997125,
+              "signed_rho": 0.0357820947967994
+            }
+          }
+        ],
+        "spectral_shape": [
+          {
+            "offset_s": 47.9,
+            "rho": 0.15824020171993114,
+            "fine_waveform": {
+              "offset_s": 47.92275,
+              "signed_rho": 0.03247413824483371
+            }
+          },
+          {
+            "offset_s": 49.2,
+            "rho": 0.1501813962539378,
+            "fine_waveform": {
+              "offset_s": 49.1589375,
+              "signed_rho": 0.03831159140162781
+            }
+          },
+          {
+            "offset_s": 50.22,
+            "rho": 0.10898014316663368,
+            "fine_waveform": {
+              "offset_s": 50.264375,
+              "signed_rho": 0.036950231454312164
+            }
+          },
+          {
+            "offset_s": 14.76,
+            "rho": 0.10839076455476887,
+            "fine_waveform": {
+              "offset_s": 14.7896875,
+              "signed_rho": 0.03653069588713583
+            }
+          },
+          {
+            "offset_s": 10.14,
+            "rho": 0.09418424091641325,
+            "fine_waveform": {
+              "offset_s": 10.14525,
+              "signed_rho": -0.04189044253169808
+            }
+          }
+        ]
+      }
+    }
+  }
 }
