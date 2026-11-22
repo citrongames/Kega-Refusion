@@ -24,7 +24,7 @@ Emulation is based on a modified **Genesis Plus GX** core, with integrated 32X s
 | Paprium | Experimental cartridge support, external MP3 soundtrack and CPU MATE integration |
 | MegaLD / LaserActive Sega PAC | Experimental MMI support; tested in Hi-Roller Battle (Japan/USA), Road Prosecutor and J.B. Harold: Blue Chicago Blues |
 
-Supply your own games and Sega CD BIOS files. The 32X uses each recognized original G/M/S BIOS when available and a built-in fallback for each missing piece. CD32X still requires the Sega CD BIOS for the selected region.
+Supply your own games and Sega CD BIOS files. The 32X uses each recognized original G/M/S BIOS when available and a built-in fallback for each missing piece. CD32X still requires the Sega CD BIOS for the selected region. An optional [4/8/16 MiB CD32X program RAM cartridge](docs/cd32x-ram-cartridge.md) supports loaders such as Road Rash Rapido; it is disabled by default.
 
 ## Features
 
