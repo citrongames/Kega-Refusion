@@ -46,3 +46,5 @@ Additional per-feature validation files remain beside these reports. Consult Git
 
 - [CD32X program RAM cartridge](cd32x-ram-cartridge.md): selection, bus behavior and verification.
 - [Road Rash CD32X load audit](roadrash-cd32x-load-audit.md): BIOS queue, ares comparison and scoped loader compatibility.
+
+- [Nuked YM2612 audio investigation](nuked-audio-issue-1.md): issue #1, exact PCM comparisons and VDP timing isolation.

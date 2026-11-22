@@ -1,0 +1,79 @@
+{
+  "issue": "https://github.com/citrongames/Kega-Refusion/issues/1",
+  "method": "Raw Linux libretro stereo PCM16, NTSC-U, Nuked YM2612, 100% FM gain, 150% PSG gain, HQ FM enabled, audio filter disabled, no inputs; neither Qt sink nor OS/Voicemeeter included",
+  "captures": {
+    "current": {
+      "core_sha256": "b9652c8875cee3a2a20447b527052de56171d6e56fa69f2905b0191a34851e77",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "c2179d56f37c3043162cb00d97a5e25697c5c0805c83008bd4b382c7c37d2bd9"
+    },
+    "reverted": {
+      "core_sha256": "9812a892a958a5825dc2cb1ab6c5b87232280ead0ddc8826f5fe005f3bef17c3",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "c2179d56f37c3043162cb00d97a5e25697c5c0805c83008bd4b382c7c37d2bd9"
+    },
+    "release026-pcm": {
+      "core_sha256": "88f1902e6f2a00a2203bd9eb9a136ecc2d8a9a8c2124e655c316ee7ab5a39616",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "038c3014e09a771e539f09598ac5c676ba344999ae0df45edcaeddd09305aa0f"
+    },
+    "release029-pcm": {
+      "core_sha256": "7786ccf77adcbefa0c2b8235dd3837dbb06a346335c70c6b3e50f88ff237b85b",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "c2179d56f37c3043162cb00d97a5e25697c5c0805c83008bd4b382c7c37d2bd9"
+    },
+    "release-0.27.0-short": {
+      "core_sha256": "87641e4514b00847fbae2459b9398ec40a0102efe8f3fe17f94078684178a6ca",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 1200,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 883137,
+      "pcm_sha256": "1f5a30de5e54d5f8ce98e2a35bd686cd2b90bda5a9fe01cfdb40dbc5feeffee4"
+    },
+    "release-0.28.0-short": {
+      "core_sha256": "1a35618b3670836911c2efe823e49b2e7dc02a735a8894a4624c208f6aa57fdb",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 1200,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 883137,
+      "pcm_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d"
+    }
+  },
+  "optimization_ab": {
+    "frame_count": 32400,
+    "mismatched_pcm_frames": 0,
+    "full_pcm_identical": true
+  },
+  "release_relation": {
+    "current_equals_release029_full": true,
+    "release027_equals_release026_first1200": true,
+    "release028_equals_release029_first1200": true,
+    "first_different_frame_zero_based_026_vs029": 19
+  },
+  "early_fifo_commit": {
+    "commit": "e868cfa",
+    "frames": 1200,
+    "matches_release028_all_frame_hashes": true,
+    "core_sha256": "949174c3e47d4f4c4afe4866ee1c4938abcd57be7861252855272053ddb024a1",
+    "pcm_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+    "sample_frames_stereo_pcm16": 883137
+  }
+}
