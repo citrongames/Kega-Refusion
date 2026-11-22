@@ -137,3 +137,12 @@ gain; the VA5 excerpt starts at the matched point and has its loudness matched
 separately. No equalization, compression or time stretching was applied. FLAC
 does not undo the hardware source's original YouTube compression. Copyrighted
 recordings and PCM dumps are not committed.
+
+## Follow-up: actual output under load
+
+The [2026-11-22 output investigation](audio-output-load.md) found a separate
+GUI-stall failure mechanism: the bounded audio queue can drop samples while
+the GUI thread cannot service the sink. Normal and CPU-stressed runs matched
+raw core PCM, but synthetic long GUI stalls also produced gaps in a virtual
+system-output recording. This does not establish the cause of the reporter's
+Windows capture and does not implicate the Nuked optimizations.

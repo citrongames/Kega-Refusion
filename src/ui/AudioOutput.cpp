@@ -104,7 +104,18 @@ void AudioOutput::play(const QByteArray& pcm, int sampleRate) {
     // Overflow already drops stale whole frames while preserving a partial
     // device write. Keep the live sink: reopening it can take longer than this
     // bounded queue, causing another overflow and an endless reopen loop.
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    inputBytes_ += pcm.size();
+    inputHash_.addData(pcm);
+    const auto inputNow = clock_.nsecsElapsed();
+    if (lastInputNs_) maximumInputGapNs_ = std::max(maximumInputGapNs_, inputNow-lastInputNs_);
+    lastInputNs_ = inputNow;
+    const auto previousBytes = queue_.size();
+#endif
     appendWithAchievementChime(pcm, sampleRate);
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    droppedBytes_ += previousBytes + pcm.size() - queue_.size();
+#endif
     requestPumpLocked();
 }
 
@@ -272,11 +283,31 @@ bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
         if (state == SinkState::StoppedState && sink_->error() != SinkError::NoError)
             fail(Localization::text(QStringLiteral("Устройство звука отключено; повторное подключение…")));
     }, Qt::QueuedConnection);
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    {
+        std::lock_guard<std::mutex> lock(diagnosticMutex_);
+        diagnosticActive_ = false;
+    }
+    // Observe transitions when emitted: the ordinary queued error handler may
+    // run after the first write and would misclassify the initial empty state.
+    connect(sink_, &QAudioSink::stateChanged, this, [this](SinkState state) {
+        std::lock_guard<std::mutex> lock(diagnosticMutex_);
+        if (state == SinkState::IdleState && diagnosticActive_) {
+            ++idleTransitions_;
+            if (clock_.elapsed() > 2000) ++idleAfterWarmup_;
+            if (idleTimes_.size() < 64) idleTimes_.append(double(clock_.elapsed()));
+        }
+        diagnosticActive_ = state == SinkState::ActiveState;
+    }, Qt::DirectConnection);
+#endif
     stream_ = sink_->start();
     if (!stream_ || sink_->error() != SinkError::NoError) {
         fail(Localization::text(QStringLiteral("Не удалось запустить вывод звука; повторная попытка…")));
         return false;
     }
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    ++sinkOpens_;
+#endif
     sampleRate_ = sampleRate;
     notified_ = false;
     retryAtMs_ = 0;
@@ -286,6 +317,13 @@ bool AudioOutput::configure(int sampleRate, qint64 deviceUsecs) {
 void AudioOutput::feedback(std::uint64_t generation, bool available, qint64 deviceBytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closing_ || generation != generation_ || resetPending_) return;
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    if (available) {
+        const auto occupancy = queue_.usecsForBytes(queue_.size()+deviceBytes);
+        if (minimumQueuedUs_ < 0 || occupancy < minimumQueuedUs_) minimumQueuedUs_ = occupancy;
+        maximumQueuedUs_ = std::max(maximumQueuedUs_, occupancy);
+    }
+#endif
     emit clockFeedback(available ? queue_.usecsForBytes(queue_.size() + deviceBytes) : 0,
                        queue_.timing().target, available);
 }
@@ -355,7 +393,14 @@ void AudioOutput::pump() {
         const qint64 highWater = queue_.bytesForUsecs(timing.device);
         const qint64 writable = qMin<qint64>(sink_->bytesFree(), qMax<qint64>(0, highWater - deviceBytes));
         result = queue_.writeTo(writable,
-            [this](const char* data, qint64 size) { return stream_->write(data, size); });
+            [this](const char* data, qint64 size) {
+                const auto accepted = stream_->write(data, size);
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+                if (accepted > 0) { writtenBytes_ += accepted; writtenHash_.addData(QByteArrayView(data,accepted)); }
+                else if (accepted < 0) ++writeErrors_;
+#endif
+                return accepted;
+            });
     }
     if (result.failed) {
         fail(Localization::text(QStringLiteral("Ошибка передачи звука; повторная попытка…")));
@@ -383,3 +428,19 @@ void AudioOutput::setVolume(int percent) {
     volume_ = qBound(0, percent, 100);
     if (sink_) sink_->setVolume(muted_ ? 0.0 : volume_ / 100.0);
 }
+
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+QJsonObject AudioOutput::diagnosticSnapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> diagnosticsLock(diagnosticMutex_);
+    return {{"input_bytes",double(inputBytes_)},{"accepted_bytes",double(writtenBytes_)},
+        {"dropped_bytes",double(droppedBytes_)},{"pending_bytes",double(queue_.size())},
+        {"input_sha256",QString::fromLatin1(inputHash_.result().toHex())},
+        {"accepted_sha256",QString::fromLatin1(writtenHash_.result().toHex())},
+        {"sink_idle_events",double(idleTransitions_)},{"idle_after_2s",double(idleAfterWarmup_)},{"idle_event_ms",idleTimes_},{"sink_opens",double(sinkOpens_)},
+        {"write_errors",double(writeErrors_)},{"queue_min_us",double(minimumQueuedUs_)},
+        {"queue_max_us",double(maximumQueuedUs_)},{"max_input_gap_ms",maximumInputGapNs_/1000000.0},
+        {"sink_buffer_bytes",sink_?double(sink_->bufferSize()):0.0},
+        {"device",outputDevice_.description()},{"sample_rate",sampleRate_}};
+}
+#endif

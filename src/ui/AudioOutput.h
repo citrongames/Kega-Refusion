@@ -8,6 +8,11 @@
 #include <QString>
 #include <QTimer>
 
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+#include <QCryptographicHash>
+#include <QJsonObject>
+#include <QJsonArray>
+#endif
 #include <array>
 #include <cstdint>
 #include <mutex>
@@ -40,6 +45,10 @@ public:
     QByteArray outputDeviceId() const { return outputDeviceId_; }
     void setOutputDeviceId(const QByteArray& id);
 
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    // Explicit audio-output probe only; absent from application builds.
+    QJsonObject diagnosticSnapshot();
+#endif
 signals:
     void outputDevicesChanged();
     void unavailable(const QString& message);
@@ -63,6 +72,17 @@ private:
     static constexpr int ChimeRate = 48000;
     static constexpr size_t ChimeSamples = ChimeRate / 4;
 
+#ifdef KEGA_AUDIO_DIAGNOSTICS
+    QCryptographicHash inputHash_{QCryptographicHash::Sha256}, writtenHash_{QCryptographicHash::Sha256};
+    quint64 inputBytes_ = 0, writtenBytes_ = 0, droppedBytes_ = 0;
+    std::mutex diagnosticMutex_;
+    bool diagnosticActive_ = false;
+    QJsonArray idleTimes_;
+    quint64 idleAfterWarmup_ = 0;
+    quint64 idleTransitions_ = 0, sinkOpens_ = 0, writeErrors_ = 0;
+    qint64 minimumQueuedUs_ = -1, maximumQueuedUs_ = 0;
+    qint64 lastInputNs_ = 0, maximumInputGapNs_ = 0;
+#endif
     std::mutex mutex_;
     AudioQueue queue_;
     std::uint64_t generation_ = 0;

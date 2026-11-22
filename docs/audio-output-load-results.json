@@ -1,0 +1,572 @@
+{
+  "date": "2026-11-22",
+  "method": "Real EmulationSession -> AudioOutput -> QAudioSink stream write; SHA256 on enqueued and accepted PCM. Audio muted at sink volume, no Windows app controlled. CPU renderer and 128 MiB rewind enabled; no GPU/window rendering. NTSC-U/Nuked/filter off, stereo S16 44100 Hz. GUI stalls every500ms after3s.",
+  "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+  "core_sha256": "b9652c8875cee3a2a20447b527052de56171d6e56fa69f2905b0191a34851e77",
+  "qt": "6.10.2",
+  "device": "WSLg RDP Sink via PulseAudio",
+  "cpu_stress": "Two busy threads plus session/output restricted to CPUs6,7; other runs on separate CPUs or unrestricted.",
+  "reference_pcm_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+  "reference_stereo_frames": 7948234,
+  "runs": {
+    "baseline": {
+      "frames": 10800,
+      "elapsed_ms": 180321,
+      "input_bytes": 31792936,
+      "accepted_bytes": 31792936,
+      "dropped_bytes": 0,
+      "pending_bytes": 0,
+      "input_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+      "accepted_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+      "gui_stall_ms": 0,
+      "gui_stalls": 0,
+      "burn_threads": 0,
+      "latency_profile": 0,
+      "max_input_gap_ms": 22.910322,
+      "queue_min_us": 4331,
+      "queue_max_us": 56916,
+      "sink_buffer_bytes": 7056,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 0,
+      "discarded_audio_seconds": 0.0
+    },
+    "cpu-load": {
+      "frames": 10800,
+      "elapsed_ms": 180410,
+      "input_bytes": 31792936,
+      "accepted_bytes": 31792936,
+      "dropped_bytes": 0,
+      "pending_bytes": 0,
+      "input_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+      "accepted_sha256": "7c9ec57ed3df46a1b309a1d5afc640daea2d9925ef84b6742b79edaf298424ad",
+      "gui_stall_ms": 0,
+      "gui_stalls": 0,
+      "burn_threads": 2,
+      "latency_profile": 0,
+      "max_input_gap_ms": 36.803693,
+      "queue_min_us": 0,
+      "queue_max_us": 61043,
+      "sink_buffer_bytes": 7056,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 0,
+      "discarded_audio_seconds": 0.0
+    },
+    "gui-10": {
+      "frames": 2400,
+      "elapsed_ms": 40213,
+      "input_bytes": 7065096,
+      "accepted_bytes": 7065096,
+      "dropped_bytes": 0,
+      "pending_bytes": 0,
+      "input_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "accepted_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "gui_stall_ms": 10,
+      "gui_stalls": 75,
+      "burn_threads": 0,
+      "latency_profile": 0,
+      "max_input_gap_ms": 28.109613,
+      "queue_min_us": 1428,
+      "queue_max_us": 56984,
+      "sink_buffer_bytes": 7056,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 0,
+      "discarded_audio_seconds": 0.0
+    },
+    "gui-25": {
+      "frames": 2400,
+      "elapsed_ms": 40253,
+      "input_bytes": 7065096,
+      "accepted_bytes": 7065096,
+      "dropped_bytes": 0,
+      "pending_bytes": 0,
+      "input_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "accepted_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "gui_stall_ms": 25,
+      "gui_stalls": 75,
+      "burn_threads": 0,
+      "latency_profile": 0,
+      "max_input_gap_ms": 20.458349,
+      "queue_min_us": 702,
+      "queue_max_us": 55147,
+      "sink_buffer_bytes": 7056,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 0,
+      "discarded_audio_seconds": 0.0
+    },
+    "gui-60": {
+      "frames": 2400,
+      "elapsed_ms": 40383,
+      "input_bytes": 7065096,
+      "accepted_bytes": 6782904,
+      "dropped_bytes": 282192,
+      "pending_bytes": 0,
+      "input_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "accepted_sha256": "062df78aba60e31ea0c2eb10afe696cbffe26fb977dbd22f7246cfd4238a0501",
+      "gui_stall_ms": 60,
+      "gui_stalls": 74,
+      "burn_threads": 0,
+      "latency_profile": 0,
+      "max_input_gap_ms": 23.018029,
+      "queue_min_us": 1428,
+      "queue_max_us": 86099,
+      "sink_buffer_bytes": 7056,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 70548,
+      "discarded_audio_seconds": 1.5997278911564625
+    },
+    "gui-60-stable": {
+      "frames": 2400,
+      "elapsed_ms": 40189,
+      "input_bytes": 7065096,
+      "accepted_bytes": 7065096,
+      "dropped_bytes": 0,
+      "pending_bytes": 0,
+      "input_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "accepted_sha256": "e1560ca79f59d8103eaf7fcc793ac074f3270ce44c96dc25bf24956fee17c3b4",
+      "gui_stall_ms": 60,
+      "gui_stalls": 75,
+      "burn_threads": 0,
+      "latency_profile": 2,
+      "max_input_gap_ms": 26.633976,
+      "queue_min_us": 45668,
+      "queue_max_us": 89387,
+      "sink_buffer_bytes": 14112,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 0,
+      "discarded_audio_seconds": 0.0
+    },
+    "gui-250-control": {
+      "frames": 1200,
+      "elapsed_ms": 20349,
+      "input_bytes": 3532548,
+      "accepted_bytes": 2247248,
+      "dropped_bytes": 1285300,
+      "pending_bytes": 0,
+      "input_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+      "accepted_sha256": "3e1d735394cbebb81ccb26b39f87dec727c1a2b36465a8c8e26d5d3e520b8601",
+      "gui_stall_ms": 250,
+      "gui_stalls": 35,
+      "burn_threads": 0,
+      "latency_profile": 0,
+      "max_input_gap_ms": 21.014754,
+      "queue_min_us": 1428,
+      "queue_max_us": 83945,
+      "sink_buffer_bytes": 7056,
+      "sink_opens": 1,
+      "write_errors": 0,
+      "errors": [],
+      "discarded_stereo_frames": 321325,
+      "discarded_audio_seconds": 7.286281179138322
+    }
+  },
+  "limits": [
+    "No physical Windows WASAPI or Voicemeeter capture tested.",
+    "QAudioSink IdleState is not a reliable backend-underflow counter here: even250ms stalls yielded no observed Idle transition after startup. First probes observed a queued startup Idle event after first write; final diagnostic uses direct transition recording. Neither observation can prove absence of silence after Qt.",
+    "Diagnostic hashes are before volume/system mixing; loopback comparison is separately documented.",
+    "Artificial GUI stalls prove an existing failure mechanism, not reproduction of the reporters machine or a new0.29regression."
+  ],
+  "virtual_sink_captures": {
+    "title-ares": {
+      "wav_sha256": "9caf52c97e1ffa145385f5cf02e45c29f161838157ce3b0e21503f3c4bd35cfe",
+      "wav_sample_rate": 48000,
+      "wav_frames": 2640177,
+      "wav_duration_s": 55.0036875,
+      "activity_window_seconds": [
+        2.66,
+        54.88
+      ],
+      "zero_runs": 126,
+      "total_zero_ms": 1082.667,
+      "longest_zero_run_ms": 32.0
+    },
+    "title-blastem": {
+      "wav_sha256": "51c37271d686231db941e70fa0a50307db13400a64a5528dca3f7f5b8a5228a9",
+      "wav_sample_rate": 48000,
+      "wav_frames": 2640199,
+      "wav_duration_s": 55.00414583333333,
+      "activity_window_seconds": [
+        1.76,
+        54.88
+      ],
+      "zero_runs": 0,
+      "total_zero_ms": 0.0,
+      "longest_zero_run_ms": 0.0
+    },
+    "title-jgenesis": {
+      "wav_sha256": "9e41a0e1f7a5a919d8e3c669730aab372c47d282b3ffb86029c9cf0269f2e922",
+      "wav_sample_rate": 48000,
+      "wav_frames": 2640203,
+      "wav_duration_s": 55.00422916666667,
+      "activity_window_seconds": [
+        1.44,
+        54.88
+      ],
+      "zero_runs": 1,
+      "total_zero_ms": 5.333,
+      "longest_zero_run_ms": 5.333
+    },
+    "title-kega": {
+      "wav_sha256": "5fed861827e8f74f5657049dd7beaa80efc7c48a642efe52f4c530558b5dcef0",
+      "wav_sample_rate": 48000,
+      "wav_frames": 2640882,
+      "wav_duration_s": 55.018375,
+      "activity_window_seconds": [
+        3.3,
+        54.88
+      ],
+      "zero_runs": 0,
+      "total_zero_ms": 0.0,
+      "longest_zero_run_ms": 0.0,
+      "qt_probe": {
+        "frames": 3300,
+        "gui_stall_ms": 0,
+        "gui_stalls": 0,
+        "latency_profile": 0,
+        "elapsed_ms": 55211,
+        "input_bytes": 9714508,
+        "input_sha256": "0390456f496ce4c999af9dad7ceeda2ea34185470846c80314d1f1179735e012",
+        "accepted_bytes": 9714508,
+        "accepted_sha256": "0390456f496ce4c999af9dad7ceeda2ea34185470846c80314d1f1179735e012",
+        "dropped_bytes": 0,
+        "sink_idle_events": 0,
+        "device": "kr_reference Audio/Sink sink",
+        "qt_version": "6.10.2"
+      }
+    },
+    "title-kega-stall60": {
+      "wav_sha256": "4607c67fc06260033dcbe2da5c0e515de42a15148dd81bf832eedcd7f8b92534",
+      "wav_sample_rate": 48000,
+      "wav_frames": 1200969,
+      "wav_duration_s": 25.0201875,
+      "activity_window_seconds": [
+        3.3,
+        22.28
+      ],
+      "zero_runs": 34,
+      "total_zero_ms": 1429.333,
+      "longest_zero_run_ms": 42.667,
+      "qt_probe": {
+        "frames": 1200,
+        "gui_stall_ms": 60,
+        "gui_stalls": 34,
+        "latency_profile": 0,
+        "elapsed_ms": 20263,
+        "input_bytes": 3532548,
+        "input_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "accepted_bytes": 3299900,
+        "accepted_sha256": "ee005329417a12957d2c01b361afc6b56b618479bd7024f44184abda3654f1e4",
+        "dropped_bytes": 232648,
+        "sink_idle_events": 0,
+        "device": "kr_reference Audio/Sink sink",
+        "qt_version": "6.10.2"
+      }
+    },
+    "title-kega-stall60-stable": {
+      "wav_sha256": "e84863d83914e7b36cb474f2d8766347950ab5285eaa969dcb11262a9e067894",
+      "wav_sample_rate": 48000,
+      "wav_frames": 1200960,
+      "wav_duration_s": 25.02,
+      "activity_window_seconds": [
+        3.44,
+        22.34
+      ],
+      "zero_runs": 1,
+      "total_zero_ms": 21.333,
+      "longest_zero_run_ms": 21.333,
+      "qt_probe": {
+        "frames": 1200,
+        "gui_stall_ms": 60,
+        "gui_stalls": 34,
+        "latency_profile": 2,
+        "elapsed_ms": 20187,
+        "input_bytes": 3532548,
+        "input_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "accepted_bytes": 3532548,
+        "accepted_sha256": "cb0c0ff3ede29037b02d9dea63ad29d869b05434feb683310c59fae871a12b7d",
+        "dropped_bytes": 0,
+        "sink_idle_events": 0,
+        "device": "kr_reference Audio/Sink sink",
+        "qt_version": "6.10.2"
+      }
+    }
+  },
+  "other_emulator_comparison": {
+    "landmark_window_seconds": 5,
+    "metrics_window_seconds_total": 35,
+    "title_capture_seconds_nominal": 55,
+    "emulators": {
+      "Kega Refusion (core)": {
+        "landmarks": [
+          {
+            "kega_seconds": 8,
+            "match_seconds": 8.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          },
+          {
+            "kega_seconds": 14,
+            "match_seconds": 14.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          },
+          {
+            "kega_seconds": 20,
+            "match_seconds": 20.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          },
+          {
+            "kega_seconds": 26,
+            "match_seconds": 26.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          },
+          {
+            "kega_seconds": 32,
+            "match_seconds": 32.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          },
+          {
+            "kega_seconds": 38,
+            "match_seconds": 38.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          },
+          {
+            "kega_seconds": 44,
+            "match_seconds": 44.0,
+            "offset_ms": 0,
+            "spectral_onset_correlation": 1.0
+          }
+        ],
+        "sha256": "c1ac8623837971005c2ea9dae687072576a2912a9a7a173155d8865c7306221c",
+        "rms_dbfs_stereo": -15.46,
+        "peak_dbfs_stereo": -0.3,
+        "energy_4_8_khz_rel_0_5_2_khz_db": -12.01,
+        "longest_exact_digital_zero_ms": 0.021,
+        "matched_audio_sample_frames": 1680000
+      },
+      "Kega Refusion (Qt)": {
+        "landmarks": [
+          {
+            "kega_seconds": 8,
+            "match_seconds": 10.3,
+            "offset_ms": 2300,
+            "spectral_onset_correlation": 0.9311
+          },
+          {
+            "kega_seconds": 14,
+            "match_seconds": 16.3,
+            "offset_ms": 2300,
+            "spectral_onset_correlation": 0.9303
+          },
+          {
+            "kega_seconds": 20,
+            "match_seconds": 22.3,
+            "offset_ms": 2300,
+            "spectral_onset_correlation": 0.9303
+          },
+          {
+            "kega_seconds": 26,
+            "match_seconds": 28.3,
+            "offset_ms": 2300,
+            "spectral_onset_correlation": 0.9296
+          },
+          {
+            "kega_seconds": 32,
+            "match_seconds": 34.3,
+            "offset_ms": 2299,
+            "spectral_onset_correlation": 0.932
+          },
+          {
+            "kega_seconds": 38,
+            "match_seconds": 40.3,
+            "offset_ms": 2299,
+            "spectral_onset_correlation": 0.9339
+          },
+          {
+            "kega_seconds": 44,
+            "match_seconds": 46.3,
+            "offset_ms": 2299,
+            "spectral_onset_correlation": 0.9357
+          }
+        ],
+        "sha256": "5fed861827e8f74f5657049dd7beaa80efc7c48a642efe52f4c530558b5dcef0",
+        "rms_dbfs_stereo": -15.48,
+        "peak_dbfs_stereo": -0.31,
+        "energy_4_8_khz_rel_0_5_2_khz_db": -11.98,
+        "longest_exact_digital_zero_ms": 0.021,
+        "matched_audio_sample_frames": 1680000
+      },
+      "ares": {
+        "landmarks": [
+          {
+            "kega_seconds": 8,
+            "match_seconds": 9.66,
+            "offset_ms": 1660,
+            "spectral_onset_correlation": 0.7341
+          },
+          {
+            "kega_seconds": 14,
+            "match_seconds": 15.72,
+            "offset_ms": 1720,
+            "spectral_onset_correlation": 0.7552
+          },
+          {
+            "kega_seconds": 20,
+            "match_seconds": 21.74,
+            "offset_ms": 1739,
+            "spectral_onset_correlation": 0.7151
+          },
+          {
+            "kega_seconds": 26,
+            "match_seconds": 27.94,
+            "offset_ms": 1940,
+            "spectral_onset_correlation": 0.5113
+          },
+          {
+            "kega_seconds": 32,
+            "match_seconds": 34.12,
+            "offset_ms": 2119,
+            "spectral_onset_correlation": 0.5059
+          },
+          {
+            "kega_seconds": 38,
+            "match_seconds": 40.16,
+            "offset_ms": 2159,
+            "spectral_onset_correlation": 0.4018
+          },
+          {
+            "kega_seconds": 44,
+            "match_seconds": 46.58,
+            "offset_ms": 2579,
+            "spectral_onset_correlation": 0.521
+          }
+        ],
+        "sha256": "9caf52c97e1ffa145385f5cf02e45c29f161838157ce3b0e21503f3c4bd35cfe",
+        "rms_dbfs_stereo": -18.63,
+        "peak_dbfs_stereo": -3.86,
+        "energy_4_8_khz_rel_0_5_2_khz_db": -16.35,
+        "longest_exact_digital_zero_ms": 32.0,
+        "matched_audio_sample_frames": 1680000
+      },
+      "jgenesis": {
+        "landmarks": [
+          {
+            "kega_seconds": 8,
+            "match_seconds": 8.72,
+            "offset_ms": 720,
+            "spectral_onset_correlation": 0.9033
+          },
+          {
+            "kega_seconds": 14,
+            "match_seconds": 14.72,
+            "offset_ms": 720,
+            "spectral_onset_correlation": 0.6535
+          },
+          {
+            "kega_seconds": 20,
+            "match_seconds": 20.72,
+            "offset_ms": 719,
+            "spectral_onset_correlation": 0.637
+          },
+          {
+            "kega_seconds": 26,
+            "match_seconds": 26.76,
+            "offset_ms": 760,
+            "spectral_onset_correlation": 0.7519
+          },
+          {
+            "kega_seconds": 32,
+            "match_seconds": 32.76,
+            "offset_ms": 759,
+            "spectral_onset_correlation": 0.9077
+          },
+          {
+            "kega_seconds": 38,
+            "match_seconds": 38.76,
+            "offset_ms": 759,
+            "spectral_onset_correlation": 0.9079
+          },
+          {
+            "kega_seconds": 44,
+            "match_seconds": 44.76,
+            "offset_ms": 759,
+            "spectral_onset_correlation": 0.9246
+          }
+        ],
+        "sha256": "9e41a0e1f7a5a919d8e3c669730aab372c47d282b3ffb86029c9cf0269f2e922",
+        "rms_dbfs_stereo": -19.31,
+        "peak_dbfs_stereo": -4.41,
+        "energy_4_8_khz_rel_0_5_2_khz_db": -16.16,
+        "longest_exact_digital_zero_ms": 5.333,
+        "matched_audio_sample_frames": 1680000
+      },
+      "BlastEm": {
+        "landmarks": [
+          {
+            "kega_seconds": 8,
+            "match_seconds": 8.82,
+            "offset_ms": 820,
+            "spectral_onset_correlation": 0.7561
+          },
+          {
+            "kega_seconds": 14,
+            "match_seconds": 14.82,
+            "offset_ms": 820,
+            "spectral_onset_correlation": 0.7006
+          },
+          {
+            "kega_seconds": 20,
+            "match_seconds": 20.82,
+            "offset_ms": 820,
+            "spectral_onset_correlation": 0.6938
+          },
+          {
+            "kega_seconds": 26,
+            "match_seconds": 26.82,
+            "offset_ms": 820,
+            "spectral_onset_correlation": 0.6868
+          },
+          {
+            "kega_seconds": 32,
+            "match_seconds": 32.82,
+            "offset_ms": 820,
+            "spectral_onset_correlation": 0.6234
+          },
+          {
+            "kega_seconds": 38,
+            "match_seconds": 38.98,
+            "offset_ms": 979,
+            "spectral_onset_correlation": 0.649
+          },
+          {
+            "kega_seconds": 44,
+            "match_seconds": 44.84,
+            "offset_ms": 840,
+            "spectral_onset_correlation": 0.6485
+          }
+        ],
+        "sha256": "51c37271d686231db941e70fa0a50307db13400a64a5528dca3f7f5b8a5228a9",
+        "rms_dbfs_stereo": -19.18,
+        "peak_dbfs_stereo": -4.25,
+        "energy_4_8_khz_rel_0_5_2_khz_db": -17.07,
+        "longest_exact_digital_zero_ms": 0.042,
+        "matched_audio_sample_frames": 1680000
+      }
+    }
+  }
+}

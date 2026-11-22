@@ -362,6 +362,13 @@ if(BUILD_TESTING)
     target_include_directories(audio_output_tests PRIVATE src)
     target_link_libraries(audio_output_tests PRIVATE Qt6::Core Qt6::Multimedia localization)
     add_test(NAME audio_output_tests COMMAND audio_output_tests)
+    # Explicit real-ROM/device diagnostic, never run automatically by CTest.
+    add_executable(audio_load_probe EXCLUDE_FROM_ALL tests/audio_load_probe.cpp
+        src/core/EmulationSession.cpp src/core/EmulationSession.h
+        src/ui/AudioOutput.cpp src/ui/AudioOutput.h)
+    target_compile_definitions(audio_load_probe PRIVATE KEGA_AUDIO_DIAGNOSTICS)
+    target_link_libraries(audio_load_probe PRIVATE core_host Qt6::Multimedia)
+
     add_executable(battery_tests tests/battery_tests.cpp)
     target_link_libraries(battery_tests PRIVATE core_host)
     add_test(NAME battery_policy_tests COMMAND battery_tests)
