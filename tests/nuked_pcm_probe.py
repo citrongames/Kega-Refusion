@@ -138,13 +138,11 @@ parser.add_argument("--core", type=Path, required=True)
 parser.add_argument("--rom", type=Path, required=True)
 parser.add_argument("--frames", type=int, default=32400)
 parser.add_argument("--output", type=Path, required=True)
-parser.add_argument('--pcm-dump', type=Path, help='Optional s16le stereo PCM, up to 1200 frames')
+parser.add_argument('--pcm-dump', type=Path, help='Optional streamed s16le stereo PCM; bounded by --frames (maximum 36000)')
 args = parser.parse_args()
 if not 1 <= args.frames <= 36000:
     parser.error("--frames must be between 1 and 36000")
 args.output.parent.mkdir(parents=True, exist_ok=True)
-if args.pcm_dump and not 1 <= args.frames <= 1200:
-    parser.error('--pcm-dump requires 1 to 1200 video frames')
 with tempfile.TemporaryDirectory(prefix="nuked-pcm-", dir=args.output.resolve().parent) as directory:
     with args.pcm_dump.open('wb') if args.pcm_dump else nullcontext(None) as pcm_file:
         result = run(args.core.resolve(), args.rom.resolve(), args.frames, directory, pcm_file)

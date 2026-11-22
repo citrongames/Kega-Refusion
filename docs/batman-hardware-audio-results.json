@@ -1,0 +1,276 @@
+{
+  "date": "2026-11-22",
+  "conclusion": "No consistent closer or worse match established for either core on the sampled hardware recordings. Not a proof of bit-level accuracy or a Windows output test.",
+  "cores": {
+    "old": {
+      "core_sha256": "88f1902e6f2a00a2203bd9eb9a136ecc2d8a9a8c2124e655c316ee7ab5a39616",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "038c3014e09a771e539f09598ac5c676ba344999ae0df45edcaeddd09305aa0f"
+    },
+    "current": {
+      "core_sha256": "b9652c8875cee3a2a20447b527052de56171d6e56fa69f2905b0191a34851e77",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "c2179d56f37c3043162cb00d97a5e25697c5c0805c83008bd4b382c7c37d2bd9"
+    }
+  },
+  "hardware": [
+    {
+      "source": "https://www.youtube.com/watch?v=UQfOvuekCWY",
+      "provenance": "cannyfocus, Mega Drive Model 1 VA5, USA ROM, in-game title",
+      "reference_sha256": "0ac8bb0c6e55889a0ba73bc0b08e87f15462951fd642ea096711959e220413ae",
+      "method": "Mono, 16 kHz; one affine clock from eight-second spectral-flux landmarks; identical alignment and calibration for both cores",
+      "hardware_offset_seconds": 0.21213330376935424,
+      "clock_drift_ppm": 64.65631929031268,
+      "window_count": 54,
+      "window_seconds": 3.0,
+      "measured_feature_seconds": 162.0,
+      "summary": {
+        "band_error_db": {
+          "old_median": 0.8225117438571887,
+          "current_median": 0.8138445846207052,
+          "paired_current_minus_old_median": -0.0009048114231816617,
+          "paired_p10": -0.016675307111153614,
+          "paired_p90": 0.011824839348724405,
+          "closer_windows": {
+            "old": 25,
+            "current": 29,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.006724798111116925,
+            0.0022312903336858536
+          ]
+        },
+        "level_error_db": {
+          "old_median": 0.35050948501885193,
+          "current_median": 0.3528269340332275,
+          "paired_current_minus_old_median": 0.0006019350763324383,
+          "paired_p10": -0.015552682816664908,
+          "paired_p90": 0.016834066849568074,
+          "closer_windows": {
+            "old": 30,
+            "current": 24,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.0028466001428451015,
+            0.004099433130654097
+          ]
+        },
+        "level_correlation": {
+          "old_median": 0.9490788000069275,
+          "current_median": 0.9505605949962095,
+          "paired_current_minus_old_median": 0.00016167723708321313,
+          "paired_p10": -0.0020147797665462375,
+          "paired_p90": 0.0038318644141949964,
+          "closer_windows": {
+            "old": 22,
+            "current": 32,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -5.692689318603783e-05,
+            0.0006440978311870182
+          ]
+        },
+        "onset_correlation": {
+          "old_median": 0.8749000719567617,
+          "current_median": 0.875002525971481,
+          "paired_current_minus_old_median": 0.0011938119461702423,
+          "paired_p10": -0.003801623042720525,
+          "paired_p90": 0.007023524770023704,
+          "closer_windows": {
+            "old": 19,
+            "current": 35,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.00021916443324804247,
+            0.0033075065719812002
+          ]
+        }
+      },
+      "issue_timestamp_window": [
+        {
+          "core_start_seconds": 165.0,
+          "hardware_start_seconds": 165.22,
+          "landmark_correlation": 0.8589984216080824,
+          "landmark_refinement_ms": -2.801596452263766,
+          "wave_refinement_ms": 4.5625,
+          "shared_wave_polarity_probe": 0.9227636041043031,
+          "old": {
+            "band_error_db": 0.7453577079655305,
+            "level_error_db": 0.2835668925982624,
+            "level_correlation": 0.9320181492846705,
+            "onset_correlation": 0.9154828461268445,
+            "wave_correlation_raw": 0.9182422528180973,
+            "wave_correlation": 0.9182422528180973
+          },
+          "current": {
+            "band_error_db": 0.7482431940854888,
+            "level_error_db": 0.28356811627375933,
+            "level_correlation": 0.9357336053248325,
+            "onset_correlation": 0.9223189703767392,
+            "wave_correlation_raw": 0.9242060160935268,
+            "wave_correlation": 0.9242060160935268
+          }
+        }
+      ]
+    },
+    {
+      "source": "https://www.youtube.com/watch?v=915k0mMK-Fo",
+      "provenance": "DUSTINODELLOFFICIAL, Genesis Model 1 VA3, NTSC; title/sound-test scenario unspecified",
+      "reference_sha256": "f9529f29c38d4fe2bc15c0dfdc2c33884a9ce7af662bda9346e031f20c25d6d1",
+      "method": "Mono, 16 kHz; one affine clock from eight-second spectral-flux landmarks; identical alignment and calibration for both cores",
+      "hardware_offset_seconds": 0.1356648853134429,
+      "clock_drift_ppm": 129.2825326781877,
+      "window_count": 54,
+      "window_seconds": 3.0,
+      "measured_feature_seconds": 162.0,
+      "summary": {
+        "band_error_db": {
+          "old_median": 0.7857674863994178,
+          "current_median": 0.7821306372495357,
+          "paired_current_minus_old_median": 0.0007907939087320459,
+          "paired_p10": -0.013000814852122441,
+          "paired_p90": 0.012012856263477301,
+          "closer_windows": {
+            "old": 29,
+            "current": 25,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.0008343121060937486,
+            0.004030297112623371
+          ]
+        },
+        "level_error_db": {
+          "old_median": 0.3440172673833639,
+          "current_median": 0.3395652796728137,
+          "paired_current_minus_old_median": 0.0003714532183947128,
+          "paired_p10": -0.018267334718923764,
+          "paired_p90": 0.013794431482768234,
+          "closer_windows": {
+            "old": 29,
+            "current": 25,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.002854234754367191,
+            0.0029740324644009775
+          ]
+        },
+        "level_correlation": {
+          "old_median": 0.9522414033614751,
+          "current_median": 0.9523972714708695,
+          "paired_current_minus_old_median": 2.9469836291040608e-05,
+          "paired_p10": -0.001717373147206158,
+          "paired_p90": 0.0023784189980943695,
+          "closer_windows": {
+            "old": 25,
+            "current": 29,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.0004606545796388972,
+            0.0003054815869387717
+          ]
+        },
+        "onset_correlation": {
+          "old_median": 0.8905616709744142,
+          "current_median": 0.8884090459717309,
+          "paired_current_minus_old_median": 4.732125681339294e-05,
+          "paired_p10": -0.007276641772642766,
+          "paired_p90": 0.003919777902598731,
+          "closer_windows": {
+            "old": 26,
+            "current": 28,
+            "tied": 0
+          },
+          "descriptive_block_bootstrap_95pct": [
+            -0.0020301409889290634,
+            0.0004356867387614538
+          ]
+        }
+      },
+      "issue_timestamp_window": [
+        {
+          "core_start_seconds": 165.0,
+          "hardware_start_seconds": 165.16,
+          "landmark_correlation": 0.8708108032869234,
+          "landmark_refinement_ms": 3.0034967946630786,
+          "wave_refinement_ms": -5.125,
+          "shared_wave_polarity_probe": -0.9274259826159442,
+          "old": {
+            "band_error_db": 0.8304716888142252,
+            "level_error_db": 0.35128650740986433,
+            "level_correlation": 0.9504271481525908,
+            "onset_correlation": 0.9427560219854992,
+            "wave_correlation_raw": -0.9252773687484209,
+            "wave_correlation": 0.9252773687484209
+          },
+          "current": {
+            "band_error_db": 0.8296934561167123,
+            "level_error_db": 0.31681621992257103,
+            "level_correlation": 0.9490148611436379,
+            "onset_correlation": 0.9377597080722128,
+            "wave_correlation_raw": -0.9264797774083635,
+            "wave_correlation": 0.9264797774083635
+          }
+        }
+      ]
+    }
+  ],
+  "raw_core_level": {
+    "interval_seconds": [
+      160,
+      175
+    ],
+    "window_seconds": 0.1,
+    "windows": 150,
+    "sample_rate": 44100,
+    "comparison_scope": "Raw libretro PCM before frontend or OS gain",
+    "results": {
+      "left": {
+        "aggregate_delta_current_minus_old_db": 0.0027864549206316055,
+        "min_delta_db": -0.14750259546601577,
+        "min_window_start_seconds": 166.2,
+        "max_delta_db": 0.20318180270609587,
+        "max_window_start_seconds": 164.0,
+        "windows_at_most_minus_6_db": 0
+      },
+      "right": {
+        "aggregate_delta_current_minus_old_db": 0.0013820922554888967,
+        "min_delta_db": -0.19325062811975696,
+        "min_window_start_seconds": 167.2,
+        "max_delta_db": 0.3243248684869324,
+        "max_window_start_seconds": 164.0,
+        "windows_at_most_minus_6_db": 0
+      },
+      "summed_stereo": {
+        "aggregate_delta_current_minus_old_db": 0.002086980739345128,
+        "min_delta_db": -0.15391913957055217,
+        "min_window_start_seconds": 167.2,
+        "max_delta_db": 0.2578103453517904,
+        "max_window_start_seconds": 164.0,
+        "windows_at_most_minus_6_db": 0
+      }
+    }
+  },
+  "limitations": [
+    "Consumer analog captures, lossy Opus, no lossless matched original capture.",
+    "Mono 16 kHz band/onset analysis: no stereo-balance or >7.1 kHz accuracy conclusion.",
+    "Shared gain and band-response correction deliberately excludes absolute level and console frequency-response differences from ranking.",
+    "Both partial WebM sources decoded with one Opus packet-header warning; no bit-perfect source claim.",
+    "Waveform ordering failed known-reference controls and was not used as fidelity evidence.",
+    "60-second block-bootstrap intervals are descriptive for these recordings, not confidence bounds for all consoles."
+  ]
+}

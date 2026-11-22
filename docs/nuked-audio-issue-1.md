@@ -70,3 +70,70 @@ and dependencies, reversing only the two Nuked patches and rebuilding
 `sound.c`/`ym3438.c` plus relinking. No ROM contents, timings or input were
 changed in that control. Temporary diagnostic builds are removed after the
 investigation; source releases and user game files remain untouched.
+
+## Comparison with original consoles
+
+On 2026-11-22, compared the same old/current PCM with two author-described
+hardware recordings of the Main Title:
+
+- [cannyfocus: Japanese Model 1 VA5](https://www.youtube.com/watch?v=UQfOvuekCWY):
+  US ROM on EverDrive at 60 Hz, recorded **in game**. This is the primary reference.
+- [DUSTINODELLOFFICIAL: NTSC Model 1 VA3](https://www.youtube.com/watch?v=915k0mMK-Fo):
+  independent recording; the description does not distinguish title-screen
+  playback from the game's Sound Test for this track.
+
+**Neither version was consistently closer to these recordings.** This does
+not establish that the timing update improved Batman's audible accuracy, but
+also provides no measured evidence of degradation on the sampled passages.
+
+Captured 540.696 seconds per core and downloaded only the first 550 seconds of
+each reference. Analysis used 54 three-second windows spread across each track
+(162 seconds per console, not every sample of nine minutes). A common offset,
+clock drift, gain and frequency-band response were fitted for both versions;
+the latter compensates the console/recording chain rather than ranking analog
+filter differences. The recovered clock differences were about 65 ppm (VA5)
+and 129 ppm (VA3). Analysis was mono at 16 kHz, over 70–7100 Hz.
+
+| Reference | Paired change in band error, current minus old | 60-second block-resampling range |
+| --- | ---: | ---: |
+| VA5 | −0.000905 dB | −0.006725 to +0.002231 dB |
+| VA3 | +0.000791 dB | −0.000834 to +0.004030 dB |
+
+Negative means closer on this metric. The direction changes with the source;
+level/envelope/onset measures likewise do not establish a reliable winner.
+These ranges describe this material, not an accuracy percentage or a confidence
+bound for other consoles/games. Spectral comparison cannot prove that every
+individual note is correct. YouTube compression, the analog path, and one Opus
+packet-header warning per clipped reference also preclude a bit-exact claim.
+
+A known-source control with delay, drift, filtering and Opus compression showed
+that raw waveform correlation could favor the wrong core. It is explicitly
+excluded from the fidelity conclusion. The band-error measure selected the
+corresponding source in both controls.
+
+Around 2:47, a separate **raw core** level check covered 160–175 seconds in 150
+100-ms windows. Current-minus-old summed stereo RMS ranged from −0.154 to
++0.258 dB; no −6 dB drop occurred in either channel. This does not reproduce or
+disprove a Windows/Voicemeeter capture defect.
+
+Compact identities and measurements are saved in
+[batman-hardware-audio-results.json](batman-hardware-audio-results.json).
+No audio synthesis or timing code was changed. No new Windows build is needed.
+
+For reproduction, add `--pcm-dump /path/to/old.s16le` or `current.s16le` to the
+probe command above (streamed to disk; still capped at 36,000 video frames).
+The diagnostic comparator requires Python/NumPy and FFmpeg and caps decoding at
+600 seconds:
+
+```sh
+python3 -B tools/compare-hardware-audio.py --old /path/to/old.s16le \
+  --current /path/to/current.s16le --reference /path/to/hardware.webm \
+  --output /path/to/comparison.json
+```
+
+For the user's listening comparison, three 60-second stereo FLAC excerpts were
+prepared for core time 2:30–3:30. Both emulator excerpts use the same constant
+gain; the VA5 excerpt starts at the matched point and has its loudness matched
+separately. No equalization, compression or time stretching was applied. FLAC
+does not undo the hardware source's original YouTube compression. Copyrighted
+recordings and PCM dumps are not committed.
