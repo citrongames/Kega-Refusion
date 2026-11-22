@@ -1,0 +1,468 @@
+{
+  "issue": "https://github.com/citrongames/Kega-Refusion/issues/3",
+  "comment": "https://github.com/citrongames/Kega-Refusion/issues/3#issuecomment-7080223705",
+  "date": "2026-11-22",
+  "attachments": {
+    "comparison.html": {
+      "bytes": 22883093,
+      "sha256": "d6471f04543ea6f3a30b04405284b92b6bd15b65751e398c8dfe7f6bdc14ff01"
+    },
+    "0.26.wav": {
+      "bytes": 2284742,
+      "sha256": "b4dda0a5255248884409b7424397bc17bd7b042872ca90f7901e8fb74c3fbc8f"
+    },
+    "0.27.wav": {
+      "bytes": 2284742,
+      "sha256": "53751844c2a86c0dba26e037ede5ce79581b6da096019fd373868a74ab3fec9f"
+    }
+  },
+  "core_comparison": {
+    "core_sha256": "87641e4514b00847fbae2459b9398ec40a0102efe8f3fe17f94078684178a6ca",
+    "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+    "frames": 32400,
+    "fps": 59.92274340431231,
+    "sample_rate": 44100.0,
+    "sample_frames_stereo_pcm16": 23844702,
+    "pcm_sha256": "038c3014e09a771e539f09598ac5c676ba344999ae0df45edcaeddd09305aa0f",
+    "compared_with_retained_026_result": {
+      "core_sha256": "88f1902e6f2a00a2203bd9eb9a136ecc2d8a9a8c2124e655c316ee7ab5a39616",
+      "rom_sha256": "9343edb48b8c6afcf44536875d5430548737599bbc49ea93cc5cf430b18ed0aa",
+      "frames": 32400,
+      "fps": 59.92274340431231,
+      "sample_rate": 44100.0,
+      "sample_frames_stereo_pcm16": 23844702,
+      "pcm_sha256": "038c3014e09a771e539f09598ac5c676ba344999ae0df45edcaeddd09305aa0f"
+    },
+    "matches_026_whole_pcm": true
+  },
+  "output_source_comparison": {
+    "0.26.0": {
+      "src/ui/AudioOutput.cpp": "bb7b4bbfe55c35239614e9aa8b04bbee9407303a4293d53af374042b19666547",
+      "src/ui/AudioOutput.h": "e6d802b170fb5130b3ffd91b64dafd2de637ff5eafcceff0c4a0431b2bbf8d20",
+      "src/ui/AudioQueue.h": "b00e5d9fa2e40309759bb30db6b36b3bc34d61d1c006d23cc638d26fa7e1e906",
+      "src/core/FramePacer.h": "bb28c1d7770200f29107c07eafb23760dafc4d7abd5379983386a15d7091deb9",
+      "runtime": {
+        "Qt6Core.dll": "7e14027a0bb4017325db707c315c70ee008c8f2364f60bb2eb04d53c017ee762",
+        "Qt6Multimedia.dll": "af66ee0ab3b0ee290eae91f5c37ba8f07e1da1cd9be5e5180c7b5d0a34a96d6e",
+        "plugins/platforms/qwindows.dll": "664cda539addfa1917e5b728f45a82a0f83694810c81df5604b86b200ad4aab1"
+      }
+    },
+    "0.27.0": {
+      "src/ui/AudioOutput.cpp": "bb7b4bbfe55c35239614e9aa8b04bbee9407303a4293d53af374042b19666547",
+      "src/ui/AudioOutput.h": "e6d802b170fb5130b3ffd91b64dafd2de637ff5eafcceff0c4a0431b2bbf8d20",
+      "src/ui/AudioQueue.h": "b00e5d9fa2e40309759bb30db6b36b3bc34d61d1c006d23cc638d26fa7e1e906",
+      "src/core/FramePacer.h": "bb28c1d7770200f29107c07eafb23760dafc4d7abd5379983386a15d7091deb9",
+      "runtime": {
+        "Qt6Core.dll": "7e14027a0bb4017325db707c315c70ee008c8f2364f60bb2eb04d53c017ee762",
+        "Qt6Multimedia.dll": "af66ee0ab3b0ee290eae91f5c37ba8f07e1da1cd9be5e5180c7b5d0a34a96d6e",
+        "plugins/platforms/qwindows.dll": "664cda539addfa1917e5b728f45a82a0f83694810c81df5604b86b200ad4aab1"
+      }
+    }
+  },
+  "submitted_wav_analysis": {
+    "recordings": [
+      {
+        "sha256": "b4dda0a5255248884409b7424397bc17bd7b042872ca90f7901e8fb74c3fbc8f",
+        "frames": 380783,
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "source_bits": 24,
+        "duration_s": 7.932979166666667,
+        "rms_dbfs": [
+          -18.687058447859354,
+          -19.103956185612894
+        ],
+        "peak_dbfs": [
+          -5.405908139710363,
+          -6.855635903109258
+        ],
+        "mean": [
+          -1.7743204037343211e-06,
+          -1.7768217817462354e-06
+        ]
+      },
+      {
+        "sha256": "53751844c2a86c0dba26e037ede5ce79581b6da096019fd373868a74ab3fec9f",
+        "frames": 380783,
+        "sample_rate_hz": 48000,
+        "channels": 2,
+        "source_bits": 24,
+        "duration_s": 7.932979166666667,
+        "rms_dbfs": [
+          -18.708148897731395,
+          -19.082238469956888
+        ],
+        "peak_dbfs": [
+          -5.810571787513732,
+          -6.110123985495313
+        ],
+        "mean": [
+          -1.778866399993521e-06,
+          -1.7739976351823457e-06
+        ]
+      }
+    ],
+    "positive_lag_definition": "0.27 signal appears later than 0.26",
+    "global_lags": {
+      "L": {
+        "lag_samples": -0.880897761881205,
+        "rho": 0.65200461402442,
+        "inverted_lag_samples": -188,
+        "inverted_rho": -0.21312577110618147
+      },
+      "R": {
+        "lag_samples": -0.9539713575627423,
+        "rho": 0.6262998161836113,
+        "inverted_lag_samples": 155,
+        "inverted_rho": -0.23605818553405175
+      },
+      "mid": {
+        "lag_samples": -0.9102939422370201,
+        "rho": 0.6369239393494689,
+        "inverted_lag_samples": -175,
+        "inverted_rho": -0.2088501118646815
+      }
+    },
+    "descriptive_drift_fit": {
+      "L": {
+        "intercept_samples": 7.738360525563928,
+        "slope_samples_per_second": -1.629405457606358,
+        "slope_ppm": -33.94594703346579,
+        "r_squared": 0.24036290862876974,
+        "residual_lag_rms_samples": 6.267982191082174,
+        "lag_min_max_samples": [
+          -16.011479718396505,
+          13.466322906666722
+        ],
+        "window_rho_min_median_max": [
+          0.5346411411549498,
+          0.6865679703595952,
+          0.8588627565155103
+        ]
+      },
+      "R": {
+        "intercept_samples": 7.456221128147179,
+        "slope_samples_per_second": -1.6430779758447887,
+        "slope_ppm": -34.230791163433096,
+        "r_squared": 0.26112274148177533,
+        "residual_lag_rms_samples": 5.980688835271178,
+        "lag_min_max_samples": [
+          -16.104655091435973,
+          13.309686281430904
+        ],
+        "window_rho_min_median_max": [
+          0.527306883924792,
+          0.6523823622231611,
+          0.8358135474689634
+        ]
+      },
+      "mid": {
+        "intercept_samples": 7.292730186835955,
+        "slope_samples_per_second": -1.5687396841223584,
+        "slope_ppm": -32.682076752549136,
+        "r_squared": 0.2307871310190188,
+        "residual_lag_rms_samples": 6.197229663556258,
+        "lag_min_max_samples": [
+          -16.052531203097594,
+          13.369594758864528
+        ],
+        "window_rho_min_median_max": [
+          0.5314676969992611,
+          0.6546494484135562,
+          0.8546815195403793
+        ]
+      }
+    },
+    "waveform_comparison": {
+      "unaltered": {
+        "lag_aligned_level_adjustment_cmp_db": [
+          0.0,
+          0.0
+        ],
+        "rho": [
+          0.6510944455251015,
+          0.6256456813907978
+        ],
+        "residual_dbfs": [
+          -20.25434474667732,
+          -20.344089189307727
+        ],
+        "residual_db_relative_to_ref_rms": [
+          -1.5731297424705846,
+          -1.2459764473474448
+        ]
+      },
+      "constant_mid_delay_only": {
+        "lag_aligned_level_adjustment_cmp_db": [
+          0.0,
+          0.0
+        ],
+        "rho": [
+          0.6532691755519016,
+          0.6284305503418922
+        ],
+        "residual_dbfs": [
+          -20.281507466982003,
+          -20.376526476256693
+        ],
+        "residual_db_relative_to_ref_rms": [
+          -1.6002924627752675,
+          -1.2784137342964126
+        ]
+      },
+      "constant_mid_delay_plus_rms_gain_dc": {
+        "lag_aligned_level_adjustment_cmp_db": [
+          0.021107850801345803,
+          -0.021699686815186914
+        ],
+        "rho": [
+          0.6532691755519016,
+          0.6284305503418922
+        ],
+        "residual_dbfs": [
+          -20.270990526072246,
+          -20.387412794306023
+        ],
+        "residual_db_relative_to_ref_rms": [
+          -1.5897755208642539,
+          -1.2893000512396329
+        ]
+      },
+      "global_affine_diagnostic_plus_rms_gain_dc": {
+        "lag_aligned_level_adjustment_cmp_db": [
+          0.021043608020357693,
+          -0.021761096142649962
+        ],
+        "rho": [
+          0.653019637592875,
+          0.620695979906746
+        ],
+        "residual_dbfs": [
+          -20.26786608566086,
+          -20.297938330000793
+        ],
+        "residual_db_relative_to_ref_rms": [
+          -1.5866510804528677,
+          -1.1998255869344034
+        ]
+      }
+    },
+    "mid_spectra_after_fixed_alignment": [
+      {
+        "hz": [
+          50,
+          250
+        ],
+        "comparison_minus_reference_power_db": 0.015805331930727737,
+        "power_weighted_magnitude_squared_coherence": 0.8066505486263436,
+        "strongest_common_bin_hz": 111.328125,
+        "strongest_bin_cmp_relative_phase_deg": 0.6777893195311143,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.3331027609450371,
+          -0.023272544426800566,
+          0.2817476671373597
+        ]
+      },
+      {
+        "hz": [
+          250,
+          500
+        ],
+        "comparison_minus_reference_power_db": -0.06017347226272507,
+        "power_weighted_magnitude_squared_coherence": 0.5581466033089987,
+        "strongest_common_bin_hz": 439.453125,
+        "strongest_bin_cmp_relative_phase_deg": -3.318442225110348,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -1.4172914886230288,
+          -0.06685541547224173,
+          1.3353651463431064
+        ]
+      },
+      {
+        "hz": [
+          500,
+          1000
+        ],
+        "comparison_minus_reference_power_db": 0.008260122950148252,
+        "power_weighted_magnitude_squared_coherence": 0.4639082526886866,
+        "strongest_common_bin_hz": 585.9375,
+        "strongest_bin_cmp_relative_phase_deg": 16.53541779569444,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.6318307568134113,
+          0.0067701199976952856,
+          0.7193131998912687
+        ]
+      },
+      {
+        "hz": [
+          1000,
+          2000
+        ],
+        "comparison_minus_reference_power_db": 0.0006730754803641443,
+        "power_weighted_magnitude_squared_coherence": 0.18119104894981566,
+        "strongest_common_bin_hz": 1318.359375,
+        "strongest_bin_cmp_relative_phase_deg": -2.0730300705663653,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.8205175697465836,
+          0.1508646945313165,
+          0.8684080422124226
+        ]
+      },
+      {
+        "hz": [
+          2000,
+          4000
+        ],
+        "comparison_minus_reference_power_db": 0.08310254444068708,
+        "power_weighted_magnitude_squared_coherence": 0.3128078216363507,
+        "strongest_common_bin_hz": 2636.71875,
+        "strongest_bin_cmp_relative_phase_deg": 46.606836999144335,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.19131177075750963,
+          0.07609265304803195,
+          0.4430104856999591
+        ]
+      },
+      {
+        "hz": [
+          4000,
+          8000
+        ],
+        "comparison_minus_reference_power_db": 0.046510435981603836,
+        "power_weighted_magnitude_squared_coherence": 0.19542804059357657,
+        "strongest_common_bin_hz": 4400.390625,
+        "strongest_bin_cmp_relative_phase_deg": -84.06163917622386,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.2874061902514257,
+          0.03155518258848037,
+          0.34567000425386263
+        ]
+      },
+      {
+        "hz": [
+          8000,
+          16000
+        ],
+        "comparison_minus_reference_power_db": 0.038116230472228715,
+        "power_weighted_magnitude_squared_coherence": 0.19193632088831636,
+        "strongest_common_bin_hz": 8367.1875,
+        "strongest_bin_cmp_relative_phase_deg": -76.89138365302139,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.33014225497689725,
+          -0.005952010586477626,
+          0.34544552667648265
+        ]
+      },
+      {
+        "hz": [
+          16000,
+          24001
+        ],
+        "comparison_minus_reference_power_db": -0.1548938317778638,
+        "power_weighted_magnitude_squared_coherence": 0.144554421479702,
+        "strongest_common_bin_hz": 16089.84375,
+        "strongest_bin_cmp_relative_phase_deg": -129.2593374441931,
+        "400ms_local_power_db_10_50_90_percentiles": [
+          -0.6616873425643245,
+          -0.05737728690541259,
+          0.6284789555882455
+        ]
+      }
+    ]
+  },
+  "source_matching": {
+    "search_source": "published Linux 0.27.0 core, 32400-frame cold no-input raw PCM",
+    "clips": {
+      "0.26": [
+        {
+          "spectral_offset_s": 488.52,
+          "multiband_onset_correlation": 0.06944188478616578,
+          "waveform_offset_s": 488.48525,
+          "signed_waveform_correlation_at_best_local_lag": 0.032973791692758936
+        },
+        {
+          "spectral_offset_s": 471.02,
+          "multiband_onset_correlation": 0.06229838040993095,
+          "waveform_offset_s": 471.07225,
+          "signed_waveform_correlation_at_best_local_lag": -0.03852757390728715
+        },
+        {
+          "spectral_offset_s": 473.44,
+          "multiband_onset_correlation": 0.06156504050021459,
+          "waveform_offset_s": 473.3671875,
+          "signed_waveform_correlation_at_best_local_lag": -0.02748886320633414
+        },
+        {
+          "spectral_offset_s": 485.54,
+          "multiband_onset_correlation": 0.05929047747749441,
+          "waveform_offset_s": 485.56475,
+          "signed_waveform_correlation_at_best_local_lag": -0.019849957526767083
+        },
+        {
+          "spectral_offset_s": 517.22,
+          "multiband_onset_correlation": 0.05655028435497251,
+          "waveform_offset_s": 517.2191875,
+          "signed_waveform_correlation_at_best_local_lag": 0.024544895754077235
+        },
+        {
+          "spectral_offset_s": 503.06,
+          "multiband_onset_correlation": 0.054635882539867835,
+          "waveform_offset_s": 503.1344375,
+          "signed_waveform_correlation_at_best_local_lag": -0.030203098619071774
+        }
+      ],
+      "0.27": [
+        {
+          "spectral_offset_s": 488.52,
+          "multiband_onset_correlation": 0.07803903453743988,
+          "waveform_offset_s": 488.4851875,
+          "signed_waveform_correlation_at_best_local_lag": 0.03485861698023849
+        },
+        {
+          "spectral_offset_s": 468.6,
+          "multiband_onset_correlation": 0.0697815461567127,
+          "waveform_offset_s": 468.6705,
+          "signed_waveform_correlation_at_best_local_lag": 0.018272976681035422
+        },
+        {
+          "spectral_offset_s": 473.44,
+          "multiband_onset_correlation": 0.06649242521077776,
+          "waveform_offset_s": 473.3681875,
+          "signed_waveform_correlation_at_best_local_lag": 0.025991140753087127
+        },
+        {
+          "spectral_offset_s": 471.02,
+          "multiband_onset_correlation": 0.06468163634834892,
+          "waveform_offset_s": 471.0839375,
+          "signed_waveform_correlation_at_best_local_lag": -0.03208715904611212
+        },
+        {
+          "spectral_offset_s": 486.12,
+          "multiband_onset_correlation": 0.06389245335057452,
+          "waveform_offset_s": 486.1360625,
+          "signed_waveform_correlation_at_best_local_lag": 0.03422350662201114
+        },
+        {
+          "spectral_offset_s": 486.94,
+          "multiband_onset_correlation": 0.05790637433035357,
+          "waveform_offset_s": 486.975625,
+          "signed_waveform_correlation_at_best_local_lag": -0.032074967048939536
+        }
+      ]
+    },
+    "known_60s_core_excerpt_scaled_0.75": {
+      "found_offset_s": 60.0,
+      "multiband_onset_correlation": 0.9765362799856661
+    },
+    "reporter_pair_matching": {
+      "0.26_vs_0.27_relative_offset_s": 0.0,
+      "multiband_onset_correlation": 0.725464839721258
+    }
+  },
+  "limits": [
+    "Raw core check uses Linux published binaries and retained 0.26 result; Windows playback not run.",
+    "Reporter excerpt origin/scene/settings not reproduced.",
+    "Matched spectra do not establish perceptual equality; differing waveforms do not locate the cause.",
+    "No rollback, synthesis, timing or output code change."
+  ]
+}
