@@ -513,3 +513,44 @@ The source archive verifies 1,929 file checksums, including exact tracked source
 integrated-core sources, patch receipts, dependency archives and runtime notices.
 Evidence and final artifacts are retained under ignored `build/release-0.30.0/`;
 transient package trees and updater installations are removed.
+
+
+## 0.30.1 audio-output release — 2026-11-22
+
+Released `v0.30.1` at `2e93731a3fa41ea0e2987c5cf241d0b9dbe724e0` with matching
+Windows, Debian 12 Linux and corresponding-source archives. This release adds
+the optional Low-pass filter and moves audio-device servicing off the GUI thread.
+Core binaries are unchanged from 0.30.0; feature measurements and limitations
+remain in [the audio-worker record](audio-worker.md).
+
+Windows was cross-built in Release; the embedded version and all 72 managed
+files were verified without launching a Windows executable. Linux reports
+0.30.1, uses Qt 6.4.2 and passes the glibc 2.36 ceiling. All 175 managed files and
+121 unchanged core/runtime/plugin hashes were checked. The two focused Linux
+audio-output and core-integration checks passed.
+
+The unmodified 0.30.0 archive engine installed both packages in isolated
+locations, preserving twelve user-data sentinels per platform. After publication,
+the actual 0.30.0 UpdateService discovered public 0.30.1, displayed the exact
+English notes, downloaded and verified the Linux archive, and used its shipped
+helper to install and restart the packaged application. All 175 installed files
+and twelve sentinels matched; update staging was removed. Windows installation
+logic was exercised on Linux, not as a Windows UI.
+
+Public latest, tagged update.json, all five GitHub asset digests and the release
+tag commit match. The public Windows download was independently streamed and
+verified. Corresponding source contains the exact 690-file project snapshot,
+801 prepared core files, 95 patch receipts and thirty dependency artifacts;
+all 1,935 internal checksums passed.
+
+Final archive SHA-256:
+
+| Asset | SHA-256 |
+| --- | --- |
+| Windows x86-64 | `e6a7b88c015c11ee98e65dacb6cfeed5cb1537551efde0e60aef2721962b5b33` |
+| Linux x86-64 | `f0934f7e5518ef20f92dc7be234b210a455bf5e261c588f9c9516d208bccad97` |
+| Corresponding source | `d40be717e7a69c4a2ef430e96a965e076a36818528565472554f651c1db3aa19` |
+
+Final artifacts, packaging recipes and compact verification evidence are retained
+under ignored `build/release-0.30.1/`. Transient package trees and isolated updater
+installations are removed; useful incremental build and dependency caches remain.
