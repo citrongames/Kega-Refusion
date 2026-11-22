@@ -845,5 +845,219 @@
         ]
       }
     }
+  },
+  "sunset_44k1_to_48k_comparison": {
+    "method": "Decode without resampling; FFT normalized cross-correlation searches every possible 48kHz offset across all60.077s. Both channels tested, no nonlinear warping or EQ.",
+    "sample_rate": 48000,
+    "source_seconds": 60.077354166666666,
+    "reporter_seconds": 7.932979166666667,
+    "soxr_conversion_same_wav_hash_026_027": true,
+    "algorithms": [
+      "FFmpeg libsoxr precision28, no dither",
+      "FFmpeg swresample default quality, no dither"
+    ],
+    "own_soxr_vs_swr": {
+      "rho": [
+        0.9999968796480599,
+        0.9999968497451643
+      ],
+      "residual_dbfs_after_rms_gain": [
+        -71.28534206126152,
+        -71.23616351269045
+      ],
+      "gain_db": [
+        3.995042003946157e-05,
+        4.010082857752226e-05
+      ]
+    },
+    "search": {
+      "soxr": {
+        "reported026": {
+          "L": {
+            "offset_seconds": 20.083333333333332,
+            "signed_rho": 0.06354881657305726
+          },
+          "R": {
+            "offset_seconds": 27.335291666666667,
+            "signed_rho": 0.06663840387034808
+          },
+          "common": {
+            "offset_seconds": 47.74760416666667,
+            "rho": 0.05285070505970682,
+            "channels_rho": [
+              0.055810584484895905,
+              0.04989082563451773
+            ],
+            "full_clip_metrics": {
+              "rho": [
+                0.055033814192124164,
+                0.04937163013553838
+              ],
+              "residual_dbfs_after_rms_gain": [
+                -15.922595810087426,
+                -16.313548520857
+              ],
+              "gain_db": [
+                0.3672143606482623,
+                -0.07162076256234055
+              ]
+            }
+          }
+        },
+        "reported027": {
+          "L": {
+            "offset_seconds": 10.546875,
+            "signed_rho": 0.058827794678371466
+          },
+          "R": {
+            "offset_seconds": 5.377916666666667,
+            "signed_rho": -0.0590642397034904
+          },
+          "common": {
+            "offset_seconds": 5.3778958333333335,
+            "rho": -0.054156770638961016,
+            "channels_rho": [
+              -0.049375518351198376,
+              -0.05893802292672366
+            ],
+            "full_clip_metrics": {
+              "rho": [
+                -0.04818769645094167,
+                -0.05676787191665942
+              ],
+              "residual_dbfs_after_rms_gain": [
+                -15.493458365299038,
+                -15.832142501479854
+              ],
+              "gain_db": [
+                0.5531897069528895,
+                0.1625622848463078
+              ]
+            }
+          }
+        }
+      },
+      "swr": {
+        "reported026": {
+          "L": {
+            "offset_seconds": 20.083333333333332,
+            "signed_rho": 0.06354877113218668
+          },
+          "R": {
+            "offset_seconds": 27.335291666666667,
+            "signed_rho": 0.0666383483554209
+          },
+          "common": {
+            "offset_seconds": 47.74760416666667,
+            "rho": 0.052850709237552675,
+            "channels_rho": [
+              0.05581060260606392,
+              0.04989081586904143
+            ],
+            "full_clip_metrics": {
+              "rho": [
+                0.05503383147312761,
+                0.04937162242455877
+              ],
+              "residual_dbfs_after_rms_gain": [
+                -15.922595889508756,
+                -16.313548485629177
+              ],
+              "gain_db": [
+                0.3672564050783981,
+                -0.0715782291878681
+              ]
+            }
+          }
+        },
+        "reported027": {
+          "L": {
+            "offset_seconds": 10.546875,
+            "signed_rho": 0.058827729288024724
+          },
+          "R": {
+            "offset_seconds": 5.377916666666667,
+            "signed_rho": -0.05906419321008979
+          },
+          "common": {
+            "offset_seconds": 5.3778958333333335,
+            "rho": -0.054156758401063196,
+            "channels_rho": [
+              -0.0493755293905636,
+              -0.0589379874115628
+            ],
+            "full_clip_metrics": {
+              "rho": [
+                -0.04818770973612972,
+                -0.05676784287139546
+              ],
+              "residual_dbfs_after_rms_gain": [
+                -15.493458310254432,
+                -15.832142620845516
+              ],
+              "gain_db": [
+                0.5532278995330385,
+                0.16260084685659754
+              ]
+            }
+          }
+        }
+      }
+    },
+    "known_excerpt_control": {
+      "L": {
+        "offset_seconds": 10.0,
+        "signed_rho": 0.9999999999985193
+      },
+      "R": {
+        "offset_seconds": 10.0,
+        "signed_rho": 0.9999999999985107
+      },
+      "common": {
+        "offset_seconds": 10.0,
+        "rho": 0.999999999998515,
+        "channels_rho": [
+          0.9999999999985193,
+          0.9999999999985107
+        ],
+        "full_clip_metrics": {
+          "rho": [
+            1.0000000000000207,
+            0.9999999999999944
+          ],
+          "residual_dbfs_after_rms_gain": [
+            -295.74287885568054,
+            -297.03516762846806
+          ],
+          "gain_db": [
+            -2.4987747321658187,
+            -2.498774732166153
+          ]
+        }
+      }
+    },
+    "reporter_pair": {
+      "L": {
+        "offset_seconds": -2.0833333333333333e-05,
+        "signed_rho": 0.6520046140244199
+      },
+      "R": {
+        "offset_seconds": -2.0833333333333333e-05,
+        "signed_rho": 0.6262998161836113
+      },
+      "common": {
+        "offset_seconds": -2.0833333333333333e-05,
+        "rho": 0.6391522151040157,
+        "channels_rho": [
+          0.6520046140244199,
+          0.6262998161836113
+        ]
+      }
+    },
+    "limits": [
+      "Standard FFmpeg swresample/libsoxr conversions, not a reproduction of Voicemeeter settings or its asynchronous capture path.",
+      "The reporter clip is not identified within this particular60.077-second SOUND00 capture; no conclusion about the full track or unknown excerpt provenance.",
+      "Full48kHz search uses integer offsets; no arbitraryEQ or nonlinear time fitting."
+    ]
   }
 }

@@ -101,3 +101,27 @@ The reporter's excerpts could not be reliably matched within this particular
 minute of SOUND 00 either. The matching positive control recovered a known
 scaled excerpt at exactly 10 seconds. This does not identify the original
 recordings or rule out other passages of the game.
+
+
+## Follow-up: explicit 44.1 to 48 kHz conversion
+
+Converted both supplied SOUND00 WAVs to 48 kHz / PCM24 with FFmpeg 8.0.1,
+libsoxr precision28, no dither. The two converted WAVs are byte-identical
+(SHA-256 `4f8a003c6695411934bc2be22fdfa6389b49a1ffde6b1078f0eec2094ec48b11`).
+A separate default-quality swresample conversion has correlation approximately
+0.999997 with the libsoxr result and a gain-matched residual around -71.3 dBFS.
+These measurements describe these two algorithms on this source, not every
+possible conversion or Voicemeeter's exact processing.
+
+Both reporter excerpts were searched at their original 48 kHz across the entire
+60.077-second converted source, at every integer sample offset, using normalized
+FFT cross-correlation per channel and a common stereo offset. The strongest
+common signed correlations had magnitudes only about 0.053 and 0.054 for either
+resampler. This is not a reliable excerpt match. A known scaled source excerpt
+was recovered at exactly10 seconds with correlation effectively1; the reporter
+pair also reproduced the previously measured correlations.
+
+Normal 44.1-to-48 conversion therefore did not reproduce or explain the supplied
+capture difference in this test. Because the source passage is still unidentified,
+this neither establishes a cause nor excludes a different Windows/Voicemeeter
+processing scenario. No emulation or production output code changed.
