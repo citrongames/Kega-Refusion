@@ -45,6 +45,9 @@ typedef struct Gpx32x {
     const uint16_t *rom_pages[64];
     t_zbank_memory_map original_zbank[256];
     int has_cart_rom;
+    uint16_t *ram_cart;
+    unsigned ram_cart_bytes, ram_page[2], ram_code_dirty, ram_code_used;
+    const uint8_t *restore_ram;
     uint32_t boot_identity; /* Zero in existing states with three original BIOS. */
     uint8_t boot_page[65536];
     uint64_t frame_base, hint_due;
@@ -71,6 +74,11 @@ void *kegarefusion_32x_sdram(void) {
 /* GPX config.ntsc is an enable flag, not the selected preset. Options are
    received before attachment too; ordinary MD/CD never allocate this table. */
 static unsigned requested_filter_preset;
+static unsigned requested_ram_cart_mb;
+/* Optional software compatibility, not a physical property of the PCB. */
+int kegarefusion_32x_ram_cart_active(void) { return ctx && ctx->ram_cart != NULL; }
+void kegarefusion_32x_set_ram_cart(unsigned mb)
+{ requested_ram_cart_mb=(mb==4 || mb==8 || mb==16)?mb:0; }
 static void video_sync(uint64_t);
 static void video_reset(void) {
     unsigned i;
@@ -148,7 +156,60 @@ static unsigned io_offset(unsigned a)
     if((a&0xfffe00)==0xa15200)return 0x200|(a&511);
     return UINT_MAX;
 }
-static void sync_device(void) { kega32x_machine_run_until(ctx->machine,current_time()); }
+/* Cartridge writes occur on the 68K side. Coalesce a loader's bursts until
+   the SH2s next execute, never flush the translation cache for every word. */
+static void run_device(uint64_t time)
+{
+#ifdef KEGA_SH2_DRC
+    if(ctx->ram_code_dirty) { kega_sh2_drc_flush();ctx->ram_code_used=0; }
+#endif
+    ctx->ram_code_dirty=0;
+    kega32x_machine_run_until(ctx->machine,time);
+}
+static void sync_device(void) { run_device(current_time()); }
+/* Nonbootable MD/32X RAM cartridge. Decode follows the documented PCB and
+   MicroNut99 ares RAM-cart reference; see docs/cd32x-ram-cartridge.md. */
+static unsigned ram_offset(unsigned address)
+{
+    unsigned local=address&0x3fffff;
+    return (ctx->ram_page[local>>21]<<21)|(local&0x1fffff);
+}
+static unsigned ram_read16(unsigned a) { return ctx->ram_cart[ram_offset(a)>>1]; }
+static unsigned ram_read8(unsigned a) { return (ram_read16(a)>>((a&1)?0:8))&255; }
+static void ram_write16(unsigned a,unsigned v)
+{
+    uint16_t *word=&ctx->ram_cart[ram_offset(a)>>1];
+    if(*word!=(uint16_t)v){*word=(uint16_t)v;ctx->ram_code_dirty|=ctx->ram_code_used;}
+}
+static void ram_write8(unsigned a,unsigned v)
+{
+    unsigned shift=(a&1)?0:8;
+    ram_write16(a,(ram_read16(a)&~(255u<<shift))|((v&255)<<shift));
+}
+static unsigned ram_open8(unsigned a) { (void)a;return 255; }
+static unsigned ram_open16(unsigned a) { (void)a;return 65535; }
+static void ram_ignore(unsigned a,unsigned v) { (void)a;(void)v; }
+static void ram_pages_update(void)
+{
+    if(!ctx->ram_cart)return;
+    for(unsigned i=0;i<64;i++)ctx->rom_pages[i]=ctx->ram_cart+(ram_offset(i<<16)>>1);
+}
+static int ram_latch(unsigned a,unsigned value,unsigned size)
+{
+    if(!ctx->ram_cart || (a&0xffff00)!=0xa13000)return 0;
+    Kega32xBus *bus=kega32x_machine_bus(ctx->machine);
+    /* /TIME is blocked by the 32X while the cartridge bus belongs to SH2. */
+    if((bus->s.regs[0]&1) && !(bus->s.regs[3]&1))return 1;
+    if(ctx->ram_cart_bytes>0x400000 && !(a&4) && !(a&1)) {
+        unsigned page=(size==1?value:value>>8)&((ctx->ram_cart_bytes>>21)-1);
+        unsigned window=(a>>1)&1;
+        if(ctx->ram_page[window]!=page) {
+            ctx->ram_page[window]=page;ctx->ram_code_dirty|=ctx->ram_code_used;
+            ram_pages_update();map_apply();
+        }
+    }
+    return 1;
+}
 static unsigned map_read8(const cpu_memory_map *map,unsigned a)
 { return map->read8?map->read8(a):READ_BYTE(map->base,a&65535); }
 static unsigned map_read16(const cpu_memory_map *map,unsigned a)
@@ -168,6 +229,10 @@ static void maps_restore(void)
         m68k.memory_map[0]=ctx->original[0];
         zbank_memory_map[0]=ctx->original_zbank[0];
     }
+    if(ctx->ram_cart)for(i=0x40;i<0x80;i++) {
+        m68k.memory_map[i]=ctx->original[i];
+        zbank_memory_map[i]=ctx->original_zbank[i];
+    }
     for(i=0x84;i<=0x9f;i++) {
         m68k.memory_map[i]=ctx->original[i];
         zbank_memory_map[i]=ctx->original_zbank[i];
@@ -185,6 +250,7 @@ static void maps_capture(void)
     memcpy(ctx->original,m68k.memory_map,sizeof(ctx->original));
     memcpy(ctx->original_zbank,zbank_memory_map,sizeof(ctx->original_zbank));
     for(unsigned i=0;i<64;i++)update_rom_page(i);
+    ram_pages_update();
     /* Keep the G bootstrap/HINT vectors; the rest follows the selected bank. */
     if(ctx->has_cart_rom && ctx->original[0].base)
         memcpy(ctx->boot_page+256,ctx->original[0].base+256,sizeof(ctx->boot_page)-256);
@@ -232,7 +298,8 @@ static bool rom_fetch_is_pure(void *user,uint32_t a,size_t bytes)
 {
     unsigned page,last;
     (void)user;
-    if(!ctx || !ctx->has_cart_rom || !bytes || bytes>0x400000u || a>0x400000u-bytes)return false;
+    if(!ctx || (!ctx->has_cart_rom && !ctx->ram_cart) || !bytes || bytes>0x400000u || a>0x400000u-bytes)return false;
+    if(ctx->ram_cart){ctx->ram_code_used=1;return true;}
     last=(unsigned)(a+bytes-1)>>16;
     for(page=a>>16;page<=last;page++)
         if(!ctx->original[page].base || ctx->original[page].read16)return false;
@@ -241,6 +308,7 @@ static bool rom_fetch_is_pure(void *user,uint32_t a,size_t bytes)
 static uint16_t rom_read(void *user,uint32_t a)
 {
     (void)user;a&=0x3ffffe;
+    if(ctx->ram_cart)return (uint16_t)ram_read16(a);
     if(!ctx->has_cart_rom)return 0xffff;
     /* Keep the cartridge mapper/SRAM behavior selected by GPX. */
     return (uint16_t)map_read16(&ctx->original[a>>16],a);
@@ -263,6 +331,7 @@ static void io_write8(unsigned a,unsigned v)
 {
     unsigned offset=io_offset(a);
     if(offset==UINT_MAX) {
+        if(ram_latch(a,v,1))return;
         if(mapping_io(a))legacy_io_write(a,v,1,0);else map_write8(&ctx->original[0xa1],a,v);
         return;
     }
@@ -272,6 +341,7 @@ static void io_write16(unsigned a,unsigned v)
 {
     unsigned offset=io_offset(a);
     if(offset==UINT_MAX) {
+        if(ram_latch(a,v,2))return;
         if(mapping_io(a))legacy_io_write(a,v,2,0);else map_write16(&ctx->original[0xa1],a,v);
         return;
     }
@@ -285,17 +355,18 @@ static unsigned zio_read8(unsigned a)
     unsigned offset=io_offset(a);uint64_t t;
     if((a&0xfffffc)==0xa130ec)return (unsigned char)"MARS"[a&3];
     if(offset==UINT_MAX)return zmap_read8(a);
-    t=z80_time();kega32x_machine_run_until(ctx->machine,t);
+    t=z80_time();run_device(t);
     return kega32x_bus_read8(kega32x_machine_bus(ctx->machine),2,offset,t);
 }
 static void zio_write8(unsigned a,unsigned v)
 {
     unsigned offset=io_offset(a);uint64_t t;
     if(offset==UINT_MAX) {
+        if(ram_latch(a,v,1))return;
         if(mapping_io(a))legacy_io_write(a,v,1,1);else zmap_write8(a,v);
         return;
     }
-    t=z80_time();kega32x_machine_run_until(ctx->machine,t);
+    t=z80_time();run_device(t);
     kega32x_bus_write8(kega32x_machine_bus(ctx->machine),2,offset,(uint8_t)v,t);
 }
 static void cover_md_framebuffer(unsigned cpu,Kega32xBus *bus,unsigned address,unsigned width)
@@ -305,7 +376,7 @@ static void cover_md_framebuffer(unsigned cpu,Kega32xBus *bus,unsigned address,u
 }
 static unsigned zfb_read8(unsigned a)
 {
-    kega32x_machine_run_until(ctx->machine,z80_time());
+    run_device(z80_time());
     Kega32xBus *bus=kega32x_machine_bus(ctx->machine);
     unsigned v=kega32x_fb_read16(bus,a);
     if (UNLIKELY(kr_cov_read_mask & KR_DEBUG_Z80)) cover_md_framebuffer(KR_DEBUG_Z80,bus,a,1);
@@ -314,7 +385,7 @@ static unsigned zfb_read8(unsigned a)
 static void zfb_write8(unsigned a,unsigned v)
 {
     const uint64_t t=z80_time();Kega32xBus *b;
-    kega32x_machine_run_until(ctx->machine,t);
+    run_device(t);
     b=kega32x_machine_bus(ctx->machine);
     if (!kega32x_owns_video(b,KEGA32X_M68K)) return;
     kega32x_fb_sync(b,t);
@@ -353,12 +424,12 @@ static unsigned rom_address(unsigned a)
     unsigned bank=kega32x_machine_bus(ctx->machine)->s.regs[2];
     return a<0x900000?a&0x7ffff:(bank<<20)|(a&0xfffff);
 }
-static unsigned rom_window8(unsigned a) {a=rom_address(a);return map_read8(&ctx->original[a>>16],a);}
-static unsigned rom_window16(unsigned a) {a=rom_address(a);return map_read16(&ctx->original[a>>16],a);}
-static void rom_window_write8(unsigned a,unsigned v) {a=rom_address(a);map_write8(&ctx->original[a>>16],a,v);}
-static void rom_window_write16(unsigned a,unsigned v) {a=rom_address(a);map_write16(&ctx->original[a>>16],a,v);}
-static unsigned zrom_window8(unsigned a) {return zmap_read8(rom_address(a));}
-static void zrom_window_write8(unsigned a,unsigned v) {zmap_write8(rom_address(a),v);}
+static unsigned rom_window8(unsigned a) {a=rom_address(a);if(ctx->ram_cart)return ram_read8(a);return map_read8(&ctx->original[a>>16],a);}
+static unsigned rom_window16(unsigned a) {a=rom_address(a);if(ctx->ram_cart)return ram_read16(a);return map_read16(&ctx->original[a>>16],a);}
+static void rom_window_write8(unsigned a,unsigned v) {if(ctx->ram_cart){if(a>=0x900000)ram_write8(rom_address(a),v);return;}a=rom_address(a);map_write8(&ctx->original[a>>16],a,v);}
+static void rom_window_write16(unsigned a,unsigned v) {if(ctx->ram_cart){if(a>=0x900000)ram_write16(rom_address(a),v);return;}a=rom_address(a);map_write16(&ctx->original[a>>16],a,v);}
+static unsigned zrom_window8(unsigned a) {if(ctx->ram_cart)return ram_read8(rom_address(a));return zmap_read8(rom_address(a));}
+static void zrom_window_write8(unsigned a,unsigned v) {if(ctx->ram_cart){if(a>=0x900000)ram_write8(rom_address(a),v);return;}zmap_write8(rom_address(a),v);}
 kr_cov_access kr_cov_32x_md_data(unsigned cpu,uint32_t address,unsigned width)
 {
     if (!ctx || !ctx->machine) return (kr_cov_access){NULL,width};
@@ -373,6 +444,7 @@ kr_cov_access kr_cov_32x_md_data(unsigned cpu,uint32_t address,unsigned width)
         return (kr_cov_access){NULL,width};
 
     address=rom_address(address);
+    if(ctx->ram_cart)return (kr_cov_access){(const uint8_t *)ctx->ram_cart+ram_offset(address),width};
     page=address>>16;
     const cpu_memory_map *map=&ctx->original[page];
     read=z80?ctx->original_zbank[page].read:width==1?map->read8:map->read16;
@@ -392,6 +464,10 @@ bool kr_debug_32x_peek_md(unsigned cpu,uint32_t address,uint8_t *value)
     if(read==(z80?zfb_read8:fb_read8)) {
         unsigned word=kega32x_fb_read16(kega32x_machine_bus(ctx->machine),address);
         *value=(uint8_t)(word>>((address&1)?0:8));
+        return true;
+    }
+    if(ctx->ram_cart && (read==ram_read8 || read==ram_open8 || read==(z80?zrom_window8:rom_window8))) {
+        *value=read==ram_open8?255:ram_read8(read==ram_read8?address:rom_address(address));
         return true;
     }
     if(read!=(z80?zrom_window8:rom_window8))return false;
@@ -416,6 +492,16 @@ static void map_apply(void)
     m68k.memory_map[0xa1].read8=io_read8;m68k.memory_map[0xa1].read16=io_read16;
     m68k.memory_map[0xa1].write8=io_write8;m68k.memory_map[0xa1].write16=io_write16;
     zbank_memory_map[0xa1].read=zio_read8;zbank_memory_map[0xa1].write=zio_write8;
+    if(ctx->ram_cart) {
+        const int direct=!(b->s.regs[0]&1) || (b->s.regs[3]&1);
+        for(i=0x40;i<0x80;i++) {
+            cpu_memory_map *m=&m68k.memory_map[i];
+            m->base=(uint8 *)ctx->ram_cart+(direct?ram_offset(i<<16):ctx->ram_cart_bytes);
+            m->read8=direct?ram_read8:ram_open8;m->read16=direct?ram_read16:ram_open16;
+            m->write8=direct?ram_write8:ram_ignore;m->write16=direct?ram_write16:ram_ignore;
+            zbank_memory_map[i].read=m->read8;zbank_memory_map[i].write=m->write8;
+        }
+    }
     if(!(b->s.regs[0]&1)) {
         for(i=0x84;i<=0x9f;i++) {
             m68k.memory_map[i]=ctx->original[i];zbank_memory_map[i]=ctx->original_zbank[i];
@@ -434,11 +520,18 @@ static void map_apply(void)
         m68k.memory_map[0].read8=NULL;m68k.memory_map[0].read16=NULL;
         m68k.memory_map[0].write8=hint_write8;m68k.memory_map[0].write16=hint_write16;
         zbank_memory_map[0].read=NULL;zbank_memory_map[0].write=hint_write8;
+    }
+    if(ctx->has_cart_rom || ctx->ram_cart) {
         for(i=0x88;i<0xa0;i++) {
             cpu_memory_map *m=&m68k.memory_map[i];
-            m->base=ctx->original[rom_address(i<<16)>>16].base;
+            m->base=ctx->ram_cart?(uint8 *)ctx->ram_cart+ram_offset(rom_address(i<<16)):ctx->original[rom_address(i<<16)>>16].base;
             m->read8=rom_window8;m->read16=rom_window16;m->write8=rom_window_write8;m->write16=rom_window_write16;
             zbank_memory_map[i].read=zrom_window8;zbank_memory_map[i].write=zrom_window_write8;
+            if(ctx->ram_cart && (b->s.regs[3]&1)) {
+                m->base=(uint8 *)ctx->ram_cart+ctx->ram_cart_bytes;
+                m->read8=ram_open8;m->read16=ram_open16;m->write8=ram_ignore;m->write16=ram_ignore;
+                zbank_memory_map[i].read=ram_open8;zbank_memory_map[i].write=ram_ignore;
+            }
         }
     }
 }
@@ -473,6 +566,13 @@ int kegarefusion_32x_attach(const uint8_t *g,const uint8_t *m,const uint8_t *s)
     next=calloc(1,sizeof(*next));if(!next)return 0;
     ctx=next;
     maps_capture();
+    if(!ctx->has_cart_rom && requested_ram_cart_mb) {
+        ctx->ram_cart_bytes=requested_ram_cart_mb<<20;
+        ctx->ram_cart=malloc(ctx->ram_cart_bytes+65536u);
+        if(!ctx->ram_cart){free(ctx);ctx=NULL;return 0;}
+        memset(ctx->ram_cart,255,ctx->ram_cart_bytes+65536u);
+        ctx->ram_page[1]=1;ram_pages_update();
+    }
     unsigned boot_revision = !m && ctx->has_cart_rom ? 2u : 1u;
     ctx->boot_identity = builtin_mask ? (boot_revision << 8) | builtin_mask : 0;
     if (!m) { builtin_boot_sh2(builtin_m, 0, ctx->has_cart_rom); m = builtin_m; }
@@ -481,7 +581,7 @@ int kegarefusion_32x_attach(const uint8_t *g,const uint8_t *m,const uint8_t *s)
     hint_vector_power();
     host.rom_pages=ctx->rom_pages;host.rom_read16=rom_read;host.rom_fetch_is_pure=rom_fetch_is_pure;host.changed=changed;host.render_sync=render_sync;host.audio_delta=audio_delta;
     ctx->machine=kega32x_machine_create(&host,m,2048,s,1024,vdp_pal,!ctx->has_cart_rom);
-    if(!ctx->machine){free(ctx);ctx=NULL;return 0;}
+    if(!ctx->machine){free(ctx->ram_cart);free(ctx);ctx=NULL;return 0;}
     ctx->hint_due=UINT64_MAX;ctx->line=-1;
     kegarefusion_32x_attached=1;map_apply();return 1;
 }
@@ -490,7 +590,7 @@ void kegarefusion_32x_detach(void)
     if(ctx) {
         /* Restore only the overlays this attachment owns. Never replace CD RAM. */
         maps_restore();
-        kega32x_machine_destroy(ctx->machine);kega32x_ntsc565_delete(ctx->filter);free(ctx->snapshot);free(ctx);ctx=NULL;
+        kega32x_machine_destroy(ctx->machine);kega32x_ntsc565_delete(ctx->filter);free(ctx->snapshot);free(ctx->ram_cart);free(ctx);ctx=NULL;
     }
     kegarefusion_32x_attached=0;
 }
@@ -499,6 +599,7 @@ void kegarefusion_32x_reinit(void)
     if(!ctx){system_init();system_reset();return;}
     maps_restore();
     system_init();system_reset();
+    ctx->ram_page[0]=0;ctx->ram_page[1]=1;ctx->ram_code_dirty=1;
     maps_capture();
     ctx->frame_base=0;ctx->now=0;ctx->hint_due=UINT64_MAX;ctx->hint_count=0;ctx->line=-1;
     ctx->line_start=0;video_reset();
@@ -512,7 +613,9 @@ void kegarefusion_32x_soft_reset(void)
     if(!ctx){gen_reset(0);return;}
     /* Assert VRES at the old timestamp, before GPX randomizes reset phase. */
     kega32x_bus_irq(kega32x_machine_bus(ctx->machine),KEGA32X_IRQ_RESET,current_time());
-    maps_restore();gen_reset(0);maps_capture();map_apply();
+    maps_restore();gen_reset(0);
+    ctx->ram_page[0]=0;ctx->ram_page[1]=1;ctx->ram_code_dirty=1;
+    maps_capture();map_apply();
 #ifdef KEGA_SH2_DRC
     kega_sh2_drc_flush();
 #endif
@@ -597,7 +700,7 @@ void kegarefusion_32x_run(unsigned target)
         }
         ctx->main_running=1;kegarefusion_m68k_run(next);ctx->main_running=0;
         if(m68k.cycles<next)next=m68k.cycles;
-        kega32x_machine_run_until(ctx->machine,ctx->frame_base+next);
+        run_device(ctx->frame_base+next);
         if(system_hw==SYSTEM_MCD) {
             kegarefusion_scd_run(next);
             /* A SUB-CPU register write can wake an idle MAIN-CPU at an
@@ -737,31 +840,48 @@ static int snapshot_storage(void)
     return ctx->snapshot!=NULL;
 }
 size_t kegarefusion_32x_state_size(void)
-{ return ctx?GPX32X_STATE_HEADER+kega32x_state_encoded_size():0; }
+{ return ctx?GPX32X_STATE_HEADER+kega32x_state_encoded_size()+(ctx->ram_cart?16+ctx->ram_cart_bytes:0):0; }
 int kegarefusion_32x_state_save(void *data,size_t size)
 {
     uint8_t *p=data;uint32_t hint;
     if(!p || size!=kegarefusion_32x_state_size() || !snapshot_storage() || ctx->main_running)return 0;
     if(!kega32x_machine_get_state(ctx->machine,ctx->snapshot) ||
-       !kega32x_state_encode(ctx->snapshot,p+GPX32X_STATE_HEADER,size-GPX32X_STATE_HEADER))return 0;
-    memcpy(p,"KR32X001",8);put32(p+8,1);put32(p+12,(uint32_t)size);
+       !kega32x_state_encode(ctx->snapshot,p+GPX32X_STATE_HEADER,kega32x_state_encoded_size()))return 0;
+    memcpy(p,"KR32X001",8);put32(p+8,ctx->ram_cart?2:1);put32(p+12,(uint32_t)size);
     put64(p+16,ctx->frame_base);put64(p+24,ctx->hint_due);
     put32(p+32,ctx->now);put32(p+36,ctx->hint_count);put32(p+40,(uint32_t)(ctx->line+1));
     put32(p+44,(uint32_t)ctx->has_cart_rom);
     hint=((uint32_t)*(uint16_t *)(void *)(ctx->boot_page+0x70)<<16)|*(uint16_t *)(void *)(ctx->boot_page+0x72);
-    put32(p+48,hint);put32(p+52,ctx->boot_identity);return 1;
+    put32(p+48,hint);put32(p+52,ctx->boot_identity);
+    if(ctx->ram_cart) {
+        uint8_t *r=p+GPX32X_STATE_HEADER+kega32x_state_encoded_size();
+        memcpy(r,"RAMC",4);put32(r+4,ctx->ram_cart_bytes);
+        put32(r+8,ctx->ram_page[0]);put32(r+12,ctx->ram_page[1]);
+        for(unsigned i=0;i<ctx->ram_cart_bytes/2;i++) {
+            unsigned word=ctx->ram_cart[i];r[16+i*2]=(uint8_t)word;r[17+i*2]=(uint8_t)(word>>8);
+        }
+    }
+    return 1;
 }
 int kegarefusion_32x_state_prepare(const void *data,size_t size)
 {
     const uint8_t *p=data;uint64_t base,now,limit=MCYCLES_PER_LINE*313u;
     if(ctx)ctx->restore.ready=0;
     if(!p || size!=kegarefusion_32x_state_size() || !snapshot_storage() || ctx->main_running ||
-       memcmp(p,"KR32X001",8) || get32(p+8)!=1 || get32(p+12)!=size || get32(p+52)!=ctx->boot_identity ||
+       memcmp(p,"KR32X001",8) || get32(p+8)!=(ctx->ram_cart?2u:1u) || get32(p+12)!=size || get32(p+52)!=ctx->boot_identity ||
        get32(p+32)>limit || get32(p+36)>255 || get32(p+40)>313 ||
        get32(p+44)!=(unsigned)ctx->has_cart_rom)return 0;
+    if(ctx->ram_cart) {
+        const uint8_t *r=p+GPX32X_STATE_HEADER+kega32x_state_encoded_size();
+        unsigned pages=ctx->ram_cart_bytes>>21;
+        if(memcmp(r,"RAMC",4) || get32(r+4)!=ctx->ram_cart_bytes ||
+           get32(r+8)>=pages || get32(r+12)>=pages ||
+           (pages==2 && (get32(r+8)!=0 || get32(r+12)!=1)))return 0;
+        ctx->restore_ram=r;
+    }
     base=get64(p+16);
     if(base>UINT64_MAX-limit*2 ||
-       !kega32x_state_decode(ctx->snapshot,p+GPX32X_STATE_HEADER,size-GPX32X_STATE_HEADER))return 0;
+       !kega32x_state_decode(ctx->snapshot,p+GPX32X_STATE_HEADER,kega32x_state_encoded_size()))return 0;
     /* Match every machine setter precondition before GPX mutates its state. */
     {
         const Kega32xBusState *live=&kega32x_machine_bus(ctx->machine)->s;
@@ -801,6 +921,12 @@ int kegarefusion_32x_state_end_load(int success)
     if(!ctx || !ctx->restore.ready)return 0;
     maps_capture();
     if(success) {
+        if(ctx->ram_cart) {
+            const uint8_t *r=ctx->restore_ram;
+            ctx->ram_page[0]=get32(r+8);ctx->ram_page[1]=get32(r+12);
+            for(unsigned i=0;i<ctx->ram_cart_bytes/2;i++)ctx->ram_cart[i]=r[16+i*2]|((uint16_t)r[17+i*2]<<8);
+            ram_pages_update();ctx->ram_code_dirty=1;
+        }
         ctx->frame_base=ctx->restore.frame_base;ctx->hint_due=ctx->restore.hint_due;
         ctx->now=ctx->restore.now;ctx->hint_count=ctx->restore.hint_count;ctx->line=ctx->restore.line;
         *(uint16_t *)(void *)(ctx->boot_page+0x70)=(uint16_t)(ctx->restore.hint_vector>>16);

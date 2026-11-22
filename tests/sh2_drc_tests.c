@@ -13,6 +13,7 @@ typedef struct Fixture {
     KegaSh2 *cpu, *peer;
     unsigned writes, wait, stop, irq, nested, fetches;
     bool deny_code, fetch_sideeffect;
+    uint32_t deny_address;
     uint64_t last_write;
 } Fixture;
 static unsigned off(uint32_t a) { return a & (MEM_SIZE-1); }
@@ -39,7 +40,8 @@ static uint16_t code_fetch(void *u,KegaSh2 *c,uint32_t address) {
     return r16(u,c,address);
 }
 static bool code_is_pure(void *u,KegaSh2 *c,uint32_t a,size_t bytes) {
-    (void)c;(void)a;(void)bytes;return !((Fixture *)u)->deny_code;
+    Fixture *f=u;(void)c;
+    return !f->deny_code && (f->deny_address<a || f->deny_address-a>=bytes);
 }
 static void setup(Fixture *f,bool slave) {
     memset(f,0,sizeof(*f));
@@ -136,7 +138,7 @@ static void smc_and_nested(void) {
      * failure must flush registers and spend its budget on reference execution. */
     state.pc=0x04000304u;assert(kega_sh2_set_state(a->cpu,&state));assert(kega_sh2_set_state(b->cpu,&state));
     assert(kega_sh2_run(a->cpu,1)==kega_sh2_run(b->cpu,1));compare(a,b);
-    assert(!kega_sh2_drc_active(b->cpu));
+    assert(kega_sh2_drc_active(b->cpu));
     kega_sh2_drc_disable();
     kega_sh2_destroy(a->cpu);kega_sh2_destroy(b->cpu);kega_sh2_destroy(peer->cpu);kega_sh2_destroy(peer_ref->cpu);
     free(a);free(b);free(peer);free(peer_ref);
@@ -148,7 +150,60 @@ static void denied_code_fetch(void) {
     assert(kega_sh2_drc_enable(b->cpu,peer->cpu));
     assert(kega_sh2_run(a->cpu,1)==kega_sh2_run(b->cpu,1));compare(a,b);
     assert(a->fetches==1 && b->fetches==1 && b->mem[0x900]==1);
-    assert(!kega_sh2_drc_active(b->cpu));
+    assert(kega_sh2_drc_active(b->cpu));
+    a->deny_code=b->deny_code=false;
+    a->fetch_sideeffect=b->fetch_sideeffect=false;
+    for(unsigned i=0;i<5;++i) {
+        assert(kega_sh2_run(a->cpu,3)==kega_sh2_run(b->cpu,3));
+        compare(a,b);
+    }
+    KegaSh2DrcStats stats;
+    kega_sh2_drc_get_stats(&stats);
+    assert(stats.fallback_interpreter_calls[0]==1 && stats.jit_cycles[0]>0);
+
+    /* A pure branch can still have a handler-backed delay slot. Keep the
+       branch and slot atomic without asking the emitter to fetch the slot. */
+    KegaSh2State state;
+    assert(kega_sh2_get_state(a->cpu,&state));
+    state.pc=BASE+0x500;
+    for(unsigned i=0;i<2;++i) {
+        Fixture *f=i?b:a;
+        put(f,0x500,0xa002); /* BRA 508 */
+        put(f,0x502,0x7401); /* ADD #1,R4 (delay) */
+        put(f,0x508,0xaffe); /* BRA 508 */
+        put(f,0x50a,0x0009);
+        f->deny_address=BASE+0x502;
+        assert(kega_sh2_set_state(f->cpu,&state));
+    }
+    assert(kega_sh2_run(a->cpu,1)==kega_sh2_run(b->cpu,1));compare(a,b);
+    assert(kega_sh2_drc_active(b->cpu));
+    assert(kega_sh2_run(a->cpu,3)==kega_sh2_run(b->cpu,3));compare(a,b);
+    kega_sh2_drc_get_stats(&stats);
+    assert(stats.fallback_interpreter_calls[0]==2);
+    kega_sh2_drc_disable();kega_sh2_destroy(a->cpu);kega_sh2_destroy(b->cpu);kega_sh2_destroy(peer->cpu);
+    free(a);free(b);free(peer);
+}
+static void emit_short_block(void) {
+    Fixture *a=malloc(sizeof(*a)),*b=malloc(sizeof(*b)),*peer=malloc(sizeof(*peer));
+    assert(a&&b&&peer);setup(a,false);setup(b,false);setup(peer,true);
+    /* The final SDRAM word forms a one-instruction block. Its MAC, writeback,
+       and dispatcher stubs need more than 128 bytes of x86-64 code. */
+    for(unsigned i=0;i<2;++i) {
+        Fixture *f=i?b:a;
+        put(f,0x3fffe,0x021f); /* MAC.L @R1+,@R2+ */
+        w32(f,NULL,BASE+0x810,0x1234);
+        w32(f,NULL,BASE+0x814,0xfffffffb);
+        KegaSh2State state;
+        assert(kega_sh2_get_state(f->cpu,&state));
+        state.pc=BASE+0x3fffe;state.r[1]=BASE+0x810;state.r[2]=BASE+0x814;
+        assert(kega_sh2_set_state(f->cpu,&state));
+    }
+    assert(kega_sh2_drc_enable(b->cpu,peer->cpu));
+    assert(kega_sh2_run(a->cpu,1)==kega_sh2_run(b->cpu,1));compare(a,b);
+    KegaSh2DrcStats stats;
+    kega_sh2_drc_get_stats(&stats);
+    assert(!stats.fallback_interpreter_calls[0] && stats.jit_calls[0]==1);
+    assert(kega_sh2_drc_active(b->cpu));
     kega_sh2_drc_disable();kega_sh2_destroy(a->cpu);kega_sh2_destroy(b->cpu);kega_sh2_destroy(peer->cpu);
     free(a);free(b);free(peer);
 }
@@ -265,6 +320,7 @@ int main(void) {
     for(unsigned mode=0;mode<8;++mode) parity(mode);
     smc_and_nested();
     cache_pressure();
+    emit_short_block();
     denied_code_fetch();
     puts("SH2 DRC: registers/cycles, waits, stop, IRQ/RTE, nested peer, SMC, fallback and cache pressure passed");
     return 0;

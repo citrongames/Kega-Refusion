@@ -84,6 +84,15 @@ bool smsControllerHardware(unsigned system) {
 const QByteArray achievementStateMagic("KRHOST01", 8);
 constexpr qsizetype stateHeaderSize = 108;
 constexpr auto dmcPcmKey = "kegarefusion_firecore_dmc_pcm";
+constexpr char cd32xRamCartKey[] = "kegarefusion_cd32x_ram_cart";
+const char* cd32xRamCartOption(Cd32xRamCart cart) {
+    switch (cart) {
+    case Cd32xRamCart::MiB4: return "4";
+    case Cd32xRamCart::MiB8: return "8";
+    case Cd32xRamCart::MiB16: return "16";
+    default: return "disabled";
+    }
+}
 constexpr char ym2612Key[] = "genesis_plus_gx_ym2612";
 constexpr char screenBordersKey[] = "genesis_plus_gx_overscan";
 const char* ym2612Model(bool nuked) { return nuked ? "nuked (ym2612)" : "mame (ym2612)"; }
@@ -409,6 +418,7 @@ bool LibretroHost::loadCd(const QString& path, QString& error) {
     if (!DiscMedia::read(path,images,error) ||
         !checkDiscBios(images.first(),error,DataFolders::path(dataPath_,QStringLiteral("bios")))) return false;
     if (!initialize(error)) return false;
+    if (!checkSelectedCd32xRamCart(error)) return false;
     const bool needs32x = images.first().needs32x;
     if (needs32x || x32Mode_ == ExpansionMode::Connected) {
         if (!api_->features || !(api_->features() & 1u)) {
@@ -859,6 +869,14 @@ static const char* attachmentOption(ExpansionMode mode, const char* connected, c
     }
     return "auto";
 }
+bool LibretroHost::checkSelectedCd32xRamCart(QString& error) const {
+    if (cd32xRamCart_ == Cd32xRamCart::Disabled) return true;
+    const auto choices = variableValues_.find(cd32xRamCartKey);
+    if (choices != variableValues_.end() && choices->second.contains(cd32xRamCartOption(cd32xRamCart_)))
+        return true;
+    error = Localization::text(QStringLiteral("Для ОЗУ программ CD32X требуется обновлённое ядро."));
+    return false;
+}
 bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     // Match the native CD/32X BIOS and BRAM buffers, including the longest
     // actual leaf and this disc set's selected per-game save subdirectory.
@@ -903,6 +921,10 @@ bool LibretroHost::applyPowerOnOptions(QString& error, bool applyPending) {
     }
     // A recording carries its own exact hardware configuration.
     if (movieConfigurationActive_ || !applyPending) return true;
+    if (variableValues_.count(cd32xRamCartKey)) {
+        const auto cart = discs_.isEmpty() ? Cd32xRamCart::Disabled : cd32xRamCart_;
+        if (!setCoreOption(cd32xRamCartKey, cd32xRamCartOption(cart), error)) return false;
+    }
     if (!setCoreOption(ym2612Key, ym2612Model(nukedYm2612_), error)) return false;
     if (!setCoreOption("genesis_plus_gx_ym2413", smsFmEnabled_ ? "enabled" : "disabled", error)) return false;
     if (megaLd_ || contentFirecore_) return true; // Both profiles own their hardware selection.
@@ -1062,6 +1084,8 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     ++inspectionGeneration_;
     error.clear();
     if (!loaded_) { error = Localization::text(QStringLiteral("Нет загруженной игры.")); return false; }
+    if (applyPending && !movieConfigurationActive_ && isCd() &&
+        !checkSelectedCd32xRamCart(error)) return false;
     const int selectedMegaLdSide = isMegaLd() ? discIndex() : 0;
     std::array<QByteArray,2> peerBattery;
     if (linkPeer_) for (unsigned i=0;i<2;++i) {
@@ -2380,7 +2404,14 @@ QJsonObject LibretroHost::movieConfiguration(bool forPowerReset) const {
     if (game.size() != 32 || exactCoreHash_.size() != 32) return {};
     QJsonObject options;
     for (const auto& [key,value] : variables_)
-        options.insert(QString::fromUtf8(key), QString::fromUtf8(value));
+        if (key != cd32xRamCartKey) options.insert(QString::fromUtf8(key), QString::fromUtf8(value));
+    if (isCd() && api_->features && (api_->features() & 2u)) {
+        const auto cart = variables_.find(cd32xRamCartKey);
+        const QByteArray value = forPowerReset && !movieConfigurationActive_
+            ? QByteArray(cd32xRamCartOption(cd32xRamCart_))
+            : (cart == variables_.end() ? QByteArrayLiteral("disabled") : cart->second);
+        if (value != "disabled") options.insert(QLatin1String(cd32xRamCartKey), QString::fromLatin1(value));
+    }
     const bool dmcPcm = forPowerReset && !movieConfigurationActive_ ? firecoreDmcPcm_ : activeFirecoreDmcPcm_;
     if (contentFirecore_ && dmcPcm)
         options.insert(QLatin1String(dmcPcmKey), QStringLiteral("enabled"));
@@ -2537,11 +2568,23 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
         error = Localization::text(QStringLiteral("Повреждено описание параметров ядра записи."));
         return false;
     }
+    // Recordings made before this option always start without program RAM.
+    // A requested cartridge must be supported before altering the live session.
+    const auto ramCart = options.take(QLatin1String(cd32xRamCartKey));
+    const QByteArray cartValue = ramCart.isUndefined() ? QByteArrayLiteral("disabled") : ramCart.toString().toUtf8();
+    const auto supportedCart = variableValues_.find(cd32xRamCartKey);
+    if (cartValue != "disabled" && (!isCd() || supportedCart == variableValues_.end() ||
+        !supportedCart->second.contains(cartValue))) {
+        error = Localization::text(QStringLiteral("Запись требует совместимое ОЗУ программ CD32X."));
+        return false;
+    }
     auto newOptions = variables_;
+    const auto cart = newOptions.find(cd32xRamCartKey);
+    if (cart != newOptions.end()) cart->second = cartValue;
     if (!options.contains(QStringLiteral("genesis_plus_gx_32x_add_on")) &&
         newOptions.count("genesis_plus_gx_32x_add_on"))
         newOptions["genesis_plus_gx_32x_add_on"] = "auto";
-    bool changedOptions = options.size() != qsizetype(variables_.size());
+    bool changedOptions = options.size() + (cart != newOptions.end()) != qsizetype(variables_.size());
     for (auto entry = options.begin(); entry != options.end(); ++entry) {
         if (!entry.value().isString()) {
             error = Localization::text(QStringLiteral("Повреждено описание параметров ядра записи.")); return false;
@@ -2726,21 +2769,21 @@ bool LibretroHost::prepareMovie(const QJsonObject& configuration, QString& error
     }
     return false;
 }
-bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningFm) {
+bool LibretroHost::restoreMovieConfiguration(QString& error, bool keepRunningHardware) {
     error.clear();
     if (!movieConfigurationActive_) return true;
-    // Ending/taking over a recording must not hot-switch the FM hardware.
-    // Recovery and unload still restore the original complete configuration.
-    if(keepRunningFm && loaded_) {
-        for (const char* key : {ym2612Key, "genesis_plus_gx_ym2413"}) {
-            const auto fm = variables_.find(key);
-            if (fm != variables_.end()) {
-                preMovieVariables_[fm->first] = fm->second;
-                preMovieOptionOverrides_[fm->first] = fm->second;
+    // Ending/taking over a recording preserves the running FM and RAM cart.
+    // Recovery and unload restore the original complete configuration.
+    if (keepRunningHardware && loaded_) {
+        for (const char* key : {ym2612Key, "genesis_plus_gx_ym2413", cd32xRamCartKey}) {
+            const auto current = variables_.find(key);
+            if (current != variables_.end()) {
+                preMovieVariables_[current->first] = current->second;
+                preMovieOptionOverrides_[current->first] = current->second;
             }
         }
     }
-    if (!keepRunningFm || !loaded_) {
+    if (!keepRunningHardware || !loaded_) {
         activeFirecoreDmcPcm_ = preMovieFirecoreDmcPcm_;
         if (loaded_ && api_->set_firecore_dmc_pcm)
             api_->set_firecore_dmc_pcm(contentFirecore_ && activeFirecoreDmcPcm_);

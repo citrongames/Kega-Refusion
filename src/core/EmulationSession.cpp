@@ -448,6 +448,9 @@ void EmulationSession::setExpansionDevices(ExpansionMode cd, ExpansionMode x32) 
     if (x32 == ExpansionMode::Disconnected) flags |= 8;
     enqueue({Type::Expansions, {}, flags});
 }
+void EmulationSession::setCd32xRamCart(Cd32xRamCart cart) {
+    enqueue({Type::Cd32xRamCart, {}, int(cart)});
+}
 void EmulationSession::requestSlotStatus(int selected) { enqueue({Type::Slots,{},selected}); }
 void EmulationSession::configureAchievements(bool enabled, bool hardcore) {
     enqueue({Type::AchievementsConfigure,{},(enabled ? 1 : 0) | (hardcore ? 2 : 0)});
@@ -1741,6 +1744,9 @@ void EmulationSession::run() {
             case Type::FirecoreDmcPcm: host.setFirecoreDmcPcm(command.value!=0); break;
             case Type::NukedYm2612: host.setNukedYm2612(command.value!=0); break;
             case Type::SmsFm: host.setSmsFmEnabled(command.value!=0); break;
+            case Type::Cd32xRamCart:
+                host.setCd32xRamCart(cd32xRamCartFromMiB(command.value));
+                break;
             case Type::NetFactor: fastForwardFactor_.store(command.value==0?0:std::clamp(command.value,2,32)); break;
             case Type::NetStepHold: frameAdvanceHeld_.store(command.value!=0); break;
             case Type::NetFast: fastForward_.store(command.value!=0); break;

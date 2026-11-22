@@ -23,7 +23,7 @@ u8 *kega_drc_emit_end;
 static u8 ALIGNED(4096) code_cache[DRC_TCACHE_SIZE];
 u8 *tcache;
 static SH2 *executing;
-static bool ready, flush_pending;
+static bool ready, flush_pending, translation_fallback;
 static unsigned depth;
 #ifdef _WIN32
 static DWORD old_protection;
@@ -53,9 +53,18 @@ void kega_drc_emit_write(void *dst, const void *src, size_t n) {
     }
     memcpy(dst,src,n);
 }
+static void cancel_translation(void) {
+    if(executing && kega_drc_guarded) {
+        /* The unfinished block may have reserved entries and links. Discard
+         * them once the generated dispatcher has returned to C. */
+        flush_pending=true;
+        longjmp(kega_drc_guard,1);
+    }
+    kega_drc_fail();
+}
 void kega_drc_emit_reserve(void *dst,size_t n) {
     if((uintptr_t)dst > (uintptr_t)kega_drc_emit_end ||
-       n > (uintptr_t)kega_drc_emit_end-(uintptr_t)dst) kega_drc_fail();
+       n > (uintptr_t)kega_drc_emit_end-(uintptr_t)dst) cancel_translation();
 }
 u32 kega_drc_rel32(const void *target, const void *after) {
     intptr_t delta = (intptr_t)target - (intptr_t)after;
@@ -94,7 +103,7 @@ bool kega_drc_code_same_span(u32 a, u32 b, SH2 *s) {
     return kega_drc_code_valid(b,s) && code_region(a,s)==code_region(b,s);
 }
 u16 kega_drc_fetch16(SH2 *s, u32 a) {
-    if (!kega_drc_code_valid(a,s)) { kega_drc_fail(); return 0; }
+    if (!kega_drc_code_valid(a,s)) { cancel_translation(); return 0; }
     return kega_sh2_host_fetch(s,a);
 }
 /* Recoverable source/emitter assertions must never abort the emulator. */
@@ -234,6 +243,7 @@ int kega_drc_execute(SH2 *s, int budget) {
         s->icount=budget-(int)used;
         return s->icount;
     }
+    translation_fallback=false;
     executing=s; ++depth;
     int left=sh2_execute_drc(s,budget);
     --depth; executing=NULL;
@@ -241,7 +251,7 @@ int kega_drc_execute(SH2 *s, int budget) {
     /* Translation failures return through the normal generated register flush.
      * Spend the remaining budget, rather than claiming unexecuted cycles. */
     ++kega_drc_stats.jit_calls[i];
-    if(kega_drc_failed && left>0) {
+    if((translation_fallback || kega_drc_failed) && left>0) {
         kega_drc_stats.jit_cycles[i]+=(uint64_t)((int64_t)s->cycles_timeslice-left);
         int remaining=sh2_execute_interpreter(s,left);
         ++kega_drc_stats.fallback_interpreter_calls[i];

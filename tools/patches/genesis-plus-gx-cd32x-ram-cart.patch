@@ -1,0 +1,85 @@
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -4174,6 +4174,15 @@
+       ((system_hw == SYSTEM_MD) || (system_hw == SYSTEM_MCD));
+    if (!forced && memcmp(rominfo.consoletype, "SEGA 32X", 8) != 0 && strcasecmp(extension, "32x") != 0)
+       return true;
++   struct retro_variable ram = { "kegarefusion_cd32x_ram_cart", NULL };
++   unsigned ram_mb = 0;
++   environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &ram);
++   if (ram.value) {
++      if (!strcmp(ram.value, "4")) ram_mb = 4;
++      else if (!strcmp(ram.value, "8")) ram_mb = 8;
++      else if (!strcmp(ram.value, "16")) ram_mb = 16;
++   }
++   kegarefusion_32x_set_ram_cart(ram_mb);
+    bool have_g = kegarefusion_read_32x_bios(dir, "32X_G_BIOS.BIN", g, sizeof(g));
+    bool have_m = kegarefusion_read_32x_bios(dir, "32X_M_BIOS.BIN", m, sizeof(m));
+    bool have_s = kegarefusion_read_32x_bios(dir, "32X_S_BIOS.BIN", s, sizeof(s));
+--- a/libretro/libretro_core_options.h
++++ b/libretro/libretro_core_options.h
+@@ -207,6 +207,22 @@
+          { NULL, NULL },
+       },
+       "4meg"
++   },
++   {
++      "kegarefusion_cd32x_ram_cart",
++      "CD32X RAM cartridge",
++      NULL,
++      "Program RAM for CD Mode 2 with 32X. Requires reload or power reset.",
++      NULL,
++      "system",
++      {
++         { "disabled", "Disabled" },
++         { "4", "4 MiB" },
++         { "8", "8 MiB" },
++         { "16", "16 MiB" },
++         { NULL, NULL },
++      },
++      "disabled"
+    },
+    {
+       "genesis_plus_gx_32x_add_on",
+--- a/core/m68k/s68kconf.h
++++ b/core/m68k/s68kconf.h
+@@ -68,6 +68,13 @@
+ #define M68K_EMULATE_ADDRESS_ERROR  OPT_OFF
+ #endif
+ 
++/* Explicit CD32X RAM-cart profile also accepts ares-style CD loaders.
++ * Real MC68000 hardware traps these accesses. Ordinary CD remains exact. */
++#ifdef KEGAREFUSION_32X
++extern int kegarefusion_32x_ram_cart_active(void);
++#define M68K_COMPAT_ALIGN_ODD kegarefusion_32x_ram_cart_active()
++#endif
++
+ /* If ON and previous option is also ON, address error exceptions will
+    also be checked when fetching instructions. Disabling this can help
+    speeding up emulation while still emulating address error exceptions
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -311,6 +311,13 @@
+ #endif /* M68K_EMULATE_TRACE */
+ 
+ 
++/* Only the explicit SUB-CPU compatibility profile may align odd words.
++ * Evaluate this inside the existing odd-address branch: even accesses keep
++ * their original hot path, and the main CPU always retains its exception. */
++#ifndef M68K_COMPAT_ALIGN_ODD
++#define M68K_COMPAT_ALIGN_ODD 0
++#endif
++
+ /* Enable or disable Address error emulation */
+ #if M68K_EMULATE_ADDRESS_ERROR
+   #define m68ki_set_address_error_trap() \
+@@ -322,7 +329,8 @@
+   #define m68ki_check_address_error(ADDR, WRITE_MODE, FC) \
+     if(UNLIKELY((ADDR)&1)) \
+     { \
+-      if (m68ki_cpu.aerr_enabled) \
++      if (M68K_COMPAT_ALIGN_ODD) { (ADDR) &= ~1u; } \
++      else if (m68ki_cpu.aerr_enabled) \
+       { \
+         m68ki_cpu.aerr_address = ADDR; \
+         m68ki_cpu.aerr_write_mode = WRITE_MODE; \

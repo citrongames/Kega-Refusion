@@ -21,6 +21,9 @@ void *kegarefusion_32x_sdram(void);
    Returns zero on failure, no partial attachment is exposed. */
 int kegarefusion_32x_attach(const uint8_t *bios_g, const uint8_t *bios_m, const uint8_t *bios_s);
 void kegarefusion_32x_detach(void);
+/* Optional CD Mode2 program RAM, 0/4/8/16 MiB; selected before attachment. */
+void kegarefusion_32x_set_ram_cart(unsigned mb);
+int kegarefusion_32x_ram_cart_active(void);
 void kegarefusion_32x_soft_reset(void);
 /* Reinitializes GPX and its attachment together, retaining 32X allocations. */
 void kegarefusion_32x_reinit(void);

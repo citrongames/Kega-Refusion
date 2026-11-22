@@ -1,4 +1,5 @@
 #include "core/CoreFileSystem.h"
+#include "core/DebugExecutionAbi.h"
 #include "core/LibretroHost.h"
 #include "core/Sega32xBios.h"
 #include "core/SegaCdBios.h"
@@ -26,7 +27,7 @@ namespace {
 int usage(const QString& detail = {}) {
     if (!detail.isEmpty()) std::fprintf(stderr, "%s\n", qPrintable(detail));
     std::fprintf(stderr, "Usage: core32x_game_probe CORE BIOS_SOURCE GAME FRAMES OUTPUT.png "
-                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--auto-fix-checksum] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--p2-buttons=FRAME:COUNT:MASK]... [--gun=menacer|justifier] [--companion-pad]\n");
+                         "[--no-input|--start-pulses|--play] [--filter=0..4] [--auto-fix-checksum] [--ram-cart=4|8|16] [--state-check] [--reset-check] [--checkpoint=N] [--record-rewind] [--reset-at=N] [--start-at=N] [--play-at=N] [--save-state=PATH] [--load-state=PATH] [--port2-disconnected] [--buttons=FRAME:COUNT:MASK] [--p2-buttons=FRAME:COUNT:MASK]... [--gun=menacer|justifier] [--companion-pad]\n");
     return 2;
 }
 void require(bool ok, const QString& error) {
@@ -155,6 +156,7 @@ int main(int argc, char** argv) {
     enum class Input { None, StartPulses, Play };
     Input input = Input::None;
     ControllerType gun = ControllerType::Pad;
+    Cd32xRamCart ramCart = Cd32xRamCart::Disabled;
     constexpr unsigned gunPlayer = 1;
     bool companionPad = false, autoFixChecksum = false;
     bool inputSpecified = false, stateCheck = false, resetCheck = false, filterSpecified = false;
@@ -175,6 +177,12 @@ int main(int argc, char** argv) {
             else if (option == QLatin1String("--play")) input = Input::Play;
         } else if (option == QLatin1String("--auto-fix-checksum")) {
             autoFixChecksum = true;
+        } else if (option.startsWith(QLatin1String("--ram-cart="))) {
+            if (ramCart != Cd32xRamCart::Disabled)
+                return usage(QStringLiteral("Duplicate --ram-cart option."));
+            ramCart = cd32xRamCartFromMiB(option.mid(11).toInt());
+            if (ramCart == Cd32xRamCart::Disabled)
+                return usage(QStringLiteral("--ram-cart requires 4, 8 or 16 MiB."));
         } else if (option == QLatin1String("--state-check")) {
             if (stateCheck) return usage(QStringLiteral("Duplicate --state-check option."));
             stateCheck = true;
@@ -266,6 +274,10 @@ int main(int argc, char** argv) {
         QString cdImportError;
         const auto cdImported = SegaCdBios::importDirectory(source, temp.path(), cdImportError);
         LibretroHost host(core, temp.path());
+        if (ramCart != Cd32xRamCart::Disabled) {
+            host.setExpansionDevices(ExpansionMode::Auto, ExpansionMode::Connected);
+            host.setCd32xRamCart(ramCart);
+        }
         host.message = [](const QString& text) { std::fprintf(stderr, "[core] %s\n", qPrintable(text)); };
         require(host.setAutoFixChecksum(autoFixChecksum, error), QStringLiteral("Could not configure checksum correction."));
         require(host.setBlarggFilter(filter, error), QStringLiteral("Could not set filter: %1").arg(error));
@@ -293,7 +305,7 @@ int main(int argc, char** argv) {
         const auto debug = reinterpret_cast<Debug>(diagnostics.resolve("retro_kegarefusion_debug"));
         if (!loadRawState.isEmpty()) {
             QFile file(loadRawState);
-            require(file.open(QIODevice::ReadOnly) && file.size() > 0 && file.size() <= 4*1024*1024,
+            require(file.open(QIODevice::ReadOnly) && file.size() > 0 && file.size() <= 64*1024*1024,
                     QStringLiteral("Could not read bounded diagnostic state."));
             require(host.unserialize(file.readAll()), QStringLiteral("Diagnostic state rejected."));
         }
@@ -354,6 +366,24 @@ int main(int argc, char** argv) {
                 savePng(host.frame(), path);
                 std::fprintf(stderr, "checkpoint frame=%d video=%s\n", frame + 1,
                     frameHash(host.frame()).constData());
+                using CpuState = bool (*)(unsigned, kr_debug_cpu*, size_t);
+                const auto cpuState = reinterpret_cast<CpuState>(diagnostics.resolve("retro_kegarefusion_debug_state"));
+                if (cpuState) for (unsigned cpu : {1u, 4u, 8u, 16u}) {
+                    kr_debug_cpu state{};
+                    if (cpuState(cpu, &state, sizeof(state))) {
+                        QJsonObject regs;
+                        for(unsigned i=0;i<state.count;i++)regs.insert(QString::fromLatin1(state.regs[i].name),QString::number(state.regs[i].value,16));
+                        std::fprintf(stderr,"cpu%u %s\n",cpu,QJsonDocument(regs).toJson(QJsonDocument::Compact).constData());
+                        using Disassemble = bool (*)(unsigned,uint32_t,kr_debug_instruction*,size_t);
+                        const auto disassemble = reinterpret_cast<Disassemble>(diagnostics.resolve("retro_kegarefusion_debug_disassemble"));
+                        uint32_t pc=state.pc;
+                        if(disassemble)for(unsigned n=0;n<4;n++) {
+                            kr_debug_instruction instruction{};
+                            if(!disassemble(cpu,pc,&instruction,sizeof(instruction)) || !instruction.length)break;
+                            std::fprintf(stderr,"  %08x %s\n",pc,instruction.text);pc+=instruction.length;
+                        }
+                    }
+                }
                 std::uint64_t raw[112]{};
                 if (debug && debug(raw, 112)) {
                     QJsonArray values;
@@ -403,6 +433,7 @@ int main(int argc, char** argv) {
             {"core", core}, {"game", game}, {"output_png", output},
             {"isolated_data", true}, {"is_cd", host.isCd()},
             {"paprium_cd_active", initialPapriumCdActive},
+            {"ram_cart_requested_mib", int(ramCart)},
             {"initial_core_features", int(initialFeatures)}, {"core_features", int(benchmarkFeatures)},
             {"bios_32x_imported", labels(x32Imported)}, {"bios_cd_imported", labels(cdImported)},
             {"input", input == Input::Play ? "start_pulses_120_123_240_243_480_483_abc_600_603_720_723" :

@@ -66,6 +66,7 @@ public:
     bool frameInputPolled() const;
     bool supportsInputPollMetrics() const;
     void setExpansionDevices(ExpansionMode cd, ExpansionMode x32);
+    void setCd32xRamCart(Cd32xRamCart cart) { cd32xRamCart_ = cart; }
     void reset();
     bool hardReset(QString& error, bool applyPending = true);
     void setFirecoreDmcPcm(bool enabled) { firecoreDmcPcm_ = enabled; }
@@ -147,7 +148,7 @@ public:
     bool prepareNetwork(const QJsonObject& configuration, QString& error);
     bool restoreNetworkState(const QByteArray& state, QString& error);
     bool prepareMovie(const QJsonObject& configuration, QString& error);
-    bool restoreMovieConfiguration(QString& error, bool keepRunningFm = false);
+    bool restoreMovieConfiguration(QString& error, bool keepRunningHardware = false);
     QByteArray movieGameIdentity() const;
     QByteArray movieCoreIdentity() const;
     unsigned achievementConsoleId() const;
@@ -266,6 +267,7 @@ private:
     void prepareCoreContent();
     bool applyPowerOnOptions(QString& error, bool applyPending = true);
     bool hasCdHardware() const;
+    bool checkSelectedCd32xRamCart(QString& error) const;
     void loadCheats();
     void applyCheats();
     void clearCoreCheats();
@@ -337,6 +339,7 @@ private:
     bool nukedYm2612_ = false;
     bool smsFmEnabled_ = true;
     ExpansionMode cdMode_ = ExpansionMode::Auto, x32Mode_ = ExpansionMode::Auto;
+    Cd32xRamCart cd32xRamCart_ = Cd32xRamCart::Disabled;
     bool contentNeeds32x_ = false;
     bool contentFirecore_ = false;
     std::array<unsigned,MaxControllerPlayers> buttons_{};

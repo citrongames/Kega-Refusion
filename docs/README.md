@@ -43,3 +43,6 @@ These are evidence records, not a claim that every listed game has been complete
 | Specific sound/protection issues | [VMV audio compatibility](vmv-audio-compatibility.txt), [Link Dragon](link-dragon-audit.txt), [Super Donkey Kong 99](pirate-sdk99-followup.json) |
 
 Additional per-feature validation files remain beside these reports. Consult Git history for earlier README descriptions and implementation milestones.
+
+- [CD32X program RAM cartridge](cd32x-ram-cartridge.md): selection, bus behavior and verification.
+- [Road Rash CD32X load audit](roadrash-cd32x-load-audit.md): BIOS queue, ares comparison and scoped loader compatibility.

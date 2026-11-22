@@ -337,6 +337,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setExpansionDevices(
         readExpansionMode(settings_, QStringLiteral("emulation/cdMode"), QStringLiteral("emulation/attachCd")),
         readExpansionMode(settings_, QStringLiteral("emulation/x32Mode"), QStringLiteral("emulation/attach32x")));
+    session_.setCd32xRamCart(cd32xRamCartFromMiB(
+        settings_.value(QStringLiteral("emulation/cd32xRamCartMiB"), 0).toInt()));
     connect(&session_, &EmulationSession::performanceMetricsChanged,
             view_, &GameView::setPerformanceMetrics);
     connect(&session_, &EmulationSession::runTimerChanged,
@@ -2394,6 +2396,20 @@ void MainWindow::editSettings(int initialPage) {
         "если оригинальные не установлены. Изменения применятся при следующей загрузке или перезапуске питания.")), &dialog);
     attachmentHelp->setWordWrap(true);
     games->addRow(attachmentHelp);
+    const Cd32xRamCart ramCart = cd32xRamCartFromMiB(
+        settings_.value(QStringLiteral("emulation/cd32xRamCartMiB"), 0).toInt());
+    auto* cd32xRamCart = new QComboBox(&dialog);
+    cd32xRamCart->setObjectName(QStringLiteral("cd32xRamCart"));
+    cd32xRamCart->addItem(Localization::text(QStringLiteral("Выключено")), 0);
+    const QString sizeFormat = Localization::text(QStringLiteral("%1 МиБ"));
+    for (const auto cart : {Cd32xRamCart::MiB4, Cd32xRamCart::MiB8, Cd32xRamCart::MiB16})
+        cd32xRamCart->addItem(sizeFormat.arg(int(cart)), int(cart));
+    cd32xRamCart->setCurrentIndex(cd32xRamCart->findData(int(ramCart)));
+    cd32xRamCart->setToolTip(Localization::text(QStringLiteral(
+        "Экспериментальное ОЗУ для Sega CD + 32X. "
+        "Включает режим совместимости загрузчиков, как в ares. "
+        "Применяется при загрузке или перезапуске питания.")));
+    games->addRow(Localization::text(QStringLiteral("ОЗУ программ CD32X:")), cd32xRamCart);
     const bool fixChecksum = settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool();
     auto* checksum = new QCheckBox(Localization::text(QStringLiteral("Автоисправлять контрольную сумму ROM")), &dialog);
     checksum->setObjectName(QStringLiteral("autoFixChecksum"));
@@ -2437,14 +2453,16 @@ void MainWindow::editSettings(int initialPage) {
     const bool movieActive = movieMode_ != 0;
     cdAttachment->setEnabled(!movieActive && !achievementsHardcore_);
     x32Attachment->setEnabled(!movieActive && !achievementsHardcore_);
+    cd32xRamCart->setEnabled(!movieActive && !achievementsHardcore_);
     checksum->setEnabled(!movieActive && !achievementsHardcore_);
     cdLoading->setEnabled(!movieActive && !achievementsHardcore_);
     spriteLimit->setEnabled(!movieActive && !achievementsHardcore_);
     connect(&session_, &EmulationSession::achievementsHardcoreChanged, &dialog,
-            [this, checksum, cdLoading, spriteLimit, cdAttachment, x32Attachment](bool active) {
+            [this, checksum, cdLoading, spriteLimit, cdAttachment, x32Attachment, cd32xRamCart](bool active) {
         const bool editable = movieMode_ == 0 && !active;
         cdAttachment->setEnabled(editable);
         x32Attachment->setEnabled(editable);
+        cd32xRamCart->setEnabled(editable);
         checksum->setEnabled(editable);
         cdLoading->setEnabled(editable);
         spriteLimit->setEnabled(editable);
@@ -3144,6 +3162,13 @@ void MainWindow::editSettings(int initialPage) {
                 settings_.setValue(QStringLiteral("emulation/cdMode"), expansionModeValue(selectedCd));
                 settings_.setValue(QStringLiteral("emulation/x32Mode"), expansionModeValue(selected32x));
                 session_.setExpansionDevices(selectedCd, selected32x);
+            }
+        }
+        if (cd32xRamCart->isEnabled()) {
+            const auto selectedCart = cd32xRamCartFromMiB(cd32xRamCart->currentData().toInt());
+            if (selectedCart != ramCart) {
+                settings_.setValue(QStringLiteral("emulation/cd32xRamCartMiB"), int(selectedCart));
+                session_.setCd32xRamCart(selectedCart);
             }
         }
         const bool selectedAchievements = achievementEnabledBox->isChecked();

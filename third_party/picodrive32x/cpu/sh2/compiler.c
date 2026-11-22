@@ -1287,8 +1287,13 @@ static u8 *dr_prepare_cache(int tcache_id, int insn_count, int entry_count)
 #endif
   }
 
-  kega_drc_emit_end = ring_next(&tcache_ring[tcache_id]) + insn_count * 128;
-  return ring_next(&tcache_ring[tcache_id]);
+  // The estimate is for eviction, not an emission bound. Include the rest
+  // of the free span for register spills and branch stubs. Keep one byte
+  // unused so ring_free_p can distinguish an empty ring from a full one.
+  const struct ring_buffer *rb = &tcache_ring[tcache_id];
+  int end = rb->used && rb->first > rb->next ? rb->first : rb->size;
+  kega_drc_emit_end = rb->base + end - 1;
+  return rb->base + rb->next;
 }
 
 static void dr_flush_tcache(int tcid)
@@ -1335,7 +1340,7 @@ static void dr_flush_tcache(int tcid)
   discard_block_list(&inactive_blocks[tcid]);
 }
 
-static void *dr_failure(void) { kega_drc_failed = 1; return NULL; }
+static void dr_fallback(void) { translation_fallback = true; }
 
 // ---------------------------------------------------------------
 
@@ -3326,11 +3331,8 @@ static void *sh2_translate_impl(SH2 *sh2, int tcache_id)
 
   // get base/validate PC
   dr_pc_base = dr_get_pc_base(base_pc, sh2);
-  if (dr_pc_base == (void *)-1) {
-    kega_drc_diagnostic("invalid PC, aborting: %08lx\n", (long)base_pc);
-    // FIXME: be less destructive
-    kega_drc_fail();
-  }
+  if (dr_pc_base == (void *)-1)
+    return NULL;
 
   // initial passes to disassemble and analyze the block
   crc = scan_block(base_pc, sh2->is_slave, op_flags, &end_pc, &base_literals, &end_literals);
@@ -5472,8 +5474,8 @@ static void sh2_generate_utils(void)
   EMITH_SJMP_START(DCOND_EQ);
   emith_jump_reg(RET_REG);
   EMITH_SJMP_END(DCOND_EQ);
-  // XXX: can't translate, fail
-  emith_abicall(dr_failure);
+  // Let the interpreter finish this slice at the untranslated PC.
+  emith_abicall(dr_fallback);
   emith_ctx_read(arg0, SHR_PC * 4);
   emith_jump(sh2_drc_exit);
   emith_flush();
