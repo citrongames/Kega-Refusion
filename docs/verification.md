@@ -479,3 +479,37 @@ The exact v0.28.0 updater archive code successfully installed both packages in i
 The corresponding-source archive contains the exact 674-file project snapshot, 801 prepared core source files, 94 matching patch receipts and thirty dependency archives. All 1,919 internal checksums were verified, with source/runtime provenance matched to both binaries. No ROMs, BIOS images, credentials or user settings were included.
 
 Evidence and recipes are retained under ignored build/release-0.29.0, including audit-verification.json, linux-archive-verification.json, windows-version-verification.json, source-verification.json, draft-verification.json, public-verification.json, updater-verification.json and updater-check-evidence.zip. Temporary package copies, isolated upgrade installations and updater probe binaries/copied sources were removed; incremental build and dependency caches remain.
+
+
+## 0.30.0 CD32X RAM-cartridge release — 2026-11-22
+
+Released `v0.30.0` at `fb1a123ec9ef7be78bc7ea7260089c428276f7a7` with Windows,
+Debian 12 Linux and corresponding-source packages. The English notes describe
+the optional 4/8/16 MiB cartridge, Road Rash Rapido setup and the SH-2 translated
+code-cache correction. Nuked audio was not changed or reverted.
+
+Windows was cross-built in Release with Qt 6.10.2. Its embedded application
+version, both core copies and all 72 managed package files were verified without
+executing a Windows program. The Debian 12 package reports 0.30.0, passed the
+maximum glibc 2.36 check and contains 175 verified managed files. The generated
+RAM-cartridge fixture passed on its final core: all capacities, page mapping,
+save restoration/rejection, SH-2 code coherence and the scoped sub-CPU loader
+profile. Earlier real-game and preceding-core comparisons remain documented in
+[the cartridge verification](cd32x-ram-cartridge.md#verification--2026-11-22).
+
+The unmodified 0.29.0 archive engine installed both final packages into isolated
+directories using their respective platform rules; twelve user-data sentinels
+per platform remained byte-identical. After publication, the actual 0.29.0
+UpdateService discovered 0.30.0 through the public latest redirect and metadata,
+displayed the exact authored notes, downloaded and verified the Linux archive,
+and handed off to the shipped old helper. Restart into the packaged 0.30.0
+application, all 175 managed files and all twelve sentinels were verified. No
+update staging or helper process remained. This was a native Linux end-to-end
+check; Windows installation logic was exercised on Linux, not as a Windows UI.
+
+All five GitHub asset digests match the final local files. Public `update.json`,
+`SHA256SUMS.txt`, the tag commit and the Windows archive download also match.
+The source archive verifies 1,929 file checksums, including exact tracked source,
+integrated-core sources, patch receipts, dependency archives and runtime notices.
+Evidence and final artifacts are retained under ignored `build/release-0.30.0/`;
+transient package trees and updater installations are removed.
