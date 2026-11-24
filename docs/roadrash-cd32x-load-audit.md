@@ -1,5 +1,10 @@
 # Road Rash Rapido CD32X race-load audit
 
+**2026-11-24:** The temporary odd-address compatibility profile described below
+was removed at the user's request, pending an author-side loader fix. The RAM
+cartridge remains supported with strict MC68000 address errors. This document
+preserves the historical diagnosis; a new game revision has not been tested.
+
 The initial CD32X program RAM implementation booted the original disc to the
 menu. In the captured race-load failure, the loader consumed a stale sector
 before a new read reached the drive, then attempted an odd MC68000 longword

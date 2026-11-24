@@ -340,46 +340,38 @@ def check_sh2_fetch(core):
     request(2, 0x44, "SH-2 executes rewritten code when the first page returns")
 
 
-def check_sub_cpu_addressing(core, allow_odd):
-    # Main CPU stages an original Sub CPU program and its reset/exception vectors.
-    prg_ram = 0x020000
-    reset_busreq = 0xA12001
-    comm = 0xA12020
-    program = (
-        0x33F9, 0x0000, 0x1001, 0x00FF, 0x8020,          # MOVE.W ($1001).L,($FF8020).L
-        0x23F9, 0x0000, 0x1001, 0x00FF, 0x8022,          # MOVE.L ($1001).L,($FF8022).L
-        0x33FC, 0xABCD, 0x0000, 0x1005,                  # MOVE.W #$ABCD,($1005).L
-        0x23FC, 0xEFFE, 0x8001, 0x0000, 0x1009,          # MOVE.L #$EFFE8001,($1009).L
-        0x13F9, 0x0000, 0x1001, 0x0000, 0x1007,          # MOVE.B ($1001).L,($1007).L
-        0x33FC, 0x51A7, 0x00FF, 0x8028, 0x60FE,          # Report success; BRA.S to self.
-    )
-    vector_3 = (0x33FC, 3, 0x00FF, 0x8028, 0x60FE)  # Report Address Error; BRA.S to self.
+def check_sub_cpu_addressing(core):
+    # Exercise each access independently: an exception must not hide later cases.
+    prg_ram, reset_busreq, comm = 0x020000, 0xA12001, 0xA12020
     data = (0x1234, 0x5678, 0x4546, 0x789A, 0xFFE0, 0xFFE1, 0x6001)
-    core.write(reset_busreq, 0, byte=True)
-    for offset, words in (
-        (0x0000, (0, 0x2000, 0, 0x0200)),  # Initial SP and PC.
-        (0x000C, (0, 0x0300)),             # Address Error vector.
-        (0x0200, program),
-        (0x0300, vector_3),
-        (0x1000, data),
-    ):
-        for index, word in enumerate(words):
-            core.write(prg_ram + offset + 2 * index, word)
-    core.write(reset_busreq, 1, byte=True)
-
-    if allow_odd:
-        core.expect(comm + 8, 0x51A7, "Sub CPU completed odd accesses")
-        for offset, expected in ((0, 0x1234), (2, 0x1234), (4, 0x5678)):
-            core.expect(comm + offset, expected, "Sub CPU rounds odd word and long reads down")
-        expected_data = (0x1234, 0x5678, 0xABCD, 0x7834, 0xEFFE, 0x8001, 0x6001)
-    else:
-        core.expect(comm + 8, 3, "Sub CPU takes Address Error vector on an odd access")
-        core.expect(comm, 0, "faulting Sub CPU read leaves destination unchanged")
-        expected_data = data
-
-    core.write(reset_busreq, 3, byte=True)  # Halt the Sub CPU so Main can read PRG RAM.
-    for index, expected in enumerate(expected_data):
-        core.expect(prg_ram + 0x1000 + 2 * index, expected, "Sub CPU writes and adjacent byte lanes")
+    accesses = (
+        ("odd word read", (0x33F9, 0, 0x1001, 0x00FF, 0x8020), True),
+        ("odd long read", (0x23F9, 0, 0x1001, 0x00FF, 0x8022), True),
+        ("odd word write", (0x33FC, 0xABCD, 0, 0x1005), True),
+        ("odd long write", (0x23FC, 0xEFFE, 0x8001, 0, 0x1009), True),
+        ("odd byte read/write", (0x13F9, 0, 0x1001, 0, 0x1007), False),
+    )
+    for name, instruction, traps in accesses:
+        core.write(reset_busreq, 0, byte=True)
+        for offset in range(0, 10, 2):
+            core.write(comm + offset, 0)
+        program = instruction + (0x33FC, 0x51A7, 0x00FF, 0x8028, 0x60FE)
+        vector_3 = (0x33FC, 3, 0x00FF, 0x8028, 0x60FE)
+        for offset, words in (
+            (0x0000, (0, 0x2000, 0, 0x0200)),
+            (0x000C, (0, 0x0300)),
+            (0x0200, program), (0x0300, vector_3), (0x1000, data),
+        ):
+            for index, word in enumerate(words):
+                core.write(prg_ram + offset + 2 * index, word)
+        core.write(reset_busreq, 1, byte=True)
+        core.expect(comm + 8, 3 if traps else 0x51A7, name)
+        for offset in (0, 2, 4):
+            core.expect(comm + offset, 0, name + " leaves faulting destination untouched")
+        core.write(reset_busreq, 3, byte=True)
+        expected_data = data if traps else (0x1234, 0x5678, 0x4546, 0x7834, 0xFFE0, 0xFFE1, 0x6001)
+        for index, expected in enumerate(expected_data):
+            core.expect(prg_ram + 0x1000 + 2 * index, expected, name + " data/byte lanes")
 
 
 def main():
@@ -404,7 +396,7 @@ def main():
                 assert not core.restore(states[capacity]), f"accepted {capacity} MiB state with RAM disabled"
             assert core.restore(states[0]), "disabled cartridge state could not be restored"
             print("PASS disabled cartridge rejects RAM states")
-            check_sub_cpu_addressing(core, allow_odd=False)
+            check_sub_cpu_addressing(core)
             print("PASS Sub CPU Address Error with CD32X RAM disabled")
         finally:
             core.close()
@@ -412,14 +404,14 @@ def main():
         try:
             check_sh2_fetch(core)
             print("PASS SH-2 RAM cartridge data and instruction coherence")
-            check_sub_cpu_addressing(core, allow_odd=True)
-            print("PASS CD32X RAM Sub CPU odd word, long and byte accesses")
+            check_sub_cpu_addressing(core)
+            print("PASS Sub CPU Address Error with CD32X RAM enabled; odd byte accesses preserved")
         finally:
             core.close()
 
         core = CdCore(core_path, iso, 4, connect_32x=False)
         try:
-            check_sub_cpu_addressing(core, allow_odd=False)
+            check_sub_cpu_addressing(core)
             print("PASS Sub CPU Address Error with 32X disconnected")
         finally:
             core.close()

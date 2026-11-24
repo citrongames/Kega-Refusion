@@ -16,15 +16,14 @@ board and a US CD BIOS. The disc's generic `SEGA CD Loader` header does not iden
 32X hardware, so select **32X: Connected** explicitly. Open the original CUE;
 there is no converted/patched game copy.
 
-## Loader compatibility
+## CPU address alignment
 
-An active CD32X program RAM cartridge also selects the ares-style loader
-profile. On the Sega CD sub-68000, a word or longword data access at an odd
-address uses the preceding even address. The main 68000 and sessions without
-the active RAM cartridge retain their normal address-error checks. This
-behavior is an emulator compatibility feature. A physical MC68000 raises an
-address error for an odd word or longword operand.
-[Motorola M68000 User's Manual, section 6.3.10](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf#page=104)
+The RAM cartridge does not change MC68000 alignment rules. Odd word and longword
+accesses raise Address Error on the Sega CD sub-CPU as well as the main CPU;
+byte accesses may use odd addresses. The temporary ares-style loader workaround
+was removed on 2026-11-24 at the user's request, ahead of an author-side loader
+fix. The old Road Rash image can therefore hit its original address error again.
+The forthcoming fixed image has not been verified yet.
 
 ## Bus model
 
@@ -64,7 +63,7 @@ this is not a claim of a cycle-exact electrical model or retail-hardware validat
 - [32X windows](https://github.com/MicroNut99/ares_android/blob/main/ares/md/m32x/bus-external.cpp)
 - [Road Rash CD32X requirements](https://anibalsmith.itch.io/road-rash-segacd-32x)
 
-## Verification — 2026-11-22
+## Historical verification — 2026-11-22 (before workaround removal)
 
 `tests/cd32x_ram_cart_tests.py` executes an original generated 68000 program
 inside a generated CD Mode 2 fixture. It verifies disabled/4/8/16 MiB, page
@@ -84,9 +83,9 @@ video and PCM. The test covered The City using a read-only disc image.
 Race startup on physical hardware remains unverified.
 [Road Rash Rapido loading audit](roadrash-cd32x-load-audit.md)
 
-The generated fixture also checks odd word and longword reads and writes,
-byte accesses, and strict address-error behavior with the cartridge disabled
-or 32X disconnected.
+The updated generated fixture separately checks Address Error for odd word and
+longword reads and writes with the cartridge enabled, disabled, and 32X
+disconnected. Odd byte reads and writes remain valid.
 
 The cartridge fixture additionally runs SH-2 code from RAM, rewrites its opcode
 from the 68000 and switches its physical page at the same guest PC. Both JIT and
@@ -121,3 +120,21 @@ core against the preceding binary:
 Both ordinary CD runs and both CD+32X runs reproduced future video and audio
 after native state and rewind-state restoration. These checks cover the
 recorded startup/intro scenes, not full-game playthroughs.
+
+
+## Removal verification — 2026-11-24
+
+Removed the sub-CPU alignment override and its bridge accessor; no cartridge
+mapping, state layout or allocation changes. The real-core RAM fixture passes
+for disabled/4/8/16 MiB, state compatibility and SH-2 code coherency. Separate
+odd word/long read/write cases now take vector 3 with RAM enabled, disabled,
+and 32X disconnected; the odd byte read/write control succeeds.
+
+Doom (Japan, USA), NTSC-U 59.922743 Hz, and Darxide (Europe), PAL 49.701459 Hz:
+600 cold-boot frames each, no input, before/after cores. Final-frame RGBA and
+complete PCM hashes match in both games. This is a short unaffected-system
+check, not a new full-game audit. Recordings with an active CD32X RAM cartridge
+now receive a distinct execution compatibility identifier so older recordings
+can warn rather than silently claim the same behavior. Native state layout
+and compatibility are unchanged. The Windows Release test build contains
+this removal; a repaired Road Rash revision remains to be tested when available.

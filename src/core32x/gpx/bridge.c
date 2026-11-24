@@ -75,8 +75,6 @@ void *kegarefusion_32x_sdram(void) {
    received before attachment too; ordinary MD/CD never allocate this table. */
 static unsigned requested_filter_preset;
 static unsigned requested_ram_cart_mb;
-/* Optional software compatibility, not a physical property of the PCB. */
-int kegarefusion_32x_ram_cart_active(void) { return ctx && ctx->ram_cart != NULL; }
 void kegarefusion_32x_set_ram_cart(unsigned mb)
 { requested_ram_cart_mb=(mb==4 || mb==8 || mb==16)?mb:0; }
 static void video_sync(uint64_t);

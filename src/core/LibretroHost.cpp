@@ -2099,6 +2099,13 @@ void LibretroHost::refreshRecordingIdentity() {
         const char* abi = api_->recording_abi();
         if (abi) recordingAbi_ = QByteArray(abi);
     }
+    // Removing the loader workaround changes execution only for an active CD32X
+    // RAM cartridge. Warn on older recordings without invalidating native states.
+    if (!recordingAbi_.isEmpty() && isCd() && api_->features && (api_->features() & 2u)) {
+        const auto cart = variables_.find(cd32xRamCartKey);
+        if (cart != variables_.end() && (cart->second == "4" || cart->second == "8" || cart->second == "16"))
+            recordingAbi_ += "-cd32x-ram-strict-address-v1";
+    }
     // Native serialization is platform/architecture dependent. The core's explicit
     // contract covers both the state layout and deterministic execution behavior.
     if (contentFirecore_ && !recordingAbi_.isEmpty()) recordingAbi_ += "-firecore-v3";
