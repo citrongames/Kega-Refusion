@@ -904,7 +904,7 @@ void EmulationSession::run() {
         networkStepAnnounced=false;networkReady=true;
         QJsonObject metadata{{"epoch",QString::number(networkEpoch)},{"configuration",configuration},{"roster",networkRoster},
             {"paused",paused},{"fast",fastForward_.load()},{"factor",fastForwardFactor_.load()},
-            {"rewinding",rewind_.load()},{"rewindRemaining",rewindLastProgressMs},{"rewindTotal",rewindTotalMs},{"slots",int(host.occupiedStateSlots())}};
+            {"rewinding",rewind_.load() && !paused},{"rewindRemaining",rewindLastProgressMs},{"rewindTotal",rewindTotalMs},{"slots",int(host.occupiedStateSlots())}};
         addNetworkClock(metadata);
         addPreviewInput(metadata,networkRewindImage.isNull() ? host.inputDisplay() : frameInput);
         QImage snapshotImage=!networkRewindImage.isNull()?networkRewindImage:host.frame();
@@ -1956,7 +1956,7 @@ void EmulationSession::run() {
                 break;
             case Type::FrameBack:
                 if (!networkMode && host.loaded() && paused && !backgroundPaused_.load() &&
-                    !rewind_.load() && !optionsPending) {
+                    !optionsPending) {
                     if (restorePreviousFrame(true)) clearAudio();
                     else if (historyHealthy) emit actionNotice(Localization::text(QStringLiteral("Нет предыдущего кадра")));
                 }
@@ -1967,7 +1967,7 @@ void EmulationSession::run() {
                     achievementSuppressed = false; achievements.reset(); achievements.refresh();
                     movieBoundary(); cheatStatus();
                 }
-                if (host.loaded() && paused && !backgroundPaused_.load() && !rewind_.load()) frameRequested = true;
+                if (host.loaded() && paused && !backgroundPaused_.load()) frameRequested = true;
                 break;
             case Type::CheatSearchClear: cheatSearch.clear(); break;
             case Type::CheatSearch: {
@@ -2309,10 +2309,11 @@ void EmulationSession::run() {
             }
         }
         if(networkDirty && networkMode==1 && host.loaded()) networkSnapshot();
+        const bool networkRewindActive = rewind_.load() && !paused;
         const bool trackNetworkAchievements=networkMode && networkReady &&
             !achievementSuppressed && achievementNetworkRole>0 && achievementState.enabled &&
             achievementState.loggedIn && !achievementState.loading && achievementState.gameId &&
-            achievementState.unlocked<achievementState.total && !rewind_.load() && !networkRemoteRewinding;
+            achievementState.unlocked<achievementState.total && !networkRewindActive && !networkRemoteRewinding;
         if (trackNetworkAchievements!=networkAchievementTracking) {
             resetNetworkAchievements();
             networkAchievementTracking=trackNetworkAchievements;
@@ -2320,7 +2321,7 @@ void EmulationSession::run() {
         networkTimeline.setAchievementsEnabled(trackNetworkAchievements);
         if(networkMode && networkTimeline.active()) {
             QString networkError;
-            if(networkReady && !rewind_.load() && !networkRemoteRewinding && !networkTimeline.idle(networkError)) {
+            if(networkReady && !networkRewindActive && !networkRemoteRewinding && !networkTimeline.idle(networkError)) {
                 networkReady=false;
 #ifdef KEGA_NETPLAY_TEST_INPUTS
                 qWarning("GGPO idle failure: %s",qPrintable(networkError));
@@ -2392,10 +2393,12 @@ void EmulationSession::run() {
         if (nowPaused != effectivePaused) {
             effectivePaused = nowPaused; emit effectivePauseChanged(nowPaused); clearAudio(); pacer.reset(nowNs());
         }
-        // Enter only when there is a previous checkpoint. Once at the oldest
-        // one, keep holding there until release instead of running forward.
-        const bool canReverse = history.size() > 1 || (rewindLatched && history.size() > 0);
-        const bool reverse = rewind_.load() && historyEnabled && canReverse && host.loaded() && !background && !achievementHardcore && !optionsPending;
+        // Keep holding the oldest checkpoint even after pausing and resuming.
+        // A single remaining checkpoint must never restart forward execution.
+        const bool canReverse = history.size() > 0;
+        // Explicit pause stops automatic rewind, but the manual frame commands below
+        // still execute while rewind/fast-forward remain requested.
+        const bool reverse = rewind_.load() && historyEnabled && canReverse && host.loaded() && !nowPaused && !achievementHardcore && !optionsPending;
         const bool metricsRunning = (performanceMetricsEnabled || gameFpsEnabled) &&
             host.loaded() && !nowPaused && !reverse && !networkRemoteRewinding;
         if (metricsRunning != metricsWindowRunning) {

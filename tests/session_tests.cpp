@@ -532,6 +532,29 @@ int main(int argc,char** argv){
   for(int i=0;i<int(live.size());++i)live[size_t(i)].state=read(livePaths[size_t(i)]);
   require(live.front().frame!=live.back().frame,"frame-back fixture pictures are static");
   compare(live.back(),"realtime final reference does not match pause boundary");
+  session.setRewind(true);
+  session.setFastForward(true);
+  const auto heldPauseState=state();const int heldPauseFrames=frames.load();
+  QThread::msleep(80);QCoreApplication::processEvents();
+  require(frames.load()==heldPauseFrames && state()==heldPauseState,
+          "automatic rewind/fast-forward ignored explicit pause");
+  step(true);compare(live[live.size()-2],"paused rewind blocked exact backward step");
+  step(false);compare(live.back(),"paused rewind blocked exact forward step");
+  for(bool backwards : {true,false}) {
+   std::atomic<int> repeated{0};
+   const auto repeatConnection=QObject::connect(&session,&EmulationSession::videoFrame,&app,
+    [&](const QImage&,double){
+     if(repeated.fetch_add(1)+1==3) {
+      if(backwards)session.setFrameBackHeld(false);else session.setFrameAdvanceHeld(false);
+     }
+    },Qt::DirectConnection);
+   if(backwards)session.setFrameBackHeld(true);else session.setFrameAdvanceHeld(true);
+   waitFor([&]{return repeated.load()>=3;},"paused held frame command did not repeat");
+   QObject::disconnect(repeatConnection);take();
+   require(repeated.load()==3 && paused,"held frame command escaped pause or repeated after release");
+   compare(backwards?live[2]:live.back(),"paused held command restored the wrong frame");
+  }
+  session.setRewind(false);session.setFastForward(false);
   for(int i=int(live.size())-2;i>=0;--i){
    step(true);compare(live[size_t(i)],"realtime reverse skipped or mismatched a frame");
   }
@@ -716,8 +739,21 @@ int main(int argc,char** argv){
   session.setRewind(false);session.setPaused(false);waitFor([&]{return !paused && frames>=boundary+8;});
   session.setPaused(true);waitFor([&]{return paused;});
   const int beforeReverse=frames.load();
-  session.setRewind(true);
+  session.setRewind(true);session.setPaused(false);
   waitFor([&]{return reversed.load() && frames>beforeReverse;},"rewind did not resume after fast-forward");
+  session.setPaused(true);waitFor([&]{return paused && !reversed.load();},"pause did not stop active rewind");
+  const int pausedReverseFrames=frames.load();QThread::msleep(80);
+  require(frames.load()==pausedReverseFrames,"paused rewind kept publishing frames");
+  session.setPaused(false);
+  waitFor([&]{return reversed.load() && frames>pausedReverseFrames;},"unpause did not resume requested rewind");
+  // This short history fits within one 16-frame reverse step. Stay at its
+  // oldest checkpoint across a pause/unpause instead of running forward.
+  session.setRewindSpeed(false,16);QThread::msleep(250);
+  session.setPaused(true);waitFor([&]{return paused && !reversed.load();},"oldest rewind pause");
+  const int oldestReverseFrames=frames.load();
+  session.setPaused(false);waitFor([&]{return !paused && reversed.load();},"oldest rewind resume");
+  QThread::msleep(100);
+  require(frames.load()==oldestReverseFrames,"unpausing oldest rewind ran the game forward");
   session.setRewind(false);session.shutdown();require(errors==0,"fast-forward session error");
   std::puts("Paused fast-forward preserves history; executed gap clears history; normal recording and rewind resume: passed");
   return 0;

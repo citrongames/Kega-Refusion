@@ -554,3 +554,19 @@ Final archive SHA-256:
 Final artifacts, packaging recipes and compact verification evidence are retained
 under ignored `build/release-0.30.1/`. Transient package trees and isolated updater
 installations are removed; useful incremental build and dependency caches remain.
+
+
+### Pause priority over automatic rewind — 2026-11-25
+
+Explicit pause now suspends automatic rewind as it already suspends fast-forward.
+Single and held manual frame steps remain available with both requests enabled.
+At the oldest history entry, pausing/unpausing keeps that entry rather than
+restarting forward execution. Network snapshot metadata reports paused rewind
+as inactive, and paused peers can continue servicing frame-step synchronization.
+
+Focused real-core `session_tests --frame-back` and `--fast-forward` passed on
+Linux with generated ROMs: exact frame/state comparisons for steps in both
+directions, three held repeats each way while both modes are requested, pause
+of active rewind, resume, and the oldest-history boundary. Windows Release
+was packaged to testbuild and its stripped EXE matched the build; Windows UI
+and a two-peer network scenario were not run for this change.
