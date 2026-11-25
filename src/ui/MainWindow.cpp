@@ -54,6 +54,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QFocusEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QListWidget>
@@ -1074,10 +1075,14 @@ void MainWindow::buildMenus() {
     connect(normalSpeedAction_, &QAction::triggered, this, [this] { setGameSpeedPercent(100); });
     updateGameSpeedActions();
     fastForwardAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Ускорение")));
+    fastForwardAction_->setObjectName(QStringLiteral("fastForwardAction"));
     fastForwardAction_->setCheckable(true);
+    fastForwardAction_->setAutoRepeat(false);
     fastForwardAction_->setEnabled(false);
     connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
     rewindAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перемотка назад")));
+    rewindAction_->setObjectName(QStringLiteral("rewindAction"));
+    rewindAction_->setAutoRepeat(false);
     rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
     connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
     QAction* focusPause = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза при потере фокуса")));
@@ -3744,7 +3749,7 @@ void MainWindow::setFrameBackSource(bool keyboard, bool pressed) {
     session_.setFrameBackHeld(held);
 }
 
-void MainWindow::releaseInput() {
+void MainWindow::releaseInput(bool preserveMenuModes) {
     heldCommandChords_.clear();
     view_->setLightgunInputEnabled(false);
     resetAnalogMotion();
@@ -3755,12 +3760,12 @@ void MainWindow::releaseInput() {
     frameBackHeld_ = frameBackPadHeld_ = false;
     session_.setFrameBackHeld(false);
     rewindHeld_ = rewindPadHeld_ = false;
-    if (rewindAction_ && rewindAction_->isChecked()) rewindAction_->setChecked(false);
+    if (!preserveMenuModes && rewindAction_ && rewindAction_->isChecked()) rewindAction_->setChecked(false);
     updateRewind();
     input_->releaseKeyboard();
     input_->setBackgroundGamepadActive(false);
     input_->setEnabled(false);
-    if (fastForwardAction_ && fastForwardAction_->isChecked())
+    if (!preserveMenuModes && fastForwardAction_ && fastForwardAction_->isChecked())
         fastForwardAction_->setChecked(false);
     updateFastForward();
 }
@@ -3862,7 +3867,7 @@ bool MainWindow::isMainMenuVisible() const {
 void MainWindow::pauseForMenu() {
     menuPauseActive_ = true;
     if (!netplay_->active() && !videoExporting_) session_.setBackgroundPaused(true);
-    releaseInput();
+    releaseInput(true);
 }
 
 #ifdef Q_OS_WIN
@@ -4002,11 +4007,19 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
     if (!keyboard && videoExporting_ && pressed) return;
     if (command == RewindCommand) {
         (keyboard ? rewindHeld_ : rewindPadHeld_) = pressed;
+        if (pressed && rewindAction_) {
+            const QSignalBlocker blocker(rewindAction_);
+            rewindAction_->setChecked(false); // The held input takes over the menu latch.
+        }
         updateRewind();
         return;
     }
     if (command == FastForwardCommand) {
         (keyboard ? fastForwardHeld_ : fastForwardPadHeld_) = pressed;
+        if (pressed && fastForwardAction_) {
+            const QSignalBlocker blocker(fastForwardAction_);
+            fastForwardAction_->setChecked(false);
+        }
         updateFastForward();
         return;
     }
@@ -4072,7 +4085,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     }
     if (event->type() == QEvent::ApplicationDeactivate ||
         (watched == view_ && event->type() == QEvent::FocusOut)) {
-        releaseInput();
+        const bool menuFocus = event->type() == QEvent::FocusOut &&
+            (menuPauseActive_ || QApplication::activePopupWidget() ||
+             static_cast<QFocusEvent*>(event)->reason() == Qt::PopupFocusReason ||
+             static_cast<QFocusEvent*>(event)->reason() == Qt::MenuBarFocusReason);
+        releaseInput(menuFocus);
         return QMainWindow::eventFilter(watched, event);
     }
     if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease &&
@@ -4199,7 +4216,8 @@ void MainWindow::dropEvent(QDropEvent* event) {
 }
 
 void MainWindow::changeEvent(QEvent* event) {
-    if (event->type() == QEvent::ActivationChange && !isActiveWindow()) releaseInput();
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+        releaseInput(menuPauseActive_ || QApplication::activePopupWidget());
     if (event->type() == QEvent::WindowStateChange) {
         const auto* change = static_cast<QWindowStateChangeEvent*>(event);
 #ifdef Q_OS_WIN

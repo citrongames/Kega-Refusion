@@ -375,7 +375,8 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
     {
         const int primary = int(Qt::ControlModifier) | int(Qt::ShiftModifier) | Qt::Key_K;
         const int alternate = Qt::Key_F12;
-        input->setCommandKeyBindings({{FastForwardCommand, {primary, alternate}}});
+        input->setCommandKeyBindings({{FastForwardCommand, {primary, alternate}},
+                                      {RewindCommand, {Qt::Key_F11}}});
         const QString primaryText = QKeySequence(primary).toString(QKeySequence::NativeText);
         const auto actions = window.findChildren<QAction*>();
         require(std::any_of(actions.cbegin(), actions.cend(), [&](const QAction* action) {
@@ -428,6 +429,42 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
         require(view->fastForwardActive(), "releasing one shortcut stopped the other");
         release(Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
         require(!view->fastForwardActive(), "releasing both shortcuts left fast forward active");
+
+        // Opening the menu must preserve its latch so the next click can turn it off.
+        for (const char* name : {"fastForwardAction", "rewindAction"}) {
+            auto* action = child<QAction>(window, name);
+            QMenu* menu = nullptr;
+            for (auto* candidate : window.findChildren<QMenu*>())
+                if (candidate->actions().contains(action)) { menu = candidate; break; }
+            require(menu && action->isEnabled(), "held command menu unavailable");
+            action->trigger();
+            require(action->isChecked(), "menu did not latch held command");
+            menu->popup(window.mapToGlobal(QPoint(20, 40)));
+            QApplication::processEvents();
+            require(action->isChecked(), "opening menu cleared held command latch");
+            action->trigger();
+            require(!action->isChecked(), "second menu click did not disable command");
+            menu->hide();
+            window.activateWindow();
+            view->setFocus();
+            QApplication::processEvents();
+
+            const int command = action == child<QAction>(window, "fastForwardAction")
+                ? FastForwardCommand : RewindCommand;
+            const int key = command == FastForwardCommand ? alternate : Qt::Key_F11;
+            action->trigger();
+            press(*view, key);
+            require(!action->isChecked(), "keyboard hold did not take over menu latch");
+            release(key, Qt::NoModifier);
+            if (command == FastForwardCommand)
+                require(!view->fastForwardActive(), "keyboard release left menu acceleration active");
+            action->trigger();
+            input->commandChanged(command, true);
+            require(!action->isChecked(), "gamepad hold did not take over menu latch");
+            input->commandChanged(command, false);
+            if (command == FastForwardCommand)
+                require(!view->fastForwardActive(), "gamepad release left menu acceleration active");
+        }
     }
     for (int key : {Qt::Key_F5, Qt::Key_F8}) {
         bool correctPicker = false;

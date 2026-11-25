@@ -135,7 +135,7 @@ private:
     void editShaderParameters();
     void updateShaderActions();
     void setGameGearLcdEnabled(bool enabled);
-    void releaseInput();
+    void releaseInput(bool preserveMenuModes = false);
     void updateMovieActions();
     void updateVideoActions();
     void setGameSpeedPercent(int percent);
