@@ -59,9 +59,8 @@ public:
     void setOsdEnabled(bool enabled);
     void setInputDisplay(const InputDisplayState& state);
     void setInputDisplayEnabled(bool enabled);
-    void setPerformanceMetricsEnabled(bool enabled);
-    void setGameFpsEnabled(bool enabled);
-    void setPerformanceMetrics(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
+    void setEmulationFpsEnabled(bool enabled);
+    void setEmulationFps(double framesPerSecond);
     void setPausedStatus(bool paused);
     void setConnectionWaiting(bool waiting);
     void setReadinessWaiting(bool waiting);
@@ -187,7 +186,6 @@ private:
     QRect achievementPopupRect(const QSize& canvas) const;
     void paintOsd(QPainter& painter, const QSize& canvas);
     void paintInputDisplay(QPainter& painter, const QSize& canvas);
-    void rebuildPerformanceMetrics();
     void paintLoading(QPainter& painter, const QSize& canvas);
 
     QImage frame_;
@@ -209,13 +207,7 @@ private:
     qreal inputDisplayRasterScale_ = 0;
     qreal inputDisplayRasterDpr_ = 0;
     bool inputDisplayRasterValid_ = false;
-    bool performanceMetricsEnabled_ = false;
-    bool gameFpsEnabled_ = false;
-    bool metricsReady_ = false;
-    bool gameFpsAvailable_ = false;
-    double emulatedFps_ = 0.0;
-    double gameFps_ = 0.0;
-    QStringList metricsLines_;
+    QStringList emulationFpsLines_;
     bool capturingImage_ = false;
     struct GunState {
         QPointF aim{0.5, 0.5};

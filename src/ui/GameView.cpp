@@ -347,8 +347,7 @@ void GameView::clearGame() {
     runTimerReady_ = false;
     runTimerFrames_ = runTimerMicroseconds_ = 0;
     runTimerText_.clear();
-    metricsReady_ = gameFpsAvailable_ = false;
-    rebuildPerformanceMetrics();
+    if (!emulationFpsLines_.isEmpty()) emulationFpsLines_.first() = QStringLiteral("—");
     setPausedStatus(false); setFastForwardStatus(false); setRewindStatus(false);
     setFrame({}, 4.0 / 3.0);
     frameCount_ = 0;
@@ -587,42 +586,18 @@ void GameView::setInputDisplayEnabled(bool enabled) {
     repaintView();
 }
 
-void GameView::setPerformanceMetricsEnabled(bool enabled) {
-    if (performanceMetricsEnabled_ == enabled) return;
-    performanceMetricsEnabled_ = enabled;
-    if (enabled) metricsReady_ = false;
-    rebuildPerformanceMetrics();
+void GameView::setEmulationFpsEnabled(bool enabled) {
+    if (enabled == !emulationFpsLines_.isEmpty()) return;
+    emulationFpsLines_ = enabled ? QStringList{QStringLiteral("—")} : QStringList{};
     repaintView();
 }
 
-void GameView::setGameFpsEnabled(bool enabled) {
-    if (gameFpsEnabled_ == enabled) return;
-    gameFpsEnabled_ = enabled;
-    if (enabled) gameFpsAvailable_ = false;
-    rebuildPerformanceMetrics();
-    repaintView();
-}
-
-void GameView::setPerformanceMetrics(double emulatedFps, double /* speedPercent */,
-                                     double gameFps, bool gameFpsAvailable) {
-    emulatedFps_ = emulatedFps;
-    gameFps_ = gameFps;
-    gameFpsAvailable_ = gameFpsAvailable;
-    metricsReady_ = true;
-    if (performanceMetricsEnabled_ || gameFpsEnabled_) {
-        const QStringList previous = metricsLines_;
-        rebuildPerformanceMetrics();
-        if (osdEnabled_ && previous != metricsLines_) repaintView();
-    }
-}
-
-void GameView::rebuildPerformanceMetrics() {
-    metricsLines_.clear();
-    if (performanceMetricsEnabled_)
-        metricsLines_.append(metricsReady_ ? QString::number(emulatedFps_, 'f', 1) : QStringLiteral("—"));
-    if (gameFpsEnabled_)
-        metricsLines_.append(gameFpsAvailable_ ? QStringLiteral("~") + QString::number(gameFps_, 'f', 1)
-                                             : QStringLiteral("~—"));
+void GameView::setEmulationFps(double framesPerSecond) {
+    if (emulationFpsLines_.isEmpty()) return;
+    const QString text = QString::number(framesPerSecond, 'f', 1);
+    if (emulationFpsLines_.constFirst() == text) return;
+    emulationFpsLines_.first() = text;
+    if (osdEnabled_) repaintView();
 }
 
 void GameView::setMutedStatus(bool muted) {
@@ -770,7 +745,7 @@ void GameView::paintOverlays(QPainter& painter, const QRectF& presentedVideo) {
             paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
             movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||
             (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty());
-        const bool metrics = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
+        const bool metrics = !frame_.isNull() && !emulationFpsLines_.isEmpty();
         const bool input = inputDisplayEnabled_ && !frame_.isNull() && !loading_ && !capturingImage_;
         if (status || metrics || input || !achievementPixmap_.isNull() || loading_) {
             const qreal scale = osdScale();
@@ -910,8 +885,8 @@ void GameView::paintOsd(QPainter& painter, const QSize& canvas) {
     };
 
     int rightY = margin;
-    if (!frame_.isNull() && !metricsLines_.isEmpty())
-        rightY += drawPanel(metricsLines_, rightY, true, Qt::AlignRight) + 4;
+    if (!frame_.isNull() && !emulationFpsLines_.isEmpty())
+        rightY += drawPanel(emulationFpsLines_, rightY, true, Qt::AlignRight) + 4;
     if (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty())
         drawPanel({runTimerText_}, rightY, true, Qt::AlignRight);
 

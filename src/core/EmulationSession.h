@@ -119,8 +119,7 @@ public:
     void setRewindMemoryMiB(int mebibytes);
     void setBackgroundPaused(bool paused);
     void setRunTimerEnabled(bool enabled);
-    void setPerformanceMetricsEnabled(bool enabled);
-    void setGameFpsEnabled(bool enabled);
+    void setEmulationFpsEnabled(bool enabled);
     void setExpansionDevices(ExpansionMode cd, ExpansionMode x32);
     void setCd32xRamCart(Cd32xRamCart cart);
     void requestSlotStatus(int selected);
@@ -198,7 +197,7 @@ signals:
     void videoFrameReady();
     void videoFrame(const QImage& frame, double aspectRatio);
     void runTimerChanged(quint64 frames, quint64 microseconds);
-    void performanceMetricsChanged(double emulatedFps, double speedPercent, double gameFps, bool gameFpsAvailable);
+    void emulationFpsChanged(double framesPerSecond);
     void audioReset();
     void audioSamples(const QByteArray& pcm, int sampleRate);
     void gameLoaded(const QString& path, double fps, const QString& contentName, ConsoleProfile profile);
@@ -224,7 +223,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, Cd32xRamCart, AudioLowPass, AutoPatches, Lua};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, EmulationFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, Cd32xRamCart, AudioLowPass, AutoPatches, Lua};
     struct Command {
         Type type;
         QString path;

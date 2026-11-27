@@ -344,8 +344,8 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         readExpansionMode(settings_, QStringLiteral("emulation/x32Mode"), QStringLiteral("emulation/attach32x")));
     session_.setCd32xRamCart(cd32xRamCartFromMiB(
         settings_.value(QStringLiteral("emulation/cd32xRamCartMiB"), 0).toInt()));
-    connect(&session_, &EmulationSession::performanceMetricsChanged,
-            view_, &GameView::setPerformanceMetrics);
+    connect(&session_, &EmulationSession::emulationFpsChanged,
+            view_, &GameView::setEmulationFps);
     connect(&session_, &EmulationSession::runTimerChanged,
             view_, &GameView::setRunTimer);
     connect(&session_, &EmulationSession::inputDisplayChanged, this, [this] {
@@ -1332,16 +1332,8 @@ void MainWindow::buildMenus() {
         refresh();
     };
     bindOverlay(fpsAction_, QStringLiteral("view/emulationFps"), [this](bool enabled) {
-        session_.setPerformanceMetricsEnabled(enabled);
-        view_->setPerformanceMetricsEnabled(enabled);
-    });
-    gameFpsAction_ = viewMenu->addAction(Localization::text(QStringLiteral("FPS игры (оценка по опросу управления)")));
-    gameFpsAction_->setObjectName(QStringLiteral("gameFpsAction"));
-    gameFpsAction_->setCheckable(true);
-    gameFpsAction_->setChecked(settings_.value(QStringLiteral("view/gameFps"), false).toBool());
-    bindOverlay(gameFpsAction_, QStringLiteral("view/gameFps"), [this](bool enabled) {
-        session_.setGameFpsEnabled(enabled);
-        view_->setGameFpsEnabled(enabled);
+        session_.setEmulationFpsEnabled(enabled);
+        view_->setEmulationFpsEnabled(enabled);
     });
     QAction* inputDisplayAction = viewMenu->addAction(
         Localization::text(QStringLiteral("Показывать нажатия на геймпадах")));

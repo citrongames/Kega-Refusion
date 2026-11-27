@@ -295,7 +295,6 @@ private:
     QAction* loadFileAction_ = nullptr;
     QAction* osdAction_ = nullptr;
     QAction* fpsAction_ = nullptr;
-    QAction* gameFpsAction_ = nullptr;
     QAction* fullscreenAction_ = nullptr;
     QAction* muteAction_ = nullptr;
     int volume_ = 80;

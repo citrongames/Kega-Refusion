@@ -89,39 +89,36 @@ void testReadinessWaiting() {
     require(render(view)==baseline,"readiness waiting OSD persisted after becoming ready");
 }
 
-void testFpsOverlays() {
+void testEmulationFpsOverlay() {
     GameView view;
     prepare(view);
     const auto baseline = render(view);
     const auto clean = view.captureGameImage();
     view.setOsdEnabled(false);
-    view.setPerformanceMetricsEnabled(true);
-    view.setGameFpsEnabled(true);
-    view.setPerformanceMetrics(59.9, 100.0, 29.95, true);
-    require(render(view) == baseline, "FPS counters ignored the global OSD switch");
+    view.setEmulationFpsEnabled(true);
+    view.setEmulationFps(59.9);
+    require(render(view) == baseline, "FPS counter ignored the global OSD switch");
     view.setOsdEnabled(true);
-    const auto counters = render(view);
-    const auto bounds = changedBounds(baseline, counters);
+    const auto counter = render(view);
+    const auto bounds = changedBounds(baseline, counter);
     require(!bounds.isEmpty() && bounds.left() > view.width()/2 && bounds.bottom() < view.height()/2,
-            "FPS counters should occupy the upper-right corner");
+            "FPS counter should occupy the upper-right corner");
     require(view.captureGameImage() == clean, "FPS leaked into clean screenshot");
     view.setOsdEnabled(false);
-    require(render(view) == baseline, "disabling OSD did not hide active FPS counters");
+    require(render(view) == baseline, "disabling OSD did not hide the active FPS counter");
     view.setOsdEnabled(true);
-    require(render(view) == counters, "global OSD toggle lost selected FPS counters or metrics");
-    view.setPerformanceMetricsEnabled(false);
-    view.setGameFpsEnabled(false);
-    require(render(view) == baseline, "FPS did not disappear after disabling both counters");
+    require(render(view) == counter, "global OSD toggle lost the selected FPS counter or its value");
+    view.setEmulationFpsEnabled(false);
+    require(render(view) == baseline, "FPS did not disappear after disabling its counter");
     view.setRunTimerMode(GameView::RunTimerMode::Time);
     view.setRunTimer(60,1000000);
     const auto timer = changedBounds(baseline, render(view));
     require(timer.top() == bounds.top() && timer.right() == bounds.right() && timer.left() > view.width()/2,
             "Game time should occupy the upper-right corner");
-    view.setPerformanceMetricsEnabled(true);
-    view.setGameFpsEnabled(true);
+    view.setEmulationFpsEnabled(true);
     const auto stacked = changedBounds(baseline, render(view));
     require(stacked.bottom() >= bounds.bottom() + timer.height() && stacked.right() == timer.right(),
-            "Game time should stack below both FPS counters");
+            "Game time should stack below the FPS counter");
     view.setOsdEnabled(false);
     view.setOsdEnabled(true);
     view.setRunTimer(60,1000000); // The session refreshes time when OSD returns.
@@ -1060,7 +1057,7 @@ int main(int argc, char** argv) {
             std::puts("player readiness waiting OSD, release, connection priority and disabled OSD passed");return 0;
         }
         if (app.arguments().contains(QStringLiteral("--fps-only"))) {
-            testFpsOverlays();
+            testEmulationFpsOverlay();
             std::puts("FPS global visibility, retained selection and clean capture passed"); return 0;
         }
         if (app.arguments().contains(QStringLiteral("--input-display-only"))) {
@@ -1112,7 +1109,7 @@ int main(int argc, char** argv) {
             testFilteredSquarePixels();
             std::puts("filtered square-pixel geometry passed"); return 0;
         }
-        testFpsOverlays();
+        testEmulationFpsOverlay();
         testInputDisplayOverlay();
         testOverlayScaling();
         testReadinessWaiting();

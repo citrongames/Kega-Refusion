@@ -586,8 +586,7 @@ void EmulationSession::setAudioLowPass(bool enabled) { enqueue({Type::AudioLowPa
 void EmulationSession::setSmsFmEnabled(bool enabled) { enqueue({Type::SmsFm,{},enabled?1:0}); }
 void EmulationSession::setBackgroundPaused(bool paused) { backgroundPaused_.store(paused); }
 void EmulationSession::setRunTimerEnabled(bool enabled) { enqueue({Type::RunTimer,{},int(enabled)}); }
-void EmulationSession::setPerformanceMetricsEnabled(bool enabled) { enqueue({Type::PerformanceMetrics,{},enabled ? 1 : 0}); }
-void EmulationSession::setGameFpsEnabled(bool enabled) { enqueue({Type::GameFps,{},enabled ? 1 : 0}); }
+void EmulationSession::setEmulationFpsEnabled(bool enabled) { enqueue({Type::EmulationFps,{},enabled ? 1 : 0}); }
 void EmulationSession::setExpansionDevices(ExpansionMode cd, ExpansionMode x32) {
     // Preserve the existing connected bits in shared commands from older clients.
     int flags = 0;
@@ -1095,12 +1094,11 @@ void EmulationSession::run() {
     };
     PerformanceMetrics metrics;
     metrics.reset(nowNs());
-    bool performanceMetricsEnabled = false, gameFpsEnabled = false;
+    bool emulationFpsEnabled = false;
     bool metricsWindowRunning = false;
     auto resetMetrics = [&] {
         metrics.reset(nowNs());
-        if (performanceMetricsEnabled || gameFpsEnabled)
-            emit performanceMetricsChanged(0.0, 0.0, 0.0, false);
+        if (emulationFpsEnabled) emit emulationFpsChanged(0.0);
     };
     FramePacer pacer;
     FrameWaiter waiter;
@@ -1695,7 +1693,7 @@ void EmulationSession::run() {
         const bool fast=context.fast, present=context.present;
         const int speedPercent=context.speedPercent, factor=context.factor;
         captureVideo();
-        if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
+        if (metricsWindowRunning) metrics.recordFrame();
         if (!achievementSuppressed && !networkMode) achievements.frame();
         afterFrame();
         observeCommittedFrame();
@@ -2653,15 +2651,9 @@ void EmulationSession::run() {
                 timerEnabled = command.value != 0;
                 publishClock(true);
                 break;
-            case Type::PerformanceMetrics:
-                if (performanceMetricsEnabled != (command.value != 0)) {
-                    performanceMetricsEnabled = command.value != 0;
-                    resetMetrics();
-                }
-                break;
-            case Type::GameFps:
-                if (gameFpsEnabled != (command.value != 0)) {
-                    gameFpsEnabled = command.value != 0;
+            case Type::EmulationFps:
+                if (emulationFpsEnabled != (command.value != 0)) {
+                    emulationFpsEnabled = command.value != 0;
                     resetMetrics();
                 }
                 break;
@@ -3352,17 +3344,16 @@ void EmulationSession::run() {
         // Explicit pause stops automatic rewind, but the manual frame commands below
         // still execute while rewind/fast-forward remain requested.
         const bool reverse = rewind_.load() && historyEnabled && canReverse && host.loaded() && !nowPaused && !achievementHardcore && !optionsPending;
-        const bool metricsRunning = (performanceMetricsEnabled || gameFpsEnabled) &&
-            host.loaded() && !nowPaused && !reverse && !networkRemoteRewinding;
+        const bool metricsRunning = emulationFpsEnabled && host.loaded() &&
+            !nowPaused && !reverse && !networkRemoteRewinding;
         if (metricsRunning != metricsWindowRunning) {
             metricsWindowRunning = metricsRunning;
             resetMetrics();
         }
         if (metricsRunning) {
-            PerformanceMetrics::Snapshot sample;
-            if (metrics.takeSample(nowNs(), host.fps(), gameFpsEnabled && host.supportsInputPollMetrics(), sample))
-                emit performanceMetricsChanged(sample.emulatedFps, sample.speedPercent,
-                                               sample.gameFps, sample.gameFpsAvailable);
+            double framesPerSecond = 0.0;
+            if (metrics.takeSample(nowNs(), framesPerSecond))
+                emit emulationFpsChanged(framesPerSecond);
         }
         if (reverse != rewindLatched) {
             rewindLatched = reverse; clearAudio(); pacer.reset(nowNs());
