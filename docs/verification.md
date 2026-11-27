@@ -1226,5 +1226,8 @@ ready while get() still blocks on thread-local teardown. The focused native
 lua_session_tests passed: reused worker identity, no per-result TLS teardown,
 exception propagation, draining discarded work at shutdown, real-core recording
 save/retry, resume/playback and cancellation of stale file requests. The actual
-Windows stall still needs comparison on the user's system; a bounded temporary
-stop trace is retained in testbuild for that check, outside tracked sources.
+Windows comparison subsequently finished writing at 89 ms and consumed the
+result at 105 ms (GUI acknowledgement at 109 ms), with get() returning in the
+same millisecond. The user confirmed the freeze was gone. The temporary
+diagnostic build is replaced with the normal build; before/after traces remain
+under ignored build/verification/movie-stop-latency, not in the shipped package.
