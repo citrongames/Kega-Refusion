@@ -409,6 +409,8 @@ struct ScriptRuntime::Script {
     QString path;
     QHash<QString, QImage> images;
     QString storageRoot, storageIdentity;
+    QByteArray timelineId;
+    QByteArrayView startupSource;
     std::unique_ptr<ScriptStorage> storage;
     size_t allocated = 0;
     lua_State* L = nullptr;
@@ -481,6 +483,7 @@ struct ScriptRuntime::Script {
         if (L) *static_cast<Script**>(lua_getextraspace(L)) = this;
     }
     ~Script() {
+        if (!timelineId.isEmpty()) owner.timeline_.remove(timelineId);
         if (!panels.isEmpty()) {
             owner.uiWindows_ -= panels.size();
             for (const auto& panel : std::as_const(panels)) owner.uiControls_ -= panel.model.controls.size();
@@ -551,9 +554,14 @@ struct ScriptRuntime::Script {
         if (Clock::now() > active.deadline) luaL_error(runner, "callback time budget exceeded");
     }
 
+    const char* spendNativeBytes(int bytes) {
+        if ((budget().nativeBytes -= bytes) < 0) return "native work budget exceeded";
+        if (Clock::now() > budget().deadline) return "callback time budget exceeded";
+        return nullptr;
+    }
+
     void chargeUiBytes(lua_State* runner, int bytes) {
-        if ((budget().nativeBytes -= bytes) < 0) luaL_error(runner, "native work budget exceeded");
-        if (Clock::now() > budget().deadline) luaL_error(runner, "callback time budget exceeded");
+        if (const auto* error = spendNativeBytes(bytes)) luaL_error(runner, "%s", error);
     }
 
     void report(ScriptStatus status, const QString& message = {}, int line = 0) {
@@ -1955,6 +1963,82 @@ struct ScriptRuntime::Script {
         return ok;
     }
 
+    static int writeTimeline(lua_State* L, int argument, QByteArrayView declaration = {}, quint32 schema = 0) {
+        auto& script = self(L);
+        auto& timeline = script.owner.timeline_;
+        int status = LUA_OK;
+        const char* error = nullptr;
+        bool duplicate = false;
+        {
+            QByteArray name;
+            if (schema) name = declaration.toByteArray();
+            if (schema && timeline.contains(name)) {
+                duplicate = true;
+            } else {
+                auto encoding = ScriptTimeline::encodeValue(L, argument);
+                status = encoding.luaStatus;
+                if (status == LUA_OK) {
+                    error = script.spendNativeBytes(encoding.work);
+                    if (!error) error = encoding.error;
+                    if (!error) {
+                        if (schema) {
+                            timeline.define(name, schema, script.startupSource, std::move(encoding.value));
+                            script.timelineId = std::move(name);
+                        } else {
+                            timeline.set(script.timelineId, std::move(encoding.value));
+                        }
+                    }
+                }
+            }
+        }
+        if (status != LUA_OK) return lua_error(L);
+        if (duplicate) return unavailable(L, "Timeline ID already in use");
+        if (error) return luaL_error(L, "%s", error);
+        return accepted(L);
+    }
+
+    static int defineTimeline(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.starting) return unavailable(L, "Timeline definition is only available at startup");
+        if (!script.timelineId.isEmpty()) return unavailable(L, "Timeline data already declared");
+        luaL_checktype(L, 1, LUA_TSTRING);
+        const auto name = checkedString(L, 1, 64);
+        luaL_argcheck(L, ScriptTimeline::validId(name), 1, "expected 1 to 64 printable ASCII bytes");
+        luaL_argcheck(L, lua_isinteger(L, 2), 2, "expected an integer schema version");
+        const auto schema = lua_tointeger(L, 2);
+        luaL_argcheck(L, schema >= 1 && schema <= 0x7fffffff, 2, "schema version out of range");
+        luaL_argcheck(L, !lua_isnone(L, 3), 3, "expected a value or explicit nil");
+        return writeTimeline(L, 3, name, quint32(schema));
+    }
+
+    static int setTimeline(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (script.accessEvent ||
+            (!script.atControlBoundary() && script.currentEvent != ScriptEvent::BeforeFrame))
+            return unavailable(L, "Timeline update unavailable here");
+        if (script.timelineId.isEmpty()) return unavailable(L, "Timeline data has not been declared");
+        luaL_argcheck(L, !lua_isnone(L, 1), 1, "expected a value or explicit nil");
+        return writeTimeline(L, 1);
+    }
+
+    static int getTimeline(lua_State* L) {
+        auto& script = self(L);
+        const auto* value = script.timelineId.isEmpty() ? nullptr : &script.owner.timeline_.value(script.timelineId);
+        script.charge(L, value ? int(value->size()) : 0);
+        if (!value) return unavailable(L, "Timeline data has not been declared");
+        return ScriptTimeline::pushValue(L, *value);
+    }
+
+    static int timelineStatus(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (script.timelineId.isEmpty()) return unavailable(L, "Timeline data has not been declared");
+        lua_pushstring(L, script.owner.timeline_.status(script.timelineId));
+        return 1;
+    }
+
     static int initialize(lua_State* L) {
         // No Lua finalizers, nested protected calls, coroutine hooks, binary
         // chunks, module lookup, environment loading or OS/file access.
@@ -2042,6 +2126,12 @@ struct ScriptRuntime::Script {
         };
         luaL_newlib(L, savestate);
         lua_setglobal(L, "savestate");
+        const luaL_Reg timeline[] = {
+            {"define", defineTimeline}, {"get", getTimeline}, {"set", setTimeline},
+            {"status", timelineStatus}, {nullptr, nullptr}
+        };
+        luaL_newlib(L, timeline);
+        lua_setglobal(L, "timeline");
         const luaL_Reg memory[] = {
             {"domains", domains}, {"cpus", cpus}, {"read", read}, {"range", range},
             {"peek", peek}, {"registers", registers}, {"writableregisters", writableRegisters},
@@ -2081,6 +2171,7 @@ struct ScriptRuntime::Script {
             report(ScriptStatus::Error, QStringLiteral("Unable to create Lua environment"));
             return false;
         }
+        startupSource = source;
         if (source.startsWith("\xef\xbb\xbf")) source = source.sliced(3);
         if (source.startsWith("#!")) {
             const auto newline = source.indexOf('\n');
@@ -2097,7 +2188,9 @@ struct ScriptRuntime::Script {
             return false;
         }
         lua_xmove(L, topLevel, 1);
-        if (!resumeTopLevel(core, catalog, true)) return false;
+        const bool started = resumeTopLevel(core, catalog, true);
+        startupSource = {};
+        if (!started) return false;
         report(ScriptStatus::Running);
         return true;
     }
@@ -2314,6 +2407,26 @@ void ScriptRuntime::discardSavedStates() {
     for (const auto& script : state_->scripts) {
         for (auto& save : script->saves) save.snapshot.reset();
     }
+}
+
+bool ScriptRuntime::hasTimelineData() const {
+    return timeline_.hasData();
+}
+
+QByteArray ScriptRuntime::captureTimeline() {
+    return timeline_.capture();
+}
+
+bool ScriptRuntime::validateTimeline(const QByteArray& bytes) {
+    return ScriptTimeline::validate(bytes);
+}
+
+bool ScriptRuntime::restoreTimeline(const QByteArray& bytes) {
+    return timeline_.restore(bytes);
+}
+
+void ScriptRuntime::resetTimeline() {
+    timeline_.reset();
 }
 
 void ScriptRuntime::invalidateTimeline(bool discardSaves, quint64 preserveRun) {

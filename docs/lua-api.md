@@ -34,17 +34,18 @@ clock, and may go backwards on restore. Console IDs are `0` for A and `1` for B.
 
 Scripts run in start order in separate Lua environments. Restarting a running
 script keeps its place and creates a fresh environment. An error stops the
-script that raised it. Stopping a script releases its callbacks, drawings,
-input overrides, temporary saves, labels and watches. Game or hardware changes stop scripts
-bound to an incompatible machine. Callbacks stay registered when a script's
-main chunk finishes.
+script that raised it. Stopping a script releases its callbacks, drawings, input overrides, temporary
+saves, declared timeline data, labels and watches. Game or hardware changes
+stop scripts bound to an incompatible machine. Callbacks stay registered when
+a script's main chunk finishes.
 
 Reset, load and rewind clear input overrides. A frame-advance sequence waiting
 to resume is stopped when the timeline changes externally. Scripts that stay
-active keep their current Lua variables and may use the restore events to
-rebuild from game memory or clear accumulated observations. A script's own
-queued reset or temporary load can preserve its waiting sequence. Restart a
-script to initialize its Lua variables again.
+active keep their Lua environment and can use restore events to read
+[timeline data](#timeline-data) or rebuild observations from game memory.
+A script's own queued reset or temporary load can preserve its waiting
+sequence. After it resumes, call `timeline.get()` for the restored data.
+A table copied before the restore keeps its previous contents.
 
 The emulator skips scripting during internal replay and rollback
 reconstruction. Netplay permits read-only observation and drawing. Hardcore
@@ -269,8 +270,81 @@ During an input recording or playback, a temporary save includes the
 recording's input checkpoint. Restoring a checkpoint while recording starts a
 branch from that saved prefix. Power reset and changes to recording mode,
 hardware, controller topology or cheats can discard snapshots. A restore
-recovers the machine and its clock. The requesting sequence continues from
-its current Lua state and can reuse its handles. Restore clears input overrides.
+recovers the machine, its clock and matching [timeline data](#timeline-data)
+before the `"loadstate"` callbacks. The requesting sequence can reuse its
+handles and call `timeline.get()` after it resumes. Restore clears input
+overrides.
+
+## Timeline data
+
+Use `timeline` for a small value that should follow the emulated timeline, such
+as a counter or the current sample of a measurement. The emulator saves the
+value alongside machine state. Locals, closures, coroutine stacks, drawings,
+windows and widget values, file requests and temporary save handles remain
+part of the running script.
+
+- `timeline.define(id, schemaVersion, initialValue)` declares one value per
+  script, during initial startup before the main chunk yields. The ID uses
+  1–64 printable ASCII characters and must be unique among running scripts.
+  The schema version is an integer from 1 to 2,147,483,647.
+- `timeline.get()` returns the current value. Each call produces a fresh copy
+  of any table. A declared `nil` is returned as a single `nil`.
+- `timeline.set(value)` validates and encodes a replacement immediately.
+  Editing a Lua table affects the stored value only after a successful
+  `set`. Call it from the main chunk, `"beforeframe"`, `"frame"` or a
+  script window handler. Restore, Draw and CPU access callbacks can read
+  the value.
+- `timeline.status()` returns one of the strings below.
+
+| Status | Meaning |
+| --- | --- |
+| `"current"` | The value was just declared or set by the script. |
+| `"restored"` | A matching saved value was restored. |
+| `"missing"` | The restored state had no entry for this ID. The initial value is active. |
+| `"incompatible"` | The saved entry had a different source or schema version. The initial value is active. |
+| `"reset"` | A reset restored the initial value. |
+
+Successful declarations and updates return `true`. A duplicate declaration
+or ID, an unavailable call context, or access before declaration returns
+`nil, reason`. Invalid arguments, unsupported values and limit violations
+raise a Lua error. Pass `nil` explicitly when it is the intended value.
+
+Values may contain `nil`, booleans, 64-bit integers, finite floating-point
+numbers, binary strings and tables with integer or string keys. Tables must
+be acyclic and have no metatables. Shared tables are copied by value at each
+occurrence. The root counts as depth one. A value is limited to eight levels
+and 512 nodes, counting the root, every table key and every table value.
+Each string is limited to 4,096 bytes. The encoded value can use up to 16 KiB
+per script, with at most eight active scripts. The usual native call and byte
+budgets apply. Keep values small in frame callbacks. Captures reuse the
+encoded value until it changes.
+
+Save slots and files, saves tied to an input-recording position and Lua
+temporary saves carry these values inside the save. Opening a file with
+timeline data requires a version of the emulator that supports it. This
+version also reads earlier saves. Saves without timeline data use the
+existing file format and restore the initial value with status `"missing"`.
+Malformed timeline data causes the load to fail before restoring machine
+state.
+
+Local rewind compresses Lua data independently of the core state within
+the shared rewind memory budget. Sessions without declared values use the
+ordinary core history. Rewind keeps its data in memory.
+
+Start the matching script before loading or rewinding. Identity uses the ID,
+schema version and SHA-256 of the exact source bytes, and works across
+different folders and platforms. Even a source comment or line-ending change
+changes the hash. Loading a snapshot never starts scripts or runs code from
+the snapshot. Stopping a script removes its active value.
+
+On load or local rewind, the value is available before the corresponding
+callback. A reset restores the initial value before `"reset"`. Use
+`timeline.get()` in these callbacks to redraw from the restored value.
+Internal preview and replay frames do not run Lua observation callbacks.
+In netplay, timeline data is local to each participant. Authoritative
+resets, loads and remote rewind transitions restore the initial value
+locally. Timeline values can track local observations in live callbacks for
+netplay and movie playback. Network rollback reconstruction does not run Lua.
 
 ## Input recordings
 
@@ -335,9 +409,12 @@ be saved. The retry also appears in the Input menu. The application waits for
 the outstanding recording before closing.
 
 The native movie stores controller inputs, hardware metadata and core states.
-Lua variables are live in the script's current environment. Save any
-measurements to script storage and use the recorded movie's identity and frame
-position to align them during playback.
+Starting a new recording resets declared timeline values. Starting playback
+or resuming a movie from its file restores their initial values with status
+`"missing"`. A save made at a movie position can carry timeline data as
+described above. To replay a script's measurements from the start of a movie,
+save them to script storage and use the movie's identity and frame position
+to align them.
 
 ## Drawing
 
@@ -506,7 +583,9 @@ use up to 128 UTF-8 bytes, captions/text up to 1,024 bytes, selectors up to
 byte and Lua allocation budgets also apply. Invalid descriptors or typed values
 raise errors. A closed/unknown target, unavailable event context or full global
 resource pool returns `nil, reason`; successful mutations return `true`.
-Window positions and Lua variables are not automatically persisted or rewound.
+Window positions and widget values stay with the running script. Use
+`timeline.get()` to read the restored value of a separately declared
+timeline variable.
 
 
 ## Runtime limits
@@ -530,6 +609,14 @@ unavailable. Use the asynchronous storage API for script-owned files.
 
 ## Included examples
 
+`timeline-counter.lua` counts observed frames and frames with a controller
+poll in any loaded game. Run it, save a state, advance a few frames and load
+the state or rewind. The HUD shows the restored counts and last timeline
+change. After loading from a file, the HUD returns on the next completed
+frame and the counters continue from the saved values. To try a saved file
+across script runs, stop the script, start the same source again and then
+load the file.
+
 `tool-panel.lua` demonstrates a separate window with pause/resume buttons,
 a HUD checkbox and color selector, a numeric sample period, a note field and
 a live input-poll graph. It works with any loaded game and no fixed RAM addresses.
@@ -550,8 +637,7 @@ matched to that recording's identity.
 Each graph point estimates activity over 60 emulated frames from controller
 polls; this is not a universal measure of game-update FPS. The example keeps at
 most 4,096 points and writes its data once when recording finishes. On rewind
-or load during recording, it discards future points and starts a new sample window;
-it does not pretend to restore an interrupted window or arbitrary Lua locals.
+or load during recording, it discards future points and starts a new sample window.
 Stopping the script itself before it saves does not save its observations.
 File preparation/parsing uses explicit frame stepping; scripts needing different
 interaction should use frame callbacks or their own controls.

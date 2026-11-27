@@ -17,6 +17,7 @@
 #include "Sega32xBios.h"
 #include "CoreFileSystem.h"
 #include "StateFile.h"
+#include "ScriptStateEnvelope.h"
 #include <QCryptographicHash>
 #include <QByteArrayView>
 #include <QDir>
@@ -2901,6 +2902,12 @@ bool LibretroHost::saveStateFile(const QString& path, QString& error, bool keepP
         wrapped.append(progress);
         payload = std::move(wrapped);
     }
+    if (captureScriptData) {
+        payload = ScriptStateEnvelope::wrap(payload, captureScriptData());
+        if (payload.isEmpty()) {
+            error = Localization::text(QStringLiteral("Неверный размер сохранения.")); return false;
+        }
+    }
     QByteArray bytes = stateMagic + romHash_ + stateCoreIdentity() + digest(payload);
     quint32 size = qToBigEndian(quint32(payload.size()));
     bytes.append(reinterpret_cast<const char*>(&size), sizeof(size));
@@ -2931,14 +2938,22 @@ bool LibretroHost::loadStateFromFile(const QString& path, QString& error, StateL
         }
         return false;
     }
-    if (file.size() < stateHeaderSize || file.size() > stateHeaderSize + maxStateSize) { error = Localization::text(QStringLiteral("Неверный размер сохранения.")); return false; }
-    const auto bytes = file.readAll();
-    if (bytes.size() < stateHeaderSize || bytes.left(8) != stateMagic || bytes.mid(8,32) != romHash_ || bytes.mid(40,32) != stateCoreIdentity()) {
+    constexpr qsizetype maximumFileSize = stateHeaderSize + maxStateSize + ScriptStateEnvelope::MaximumOverhead;
+    const qint64 fileSize = file.size();
+    if (fileSize < stateHeaderSize || fileSize > maximumFileSize) { error = Localization::text(QStringLiteral("Неверный размер сохранения.")); return false; }
+    const auto bytes = file.read(fileSize + 1);
+    if (bytes.size() != fileSize) { error = Localization::text(QStringLiteral("Неверный размер сохранения.")); return false; }
+    if (bytes.left(8) != stateMagic || bytes.mid(8,32) != romHash_ || bytes.mid(40,32) != stateCoreIdentity()) {
         error = Localization::text(QStringLiteral("Сохранение относится к другой игре или сборке ядра.")); return false;
     }
     const quint32 size = qFromBigEndian<quint32>(bytes.constData() + 104);
-    const auto payload = bytes.mid(stateHeaderSize);
-    if (size != quint32(payload.size()) || bytes.mid(72,32) != digest(payload)) { error = Localization::text(QStringLiteral("Сохранение повреждено.")); return false; }
+    const auto packed = QByteArray::fromRawData(bytes.constData() + stateHeaderSize, bytes.size() - stateHeaderSize);
+    QByteArray payload, scriptData;
+    if (size != quint32(packed.size()) || bytes.mid(72,32) != digest(packed) ||
+        !ScriptStateEnvelope::split(packed, payload, scriptData) || payload.size() > maxStateSize ||
+        (!scriptData.isEmpty() && validateScriptData && !validateScriptData(scriptData))) {
+        error = Localization::text(QStringLiteral("Сохранение повреждено.")); return false;
+    }
     QByteArray native = payload;
     QByteArray progress;
     if (payload.startsWith(achievementStateMagic)) {
@@ -2964,6 +2979,7 @@ bool LibretroHost::loadStateFromFile(const QString& path, QString& error, StateL
         }
     }
     if (restoreAchievementProgress) restoreAchievementProgress(progress);
+    if (restoreScriptData) restoreScriptData(scriptData);
     if (failure) *failure = StateLoadError::None;
     audio_.clear();
     return true;

@@ -186,6 +186,10 @@ public:
     QString achievementHardcoreBlockReason() const;
     std::function<QByteArray()> captureAchievementProgress;
     std::function<void(const QByteArray&)> restoreAchievementProgress;
+    // Explicit file saves and movie checkpoints only.
+    std::function<QByteArray()> captureScriptData;
+    std::function<bool(const QByteArray&)> validateScriptData;
+    std::function<void(const QByteArray&)> restoreScriptData;
     const QString& movieCompatibilityWarning() const { return movieCompatibilityWarning_; }
     void setMoviePlayback(bool playback) { moviePlayback_ = playback; }
     bool flushSaveRam(QString& error);

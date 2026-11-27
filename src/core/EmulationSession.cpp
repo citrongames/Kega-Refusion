@@ -15,6 +15,7 @@
 #include "AchievementsClient.h"
 #include <QtEndian>
 #include "RewindBuffer.h"
+#include "ScriptStateEnvelope.h"
 #include "FramePacer.h"
 #include "PerformanceMetrics.h"
 #include "VideoFrameGeometry.h"
@@ -29,6 +30,7 @@
 #include <future>
 #include <system_error>
 #include <thread>
+#include <utility>
 
 namespace {
 struct MovieFileResult {
@@ -935,6 +937,7 @@ void EmulationSession::run() {
             stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
             return;
         }
+        if (event==ScriptEvent::Reset) scripts.resetTimeline();
         const int instance=int(host.inspectionPresentedInstance());
         scriptPolicy();
         scriptOverlay=scripts.event(event,host,scriptGeneration,host.runClock().frames,instance,draw);
@@ -977,6 +980,11 @@ void EmulationSession::run() {
     host.restoreAchievementProgress = [&](const QByteArray& progress) {
         if (networkMode) achievements.reset();
         else achievements.restoreProgress(progress);
+    };
+    host.captureScriptData = [&] { return networkMode ? QByteArray{} : scripts.captureTimeline(); };
+    host.validateScriptData = ScriptRuntime::validateTimeline;
+    host.restoreScriptData = [&](const QByteArray& data) {
+        scripts.restoreTimeline(networkMode ? QByteArray{} : data);
     };
     const auto loadAchievements = [&](bool changedMedia = false) {
         if (achievementSuppressed || !achievementEnabled || !host.loaded()) { achievements.unloadGame(); achievements.refresh(); return; }
@@ -1333,26 +1341,31 @@ void EmulationSession::run() {
         if (!videoRecorder.accepting()) host.setRecordingVideoEnabled(false);
     };
     auto captureHistory = [&] {
-        const auto state = movie.active() ? movie.captureRewind() : host.captureRewindState();
+        auto state = movie.active() ? movie.captureRewind() : host.captureRewindState();
+        if (state.isEmpty()) return state;
         const auto progress = achievementSuppressed ? QByteArray() : achievements.saveProgress(false);
-        if (progress.isEmpty() || state.isEmpty()) return state;
-        QByteArray wrapped("KRACHRW1",8);
-        for (quint32 length : {quint32(state.size()),quint32(progress.size())}) {
-            const auto encoded = qToBigEndian(length);
-            wrapped.append(reinterpret_cast<const char*>(&encoded),4);
+        if (!progress.isEmpty()) {
+            QByteArray wrapped("KRACHRW1",8);
+            wrapped.reserve(16+state.size()+progress.size());
+            for (quint32 length : {quint32(state.size()),quint32(progress.size())}) {
+                const auto encoded = qToBigEndian(length);
+                wrapped.append(reinterpret_cast<const char*>(&encoded),4);
+            }
+            wrapped += state; wrapped += progress;
+            state=std::move(wrapped);
         }
-        wrapped += state; wrapped += progress;
-        return wrapped;
+        return state;
     };
     auto historyPayload = [](const QByteArray& packed, QByteArray& state, QByteArray& progress) {
-        state = packed;
+        const auto& payload=packed;
+        state = payload;
         progress.clear();
-        if (!packed.startsWith("KRACHRW1")) return true;
-        if (packed.size() < 16) return false;
-        const auto stateSize = qFromBigEndian<quint32>(packed.constData()+8);
-        const auto progressSize = qFromBigEndian<quint32>(packed.constData()+12);
-        if (progressSize > 2*1024*1024 || quint64(stateSize)+progressSize+16 != quint64(packed.size())) return false;
-        state = packed.mid(16,stateSize); progress = packed.mid(16+stateSize,progressSize);
+        if (!payload.startsWith("KRACHRW1")) return true;
+        if (payload.size() < 16) return false;
+        const auto stateSize = qFromBigEndian<quint32>(payload.constData()+8);
+        const auto progressSize = qFromBigEndian<quint32>(payload.constData()+12);
+        if (progressSize > 2*1024*1024 || quint64(stateSize)+progressSize+16 != quint64(payload.size())) return false;
+        state = payload.mid(16,stateSize); progress = payload.mid(16+stateSize,progressSize);
         return true;
     };
     auto restoreHistory = [&](const QByteArray& packed, QString& error) {
@@ -1394,9 +1407,10 @@ void EmulationSession::run() {
         const auto* display = inputDisplayEnabled ? &frameInput : nullptr;
         if (needsFirstPicture) {
             needsFirstPicture = false;
-            return history.capture(state,host.frame(),host.aspectRatio(),display);
+            return history.capture(state,host.frame(),host.aspectRatio(),display,scripts.captureTimeline());
         }
-        return history.captureForReplay(state,host.aspectRatio(),frameControls,display,host.rewindPreviewNeedsPair());
+        return history.captureForReplay(state,host.aspectRatio(),frameControls,display,host.rewindPreviewNeedsPair(),
+                                        scripts.captureTimeline());
     };
     // Capture the pre-input state once when a new local timeline starts.
     // At power-on the core has not delivered its first picture yet.
@@ -1411,16 +1425,20 @@ void EmulationSession::run() {
             frame.fill(Qt::black);
         }
         historyHealthy = history.capture(captureHistory(),frame,host.aspectRatio(),
-                                        inputDisplayEnabled ? &frameInput : nullptr);
+                                        inputDisplayEnabled ? &frameInput : nullptr,scripts.captureTimeline());
     };
     auto restorePreviousFrame = [&](bool exactStep, int steps = 1) {
-        QByteArray state;
+        QByteArray state, restoredScriptData;
         QImage frame;
         double aspect = 4.0 / 3.0;
         InputDisplayState previousInput;
         const bool needInput = inputDisplayEnabled || networkMode == 1;
         RewindBuffer::ReplayFrame replay;
-        if (!history.stepBack(state,frame,aspect,steps,needInput ? &previousInput : nullptr,&replay)) return false;
+        if (!history.stepBack(state,frame,aspect,steps,needInput ? &previousInput : nullptr,&replay,&restoredScriptData)) return false;
+        if (!ScriptRuntime::validateTimeline(restoredScriptData)) {
+            clearHistory(); historyHealthy=false;
+            return false;
+        }
         QString error;
         bool previewRestored = true;
         if (!replay.previousState.isEmpty()) {
@@ -1452,10 +1470,16 @@ void EmulationSession::run() {
         // and movie position even if preview generation failed partway through.
         const auto regeneratedGeometry = networkMode && !replay.previousState.isEmpty()
             ? networkRewindLinkPreview : QByteArray();
-        const bool restored = restoreHistory(state,error);
+        bool restored = restoreHistory(state,error);
         if (!replay.previousState.isEmpty()) host.endRewindPreview();
+        if (restored) {
+            scripts.invalidateTimeline(false);
+            restored = scripts.restoreTimeline(restoredScriptData);
+        }
+        if (restored) ++scriptGeneration;
         if(restored && !regeneratedGeometry.isEmpty())networkRewindLinkPreview=regeneratedGeometry;
         if (!restored || !previewRestored) {
+            if (restored) scriptEvent(ScriptEvent::Rewind,false);
             clearHistory(); historyHealthy = false;
             emit errorOccurred(Localization::text(QStringLiteral("Ядро отклонило состояние перемотки. История очищена.")));
             return false;
@@ -1467,8 +1491,6 @@ void EmulationSession::run() {
             needsFirstPicture = frame.width() <= 1 || frame.height() <= 1;
         }
         const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
-        scripts.invalidateTimeline(false);
-        ++scriptGeneration;
         scriptEvent(ScriptEvent::Rewind);
         if (!selected.isNull()) presentFrame(selected,aspect,{},host.inputViewport(),scriptOverlay);
         if (networkMode) { networkRewindImage = frame; networkRewindAspect = aspect; }
@@ -1744,6 +1766,7 @@ void EmulationSession::run() {
             paused = movie.mode() == MovieSession::Finished;
             emit pausedChanged(paused);
         }
+        if (type == Type::MoviePlay || type == Type::MovieResume) scripts.restoreTimeline({});
         scriptEvent(type == Type::MovieRecord ? ScriptEvent::Reset : ScriptEvent::LoadState);
         if ((type == Type::MoviePlay || type == Type::MovieResume) &&
             !host.movieCompatibilityWarning().isEmpty()) {
@@ -1891,6 +1914,9 @@ void EmulationSession::run() {
             host.debuggerFramePending()) {
             error=QStringLiteral("Temporary saves are unavailable in this context"); return {};
         }
+        const QByteArray scriptData=scripts.captureTimeline();
+        const qsizetype scriptBytes=scriptData.isEmpty() ? 0 : ScriptStateEnvelope::HeaderBytes+scriptData.size();
+        remaining-=scriptBytes;
         const QByteArray progress=achievementSuppressed ? QByteArray() : achievements.saveProgress(false);
         constexpr qsizetype headerSize=17;
         if (progress.size()>2*1024*1024 || remaining<=headerSize+progress.size()) {
@@ -1914,7 +1940,7 @@ void EmulationSession::run() {
             packed.append(reinterpret_cast<const char*>(&encoded),4);
         }
         packed+=core; packed+=progress;
-        return packed;
+        return ScriptStateEnvelope::wrap(packed,scriptData);
     };
     scripts.setHostServices(std::move(scriptServices));
     auto processScriptControls = [&] {
@@ -2040,7 +2066,11 @@ void EmulationSession::run() {
                 break;
             case ScriptControlType::LoadState: {
                 if (!control.snapshot) { error=QStringLiteral("Temporary save is empty"); break; }
-                const auto& packed=*control.snapshot;
+                QByteArray packed, scriptData;
+                if (!ScriptStateEnvelope::split(*control.snapshot,packed,scriptData) ||
+                    !ScriptRuntime::validateTimeline(scriptData)) {
+                    error=QStringLiteral("Invalid temporary script data"); break;
+                }
                 if (packed.size()<17 || !packed.startsWith("KRLUAS01") ||
                     (packed[8]!=char(0) && packed[8]!=char(1)) ||
                     bool(packed[8])!=movie.active()) {
@@ -2061,6 +2091,7 @@ void EmulationSession::run() {
                 }
                 if (!achievementSuppressed) achievements.restoreProgress(packed.mid(17+coreSize,progressSize),true);
                 scripts.invalidateTimeline(false,control.run);
+                scripts.restoreTimeline(scriptData);
                 repositionedBy=control.run;
                 scriptSteps.clear(); scriptOverlay.reset(); ++scriptGeneration;
                 clearHistory(); clearAudio(); resetMetrics(); pacer.reset(nowNs());
@@ -2557,7 +2588,8 @@ void EmulationSession::run() {
                                 clearHistory(); clearAudio(); pacer.reset(nowNs()); cheatStatus(); discStatus();
                                 QByteArray preview=QByteArray::fromBase64(meta.value("image").toString().toLatin1());
                                 ++scriptGeneration;
-                                // Canonical state was successfully restored above.
+                                // Remote core state never imports another participant's Lua data.
+                                scripts.restoreTimeline({});
                                 scriptEvent(ScriptEvent::LoadState);
                                 if(!preview.isEmpty()) {
                                 QBuffer imageBuffer(&preview);imageBuffer.open(QIODevice::ReadOnly);
@@ -3061,7 +3093,10 @@ void EmulationSession::run() {
                                 presentHostFrame();
                             } else {
                                 // A failed preview restore must not become the live timeline.
-                                if (!loadState()) { emit errorOccurred(error); break; }
+                                auto restoreScriptData = std::exchange(host.restoreScriptData, {});
+                                const bool recovered = loadState();
+                                host.restoreScriptData = std::move(restoreScriptData);
+                                if (!recovered) { emit errorOccurred(error); break; }
                                 emit actionNotice(Localization::text(QStringLiteral("Не удалось обновить изображение сохранения.")));
                             }
                         }
@@ -3485,6 +3520,7 @@ void EmulationSession::run() {
     }
     achievements.unloadGame();
     host.captureAchievementProgress = {}; host.restoreAchievementProgress = {};
+    host.captureScriptData = {}; host.validateScriptData = {}; host.restoreScriptData = {};
     networkTimeline.stop();
     if(networkQualityVisible)emit networkQualityChanged(QJsonObject{{"active",false}});
     host.setDebugAccessObserver({},nullptr,nullptr);

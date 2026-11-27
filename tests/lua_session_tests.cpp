@@ -227,6 +227,102 @@ emu.on('rewind',render)
         check(session.scriptCommand(stop),"stop example");
         waitFor([&]{return panels.windows.isEmpty() && status(9,ScriptStatus::Stopped);},"example cleanup");
 
+        // Explicit Lua data follows native time; locals/VM stacks do not.
+        const QString plainState=temp.filePath("plain-before-lua.krs");
+        session.saveStateToFile(plainState);
+        waitFor([&]{return QFile::exists(plainState);},"legacy state");
+        ScriptCommand tracked;
+        tracked.id=11;tracked.path="timeline.lua";
+        tracked.source=R"(
+assert(timeline.define('session-counter',1,{count=0}))
+local function show()
+    draw.text(2,2,tostring(timeline.get().count)..'/'..timeline.status())
+end
+emu.on('frame',function()
+    local data=timeline.get()
+    data.count=data.count+1
+    assert(timeline.set(data))
+    show()
+end)
+emu.on('draw',show)
+emu.on('rewind',show)
+emu.on('reset',function() print('reset:'..timeline.get().count..'/'..timeline.status()); show() end)
+emu.on('loadstate',function() print('loaded:'..timeline.get().count..'/'..timeline.status()); show() end)
+)";
+        const auto trackedSource=tracked.source;
+        check(session.scriptCommand(tracked),"start declared data");
+        waitFor([&]{return overlay && overlay->commands.size()==1 && overlay->commands[0].text=="0/current";},"initial declared data");
+        auto stepCounter=[&](const QString& expected) {
+            session.advanceFrame();
+            waitFor([&]{return overlay && overlay->commands.size()==1 && overlay->commands[0].text==expected;},"timeline frame");
+        };
+        stepCounter("1/current");stepCounter("2/current");stepCounter("3/current");
+        const QString trackedState=temp.filePath("with-lua.krs");
+        session.saveStateToFile(trackedState);
+        waitFor([&]{return QFile::exists(trackedState);},"file with declared data");
+        stepCounter("4/current");stepCounter("5/current");
+        session.backFrame();
+        waitFor([&]{return overlay && overlay->commands.size()==1 && overlay->commands[0].text=="4/restored";},"rewind declared counter");
+        session.loadStateFromFile(trackedState);
+        waitFor([&]{return logged(11,"loaded:3/restored");},"file restores declared data");
+        stepCounter("4/current");
+        check(session.scriptCommand(stop),"stop data script");
+        waitFor([&]{return status(11,ScriptStatus::Stopped);},"data script stopped");
+        // Load without any script, then start it: no automatic script launch/import.
+        session.loadStateFromFile(trackedState);
+        ScriptCommand barrier;barrier.id=12;barrier.path="barrier.lua";barrier.source="print('bare load barrier')";
+        check(session.scriptCommand(barrier),"bare load barrier queue");
+        waitFor([&]{return logged(12,"bare load barrier");},"bare load succeeds");
+        check(session.scriptCommand(tracked),"restart same script");
+        waitFor([&]{return overlay && overlay->commands[0].text=="0/current";},"restart begins defaults");
+        updates.clear();
+        session.loadStateFromFile(trackedState);
+        waitFor([&]{return logged(11,"loaded:3/restored");},"same source restart matches");
+        tracked.source=trackedSource+"\n-- incompatible source revision\n";
+        check(session.scriptCommand(tracked),"changed source restart");
+        waitFor([&]{return overlay && overlay->commands[0].text=="0/current";},"changed source defaults");
+        session.loadStateFromFile(trackedState);
+        waitFor([&]{return logged(11,"loaded:0/incompatible");},"changed source cannot import data");
+        session.loadStateFromFile(plainState);
+        waitFor([&]{return logged(11,"loaded:0/missing");},"old save restores defaults");
+        session.resetGame();
+        waitFor([&]{return logged(11,"reset:0/reset");},"reset restores defaults");
+        check(session.scriptCommand(stop),"stop timeline test");
+        waitFor([&]{return status(11,ScriptStatus::Stopped);},"timeline stop");
+
+        tracked.id=13;tracked.path="temporary-timeline.lua";
+        tracked.source=R"(
+assert(timeline.define('temporary-counter',1,{count=0}))
+assert(timeline.set({count=17}))
+local save=assert(savestate.create())
+assert(savestate.save(save))
+assert(timeline.set({count=29}))
+assert(savestate.load(save))
+assert(emu.frameadvance())
+assert(timeline.get().count==17 and timeline.status()=='restored')
+assert(savestate.free(save))
+print('temporary timeline restored')
+)";
+        check(session.scriptCommand(tracked),"temporary data script");
+        waitFor([&]{return logged(13,"temporary timeline restored");},"temporary data capture during startup");
+        check(session.scriptCommand(stop),"stop temporary data");
+        waitFor([&]{return status(13,ScriptStatus::Stopped);},"temporary stop");
+
+        QFile timelineExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/timeline-counter.lua"));
+        check(timelineExample.open(QIODevice::ReadOnly),"open shipped timeline example");
+        tracked.id=14;tracked.path=timelineExample.fileName();tracked.source=timelineExample.readAll();
+        check(session.scriptCommand(tracked),"run timeline example");
+        waitFor([&]{return status(14,ScriptStatus::Running) && overlay &&
+            overlay->commands[0].text.startsWith("Frames: 0");},"timeline example starts");
+        session.advanceFrame();
+        waitFor([&]{return overlay && overlay->commands[0].text.startsWith("Frames: 1");},"timeline example advances");
+        session.advanceFrame();
+        waitFor([&]{return overlay && overlay->commands[0].text.startsWith("Frames: 2");},"timeline example second frame");
+        session.backFrame();
+        waitFor([&]{return overlay && overlay->commands[0].text.startsWith("Frames: 1");},"timeline example rewind");
+        check(session.scriptCommand(stop),"stop example timeline");
+        waitFor([&]{return status(14,ScriptStatus::Stopped);},"timeline example cleanup");
+
         auto runMovieScript=[&](quint64 id, QByteArray source) {
             ScriptCommand command;
             command.id=id;
@@ -299,16 +395,20 @@ print('detached save retried')
         check(source.load(moviePath,movieError) && source.size()==2 &&
               source.resumeFrame()==2,"persisted only the captured frames");
         runMovieScript(23,R"(
+assert(timeline.define('branch-counter',1,0))
 assert(movie.play('input.krm'))
 assert(emu.frameadvance())
 local s = movie.status()
 assert(s.mode == 'playback' and s.frame == 1 and s.length == 2 and not input.get(1).a)
+assert(timeline.get()==0 and timeline.status()=='missing')
+assert(timeline.set(42))
 local original = s.id
 emu.on('beforeframe',function() assert(input.set(1,{b=true})) end)
 assert(movie.rerecord('branch'))
 assert(emu.frameadvance())
 s = movie.status()
 assert(s.mode == 'recording' and s.id ~= original and s.frame == 2 and input.get(1).b)
+assert(timeline.get()==42 and timeline.status()=='current')
 assert(movie.stop())
 assert(emu.frameadvance())
 assert(movie.status().mode == 'off' and not movie.status().error)

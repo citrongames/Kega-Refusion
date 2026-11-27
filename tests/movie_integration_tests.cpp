@@ -335,6 +335,85 @@ void multitapRecording(const QString& core) {
     require(tape.inputAt(8,read) && read==continued,"resumed player eight input lost");
 }
 
+void movieScriptStateFiles(const QString& core) {
+    QTemporaryDir temp;
+    require(temp.isValid(),"movie script fixture directory failed");
+    const QString romPath=temp.filePath("script-test.md");
+    const QString moviePath=temp.filePath("script-test.krm");
+    const QString dataPath=temp.filePath("data");
+    writeFile(romPath,makeInputRom());
+    QString error;
+    LibretroHost host(core,dataPath);
+    require(host.load(romPath,error),qPrintable(error));
+    QLibrary library(core);
+    const auto memory=reinterpret_cast<Memory>(library.resolve("retro_get_memory_data"));
+    require(memory,"movie script fixture memory API missing");
+    MovieSession movie(host,dataPath);
+    const QByteArray scriptData("movie script data");
+    QByteArray pendingScriptData, restoredScriptData;
+    quint64 restoredPosition=0;
+    int captures=0, validations=0, restores=0;
+    host.captureScriptData=[&] { ++captures; return pendingScriptData; };
+    host.validateScriptData=[&](const QByteArray& data) { ++validations; return data==scriptData; };
+    host.restoreScriptData=[&](const QByteArray& data) {
+        ++restores;
+        restoredScriptData=data;
+        restoredPosition=movie.position();
+    };
+
+    require(movie.startRecording(moviePath,error),qPrintable(error));
+    const auto startFile=readFile(moviePath);
+    const auto rewind=movie.captureRewind();
+    const auto temporary=movie.captureTemporaryState(error);
+    require(!rewind.isEmpty() && !temporary.isEmpty() &&
+            movie.restoreRewind(rewind,error) && movie.restoreTemporaryState(temporary,error) &&
+            captures==0 && validations==0 && restores==0,
+            "internal movie snapshots called script attachment callbacks");
+
+    for (int i=0;i<3;++i) step(movie,host,memory,inputFor(i),error);
+    require(movie.saveSlot(2,error),qPrintable(error));
+    const QString slot=dataPath+"/states/movies/script-test_"+QString::fromLatin1(movie.id().toHex())+"/slot2.krs";
+    const auto legacy=readFile(slot);
+    require(legacy.mid(76,8)!="KRSCPT01","empty script data changed the movie slot format");
+    step(movie,host,memory,inputFor(3),error);
+    pendingScriptData=scriptData;
+    require(movie.saveSlot(2,error),qPrintable(error));
+    require(readFile(slot+QStringLiteral(".bak"))==legacy && readFile(slot).mid(76,8)=="KRSCPT01",
+            "movie slot did not wrap script data and preserve its previous version");
+    const QString named=temp.filePath("movie checkpoint.krs");
+    require(movie.saveFile(named,error),qPrintable(error));
+    require(captures==3 && readFile(moviePath)==startFile,
+            "movie save callbacks or native recording file changed unexpectedly");
+
+    for (int i=4;i<7;++i) step(movie,host,memory,inputFor(i),error);
+    auto corrupt=readFile(named);
+    const auto stateSize=qFromBigEndian<quint32>(corrupt.constData()+40);
+    require(stateSize>0 && qsizetype(76)+stateSize<=corrupt.size(),"movie state range invalid");
+    corrupt[76+qsizetype(stateSize)-1]=char(corrupt.at(76+qsizetype(stateSize)-1)^1);
+    corrupt.replace(8,32,QCryptographicHash::hash(corrupt.mid(40),QCryptographicHash::Sha256));
+    const QString corruptPath=temp.filePath("corrupt movie checkpoint.krs");
+    writeFile(corruptPath,corrupt);
+    QImage savedFrame; double aspect=0; bool missing=false;
+    const auto before=host.serialize();
+    require(!movie.loadFile(corruptPath,savedFrame,aspect,missing,error) && !missing &&
+            movie.position()==7 && movie.length()==7 && host.serialize()==before &&
+            validations==1 && restores==0, "invalid movie script attachment changed the recording or core");
+
+    require(movie.loadFile(named,savedFrame,aspect,missing,error) && !savedFrame.isNull() && aspect>0,
+            qPrintable(error));
+    require(movie.position()==4 && movie.length()==4 && restoredPosition==4 &&
+            restoredScriptData==scriptData && validations==2 && restores==1,
+            "named movie checkpoint did not restore script data after branching");
+    require(movie.loadSlot(2,savedFrame,aspect,missing,error) && scriptData==restoredScriptData &&
+            restores==2 && validations==3, "movie quick load lost script data");
+    require(movie.loadFile(slot+QStringLiteral(".bak"),savedFrame,aspect,missing,error) &&
+            movie.position()==3 && movie.length()==3 && restoredPosition==3 &&
+            restoredScriptData.isEmpty() && restores==3 && validations==3,
+            "legacy movie slot did not restore its branch and reset script data");
+    require(movie.finish(false,error) && captures==3 && restores==3 && validations==3,
+            "finishing the recording called script attachment callbacks");
+}
+
 void integration(const QString& core) {
     QTemporaryDir temp; require(temp.isValid(), "temporary directory failed");
     const QString romPath=temp.filePath("movie-test.md");
@@ -788,6 +867,7 @@ int main(int argc, char** argv) {
             integration(QString::fromLocal8Bit(argv[1]));
             multitapRecording(QString::fromLocal8Bit(argv[1]));
             temporaryMovieStates(QString::fromLocal8Bit(argv[1]));
+            movieScriptStateFiles(QString::fromLocal8Bit(argv[1]));
             std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard, fork, multitap and temporary saves passed");
         }
         return 0;

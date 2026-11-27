@@ -1,4 +1,5 @@
 #include "core/LibretroHost.h"
+#include "core/ScriptStateEnvelope.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -25,6 +26,22 @@ QByteArray readFile(const QString& path) {
     QFile f(path);
     require(f.open(QIODevice::ReadOnly), "fixture read failed");
     return f.readAll();
+}
+void checkScriptEnvelope() {
+    const QByteArray native("native-data");
+    const QByteArray script(ScriptStateEnvelope::MaximumScriptBytes, char(0));
+    QByteArray decodedNative, decodedScript("stale");
+    require(ScriptStateEnvelope::wrap(native,{})==native &&
+            ScriptStateEnvelope::split(native,decodedNative,decodedScript) &&
+            decodedNative==native && decodedScript.isEmpty(), "legacy state payload changed");
+    const auto packed=ScriptStateEnvelope::wrap(native,script);
+    require(!packed.isEmpty() && ScriptStateEnvelope::split(packed,decodedNative,decodedScript) &&
+            decodedNative==native && decodedScript==script, "maximum script data did not round trip");
+    require(ScriptStateEnvelope::wrap(native,script+'x').isEmpty(), "oversized script data packed");
+    require(!ScriptStateEnvelope::split(packed.left(12),decodedNative,decodedScript) &&
+            !ScriptStateEnvelope::split(packed.chopped(1),decodedNative,decodedScript) &&
+            !ScriptStateEnvelope::split(packed+'x',decodedNative,decodedScript) &&
+            decodedNative==native && decodedScript==script, "malformed wrapper changed decoded data");
 }
 QByteArray makeMd() {
     QByteArray rom(64 * 1024, char(0xff));
@@ -237,6 +254,66 @@ void run(const QString& core) {
     require(!host.loadState(2,error),"oversized achievement progress accepted");
     require(restores==2 && host.serialize()==beforeMalformed,
             "malformed progress changed emulation or achievement state");
+
+    checkScriptEnvelope();
+    const QString scriptSlot=temp.filePath("data/states/fixture.slot3.krs");
+    const QString scriptBackup=scriptSlot+QStringLiteral(".bak");
+    const QByteArray firstScriptData("lua\0state",9);
+    QByteArray pendingScriptData=firstScriptData;
+    QByteArray restoredScriptData;
+    quint64 restoredFrame=0;
+    int scriptCaptures=0, scriptValidations=0, scriptRestores=0;
+    bool rejectScriptData=false;
+    host.captureScriptData=[&] { ++scriptCaptures; return pendingScriptData; };
+    host.validateScriptData=[&](const QByteArray&) { ++scriptValidations; return !rejectScriptData; };
+    host.restoreScriptData=[&](const QByteArray& data) {
+        ++scriptRestores;
+        restoredScriptData=data;
+        restoredFrame=host.runClock().frames;
+    };
+    const auto firstFrame=host.runClock().frames;
+    require(host.saveState(3,error),qPrintable(error));
+    const auto firstSlot=readFile(scriptSlot);
+    require(firstSlot.mid(108,8)=="KRSCPT01","script data wrapper missing");
+    require(firstSlot.mid(124,8)=="KRHOST01","script wrapper lost the achievement payload");
+    host.runFrame(false,false);
+    pendingScriptData="second lua state";
+    require(host.saveState(3,error),qPrintable(error));
+    const auto secondSlot=readFile(scriptSlot);
+    require(readFile(scriptBackup)==firstSlot && scriptCaptures==2,
+            "script save did not back up the previous file");
+    pendingScriptData=QByteArray(ScriptStateEnvelope::MaximumScriptBytes+1,'x');
+    require(!host.saveState(3,error) && scriptCaptures==3 &&
+            readFile(scriptSlot)==secondSlot && readFile(scriptBackup)==firstSlot,
+            "oversized script save changed the slot or backup");
+    require(host.loadStateFromFile(scriptBackup,error),qPrintable(error));
+    require(scriptValidations==1 && scriptRestores==1 && restoredScriptData==firstScriptData &&
+            restoredFrame==firstFrame && restored=="achievements-progress-v1",
+            "backup did not restore script, native and achievement payloads together");
+    require(host.loadState(1,error),qPrintable(error));
+    require(scriptValidations==1 && scriptRestores==2 && restoredScriptData.isEmpty(),
+            "legacy achievement state did not reset script data");
+
+    rejectScriptData=true;
+    host.runFrame(false,false);
+    const auto beforeScriptReject=host.serialize();
+    const auto beforeScriptRejectFrame=host.runClock().frames;
+    require(!host.loadStateFromFile(scriptBackup,error) && scriptValidations==2 && scriptRestores==2 &&
+            host.runClock().frames==beforeScriptRejectFrame && host.serialize()==beforeScriptReject,
+            "unvalidated script data changed the current state");
+    auto malformedScript=firstSlot;
+    qToBigEndian(quint32(ScriptStateEnvelope::MaximumScriptBytes+1),malformedScript.data()+120);
+    malformedScript.replace(72,32,QCryptographicHash::hash(malformedScript.mid(108),QCryptographicHash::Sha256));
+    const QString malformedScriptPath=temp.filePath("malformed-script.krs");
+    writeFile(malformedScriptPath,malformedScript);
+    require(!host.loadStateFromFile(malformedScriptPath,error) && scriptValidations==2 &&
+            scriptRestores==2 && host.runClock().frames==beforeScriptRejectFrame &&
+            host.serialize()==beforeScriptReject, "malformed script wrapper changed the current state");
+    host.captureScriptData={};
+    host.validateScriptData={};
+    host.restoreScriptData={};
+    require(host.loadStateFromFile(scriptBackup,error) && host.runClock().frames==firstFrame,
+            "a host without script callbacks could not load a save with script data");
 
     require(host.load(temp.filePath("fixture.smd"),error),qPrintable(error));
     require(host.achievementConsoleId()==1,"SMD console id incorrect");

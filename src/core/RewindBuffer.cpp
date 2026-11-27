@@ -7,6 +7,7 @@
 
 namespace {
 constexpr qsizetype maxBytes = 64 * 1024 * 1024;
+constexpr qsizetype maxAuxiliaryBytes = 256 * 1024;
 void appendWord(QByteArray& out, quint32 value) {
     const auto word = qToLittleEndian(value);
     out.append(reinterpret_cast<const char*>(&word), 4);
@@ -68,7 +69,7 @@ QByteArray RewindBuffer::decode(const Patch& patch, QByteArray newer) {
     const qsizetype prefix = patch.delta ? 1 : 0;
     if (patch.bytes.size() < prefix+4 || (patch.delta && patch.bytes[0] != '\1')) return {};
     const auto rawSize = qFromBigEndian<quint32>(patch.bytes.constData()+prefix);
-    if (!rawSize || rawSize > maxBytes || (!patch.delta && rawSize != patch.restoredSize)) return {};
+    if (!rawSize || rawSize > patch.restoredSize || (!patch.delta && rawSize != patch.restoredSize)) return {};
     const auto raw = qUncompress(reinterpret_cast<const uchar*>(patch.bytes.constData()+prefix), patch.bytes.size()-prefix);
     if (raw.size() != rawSize) return {};
     if (!patch.delta) return raw;
@@ -128,6 +129,12 @@ void RewindBuffer::setByteLimit(qsizetype byteLimit) {
 }
 void RewindBuffer::trimToBudget() {
     while (!entries_.empty() && bytesUsed_ > byteLimit_) {
+        if (auxiliaryChanges_ && auxiliaryChanges_->front().checkpoint == firstCheckpoint_) {
+            bytesUsed_ -= sizeof(AuxiliaryChange) + auxiliaryChanges_->front().patch.bytes.capacity();
+            auxiliaryChanges_->pop_front();
+            if (auxiliaryChanges_->empty()) auxiliaryChanges_.reset();
+        }
+        ++firstCheckpoint_;
         bytesUsed_ -= entryBytes(entries_.front());
         entries_.pop_front();
         dropOldestInput();
@@ -137,38 +144,60 @@ void RewindBuffer::trimToBudget() {
 void RewindBuffer::clear() {
     entries_.clear(); inputRuns_.clear(); currentState_.clear(); currentPixels_.clear(); currentSize_ = {}; currentNativeSize_ = {};
     currentControls_.reset();
+    auxiliaryChanges_.reset();
+    currentAuxiliary_.clear();
+    firstCheckpoint_ = 0;
     currentTwoFields_ = false;
     bytesUsed_ = 0;
 }
 bool RewindBuffer::capture(const QByteArray& state, const QImage& frame, double aspect,
-                           const InputDisplayState* input) {
+                           const InputDisplayState* input, const QByteArray& auxiliary) {
     if (!enabled_) return true;
     if (state.isEmpty() || state.size()>maxBytes || frame.isNull() || frame.sizeInBytes()>maxBytes ||
-        !std::isfinite(aspect) || aspect<=0 || quint64(frame.width())*frame.height()*4>maxBytes) return false;
+        !std::isfinite(aspect) || aspect<=0 || quint64(frame.width())*frame.height()*4>maxBytes ||
+        auxiliary.size() > maxAuxiliaryBytes) return false;
     const QImage rgb = frame.convertToFormat(QImage::Format_RGB32);
     if (rgb.isNull() || rgb.sizeInBytes()>maxBytes) return false;
     const QByteArray pixels(reinterpret_cast<const char*>(rgb.constBits()),rgb.sizeInBytes());
-    return append(state, pixels, rgb.size(), VideoFrameGeometry::nativeSize(frame), aspect, std::nullopt, input, false);
+    return append(state, pixels, rgb.size(), VideoFrameGeometry::nativeSize(frame), aspect, std::nullopt, input,
+                  false, auxiliary);
 }
 bool RewindBuffer::captureForReplay(const QByteArray& state, double aspect, const MovieInput& controls,
-                                    const InputDisplayState* input, bool twoFields) {
+                                    const InputDisplayState* input, bool twoFields, const QByteArray& auxiliary) {
     if (!enabled_) return true;
-    if (state.isEmpty() || state.size() > maxBytes || !std::isfinite(aspect) || aspect <= 0) return false;
-    return append(state, {}, {}, {}, aspect, controls, input, twoFields);
+    if (state.isEmpty() || state.size() > maxBytes || !std::isfinite(aspect) || aspect <= 0 ||
+        auxiliary.size() > maxAuxiliaryBytes) return false;
+    return append(state, {}, {}, {}, aspect, controls, input, twoFields, auxiliary);
 }
 bool RewindBuffer::append(const QByteArray& state, const QByteArray& pixels, QSize size, QSize nativeSize,
-                          double aspect, std::optional<MovieInput> controls, const InputDisplayState* input, bool twoFields) {
-    const qsizetype anchorBytes = state.capacity()+pixels.capacity();
+                          double aspect, std::optional<MovieInput> controls, const InputDisplayState* input,
+                          bool twoFields, const QByteArray& auxiliary) {
+    const bool auxiliaryChanged = currentAuxiliary_ != auxiliary;
+    const auto& nextAuxiliary = auxiliaryChanged ? auxiliary : currentAuxiliary_;
+    const qsizetype anchorBytes = state.capacity() + pixels.capacity() +
+        (nextAuxiliary.isEmpty() ? 0 : nextAuxiliary.capacity());
     if (anchorBytes>byteLimit_) { clear(); return false; }
     const size_t previousCount = currentState_.isEmpty() ? 0 : entries_.size() + 1;
     if (!currentState_.isEmpty()) {
         Entry previous{encode(currentState_,state), {}, currentSize_, currentNativeSize_, currentAspect_, currentControls_, currentTwoFields_};
         if (!currentControls_) previous.pixels = encode(currentPixels_,pixels);
         if (previous.state.bytes.isEmpty() || (!currentControls_ && previous.pixels.bytes.isEmpty())) { clear(); return false; }
+        if (auxiliaryChanged) {
+            // An empty old value has no payload and needs no compression.
+            Patch reverse;
+            if (!currentAuxiliary_.isEmpty()) {
+                reverse = encode(currentAuxiliary_, auxiliary);
+                if (reverse.bytes.isEmpty()) { clear(); return false; }
+            }
+            if (!auxiliaryChanges_) auxiliaryChanges_.emplace();
+            bytesUsed_ += sizeof(AuxiliaryChange) + reverse.bytes.capacity();
+            auxiliaryChanges_->push_back({std::move(reverse), firstCheckpoint_ + entries_.size()});
+        }
         bytesUsed_ += entryBytes(previous);
         entries_.push_back(std::move(previous));
     }
-    bytesUsed_ += anchorBytes-currentState_.capacity()-currentPixels_.capacity();
+    bytesUsed_ += anchorBytes - currentState_.capacity() - currentPixels_.capacity() - currentAuxiliary_.capacity();
+    if (auxiliaryChanged) currentAuxiliary_ = auxiliary.isEmpty() ? QByteArray{} : auxiliary;
     currentState_ = state; currentPixels_ = pixels; currentSize_ = size; currentNativeSize_ = nativeSize;
     currentAspect_ = aspect; currentControls_ = controls; currentTwoFields_ = twoFields;
     // A history captured before input tracking began has neutral input. Runs
@@ -181,10 +210,28 @@ bool RewindBuffer::append(const QByteArray& state, const QByteArray& pixels, QSi
     trimToBudget();
     return !currentState_.isEmpty();
 }
+bool RewindBuffer::rewindAuxiliary(size_t checkpoint) {
+    if (!auxiliaryChanges_ || auxiliaryChanges_->back().checkpoint != checkpoint) return true;
+    const auto& patch = auxiliaryChanges_->back().patch;
+    if (!patch.restoredSize) {
+        if (!patch.bytes.isEmpty() || patch.delta) return false;
+        currentAuxiliary_.clear();
+    } else {
+        if (patch.restoredSize > maxAuxiliaryBytes) return false;
+        currentAuxiliary_ = decode(patch, std::move(currentAuxiliary_));
+        if (currentAuxiliary_.isEmpty()) return false;
+    }
+    bytesUsed_ -= sizeof(AuxiliaryChange) + patch.bytes.capacity();
+    auxiliaryChanges_->pop_back();
+    if (auxiliaryChanges_->empty()) auxiliaryChanges_.reset();
+    return true;
+}
+
 bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, int steps,
-                            InputDisplayState* input, ReplayFrame* replay) {
+                            InputDisplayState* input, ReplayFrame* replay, QByteArray* auxiliary) {
     if (input) *input = {};
     if (replay) *replay = {};
+    if (auxiliary) auxiliary->clear();
     if (steps < 1 || size() < 2) return false;
     const size_t count = std::min(size_t(steps), size() - 1);
     if (!replay && entries_[entries_.size() - count].controls) return false;
@@ -192,10 +239,11 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, in
     // and a core restore, even when one display tick spans several checkpoints.
     for (size_t i = 0; i < count; ++i) {
         const auto& target = entries_.back();
-        const auto oldBytes = currentState_.capacity() + currentPixels_.capacity();
+        const auto oldBytes = currentState_.capacity() + currentPixels_.capacity() + currentAuxiliary_.capacity();
         currentState_ = decode(target.state,std::move(currentState_));
         currentPixels_ = target.controls ? QByteArray() : decode(target.pixels,std::move(currentPixels_));
-        const auto newBytes = currentState_.capacity() + currentPixels_.capacity();
+        if (!rewindAuxiliary(firstCheckpoint_ + entries_.size() - 1)) { clear(); return false; }
+        const auto newBytes = currentState_.capacity() + currentPixels_.capacity() + currentAuxiliary_.capacity();
         if (currentState_.isEmpty() || newBytes > byteLimit_ ||
             (!target.controls && (currentPixels_.isEmpty() ||
              quint64(target.size.width()) * target.size.height() * 4 != quint64(currentPixels_.size())))) {
@@ -237,5 +285,6 @@ bool RewindBuffer::stepBack(QByteArray& state, QImage& frame, double& aspect, in
     if (currentState_.isEmpty()) return false;
     state = currentState_; aspect = currentAspect_;
     if (input && !inputRuns_.empty()) *input = inputRuns_.back().state;
+    if (auxiliary) *auxiliary = currentAuxiliary_;
     return true;
 }

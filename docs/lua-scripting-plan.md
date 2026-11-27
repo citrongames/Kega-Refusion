@@ -14,10 +14,10 @@ planned work and are not advertised as shipped functionality.
 - [x] Phase 1: runtime, script window, read-only memory and drawing.
 - [x] Phase 2: input automation, frame control and temporary save objects.
 - [x] Phase 3: memory/register editing and debugger integration.
-- [ ] Phase 4: general script files, recording control, custom panels and declared timeline data.
+- [x] Phase 4: general script files, recording control, custom panels and declared timeline data.
   - [x] General asynchronous file access and native input-recording control.
   - [x] Custom panels with controls and graphs.
-  - [ ] Explicit script-data restoration with save/load and rewind.
+  - [x] Explicit script-data restoration with save/load and local rewind.
   - [x] Bilingual native API reference and practical examples; keep these current with each batch.
 
 Agreed baseline: one embedded Lua 5.5 library and a native versioned API.
@@ -147,20 +147,18 @@ explicit. No stale reference may survive destruction of a linked peer.
 | --- | --- |
 | Input recording | Record final effective controls after permitted script overrides. Playback uses those recorded controls without running the input automation again. |
 | Memory mutation during a recording | Ordinary input records cannot reproduce it. Initially reject this combination clearly. A deterministic mutation journal is separate later work, not silently enabled. |
-| Save/load and rewind | Restore explicitly declared serializable script data and rebuild drawings for the restored frame. Do not claim arbitrary Lua locals, closures or coroutine stacks are restored. |
+| Save/load and rewind | Restore explicitly declared script data before the corresponding Lua callback. The script can redraw using the restored value. |
 | Internal preview/replay | Distinguish normal execution from rewind preview, export and network replay. Do not accidentally duplicate input mutations, logs or file output during internal reconstruction. |
-| Netplay | Start with local read-only observation/drawing. Mutating scripts need a separately verified shared ordering and rollback contract before being permitted. Do not automatically distribute or run another participant's scripts. |
+| Netplay | Permit local read-only observation/drawing. Authoritative reset, load and remote rewind reinitialize declared local data. Shared script mutation remains separate work that requires a verified rollback contract. |
 | Achievement Hardcore | Preserve existing debugger restrictions; scripting must not bypass them. |
 
-Declared script data must be bounded and tied to script identity/schema. Avoid
-serializing an entire Lua environment or adding unbounded per-frame blobs to the
-existing compressed history. Define restart/load behavior for coroutine scripts
-explicitly; arbitrary continuation rewind is not an initial promise.
-
-Before timeline integration is complete, expose its limits rather than silently
-continuing a stateful script with incorrect future counters. Read-only HUDs can
-rebuild from restored game memory. Frame-bound writes, script continuation state,
-and cycle-level mutations are different problems and require separate acceptance.
+Declared data is bounded and tied to the precise script source, its declared
+ID and schema version. Each snapshot carries the data needed to restore that
+point in the local timeline. Rewind data uses independent Lua and core
+compression within one memory budget. A coroutine that resumes after its
+own temporary-state load reads the restored value through `timeline.get()`.
+Its previous local copies remain in the running environment. Frame-bound
+writes and cycle-level mutations have separate acceptance requirements.
 
 ## Resource discipline
 
@@ -388,10 +386,8 @@ refresh, identity and frame position. It is a controller-poll estimate, not a
 universal game-update measurement. Source identity and graph parsing are tested
 through the shipped script itself. Exact evidence is in verification.md.
 
-Remaining Phase 4 work: custom script panels/controls/graphs, followed by bounded
-declared script-data restoration with saves and rewind. Arbitrary Lua locals,
-closures and coroutine stacks are not restored. No new Gens compatibility work
-is planned.
+At this milestone, custom panels and declared timeline restoration remained
+Phase 4 work.
 
 ## Phase 4B delivered — 2026-11-27
 
@@ -426,6 +422,41 @@ is explicitly not universal game FPS. Both packaged API references document
 the schema, callbacks, policy, lifecycle, limits and precision caveat.
 
 Focused runtime, Qt widget and real-core session evidence is recorded in
-verification.md. The remaining Phase 4 item is explicit bounded script-data
-restoration with native saves/rewind. Arbitrary Lua locals, closures and coroutine
-stacks still are not serialized; compatibility adapters remain out of scope.
+verification.md. At this milestone, declared timeline restoration with saves
+and local rewind remained Phase 4 work.
+
+## Phase 4C — Declared timeline data
+
+One bounded Lua value per script follows slot and file saves, movie-position
+checkpoints, temporary Lua saves and local rewind. The emulator matches the
+declaration by explicit ID, exact-source SHA-256 and schema version. A matching
+script must already be running when the snapshot is restored. Missing and
+incompatible entries restore the default and expose the reason to the script
+before its restore callback. The emulator validates the optional saved data
+before restoring the core. Lua locals, closures, stacks, widgets, files and
+temporary handles remain part of the running environment.
+
+The runtime validates and encodes a replacement at `timeline.set`. Captures
+reuse encoded values. File and temporary saves embed the optional timeline
+data in the same save. Files without timeline data retain the existing
+format. Older files remain readable, and files with Lua data require an
+emulator version that supports the attachment.
+
+Local rewind stores Lua data in an independent compressed chain inside the
+same rewind buffer memory cap. Core-state deltas can continue across changes
+in Lua payload length. A session without declared data keeps the ordinary
+rewind path. Size, string, depth, node and script-count limits bound work and
+retained data. Lua observation runs at real frame boundaries and in the
+existing restore callbacks.
+
+The native input recording continues to carry final controls and core
+checkpoints. Starting a recording resets declared Lua data. Playing or resuming
+a recording from its file starts with the declared initial value. Authoritative
+netplay rebases reinitialize local data. Netplay participants keep their own Lua
+environments, and rollback reconstruction skips Lua execution.
+
+The packaged English and Russian references document the API and limits.
+The `timeline-counter.lua` example uses declared data for the frame and
+input-poll counters and reads the restored value when redrawing. See
+[verification.md](verification.md) for focused integration and performance
+evidence.

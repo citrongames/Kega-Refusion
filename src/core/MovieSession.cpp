@@ -3,6 +3,7 @@
 #include "LibretroHost.h"
 #include "VideoFrameGeometry.h"
 #include "StateFile.h"
+#include "ScriptStateEnvelope.h"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
@@ -20,7 +21,8 @@ namespace {
 constexpr qsizetype MaxSnapshot = 32 * 1024 * 1024;
 constexpr qsizetype MaxPrefix = 72 * 1024 * 1024;
 constexpr qsizetype MaxPixels = 16 * 1024 * 1024;
-constexpr qsizetype MaxSlot = MaxSnapshot + MaxPrefix + MaxPixels + 256;
+constexpr qsizetype MaxSlotState = MaxSnapshot + ScriptStateEnvelope::MaximumOverhead;
+constexpr qsizetype MaxSlot = MaxSlotState + MaxPrefix + MaxPixels + 256;
 QByteArray hash(const QByteArray& bytes) { return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256); }
 // Failure recovery only: successful takeover keeps the current game/disc running.
 void restorePreviousSession(LibretroHost& host, const QByteArray& state,
@@ -235,11 +237,18 @@ bool MovieSession::saveFile(const QString& path, QString& error) {
 }
 bool MovieSession::saveSlotFile(const QString& path, QString& error, bool keepPrevious) {
     if (!active() || path.isEmpty()) { error = Localization::text(QStringLiteral("Нет активной записи или не выбран файл сохранения.")); return false; }
-    const auto state = host_.captureMovieState();
+    auto state = host_.captureMovieState();
     const auto prefix = tape_.checkpoint(cursor_, error);
     if (state.isEmpty() || state.size() > MaxSnapshot || prefix.isEmpty() || prefix.size() > MaxPrefix) {
         if (error.isEmpty()) error = Localization::text(QStringLiteral("Состояние записи слишком велико или недоступно."));
         return false;
+    }
+    if (host_.captureScriptData) {
+        state = ScriptStateEnvelope::wrap(state, host_.captureScriptData());
+        if (state.isEmpty()) {
+            error = Localization::text(QStringLiteral("Состояние записи слишком велико или недоступно."));
+            return false;
+        }
     }
     const auto frame = host_.frame().convertToFormat(QImage::Format_RGB32);
     const auto native = VideoFrameGeometry::nativeSize(host_.frame());
@@ -278,21 +287,28 @@ bool MovieSession::loadFile(const QString& path, QImage& frame, double& aspect, 
         return false;
     }
     const auto bad = [&] { error = Localization::text(QStringLiteral("Сохранение записи повреждено или несовместимо.")); return false; };
-    if (file.size() < 76 || file.size() > MaxSlot) return bad();
-    const auto data = file.readAll();
-    if (data.size() != file.size() || data.left(8) != QByteArrayLiteral("KRMSLOT1") || data.mid(8,32) != hash(data.mid(40))) return bad();
-    const auto payload = data.mid(40);
+    const qint64 fileSize = file.size();
+    if (fileSize < 76 || fileSize > MaxSlot) return bad();
+    const auto data = file.read(fileSize + 1);
+    if (data.size() != fileSize || data.left(8) != QByteArrayLiteral("KRMSLOT1")) return bad();
+    const auto payload = QByteArray::fromRawData(data.constData() + 40, data.size() - 40);
+    if (data.mid(8,32) != hash(payload)) return bad();
     QDataStream stream(payload); stream.setVersion(QDataStream::Qt_6_0);
     quint32 stateSize = 0, prefixSize = 0, pixelSize = 0;
     qint32 w = 0, h = 0, nw = 0, nh = 0; double ratio = 0;
     stream >> stateSize >> prefixSize >> pixelSize >> w >> h >> nw >> nh >> ratio;
     constexpr qsizetype header = 36;
-    if (stream.status() != QDataStream::Ok || !stateSize || stateSize > MaxSnapshot ||
+    if (stream.status() != QDataStream::Ok || !stateSize || stateSize > MaxSlotState ||
         !prefixSize || prefixSize > MaxPrefix || pixelSize > MaxPixels ||
         quint64(header) + stateSize + prefixSize + pixelSize != quint64(payload.size()) ||
         !std::isfinite(ratio) || ratio <= 0 || ratio > 16 || w < 0 || h < 0 ||
         w > 4096 || h > 4096 || quint64(w)*h*4 > MaxPixels ||
         ((w == 0 || h == 0) && (w != 0 || h != 0 || pixelSize != 0))) return bad();
+    QByteArray state, scriptData;
+    if (!ScriptStateEnvelope::split(QByteArray::fromRawData(payload.constData()+header,stateSize), state, scriptData) ||
+        state.size() > MaxSnapshot ||
+        (!scriptData.isEmpty() && host_.validateScriptData && !host_.validateScriptData(scriptData)))
+        return bad();
     QImage savedFrame;
     if (pixelSize) {
         const auto packed = payload.mid(header + stateSize + prefixSize, pixelSize);
@@ -304,9 +320,9 @@ bool MovieSession::loadFile(const QString& path, QImage& frame, double& aspect, 
         std::memcpy(savedFrame.bits(), raw.constData(), size_t(raw.size()));
         if (nw > 0 && nh > 0 && nw <= 4096 && nh <= 4096) VideoFrameGeometry::setNativeSize(savedFrame, QSize(nw,nh));
     } else if (w || h) return bad();
-    if (!restoreCheckpoint(QByteArray::fromRawData(payload.constData()+header,stateSize),
-                           QByteArray::fromRawData(payload.constData()+header+stateSize,prefixSize),error))
+    if (!restoreCheckpoint(state,QByteArray::fromRawData(payload.constData()+header+stateSize,prefixSize),error))
         return false;
+    if (host_.restoreScriptData) host_.restoreScriptData(scriptData);
     frame = savedFrame; aspect = ratio;
     return true;
 }

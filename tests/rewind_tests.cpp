@@ -7,6 +7,99 @@
 #include <vector>
 void require(bool ok, const char* reason) { if (!ok) { std::fprintf(stderr,"FAIL: %s\n",reason); std::exit(1); } }
 struct Shot { QByteArray state; QImage frame; double aspect; };
+
+void checkAuxiliary(const std::vector<Shot>& shots, const QImage& tiny) {
+    RewindBuffer history;
+    history.configure(true);
+    const QByteArray binary("\xff\0Lua", 5);
+    const QByteArray longer("different length");
+    const std::vector<QByteArray> auxiliary{{}, {}, binary, binary, longer, {}, {}, binary};
+    for (size_t i = 0; i < auxiliary.size(); ++i) {
+        require(history.capture(shots[i].state, shots[i].frame, 1.0, nullptr, auxiliary[i]),
+                "capture with independent auxiliary data");
+    }
+
+    QByteArray actual, restored;
+    QImage image;
+    double aspect;
+    require(history.stepBack(actual, image, aspect, 1) && actual == shots[6].state,
+            "rewind updates auxiliary anchor without output pointer");
+    require(history.stepBack(actual, image, aspect, 2, nullptr, nullptr, &restored) &&
+            actual == shots[4].state && restored == longer, "variable-length auxiliary rewind");
+    require(history.capture(shots[9].state, shots[9].frame, 1.0, nullptr, binary),
+            "capture auxiliary on new branch");
+    require(history.stepBack(actual, image, aspect, 1, nullptr, nullptr, &restored) &&
+            actual == shots[4].state && restored == longer, "auxiliary branch preserves timeline");
+    require(history.stepBack(actual, image, aspect, 2, nullptr, nullptr, &restored) &&
+            actual == shots[2].state && restored == binary, "binary auxiliary data was altered");
+    require(history.stepBack(actual, image, aspect, 20, nullptr, nullptr, &restored) &&
+            actual == shots[0].state && restored.isEmpty(), "pre-declaration auxiliary checkpoint");
+    restored = binary;
+    require(!history.stepBack(actual, image, aspect, 1, nullptr, nullptr, &restored) && restored.isEmpty(),
+            "failed rewind clears auxiliary output");
+
+    history.clear();
+    require(history.capture(shots[0].state, shots[0].frame, 1.0, nullptr, binary), "replay seed with auxiliary data");
+    MovieInput controls;
+    for (size_t i = 1; i < auxiliary.size(); ++i) {
+        controls.buttons[0] = quint16(i);
+        require(history.captureForReplay(shots[i].state, 1.0, controls, nullptr, true, auxiliary[i]),
+                "woven replay capture with auxiliary data");
+    }
+    RewindBuffer::ReplayFrame replay;
+    require(history.stepBack(actual, image, aspect, 3, nullptr, &replay, &restored) &&
+            actual == shots[4].state && restored == longer && replay.previousState == shots[2].state &&
+            replay.firstFieldControls && replay.firstFieldControls->buttons[0] == 3 &&
+            replay.controls.buttons[0] == 4, "replay prerequisites use native state only");
+
+    RewindBuffer bounded(6000);
+    bounded.configure(true);
+    QByteArray native(1024, 'n');
+    std::vector<QByteArray> many;
+    for (int i = 0; i < 100; ++i) {
+        many.emplace_back(i % 10 == 0 ? 0 : 900 + i * 4, char(i));
+        native[0] = char(i);
+        require(bounded.capture(native, tiny, 1.0, nullptr, many.back()), "bounded auxiliary capture");
+        require(bounded.bytesUsed() <= 6000, "auxiliary capture exceeded shared budget");
+    }
+    const auto retained = bounded.size();
+    require(retained > 2 && retained < many.size(), "auxiliary budget should evict old checkpoints");
+    for (size_t i = 1; i < retained; ++i) {
+        require(bounded.stepBack(actual, image, aspect, 1, nullptr, nullptr, &restored) &&
+                restored == many[many.size() - 1 - i] && actual.at(0) == char(many.size() - 1 - i),
+                "budget eviction misaligned sparse auxiliary deltas");
+        require(bounded.bytesUsed() <= 6000, "auxiliary rewind exceeded shared budget");
+    }
+    bounded.setByteLimit(0);
+    require(bounded.size() == 0 && bounded.bytesUsed() == 0, "zero budget released auxiliary history");
+
+    const QByteArray maximum(256 * 1024, 'm');
+    RewindBuffer plain, unchanged;
+    plain.configure(true);
+    unchanged.configure(true);
+    for (int i = 0; i < 200; ++i) {
+        native[0] = char(i);
+        require(plain.capture(native, tiny, 1.0) &&
+                unchanged.capture(native, tiny, 1.0, nullptr, maximum), "unchanged auxiliary capture");
+    }
+    require(unchanged.bytesUsed() == plain.bytesUsed() + maximum.capacity(),
+            "unchanged snapshots retain only one auxiliary value");
+    const QByteArray oversized(maximum.size() + 1, 'x');
+    require(!unchanged.capture(native, tiny, 1.0, nullptr, oversized) &&
+            !unchanged.captureForReplay(native, 1.0, controls, nullptr, false, oversized) &&
+            unchanged.size() == plain.size(), "oversized auxiliary data bypassed the hard limit or damaged history");
+    require(unchanged.capture(native, tiny, 1.0) &&
+            unchanged.stepBack(actual, image, aspect, 20, nullptr, nullptr, &restored) &&
+            restored == maximum, "restore the maximum auxiliary payload from an empty anchor");
+
+    QByteArray reserved(1, 'r');
+    reserved.reserve(8 * 1024);
+    RewindBuffer capacityLimited(4 * 1024);
+    capacityLimited.configure(true);
+    require(!capacityLimited.capture(native, tiny, 1.0, nullptr, reserved) &&
+            !capacityLimited.bytesUsed(), "reserved auxiliary capacity escaped accounting");
+}
+
 int main(int argc,char** argv) {
  QCoreApplication app(argc,argv);
  QRandomGenerator random(314159U);
@@ -159,5 +252,6 @@ int main(int argc,char** argv) {
  require(replayBuffer.stepBack(actual,image,aspect,20,nullptr,&replay) && actual==shots[2].state &&
          replay.previousState==shots[1].state && !replay.firstFieldControls &&
          replay.singleFieldFallback && image.isNull(),"missing oldest-field fallback");
- std::puts("Reverse deltas: sparse/dense changes, dimensions, branches, budgets, input and disabled history passed");
+ checkAuxiliary(shots,tiny);
+ std::puts("Reverse deltas: sparse/dense changes, dimensions, branches, budgets, input and auxiliary history passed");
 }

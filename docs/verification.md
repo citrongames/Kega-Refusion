@@ -1008,3 +1008,81 @@ verified staging bytes. EXE SHA-256:
 Packaged example matches the source. Logs and package verification are retained
 under ignored build/verification/lua-phase4b; staging and duplicate standalone
 widget-test compilation artifacts were removed. User files were retained.
+
+## Lua Phase 4C — declared data with saves and rewind (2026-11-27)
+
+Added opt-in `timeline.define/get/set/status`. Only explicitly declared values
+are saved: not the Lua VM, locals, coroutine stacks, widgets, files or handles.
+The identity is declaration ID, schema and exact source SHA-256. Matching active
+scripts restore before the load/rewind callback; absent scripts are never started.
+Missing or incompatible data initializes declared defaults. Ordinary saves
+without Lua retain their previous format; older emulator builds cannot read
+the optional attachment. Native input recordings and network snapshots do not
+include these values.
+
+Storage is bounded to 16 KiB per script, at most eight scripts, with depth,
+node and string limits. Unchanged values reuse a cached aggregate. Local rewind
+uses sparse independent reverse patches within its existing memory cap, so
+Lua payload length changes cannot force recompression of the native state.
+No declared data means no auxiliary per-frame entries or payload allocation;
+stopping scripts frees the live declarations. Existing bounded history can
+retain previous data until evicted or cleared, allowing a matching restart
+to restore it. Temporary Lua states count the attachment against their budget.
+
+Focused verification:
+
+- Runtime codec: deterministic encoding, supported value types, exact integers,
+  source/schema matching, missing values, bounds, rejected cycles/metatables,
+  malformed attachments, cleanup and cached unchanged captures.
+- Real-core session on the generated original cartridge: slot/file save and
+  restoration, load without a script, restart of matching source, changed
+  source, legacy save, reset, temporary Lua save/load and local rewind. The
+  shipped timeline-counter.lua is executed directly, including reverse
+  restoration. Native recording playback resets to defaults while a rerecord
+  fork retains current declared values.
+- File and movie checkpoint tests: framing, checksum, backup, coexistence with
+  achievement progress, legacy files, validation before core mutation, and no
+  script payload in generic movie/native capture or the .krm tape.
+- Rewind tests: sparse changes, empty values, varying sizes, accelerated
+  stepping, branch alignment, front eviction, shared memory budget and
+  core-only reconstruction of one/two video fields.
+- Review corrected duplicate Lua restoration during a failed preview retry
+  and stale Lua data when canonical rewind restoration succeeds but preview
+  rendering fails. Reset/load with no declarations avoids an empty QMap
+  allocation.
+
+Performance harness uses the same core and settings for every workload:
+Sunset Riders (USA), NTSC-U 59.92274 Hz, and Aladdin (Europe), PAL 49.70146 Hz.
+Each has 120 unattended startup frames and two rotated 600-frame measurements.
+Normal rendering includes audio and rewind; accelerated measurements render
+every 32nd frame, disable audio and keep no rewind history. These are startup
+scenes measured inside the core/runtime harness, not gameplay or whole-window
+GPU benchmarks. Native state, final video and PCM hashes matched across all
+workloads within each rendering policy.
+
+For 599 retained frames, empty-runtime history was byte-for-byte the same size
+as baseline: 1,355,698 bytes for Sunset Riders and 1,745,941 for Aladdin.
+A constant 63-byte declaration added 110 retained bytes; an every-frame counter
+added 56,416 bytes. The near-limit varying-length case added 183,791 bytes.
+An early implementation that wrapped Lua around every native checkpoint had
+used 23.4 MB on the same Sunset Riders workload; that design was removed.
+
+Timing is noisy under WSL: ordinary baseline trials varied particularly for
+Sunset Riders. Empty-runtime means differed from baseline by -7.75% and +1.77%,
+which is not evidence of a speed gain. Small every-frame counters measured
+-9.02% and +7.00%. Updating/encoding nearly 16 KiB every frame costs work:
+varying-length means were 0.867/0.965 ms versus 0.749/0.828 ms baseline,
+about +0.118/+0.137 ms per emulated frame. In accelerated mode the same
+stress case added approximately 0.021/0.037 ms (+7.30%/+9.90%).
+Do not describe unrestricted Lua computation or large every-frame updates as
+free; small explicitly chosen values are the intended use.
+
+Logs and measurements are retained under ignored build/verification/lua-phase4c.
+
+Linux and Windows Release builds passed. The final runtime, real-core session
+and movie integration checks passed after the review fixes. Windows testbuild
+contains the new example and both API references. All 87 package files match
+their SHA-256 manifest and staging; the sample and references match source.
+EXE SHA-256: 2eb1fd39b40ec399e7e695f2acf1702524c1ff6a9550f6e8a7a8bec44a3adfcd.
+Package staging was removed after verification; user files were retained.
+No GitHub release or updater version was created for this batch.

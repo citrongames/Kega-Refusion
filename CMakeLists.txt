@@ -39,6 +39,7 @@ set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/script/ScriptRuntime.cpp src/script/ScriptRuntime.h src/script/ScriptTypes.h
     src/script/ScriptStorage.cpp src/script/ScriptStorage.h
+    src/script/ScriptTimeline.cpp src/script/ScriptTimeline.h
     src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/DebugProject.cpp
@@ -192,8 +193,12 @@ if(BUILD_TESTING)
     set_tests_properties(lua_panel_view_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(lua_runtime_tests tests/lua_runtime_tests.cpp)
     target_link_libraries(lua_runtime_tests PRIVATE core_host)
+    add_executable(lua_timeline_tests tests/lua_timeline_tests.cpp)
+    target_link_libraries(lua_timeline_tests PRIVATE core_host)
     add_executable(lua_benchmark EXCLUDE_FROM_ALL tests/lua_benchmark.cpp)
     target_link_libraries(lua_benchmark PRIVATE core_host)
+    add_executable(lua_timeline_benchmark EXCLUDE_FROM_ALL tests/lua_timeline_benchmark.cpp)
+    target_link_libraries(lua_timeline_benchmark PRIVATE core_host)
     add_executable(lua_automation_tests tests/lua_automation_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
     target_link_libraries(lua_automation_tests PRIVATE core_host)
     add_executable(lua_session_tests tests/lua_session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)

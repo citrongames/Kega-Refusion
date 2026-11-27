@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ScriptTimeline.h"
 #include "ScriptTypes.h"
 #include "ScriptUiTypes.h"
 #include "core/DebugAccess.h"
@@ -63,6 +64,11 @@ public:
     void waitForMovie(quint64 run) { movieWaitingRun_ = run; }
     void invalidateTimeline(bool discardSaves, quint64 preserveRun = 0);
     void discardSavedStates();
+    bool hasTimelineData() const;
+    QByteArray captureTimeline();
+    static bool validateTimeline(const QByteArray& bytes);
+    bool restoreTimeline(const QByteArray& bytes);
+    void resetTimeline();
     quint64 accessRevision() const { return accessRevision_; }
     QVector<DebugAccessSubscription> accessSubscriptions() const;
     void beginAccessFrame(const LibretroHost& host, quint64 frame);
@@ -100,6 +106,7 @@ private:
     qint64 accessNanoseconds_ = 0;
     bool accessFailed_ = false;
     std::shared_ptr<qsizetype> saveBytes_;
+    ScriptTimeline timeline_;
     std::unique_ptr<State> state_;
 
     void update(ScriptUpdate update);
