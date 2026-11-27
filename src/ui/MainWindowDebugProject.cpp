@@ -33,6 +33,7 @@ struct DebugProjectOperation {
 void MainWindow::ensureDebugWatch() {
     if (debugWatchDialog_) return;
     debugWatchDialog_=new DebugWatchDialog(this);
+    debugWatchDialog_->setScriptEntries(scriptAnnotations_.watches);
     connect(debugWatchDialog_,&DebugWatchDialog::inspectionChanged,this,&MainWindow::scheduleInspection);
     connect(debugWatchDialog_,&DebugWatchDialog::entriesChanged,this,&MainWindow::debugProjectChanged);
     connect(debugWatchDialog_,&DebugWatchDialog::navigateRequested,this,

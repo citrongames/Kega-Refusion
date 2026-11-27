@@ -727,6 +727,11 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         auto updates=session_.takeScriptUpdates();
         if (luaScriptsDialog_) luaScriptsDialog_->applyUpdates(updates);
     });
+    connect(&session_, &EmulationSession::scriptAnnotationsReady, this, [this] {
+        scriptAnnotations_ = session_.takeScriptAnnotations();
+        if (cpuDebuggerDialog_) cpuDebuggerDialog_->setScriptLabels(scriptAnnotations_.labels);
+        if (debugWatchDialog_) debugWatchDialog_->setScriptEntries(scriptAnnotations_.watches);
+    });
     connect(&session_, &EmulationSession::scriptsContextChanged, this, [this] {
         if (luaScriptsDialog_) luaScriptsDialog_->discardPendingStarts();
     });
@@ -1708,6 +1713,7 @@ QString MainWindow::cpuDebuggerBlockedReason() const {
 void MainWindow::ensureCpuDebugger() {
     if (!cpuDebuggerDialog_) {
         cpuDebuggerDialog_ = new CpuDebuggerDialog(this);
+        cpuDebuggerDialog_->setScriptLabels(scriptAnnotations_.labels);
         connect(cpuDebuggerDialog_, &CpuDebuggerDialog::projectChanged, this, &MainWindow::debugProjectChanged);
         connect(cpuDebuggerDialog_, &CpuDebuggerDialog::projectStateChanged, this, &MainWindow::updateDebugProjectActions);
         connect(cpuDebuggerDialog_, &CpuDebuggerDialog::projectApplied, this, &MainWindow::finishDebugProjectApply);
@@ -1954,6 +1960,7 @@ void MainWindow::refreshInspection() {
         request.parts |= KR_INSPECT_MEMORY;
         request.watchCatalog=true;
         request.watches=debugWatchDialog_->entries();
+        request.scriptWatches=debugWatchDialog_->scriptEntries();
     }
     const bool blocked = !session_.hasGame() || loading_ || videoExporting_ || achievementsHardcore_;
     if (blocked || !request.parts) {

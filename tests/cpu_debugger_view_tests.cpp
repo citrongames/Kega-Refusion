@@ -455,10 +455,18 @@ void verifyBankLabels() {
     dialog.applyProject(project);
     acceptConfiguration(dialog,data,commands.last());
     auto* code=find<QTableWidget>(dialog,"debugCpuDisassembly");
-    check(code->item(0,5)->text().contains("first"),"physical label on first bank");
+    dialog.setScriptLabels({
+        {1, 0, KR_DEBUG_M68K, 0x102, QStringLiteral("ScriptLoop"), 1, 0x40102},
+        {2, 1, KR_DEBUG_M68K, 0x102, QStringLiteral("PeerLoop"), 1, 0x40102}
+    });
+    check(code->item(0,5)->text().contains("first") &&
+          code->item(0,5)->text().contains("ScriptLoop (Lua)") &&
+          !code->item(0,5)->text().contains("PeerLoop"),
+          "Physical script label appears beside the project label for its own console and bank");
     data.instructionLocations[0].offset=0x80102;
     dialog.setSnapshot(data);
-    check(code->item(0,5)->text().contains("second") && !code->item(0,5)->text().contains("first"),"same CPU address switches bank label");
+    check(code->item(0,5)->text().contains("second") && !code->item(0,5)->text().contains("first") &&
+          !code->item(0,5)->text().contains("ScriptLoop"), "Same CPU address switches bank labels");
     data.instructionLocations[0].offset=0xc0102;
     dialog.setSnapshot(data);
     check(code->item(0,5)->text().isEmpty(),"unknown bank does not inherit a label");
@@ -467,6 +475,13 @@ void verifyBankLabels() {
     dialog.setSnapshot(data);
     check(code->item(0,5)->text().contains("first"),"physical alias shares its label");
     auto* address=find<QLineEdit>(dialog,"debugCpuAddress");
+    address->setText("ScriptLoop");
+    find<QPushButton>(dialog,"debugCpuNavigate")->click();
+    check(commands.last().physicalSource == 1 && commands.last().physicalOffset == 0x40102 &&
+          commands.last().address == 0x102, "Script label navigation validates the declared bank");
+    dialog.setScriptLabels({});
+    check(code->item(0,5)->text().contains("first") && !code->item(0,5)->text().contains("ScriptLoop"),
+          "Stopping the script preserves the permanent label");
     address->setText("second");
     find<QPushButton>(dialog,"debugCpuNavigate")->click();
     check(commands.last().physicalSource==1 && commands.last().physicalOffset==0x80102 &&

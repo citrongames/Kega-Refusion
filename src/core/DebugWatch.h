@@ -24,3 +24,4 @@ struct DebugWatchSample {
     bool bigEndian=false;
 };
 constexpr int DebugWatchLimit=128;
+constexpr int DebugScriptWatchLimit=64;

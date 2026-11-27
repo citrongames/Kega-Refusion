@@ -152,6 +152,45 @@ end)
         waitFor([&]{return graphOverlay && graphOverlay->commands.size()>=3 &&
             graphOverlay->commands.front().text.startsWith("Input-poll FPS ") &&
             !graphOverlay->commands.front().text.contains("unavailable");},"shipped FPS graph on real core");
+        stop();waitFor([&]{return status(30,ScriptStatus::Stopped);},"stop graph before debugger integration");
+        ScriptDebugAnnotations annotations;
+        QObject::connect(&session,&EmulationSession::scriptAnnotationsReady,&app,[&]{annotations=session.takeScriptAnnotations();});
+        run(40,R"(
+local save=assert(savestate.create()); assert(savestate.save(save))
+assert(memory.label(1,0x20e,"Controller loop"))
+assert(memory.watch(2,0x80,2,"Script scratch"))
+assert(memory.write(2,0x80,0x1234,2))
+assert(memory.setregister(1,"D0",0x56789abc))
+-- A save queued before an edit must not silently undo the new state.
+assert(savestate.load(save))
+assert(emu.frameadvance())
+assert(memory.read(2,0x80,2)==0x1234,'deferred memory edit lost')
+assert(memory.registers(1).values.D0==0x56789abc,'deferred register edit lost')
+assert(not savestate.load(save),'pre-edit temporary state survived')
+print('session mutation passed')
+)");
+        waitFor([&]{return logged(40,"session mutation passed") && annotations.labels.size()==1 && annotations.watches.size()==1;},"session mutation and annotations");
+        check(annotations.labels.front().source!=0,"script label pinned to physical code");
+        stop();waitFor([&]{return status(40,ScriptStatus::Stopped) && annotations.labels.isEmpty() && annotations.watches.isEmpty();},"temporary annotations removed");
+        run(41,R"(
+local hits=0
+assert(memory.on(1,"write",0xff0020,nil,function(e)
+    assert(e.address==0xff0020)
+    assert(memory.read(2,0x20)==e.value)
+    hits=hits+1
+end))
+assert(emu.frameadvance())
+assert(hits>0,'native access hook not dispatched')
+print('session access passed')
+)");
+        waitFor([&]{return logged(41,"session access passed");},"native hooks via worker scheduler");
+        stop();waitFor([&]{return status(41,ScriptStatus::Stopped);},"stop hooked script");
+        session.startMovieRecording(temp.filePath("mutation-policy.krm"));session.setPaused(true);
+        waitFor([&]{return movieMode==1 && paused;},"recording mutation policy");
+        run(42,"assert(not memory.write(2,0x80,0)); assert(not memory.setregister(1,'D0',0)); print('recording edits rejected')");
+        waitFor([&]{return logged(42,"recording edits rejected");},"recording edit policy");
+        stop();session.stopMovie();
+        waitFor([&]{return movieMode==0 && status(42,ScriptStatus::Stopped);},"recording policy cleanup");
         session.shutdown();
         std::puts("PASS Lua automation: physical input, yielded steps, state/clock, error cleanup, timeline cancellation, recording branch and script-free replay");
         return 0;

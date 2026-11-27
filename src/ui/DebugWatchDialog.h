@@ -16,7 +16,9 @@ class DebugWatchDialog final : public QDialog {
 public:
     explicit DebugWatchDialog(QWidget* parent = nullptr);
     QVector<DebugWatchEntry> entries() const;
+    QVector<DebugWatchEntry> scriptEntries() const;
     void setEntries(const QVector<DebugWatchEntry>& entries);
+    void setScriptEntries(const QVector<DebugWatchEntry>& entries);
     void addWatch(const DebugWatchEntry& entry);
     void setSnapshot(const DebugInspectionSnapshot& snapshot);
 
@@ -49,6 +51,7 @@ private:
     QLabel* status_ = nullptr;
     QLabel* feedback_ = nullptr;
     QVector<DebugWatchDomain> domains_;
+    QVector<DebugWatchEntry> scriptDeclarations_;
     QString gameKey_;
     quint64 generation_ = 0;
     quint32 activeInstance_ = 0;

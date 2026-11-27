@@ -1,6 +1,7 @@
 #include "LibretroHost.h"
 #include <QSet>
 #include <QScopeGuard>
+#include <QtAlgorithms>
 #include "LibretroHostApi.h"
 #include "i18n/Localization.h"
 #include <libco.h>
@@ -69,22 +70,15 @@ unsigned instance(unsigned id) { return id >> instanceShift; }
 quint32 addressMask(const kr_debug_target& target) {
     return target.address_bits == 32 ? ~quint32(0) : (quint32(1) << target.address_bits) - 1;
 }
-unsigned cpuIndex(unsigned id) {
-    unsigned index = 0;
-    while (id > 1) { id >>= 1; ++index; }
-    return index;
-}
+unsigned cpuIndex(unsigned id) { return qCountTrailingZeroBits(quint32(id)); }
 bool ascendingStack(const kr_debug_target& target) {
     return target.capabilities & KR_DEBUG_CAP_STACK_ASCENDING;
 }
 }
 
 struct LibretroHost::DebugExecution {
-    struct Endpoint { DebugExecution* debugger; unsigned instance; };
-    using Masks = std::array<unsigned, KR_DEBUG_MAX_CPUS>;
-
     LibretroHost& host;
-    std::array<Endpoint, 2> endpoints{{{this, 0}, {this, 1}}};
+    DebugHookMasks enabled{};
     cothread_t control = nullptr, fiber = nullptr, resumeFiber = nullptr;
     LibretroHost* resumeOwner = nullptr;
     std::array<QImage, 2> previousPictures;
@@ -116,7 +110,7 @@ struct LibretroHost::DebugExecution {
 
     void discover() {
         targets.clear();
-        for (unsigned side = 0; side < endpoints.size(); ++side) {
+        for (unsigned side = 0; side < enabled.size(); ++side) {
             auto* core = console(side);
             if (!core || !core->loaded_) continue;
             const auto& api = *core->api_;
@@ -202,37 +196,16 @@ struct LibretroHost::DebugExecution {
         }
     }
 
-    bool connect(unsigned side, const Masks* mask) {
-        auto* core = console(side);
-        if (!core) return !mask;
-        const auto& api = *core->api_;
-        Activation active(core);
-        if (api.debug_connect_v2)
-            return api.debug_connect_v2(mask ? hook : nullptr, mask ? &endpoints[side] : nullptr,
-                                        mask ? mask->data() : nullptr, mask ? mask->size() : 0);
-        return api.debug_connect && api.debug_connect(mask ? hook : nullptr, mask ? &endpoints[side] : nullptr,
-                                                       mask ? (*mask)[0] : 0, mask ? (*mask)[1] : 0);
-    }
-
     bool masks() {
-        std::array<Masks, 2> enabled{};
+        DebugHookMasks requested{};
         if ((pauseNext || stepping) && target(stepCpu))
-            enabled[instance(stepCpu)][cpuIndex(nativeCpu(stepCpu))] |= KR_DEBUG_EXEC;
+            requested[instance(stepCpu)][cpuIndex(nativeCpu(stepCpu))] |= KR_DEBUG_EXEC;
         for (const auto& item : breaks)
             if (item.enabled && target(item.cpu))
-                enabled[instance(item.cpu)][cpuIndex(nativeCpu(item.cpu))] |= item.events;
-        activeHooks = false;
-        for (unsigned side = 0; side < endpoints.size(); ++side) {
-            if (!console(side)) continue;
-            const bool active = std::any_of(enabled[side].begin(), enabled[side].end(),
-                                           [](unsigned mask) { return mask != 0; });
-            if (!connect(side, active ? &enabled[side] : nullptr)) {
-                connect(0, nullptr); connect(1, nullptr);
-                activeHooks = false;
-                return false;
-            }
-            activeHooks |= active;
-        }
+                requested[instance(item.cpu)][cpuIndex(nativeCpu(item.cpu))] |= item.events;
+        if (!host.applyDebugHookMasks(requested, host.debugAccessObserver_.get())) return false;
+        enabled = requested;
+        activeHooks = enabled != DebugHookMasks{};
         return true;
     }
 
@@ -279,11 +252,9 @@ struct LibretroHost::DebugExecution {
         co_switch(control);
     }
 
-    static void hook(void* opaque, unsigned native, unsigned kind, uint32_t at, uint32_t val, unsigned bytes) {
-        auto& endpoint = *static_cast<Endpoint*>(opaque);
-        auto& d = *endpoint.debugger;
-        if (!d.running || d.suppress) return;
-        const unsigned which = native | (endpoint.instance << instanceShift);
+    void handleAccess(unsigned side, unsigned native, unsigned kind, quint32 at, quint32 val, unsigned bytes) {
+        auto& d = *this;
+        const unsigned which = native | (side << instanceShift);
         const auto* chip = d.target(which);
         if (!chip) return;
         kr_debug_cpu state{};
@@ -341,8 +312,187 @@ struct LibretroHost::DebugExecution {
     }
 };
 
+struct LibretroHost::DebugAccessObserver {
+    struct Range { quint32 first, last; };
+    struct Filter {
+        QVector<Range> ranges;
+        quint32 addressMask = 0;
+
+        void sortAndMerge() {
+            std::sort(ranges.begin(), ranges.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
+            qsizetype count = 0;
+            for (const auto range : ranges) {
+                if (count && range.first <= quint64(ranges[count - 1].last) + 1)
+                    ranges[count - 1].last = std::max(ranges[count - 1].last, range.last);
+                else
+                    ranges[count++] = range;
+            }
+            ranges.resize(count);
+        }
+
+        bool matches(const DebugAccessEvent& access) const {
+            const auto candidate = std::lower_bound(ranges.cbegin(), ranges.cend(), access.address,
+                [](const auto& range, quint32 address) { return range.last < address; });
+            if (candidate != ranges.cend() &&
+                debugAccessOverlaps(candidate->first, candidate->last, access, addressMask))
+                return true;
+            // The access may also touch the first range after wrapping to zero.
+            return debugAccessOverlaps(ranges.front().first, ranges.front().last, access, addressMask);
+        }
+    };
+
+    DebugHookMasks masks{};
+    std::array<std::array<std::array<Filter, 3>, KR_DEBUG_MAX_CPUS>, 2> filters{};
+    QVector<DebugAccessSubscription> subscriptions;
+    DebugAccessCallback callback = nullptr;
+    void* opaque = nullptr;
+};
+
 thread_local LibretroHost::DebugExecution* LibretroHost::DebugExecution::entering = nullptr;
 void LibretroHost::DebugExecutionDeleter::operator()(DebugExecution* p) const { delete p; }
+
+void LibretroHost::DebugAccessObserverDeleter::operator()(DebugAccessObserver* p) const { delete p; }
+
+bool LibretroHost::connectDebugHooks(const DebugHookMask& masks) {
+    if (masks == connectedDebugHooks_) return true;
+    const bool enabled = masks != DebugHookMask{};
+    const auto callback = enabled ? debugAccessHook : nullptr;
+    auto* opaque = enabled ? this : nullptr;
+    const Activation owner(this);
+    const bool connected = api_->debug_connect_v2
+        ? api_->debug_connect_v2(callback, opaque, enabled ? masks.data() : nullptr,
+                                 enabled ? masks.size() : 0)
+        : api_->debug_connect && api_->debug_connect(callback, opaque, masks[0], masks[1]);
+    if (connected) connectedDebugHooks_ = masks;
+    return connected;
+}
+
+bool LibretroHost::applyDebugHookMasks(const DebugHookMasks& debuggerMasks,
+                                     const DebugAccessObserver* observer) {
+    auto masks = debuggerMasks;
+    if (observer) {
+        for (size_t side = 0; side < masks.size(); ++side)
+            for (size_t cpu = 0; cpu < masks[side].size(); ++cpu)
+                masks[side][cpu] |= observer->masks[side][cpu];
+    }
+    const auto previous = connectedDebugHooks_;
+    if (!connectDebugHooks(masks[0])) return false;
+    if (!linkPeer_ || linkPeer_->connectDebugHooks(masks[1])) return true;
+    connectDebugHooks(previous);
+    return false;
+}
+
+void LibretroHost::debugAccessHook(void* opaque, unsigned cpu, unsigned event, uint32_t address,
+                                 uint32_t value, unsigned size) {
+    if (!cpu || (cpu & (cpu - 1)) || cpu >= (1u << KR_DEBUG_MAX_CPUS) ||
+        (event != KR_DEBUG_EXEC && event != KR_DEBUG_READ && event != KR_DEBUG_WRITE))
+        return;
+    auto& console = *static_cast<LibretroHost*>(opaque);
+    const unsigned side = console.linkParent_ ? 1 : 0;
+    auto& host = console.linkParent_ ? *console.linkParent_ : console;
+    auto* debugger = host.debugger_.get();
+    if (debugger && debugger->suppress) return;
+    const unsigned index = cpuIndex(cpu);
+    const auto* observer = host.debugAccessObserver_.get();
+    if (observer && (observer->masks[side][index] & event) && !host.rewindPreview_ &&
+        !host.dispatchingDebugAccess_) {
+        const DebugAccessEvent access{side, cpu, event, address, value, size};
+        if (observer->filters[side][index][cpuIndex(event)].matches(access)) {
+            host.dispatchingDebugAccess_ = true;
+            const auto done = qScopeGuard([&] { host.dispatchingDebugAccess_ = false; });
+            observer->callback(observer->opaque, access);
+        }
+    }
+    // A breakpoint can suspend this stack. No observer pointer is used
+    // after the switch, so even clearing subscriptions while stopped is safe.
+    if (debugger && debugger->running && (debugger->enabled[side][index] & event))
+        debugger->handleAccess(side, cpu, event, address, value, size);
+}
+
+bool LibretroHost::setDebugAccessObserver(const QVector<DebugAccessSubscription>& subscriptions,
+                                        DebugAccessCallback callback, void* opaque) {
+    return configureDebugAccessObserver(subscriptions, callback, opaque, false);
+}
+
+bool LibretroHost::configureDebugAccessObserver(const QVector<DebugAccessSubscription>& subscriptions,
+                                              DebugAccessCallback callback, void* opaque, bool ignoreUnavailable) {
+    if (dispatchingDebugAccess_ || linkParent_) return false;
+    const auto debuggerMasks = debugger_ ? debugger_->enabled : DebugHookMasks{};
+    if (subscriptions.isEmpty()) {
+        if (!debugAccessObserver_) return true;
+        if (!applyDebugHookMasks(debuggerMasks, nullptr)) return false;
+        debugAccessObserver_.reset();
+        return true;
+    }
+    constexpr qsizetype maxSubscriptions = 128;
+    if (!callback || debuggerFramePending() || subscriptions.size() > maxSubscriptions) return false;
+    std::array<QVector<kr_debug_target>, 2> targets;
+    std::array<bool, 2> discovered{};
+    decltype(debugAccessObserver_) observer(new DebugAccessObserver);
+    observer->callback = callback;
+    observer->opaque = opaque;
+    for (const auto& subscription : subscriptions) {
+        const auto [side, cpu, event, first, last] = subscription;
+        if (side >= targets.size() || (event != KR_DEBUG_EXEC && event != KR_DEBUG_READ && event != KR_DEBUG_WRITE))
+            return false;
+        if (!discovered[side]) {
+            targets[side] = inspectionCpuTargets(side);
+            discovered[side] = true;
+        }
+        const auto target = std::find_if(targets[side].cbegin(), targets[side].cend(),
+            [cpu = subscription.cpu](const auto& item) { return item.cpu == cpu; });
+        if (target == targets[side].cend() || !(target->capabilities & event) ||
+            first > last || last > debugAccessAddressMask(*target, event)) {
+            if (ignoreUnavailable) continue;
+            return false;
+        }
+        const auto index = cpuIndex(cpu);
+        auto& filter = observer->filters[side][index][cpuIndex(event)];
+        filter.addressMask = debugAccessAddressMask(*target, event);
+        filter.ranges.push_back({first, last});
+        observer->masks[side][index] |= event;
+        observer->subscriptions.push_back(subscription);
+    }
+    if (observer->subscriptions.isEmpty()) observer.reset();
+    if (observer) {
+        for (auto& console : observer->filters)
+            for (auto& cpu : console)
+                for (auto& filter : cpu)
+                    if (!filter.ranges.isEmpty()) filter.sortAndMerge();
+    }
+    if (!applyDebugHookMasks(debuggerMasks, observer.get())) return false;
+    debugAccessObserver_ = std::move(observer);
+    return true;
+}
+
+void LibretroHost::suspendDebugHooks() {
+    connectDebugHooks({});
+    if (linkPeer_) linkPeer_->connectDebugHooks({});
+}
+
+void LibretroHost::unloadDebugHooks() {
+    if (debuggerFramePending()) finishDebugFrame();
+    suspendDebugHooks();
+    debugAccessObserver_.reset();
+    debugger_.reset();
+}
+
+void LibretroHost::restoreDebugHooks(bool changedTargets) {
+    if (!changedTargets) {
+        applyDebugHookMasks(debugger_ ? debugger_->enabled : DebugHookMasks{}, debugAccessObserver_.get());
+        return;
+    }
+    // Rediscover debugger targets before revalidating observation ranges
+    // against the new machine and available Link Cable endpoints.
+    auto observer = std::move(debugAccessObserver_);
+    if (debugger_) {
+        QString ignored;
+        debuggerAttach(ignored);
+    }
+    if (observer)
+        configureDebugAccessObserver(observer->subscriptions, observer->callback, observer->opaque, true);
+}
 
 bool LibretroHost::debuggerAttach(QString& error) {
     error.clear();
@@ -373,18 +523,17 @@ bool LibretroHost::debuggerAttach(QString& error) {
     return true;
 }
 
-void LibretroHost::debuggerDisconnectPeer() {
-    if (!debugger_ || !linkPeer_) return;
+void LibretroHost::disconnectPeerDebugHooks() {
+    if (!linkPeer_) return;
     finishDebugFrame();
-    debugger_->connect(1, nullptr);
+    linkPeer_->connectDebugHooks({});
 }
 
 void LibretroHost::debuggerDetach() {
     if (!debugger_) return;
     finishDebugFrame();
-    debugger_->connect(0, nullptr);
-    debugger_->connect(1, nullptr);
     debugger_.reset();
+    applyDebugHookMasks({}, debugAccessObserver_.get());
 }
 
 bool LibretroHost::debuggerAttached() const { return bool(debugger_); }
@@ -549,22 +698,16 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
                 : tr("Регистр можно изменить на границе кадра или перед инструкцией этого процессора.");
             return false;
         }
-        auto* core = d.console(instance(selected));
         const auto name = command.registerName.trimmed().toUpper().toLatin1();
         const auto* begin = static_cast<const kr_debug_reg*>(state.regs);
         const auto* end = begin + state.count;
         const auto* current = std::find_if(begin, end,
             [&](const auto& item) { return name == item.name; });
-        Activation owner(core);
-        const unsigned native = nativeCpu(selected);
-        if (current == end || !core->api_->debug_register_writable(native, name.constData()) ||
-            !core->api_->debug_write_register(native, name.constData(),
+        if (current == end || !writeDebugRegister(instance(selected), nativeCpu(selected), name.constData(),
                 (current->value & ~command.registerMask) | (command.registerValue & command.registerMask))) {
             error = tr("Ядро отклонило значение регистра.");
             return false;
         }
-        ++inspectionGeneration_;
-        debugToolsBoundary(KR_TRACE_REGISTER_EDIT);
         return true;
     }
 
@@ -679,6 +822,30 @@ bool LibretroHost::debuggerCommand(const DebuggerCommand& command, QString& erro
         return false;
     }
     return true;
+}
+
+bool LibretroHost::inspectionRegisterWritable(unsigned instance, unsigned cpu, const char* name) const {
+    const auto* console = inspectionConsole(instance);
+    if (!name || !console || !console->api_->debug_register_writable || !console->api_->debug_write_register)
+        return false;
+    const Activation owner(const_cast<LibretroHost*>(console));
+    return console->api_->debug_register_writable(cpu, name);
+}
+
+bool LibretroHost::writeDebugRegister(unsigned instance, unsigned cpu, const char* name, quint32 value) {
+    if (!inspectionRegisterWritable(instance, cpu, name)) return false;
+    auto* console = const_cast<LibretroHost*>(inspectionConsole(instance));
+    {
+        const Activation owner(console);
+        if (!console->api_->debug_write_register(cpu, name, value)) return false;
+    }
+    ++inspectionGeneration_;
+    debugToolsBoundary(KR_TRACE_REGISTER_EDIT);
+    return true;
+}
+
+bool LibretroHost::inspectionWriteRegister(unsigned instance, unsigned cpu, const char* name, quint32 value) {
+    return canWriteInspection() && writeDebugRegister(instance, cpu, name, value);
 }
 
 DebuggerSnapshot LibretroHost::debuggerSnapshot() const {

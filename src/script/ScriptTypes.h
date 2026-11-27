@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/DebugWatch.h"
 #include <QByteArray>
 #include <QColor>
 #include <QHash>
@@ -18,6 +19,11 @@ inline constexpr int MaxImageNameBytes = 128;
 inline constexpr int MaxImageBytes = 8 * 1024 * 1024;
 inline constexpr int MaxUpdates = 128;
 inline constexpr int MaxSaveObjects = 8;
+inline constexpr int MaxAccessHooksPerScript = 32;
+inline constexpr int MaxAccessHooks = 128;
+inline constexpr int MaxLabels = 128;
+inline constexpr int MaxAnnotationsPerKind = 32;
+inline constexpr int MaxAnnotationNameBytes = 128;
 inline constexpr qsizetype MaxSaveObjectBytes = 32 * 1024 * 1024;
 inline constexpr qsizetype MaxSaveBytes = 64 * 1024 * 1024;
 }
@@ -60,3 +66,14 @@ struct ScriptOverlay {
     QVector<ScriptDraw> commands;
 };
 using ScriptOverlayPtr = std::shared_ptr<const ScriptOverlay>;
+
+struct ScriptDebugLabel {
+    quint32 id = 0, instance = 0, cpu = 0, address = 0;
+    QString name;
+    quint32 source = 0, offset = 0;
+};
+
+struct ScriptDebugAnnotations {
+    QVector<ScriptDebugLabel> labels;
+    QVector<DebugWatchEntry> watches;
+};

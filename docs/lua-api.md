@@ -27,7 +27,7 @@ clock, and may go backwards on restore. Console IDs are `0` for A and `1` for B.
 Scripts run in start order in separate Lua environments. Restarting a running
 script keeps its place and creates a fresh environment. An error stops the
 script that raised it. Stopping a script releases its callbacks, drawings,
-input overrides and temporary saves. Game or hardware changes stop scripts
+input overrides, temporary saves, labels and watches. Game or hardware changes stop scripts
 bound to an incompatible machine. Callbacks stay registered when a script's
 main chunk finishes.
 
@@ -51,8 +51,9 @@ unavailable console, domain, address or register set yields `nil, reason`.
 A console with no native domain or CPU catalog returns an empty list.
 
 - `memory.domains([instance])` gives a list of records with `id`, `name`,
-  `size` in bytes, the associated `base` address and `endian` (`"be"` or
-  `"le"`). Availability, size and order can change with the active video mode.
+  `size` in bytes, the associated `base` address, `endian` (`"be"` or
+  `"le"`) and a `writable` flag. Availability, size and order can change with
+  the active video mode.
   Domain offsets start at zero. The base is metadata and does not
   imply that the entire domain is mapped into the CPU's current bus.
 - `memory.read(domain, offset[, width[, endian[, signed[, instance]]]])`
@@ -63,7 +64,8 @@ A console with no native domain or CPU catalog returns an empty list.
   bytes in a Lua string with embedded zeros preserved. Use `string.byte`
   to interpret the result. A request that crosses the end fails as a whole.
 - `memory.cpus([instance])` gives a list of `id`, `name`, `addressBits`,
-  `addressUnit` (bytes per logical address) and `endian`.
+  `addressUnit` (bytes per logical address), `endian` and a `hooks` table
+  with the hardware capability flags `exec`, `read` and `write`.
 - `memory.peek(cpu, address[, width[, endian[, signed[, instance]]]])` reads
   the CPU's logical map using the same integer options. Native order comes
   from the CPU record. Addresses are byte-based for 68000, Z80 and SH-2,
@@ -73,9 +75,88 @@ A console with no native domain or CPU catalog returns an empty list.
 - `memory.registers(cpu[, instance])` returns `pc`, `sp`, `cycles` (within the
   current emulated frame) and a `values` table keyed by native register names.
 
-The core's existing inspection API supplies the bytes. Starting a script
-does not attach the debugger or enable CPU hooks. Operations available on a
-given cartridge, add-on or console depend on the active core.
+The core's existing inspection API supplies the bytes. CPU access observation
+is enabled only for explicit subscriptions. Available operations depend on
+the active core and session.
+
+## Editing memory and registers
+
+- `memory.write(domain, offset, value[, width[, endian[, instance]]])`
+  queues a write to a writable physical domain. Width is `1`, `2` or `4`
+  bytes and defaults to `1`. The byte order is `"native"`, `"be"` or `"le"`
+  and defaults to the domain's order. Values may range from the signed minimum
+  to the unsigned maximum for the selected width.
+- `memory.writableregisters(cpu[, instance])` returns a table of supported
+  native register names and their widths in hexadecimal digits.
+- `memory.setregister(cpu, name, value[, instance])` queues a write to a
+  writable register. Use its exact native name and an unsigned integer that
+  fits the reported width.
+
+Writes are available at startup, in the `"frame"` callback and after
+`emu.frameadvance()` resumes in local play. Input recording and playback
+disable writes. A write returns `true` when queued or `nil, reason` when
+unavailable. Writes share the existing 32-request control queue and take
+effect at the next safe frame boundary. A read in the same callback still
+sees the current state. If the core rejects a queued write, the script stops
+and the console reports the error. A change invalidates rewind history and
+captured temporary saves.
+
+## CPU access callbacks
+
+- `memory.on(cpu, event, first, last, callback[, instance])` subscribes to
+  CPU accesses intersecting an inclusive logical address range. Pass `nil`
+  for `last` to observe a single address. It returns a positive handle or
+  `nil, reason`.
+- `memory.off(handle)` removes one of the current script's subscriptions.
+  It returns `true` on success or `nil, reason` for an unknown or unavailable
+  handle.
+- `memory.hookstats()` returns `{callbacks, truncated}` for the current
+  script's last completed frame. `truncated` is true when a budget caused a
+  matching event to be skipped. Read it in the `"frame"` callback or after
+  `emu.frameadvance()` resumes. It returns `nil, reason` when the completed
+  frame has no subscription statistics.
+
+Subscriptions can change at startup or after a completed frame in local
+play and during input recording or playback. Their callbacks receive a table
+with `event`, `frame`, `instance`, `cpu`, `address`, `value` and `size`.
+The event's frame number identifies the frame being executed, matching
+the subsequent `"frame"` event. During a CPU callback, `emu.framecount()`
+still returns the last completed frame. The event `"exec"`
+runs before opcode fetch, with `value` and `size` both zero. The events
+`"read"` and `"write"` report completed bus accesses. Their `value` is the
+native bus value and `size` is its width in bytes. Access ranges use the
+native event addresses. For example, SVP instruction addresses count words
+and its data accesses count bytes.
+
+Callbacks run in script start order and then in registration order. They
+can inspect memory and registers and write bounded console output. Collect
+counts or values for use in the next `"frame"` callback. Each script can
+register up to 32 access callbacks, with 128 subscriptions in total. A frame
+runs at most 32 access callbacks per script and 128 in total, within a shared
+wall-time budget of approximately 4 ms. Additional matching accesses are
+skipped when the budget is exhausted. The console reports the first such
+truncation per script run. An error retires the affected script at a frame
+boundary.
+
+## Debugger labels and RAM Watch
+
+- `memory.label(cpu, address, name[, instance])` adds a temporary label to
+  the CPU debugger. Use the CPU's logical instruction address, with the same
+  address units as `memory.peek`. Where the native mapping is available, the
+  label follows the bank resolved when the script declares it.
+- `memory.watch(domain, offset, width, name[, instance])` adds a temporary
+  RAM Watch row. Use a physical domain offset and width `1`, `2` or `4` bytes.
+  The row displays an unsigned integer in the domain's byte order.
+- `memory.unlabel(handle)` and `memory.unwatch(handle)` remove that script's
+  declarations. Creation returns a positive handle. Removal returns `true`.
+  An unavailable address, full list or unknown handle returns `nil, reason`.
+
+Declare entries at startup or after a completed frame. Names are nonempty
+UTF-8 strings of up to 128 bytes. Each script can declare up to 32 labels and
+32 watches, with 128 labels and 64 watches in total. The CPU debugger and
+RAM Watch mark the entries with `(Lua)`. RAM Watch samples its displayed
+values while its window is open. Temporary entries disappear when the
+script stops and project files contain only the user's saved entries.
 
 ## Frame observation and control
 
@@ -255,7 +336,10 @@ input recordings through the emulator menu.
 Kega Lua Overlay test cartridge, revision `KR-LUA1`. Generate this cartridge
 with `lua_runtime_tests --write-fixture /path/to/overlay.md`; the command
 creates a new file. The test source defines the ROM and the known RAM layout.
-
+`fixture-debugger.lua` uses the same cartridge. It edits a spare RAM word,
+adds a RAM Watch row and a label at the loop address, and counts delivered
+execution callbacks in a HUD. Run it in local play with input recording
+and playback stopped.
 
 For a real-game example, sonic1-hud.lua supports Sonic the Hedgehog REV00
 (serial GM 00001009-00, 512 KiB, header checksum 0x264A). It shows player/camera

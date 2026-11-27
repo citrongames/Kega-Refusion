@@ -849,3 +849,75 @@ excluded. These compare workloads in the same build, not two release binaries.
 No-script variation spans -2.49% to +1.33%; automation adds 2.15–8.15% in
 full output and 0.99–2.37% when presenting one frame in 32. Evidence is retained
 under ignored build/verification/lua-phase2.
+
+### Lua Phase 3 — debugger integration (2026-11-27)
+
+The native CPU event ABI and native emulation were unchanged. The host now
+unions debugger and Lua masks into one connection; trace and coverage keep
+their independent connections. `debug_execution` passes selected execute/read/
+write events, exact event values and ordering, overlapping/duplicate ranges,
+no debugger attachment for observation, unchanged machine bytes, blocked writes
+from callbacks/partial frames, observer removal with a suspended debugger fiber,
+soft/power reset and unload. Linked fixtures verify peer ranges, writes and
+teardown. `debug_expansion`, `inspection_core`, `debug_trace_host_tests` and
+`debug_coverage_host_tests` passed against the current native core.
+
+Runtime checks passed actual MD access callbacks, endian writes, register edits,
+unsupported/out-of-range rejection, callback mutation rejection, quota statistics
+and a single truncation notice, stop/error isolation, stale-save revision
+rejection, stable annotation handles and independent Game Gear Link A/B access.
+The packaged fixture-debugger.lua runs on the generated original cartridge,
+including its queued write, label/watch and access-count HUD. Existing read-only
+fixtures for MD, SMS, SG-1000, GG, GG Link, 32X, Firecore, CD and CD+32X still pass;
+this is not a new full mapper/MegaLD media audit.
+
+Session integration passed deferred memory/register edits without opening the
+debugger, rejection of an already queued pre-edit temporary load, annotation
+publication and clearing, native callbacks through the normal frame scheduler,
+and write rejection during input recording. Existing automation, recording branch,
+playback, frame-aligned packets, pause/step/rewind/load and lifecycle checks pass.
+While a native frame is suspended, Stop removes an empty observer immediately;
+nonempty subscription changes wait for a complete boundary. A before-frame
+script failure also removes its hooks before the upcoming native frame.
+
+Three offscreen UI checks (`debug_watch_view`, `cpu_debugger_view_tests`,
+`lua_window_tests`) passed. Added assertions cover physical-bank and linked
+labels, navigation, saved-project separation and watch-ID collisions. Sampling
+is still restricted to open inspector windows and requested addresses.
+
+#### Performance
+
+The preserved pre-change benchmark executable came from `00c5978`. Both
+executables used the same core binary and same ROMs read in place, 360 warm-up
+frames followed by 1,800 timed frames, three rotated trials per workload.
+Measurements cover core/host/script execution, not Qt rendering, disk or device
+audio output. Normal mode renders every frame with PCM; accelerated mode renders
+one in 32 with audio muted. The new hook workload observes the ROM's VBlank
+handler and reads a work-RAM word, without changing the emulated state.
+
+| Game/region | Output | Old baseline | New baseline | New empty runtime | HUD | Automation | VBlank hook |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Lion King, NTSC-U 59.92274 Hz | Full video/audio | 549.61 | 545.09 | 550.46 | 559.94 | 549.57 | 726.03 |
+| Lion King, NTSC-U | 1/32 video, muted | 366.77 | 368.26 | 370.57 | 376.08 | 373.66 | 538.68 |
+| Sonic 2, PAL 49.70146 Hz | Full video/audio | 628.05 | 684.59 | 690.54 | 740.58 | 696.25 | 851.45 |
+| Sonic 2, PAL | 1/32 video, muted | 425.84 | 455.17 | 449.85 | 463.63 | 467.49 | 638.45 |
+
+Values are median microseconds per frame. The Sonic sequence showed host-load
+drift; a follow-up run of the **unchanged old executable** measured 685.59 us
+normal and 432.64 us accelerated (ranges 668.45–700.95 and 430.20–450.46),
+so the initial sequential old/new delta is not an isolated code regression.
+The empty runtime in the new build differs from its own baseline by -1.17% to
++0.99%. Explicit execution observation costs 0.17–0.18 ms/frame here, or roughly
+24–46% extra core execution work. It is not free; no native access hook is
+connected for ordinary HUDs or when no subscriptions exist. Heavy callback
+scripts can cost more and are bounded by the documented quotas.
+
+All workloads and both executables retained identical final native state, image
+and PCM digests for each game/output mode. Raw measurements are retained in
+ignored `build/verification/lua-phase3`. Linux application and Windows cross-build
+compile successfully; Windows interactive verification remains with the user.
+
+The final Windows testbuild matches all 83 staged package files byte for byte, including
+the executable, languages, example and API guide. No Windows application was
+launched or controlled. Generated package staging and the old benchmark copy
+were removed after verification; incremental builds and small evidence logs remain.

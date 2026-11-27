@@ -823,7 +823,7 @@ void LibretroHost::unload() {
     debugToolsBoundary(KR_TRACE_UNLOAD);
     traceStop();
     coverageStop();
-    debuggerDetach();
+    unloadDebugHooks();
     ++inspectionGeneration_;
     while (rewindPreviewDepth_) endRewindPreview();
     runClock_ = {};
@@ -1038,8 +1038,10 @@ void LibretroHost::reset() {
     ++inspectionGeneration_;
     runClock_ = {};
     spriteOwnership_ = {};
-    if (linkPeer_) { resetLinkedPair(); return; }
-    if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
+    suspendDebugHooks();
+    if (linkPeer_) resetLinkedPair();
+    else if (loaded_) { clearCoreCheats(); api_->reset(); resetAchievementMemory(); applyCheats(); audio_.clear(); }
+    restoreDebugHooks(false);
 }
 LibretroHost::DebugCapabilities LibretroHost::debugCapabilities() const {
     DebugCapabilities result;
@@ -1135,6 +1137,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
     if (!flushSaveRam(error)) return false;
     resetAchievementMemory();
     achievementDescriptorCount_ = 0;
+    suspendDebugHooks();
     clearCoreCheats();
     api_->unload_game();
     batterySave_.clear();
@@ -1193,7 +1196,7 @@ bool LibretroHost::hardReset(QString& error, bool applyPending) {
             if (bytes) std::memcpy(bytes,peerBattery[i].constData(),size_t(peerBattery[i].size()));
         }
     }
-    if (debugger_) { QString ignored; debuggerAttach(ignored); }
+    restoreDebugHooks(true);
     return true;
 }
 Cheats::Platform LibretroHost::cheatPlatform() const {

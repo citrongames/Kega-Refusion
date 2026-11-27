@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/DebugProject.h"
+#include "script/ScriptTypes.h"
 
 #include <QDialog>
 #include <QHash>
@@ -26,6 +27,7 @@ public:
     explicit CpuDebuggerDialog(QWidget* parent = nullptr);
     DebuggerCommand refreshCommand() const;
     void setSnapshot(const DebuggerSnapshot& snapshot);
+    void setScriptLabels(const QVector<ScriptDebugLabel>& labels);
     void navigateTo(quint32 cpu, quint32 address);
     DebugProject exportProject() const;
     void applyProject(const DebugProject& project);
@@ -98,6 +100,7 @@ private:
     quint64 codeSymbolKey(int row) const;
     QString symbolLocation(quint64 key) const;
     void navigateSymbol(quint64 key);
+    void navigateSymbol(quint64 key, quint32 address);
 
     QTabWidget* pages_ = nullptr;
     QLabel* status_ = nullptr;
@@ -136,6 +139,7 @@ private:
     std::optional<PendingConfiguration> pendingConfiguration_;
     std::optional<DebugProject> queuedProject_;
     QHash<quint32, QMap<quint64, Symbol>> symbols_;
+    QHash<quint32, QHash<quint64, QVector<ScriptDebugLabel>>> scriptLabels_;
     QString gameKey_;
     quint64 generation_ = 0;
     quint64 nextConfigureRequest_ = 0, lastConfigureResult_ = 0;

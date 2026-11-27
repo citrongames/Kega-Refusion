@@ -227,6 +227,7 @@ void EmulationSession::requestInspection(const DebugInspectionRequest& request) 
     inspectionRequest_.parts &= 15u;
     inspectionRequest_.length = std::min(request.length,4096u);
     inspectionRequest_.watches.resize(std::min(inspectionRequest_.watches.size(), qsizetype(DebugWatchLimit)));
+    inspectionRequest_.scriptWatches.resize(std::min(inspectionRequest_.scriptWatches.size(), qsizetype(DebugScriptWatchLimit)));
     inspectionRequested_.store(true);
     if (!request.parts) {
         inspectionSnapshot_ = {};
@@ -394,6 +395,11 @@ QVector<ScriptUpdate> EmulationSession::takeScriptUpdates() {
     result.swap(scriptUpdates_);
     scriptUpdatePending_=false;
     return result;
+}
+ScriptDebugAnnotations EmulationSession::takeScriptAnnotations() {
+    std::lock_guard<std::mutex> lock(scriptMutex_);
+    scriptAnnotationsPending_=false;
+    return scriptAnnotations_;
 }
 void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership,
                                     const QRectF& inputViewport, ScriptOverlayPtr scriptOverlay) {
@@ -633,8 +639,36 @@ void EmulationSession::run() {
     LibretroHost host(corePath_,dataPath_);
     ScriptRuntime scripts;
     ScriptOverlayPtr scriptOverlay;
-    quint64 scriptGeneration=1;
+    quint64 scriptGeneration=1, scriptAccessRevision=0, scriptAnnotationRevision=0;
+    QHash<quint32,ScriptDebugLabel> scriptLabelLocations;
     auto publishScriptUpdates = [&] {
+        const auto annotationRevision=scripts.annotationRevision();
+        if (annotationRevision!=scriptAnnotationRevision) {
+            auto annotations=scripts.annotations();
+            QHash<quint32,ScriptDebugLabel> locations;
+            for (auto& label : annotations.labels) {
+                const auto previous=scriptLabelLocations.constFind(label.id);
+                if (previous!=scriptLabelLocations.cend() && previous->instance==label.instance &&
+                    previous->cpu==label.cpu && previous->address==label.address) {
+                    label.source=previous->source;label.offset=previous->offset;
+                } else {
+                    kr_cov_location location{};
+                    if (host.inspectionCodeLocation(label.instance,label.cpu,label.address,location)) {
+                        label.source=location.source; label.offset=location.offset;
+                    }
+                }
+                locations.insert(label.id,label);
+            }
+            scriptLabelLocations=std::move(locations);
+            scriptAnnotationRevision=annotationRevision;
+            bool notify=false;
+            {
+                std::lock_guard<std::mutex> lock(scriptMutex_);
+                scriptAnnotations_=std::move(annotations);
+                notify=!scriptAnnotationsPending_;scriptAnnotationsPending_=true;
+            }
+            if (notify) emit scriptAnnotationsReady();
+        }
         auto updates=scripts.takeUpdates();
         if (updates.isEmpty()) return;
         bool notify=false;
@@ -655,7 +689,9 @@ void EmulationSession::run() {
         if (notify) emit scriptsReady();
     };
     auto stopScripts = [&] (const QString& reason) {
+        host.setDebugAccessObserver({},nullptr,nullptr);
         scripts.stopAll(reason);
+        scriptAccessRevision=scripts.accessRevision();
         scriptOverlay.reset();
         ++scriptGeneration;
         scriptMachineRevision_.fetch_add(1);
@@ -730,7 +766,23 @@ void EmulationSession::run() {
     QString achievementStatusOverride;
     auto scriptPolicy = [&] {
         const bool local = !networkMode && !achievementHardcore && !videoExport;
-        scripts.setHostPolicy(local && !movie.readOnly(), local, local);
+        scripts.setHostPolicy(local && !movie.readOnly(), local, local,
+                              local && !movie.active(), local);
+    };
+    const auto syncScriptAccess = [&] {
+        const auto revision=scripts.accessRevision();
+        if (scriptAccessRevision==revision) return;
+        const auto subscriptions=scripts.accessSubscriptions();
+        // Removing the last observer is safe even at a suspended breakpoint;
+        // changing nonempty masks waits for the native frame to finish.
+        if (!subscriptions.isEmpty() && host.debuggerFramePending()) return;
+        if (!host.setDebugAccessObserver(subscriptions,
+                subscriptions.isEmpty() ? nullptr : +[](void* opaque,const DebugAccessEvent& event) {
+                    static_cast<ScriptRuntime*>(opaque)->dispatchMemoryAccess(event);
+                },subscriptions.isEmpty() ? nullptr : &scripts)) {
+            stopScripts(Localization::text(QStringLiteral("Не удалось подключить обработчики Lua к процессорам.")));
+        }
+        scriptAccessRevision=scripts.accessRevision();
     };
     auto scriptEvent = [&] (ScriptEvent event, bool draw=true) {
         if (!scripts.hasScripts()) { scriptOverlay.reset(); return; }
@@ -1087,7 +1139,12 @@ void EmulationSession::run() {
             publishScriptUpdates();
         }
         // Consume physical mouse motion, never a scripted replacement delta.
-        if (movie.beforeFrame(effective, error, &frameControls)) {consumeMouseInput(local);return true;}
+        if (movie.beforeFrame(effective, error, &frameControls)) {
+            consumeMouseInput(local);
+            syncScriptAccess();
+            if (scripts.hasScripts()) scripts.beginAccessFrame(host,host.runClock().frames+1);
+            return true;
+        }
         paused = true; frameAdvanceHeld_.store(false);
         clearAudio(); emit pausedChanged(true);
         if (movie.recording() && !error.isEmpty()) {
@@ -1439,6 +1496,7 @@ void EmulationSession::run() {
     auto finishFramePipeline = [&] {
         if (!debugFrame.active) return;
         const auto context=debugFrame;debugFrame.active=false;
+        scripts.endAccessFrame();
         scriptSteps.clear();
         const auto observeCommittedFrame = [&] {
             if (!scripts.hasScripts()) { scriptOverlay.reset(); return; }
@@ -1547,8 +1605,9 @@ void EmulationSession::run() {
     };
     scripts.setHostServices(std::move(scriptServices));
     auto processScriptControls = [&] {
+        scriptPolicy();
         quint64 repositionedBy=0;
-        bool failed=false;
+        bool failed=false, mutated=false;
         for (const auto& control : scripts.takeControls()) {
             if (!scripts.ownsControl(control) || (repositionedBy && control.run!=repositionedBy)) continue;
             QString error;
@@ -1559,6 +1618,44 @@ void EmulationSession::run() {
                 continue;
             }
             switch (control.type) {
+            case ScriptControlType::MemoryWrite:
+            case ScriptControlType::RegisterWrite: {
+                if (movie.active()) {
+                    error=QStringLiteral("Memory and register changes are unavailable during input recording or playback");
+                    break;
+                }
+                bool changed=true, okay=false;
+                if (control.type==ScriptControlType::MemoryWrite) {
+                    char previous[KR_INSPECT_MAX_WRITE]{};
+                    const auto count=control.bytes.size();
+                    if (count>0 && count<=KR_INSPECT_MAX_WRITE &&
+                        host.inspectionDomainWritable(control.instance,control.target) &&
+                        host.inspectionRead(control.instance,control.target,control.offset,previous,size_t(count))) {
+                        changed=std::memcmp(previous,control.bytes.constData(),size_t(count))!=0;
+                        okay=!changed || host.inspectionWrite(control.instance,control.target,control.offset,
+                                                             control.bytes.constData(),size_t(count));
+                    }
+                } else {
+                    kr_debug_cpu registers{};
+                    if (host.inspectionRegisterWritable(control.instance,control.target,control.registerName.constData()) &&
+                        host.inspectionRegisters(control.instance,control.target,registers)) {
+                        for (unsigned i=0;i<registers.count;++i)
+                            if (control.registerName==registers.regs[i].name) changed=registers.regs[i].value!=control.valueBits;
+                        okay=!changed || host.inspectionWriteRegister(control.instance,control.target,
+                                                                     control.registerName.constData(),control.valueBits);
+                    }
+                }
+                if (!okay) error=QStringLiteral("The core rejected the memory or register write");
+                else if (changed) {
+                    if (!mutated) {
+                        scripts.discardSavedStates();
+                        clearHistory();clearAudio();resetMetrics();pacer.reset(nowNs());
+                        scriptOverlay.reset();++scriptGeneration;
+                    }
+                    mutated=true;
+                }
+                break;
+            }
             case ScriptControlType::FrameAdvance:
                 if (movie.mode()==MovieSession::Finished)
                     error=QStringLiteral("Input playback has finished");
@@ -1653,12 +1750,17 @@ void EmulationSession::run() {
             }
             if (!error.isEmpty()) { scripts.controlFailed(control,error); failed=true; }
         }
-        if (failed && host.loaded() && !networkRemoteRewinding) {
+        if (mutated) {
+            inspectionRequested_.store(true);
+            if (host.debuggerAttached()) publishDebugger();
+        }
+        if ((failed || mutated) && host.loaded() && !networkRemoteRewinding) {
             scriptEvent(ScriptEvent::Draw);
             if (!host.frame().isNull()) presentHostFrame();
         }
         scriptSteps.erase(std::remove_if(scriptSteps.begin(),scriptSteps.end(),
             [&](const ScriptControl& request) { return !scripts.ownsControl(request); }),scriptSteps.end());
+        syncScriptAccess();
         publishScriptUpdates();
     };
     while (!quitting_.load()) {
@@ -1758,6 +1860,7 @@ void EmulationSession::run() {
                     if (command.script->action==ScriptAction::Run) continue;
                     const auto stop=command.script;
                     scripts.command(*stop,host);
+                    syncScriptAccess();
                     for (auto& queued : pending)
                         if (queued.type==Type::Lua && queued.script &&
                             queued.script->action==ScriptAction::Run &&
@@ -2975,6 +3078,8 @@ void EmulationSession::run() {
     host.captureAchievementProgress = {}; host.restoreAchievementProgress = {};
     networkTimeline.stop();
     if(networkQualityVisible)emit networkQualityChanged(QJsonObject{{"active",false}});
+    host.setDebugAccessObserver({},nullptr,nullptr);
+    scripts.endAccessFrame();
     scripts.stopAll({});
     host.unload();
     loaded_.store(false);

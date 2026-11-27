@@ -445,6 +445,196 @@ end)
     runtime.setHostServices({});
 }
 
+bool connectAccess(ScriptRuntime& runtime, LibretroHost& host) {
+    return host.setDebugAccessObserver(runtime.accessSubscriptions(),
+        [](void* opaque, const DebugAccessEvent& e) {
+            static_cast<ScriptRuntime*>(opaque)->dispatchMemoryAccess(e);
+        }, &runtime);
+}
+
+void checkDebuggerExample(ScriptRuntime& runtime, LibretroHost& host, const QString& directory) {
+    QFile source(directory + QStringLiteral("/fixture-debugger.lua"));
+    require(source.open(QIODevice::ReadOnly), "Open the debugger fixture example");
+    runtime.setHostPolicy(false, false, false, true, true);
+    expectStatus(run(runtime, host, 1, source.readAll()), 1, ScriptStatus::Running);
+    const auto controls = runtime.takeControls();
+    require(controls.size() == 1 && controls[0].type == ScriptControlType::MemoryWrite &&
+            host.inspectionWrite(controls[0].instance, controls[0].target, controls[0].offset,
+                                 controls[0].bytes.constData(), size_t(controls[0].bytes.size())),
+            "Apply the debugger fixture's memory edit");
+    const auto annotations = runtime.annotations();
+    require(annotations.labels.size() == 1 && annotations.watches.size() == 1 && connectAccess(runtime, host),
+            "Install example label, RAM watch and execute hook");
+    for (int step = 0; step < 2; ++step) {
+        runtime.beginAccessFrame(host, host.runClock().frames + 1);
+        host.runFrame();
+        runtime.endAccessFrame();
+        const auto overlay = frame(runtime, host);
+        require(overlay && overlay->commands.first().text == "Loop callbacks: 32 (budget reached)",
+                "Show limited execute hooks on the example HUD");
+        const auto updates = runtime.takeUpdates();
+        require(updates.size() == (step == 0 ? 1 : 0),
+                "Example reports truncation only once per run");
+        if (!updates.isEmpty()) expectStatus(updates, 1, ScriptStatus::Log);
+    }
+    runtime.stopAll();
+    runtime.takeUpdates();
+    require(host.setDebugAccessObserver({}), "Clear the debugger example observer");
+    runtime.setHostPolicy(false, false, false);
+}
+
+void checkAccessAndEdits(ScriptRuntime& runtime, LibretroHost& host, const QTemporaryDir& temp) {
+    host.unload();
+    auto rom = mdFixture();
+    // Loop: MOVE.W ($FF0050).L,D0; MOVE.W D0,($FF0052).L; BRA.S to the read.
+    const auto loop = QByteArray::fromHex("303900ff005033c000ff005260f2");
+    rom.replace(0x23c, loop.size(), loop);
+    QString error;
+    require(host.load(writeFixture(temp, "access.md", rom), error), "Load access fixture: " + error);
+    host.runFrame();
+    runtime.setHostServices({true, true, true, [&](qsizetype, QString&) {
+        return host.captureMovieState();
+    }, true, true});
+    expectStatus(run(runtime, host, 26, R"(
+local domains = {}
+for _, d in ipairs(memory.domains()) do domains[d.id] = d end
+assert(domains[2].writable and not domains[1].writable)
+local main = memory.cpus()[1]
+assert(main.id == 1 and main.hooks.exec and main.hooks.read and main.hooks.write)
+assert(memory.writableregisters(1).D1 == 8)
+assert(memory.write(1, 0, 0) == nil)
+assert(memory.write(2, domains[2].size - 1, 0, 2) == nil)
+assert(memory.write(2, 0, 0, 1, nil, 1) == nil)
+assert(memory.setregister(1, "UNKNOWN", 0) == nil)
+assert(memory.on(1, "read", 0x1000000, nil, function() end) == nil)
+assert(memory.watch(2, domains[2].size, 1, "outside") == nil)
+local unused = assert(memory.watch(2, 0x10, 1, "unused"))
+assert(memory.unwatch(unused) and not memory.unwatch(unused))
+local label = assert(memory.label(1, 0x23c, "Copy word"))
+local watch = assert(memory.watch(2, 0x52, 2, "Copied value"))
+assert(watch >= 0x80000000 and label < 0x80000000)
+
+local save = assert(savestate.create())
+assert(savestate.save(save))
+assert(memory.write(2, 0x50, 0x3412, 2, "le"))
+assert(memory.write(2, 0x54, -2, 2))
+assert(memory.setregister(1, "D1", 0x76543210))
+assert(memory.read(2, 0x50, 2) == 0)
+assert(savestate.load(save))
+local count, types = 0, {}
+local function access(e)
+    assert(e.instance == 0 and e.cpu == 1 and e.frame == emu.framecount() + 1)
+    if count == 0 then
+        assert(not memory.write(2, 0x50, 0))
+        assert(not memory.setregister(1, "D1", 0))
+        assert(not emu.pause() and not emu.reset() and not emu.frameadvance())
+        assert(not input.set(1, {start = true}))
+        assert(not savestate.load(save))
+        assert(not memory.label(1, 0x23c, "forbidden"))
+        assert(not memory.on(1, "exec", 0x23c, nil, access))
+    end
+    if e.event == "exec" then
+        assert(e.address == 0x23c and e.size == 0 and e.value == 0)
+    else
+        assert(e.size == 2 and e.value == 0x1234)
+        if e.event == "read" then assert(e.address == 0xff0050) end
+        if e.event == "write" then
+            assert(e.address == 0xff0052 and memory.peek(1, e.address, 2) == e.value)
+        end
+    end
+    types[e.event] = true
+    count = count + 1
+end
+local read = assert(memory.on(1, "read", 0xff0051, nil, access))
+local write = assert(memory.on(1, "write", 0xff0052, 0xff0053, access))
+local exec = assert(memory.on(1, "exec", 0x23c, nil, access))
+local other = assert(memory.on(1, "exec", 0x23c, nil, function() error("removed") end))
+assert(memory.off(other) and not memory.off(other))
+assert(emu.frameadvance())
+assert(not savestate.load(save))
+assert(count == 32 and types.exec and types.read and types.write, "Access callbacks missing: " .. count)
+local stats = assert(memory.hookstats())
+assert(stats.truncated and stats.callbacks == count)
+assert(memory.registers(1).values.D1 == 0x76543210)
+assert(memory.read(2, 0x54, 2, nil, true) == -2)
+assert(memory.off(read) and memory.off(write) and memory.off(exec))
+assert(memory.unlabel(label) and memory.unwatch(watch))
+draw.text(0, 0, "access")
+)"), 26, ScriptStatus::Running);
+
+    const auto annotations = runtime.annotations();
+    require(annotations.labels.size() == 1 && annotations.labels.first().address == 0x23c &&
+            annotations.watches.size() == 1 && annotations.watches.first().offset == 0x52,
+            "Live script annotations use CPU addresses and physical-domain offsets");
+    const auto annotationRevision = runtime.annotationRevision();
+    const auto controls = runtime.takeControls();
+    require(controls.size() == 5 && controls[0].type == ScriptControlType::MemoryWrite &&
+            controls[0].bytes == QByteArray::fromHex("1234") && controls[0].offset == 0x50 &&
+            controls[1].type == ScriptControlType::MemoryWrite &&
+            controls[1].bytes == QByteArray::fromHex("fffe") &&
+            controls[2].type == ScriptControlType::RegisterWrite && controls[2].registerName == "D1" &&
+            controls[3].type == ScriptControlType::LoadState && controls[3].snapshot &&
+            controls[4].type == ScriptControlType::FrameAdvance,
+            "Mutations use canonical bytes and keep control order");
+    for (const auto& control : {controls[0], controls[1]}) {
+        require(host.inspectionWrite(control.instance, control.target, control.offset,
+                                     control.bytes.constData(), size_t(control.bytes.size())),
+                "Apply deferred memory edit at the boundary");
+    }
+    require(host.inspectionWriteRegister(controls[2].instance, controls[2].target,
+                                         controls[2].registerName.constData(), controls[2].valueBits),
+            "Apply deferred register edit at the boundary");
+    runtime.discardSavedStates();
+    require(!runtime.ownsControl(controls[3]) && runtime.ownsControl(controls[4]),
+            "Edits invalidate older state loads and keep a pending advance");
+    require(runtime.accessSubscriptions().size() == 3 && connectAccess(runtime, host),
+            "Connect real access observer");
+    const auto accessRevision = runtime.accessRevision();
+    runtime.beginAccessFrame(host, host.runClock().frames + 1);
+    host.runFrame();
+    runtime.endAccessFrame();
+    const auto overlay = frame(runtime, host);
+    const auto updates = runtime.takeUpdates();
+    expectStatus(updates, 26, ScriptStatus::Log);
+    require(updates.size() == 1 && overlay && overlay->commands.first().text == "access",
+            "Completed Lua access verification and emitted one truncation notice");
+    require(runtime.accessRevision() != accessRevision && runtime.accessSubscriptions().isEmpty() &&
+            runtime.annotationRevision() != annotationRevision && runtime.annotations().labels.isEmpty() &&
+            runtime.annotations().watches.isEmpty() && connectAccess(runtime, host),
+            "Remove all access and annotation handles");
+
+    expectStatus(run(runtime, host, 26, R"(
+assert(memory.watch(2, 0x50, 2, "fault owned"))
+assert(memory.label(1, 0x23c, "fault owned"))
+assert(memory.on(1, "exec", 0x23c, nil, function() error("native hook failure") end))
+)"), 26, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 27, R"(
+local seen = false
+assert(memory.on(1, "exec", 0x240, nil, function() seen = true end))
+emu.on("frame", function()
+    local stats = assert(memory.hookstats())
+    assert(not seen and not stats.truncated and stats.callbacks == 0)
+end)
+)"), 27, ScriptStatus::Running);
+    runtime.setHostPolicy(false, false, false, false, false);
+    require(runtime.accessSubscriptions().isEmpty() && runtime.annotations().labels.size() == 1,
+            "Access policy disables hooks and permits read-only annotations");
+    runtime.setHostPolicy(false, false, false, false, true);
+    require(connectAccess(runtime, host), "Restore hook observer after policy change");
+    runtime.beginAccessFrame(host, host.runClock().frames + 1);
+    host.runFrame();
+    runtime.endAccessFrame();
+    expectStatus(runtime.takeUpdates(), 26, ScriptStatus::Error);
+    frame(runtime, host);
+    require(runtime.hasScripts() && runtime.accessSubscriptions().size() == 1 &&
+            runtime.annotations().labels.isEmpty() && runtime.annotations().watches.isEmpty() &&
+            runtime.takeUpdates().isEmpty(), "A failed hook releases only its own script");
+    runtime.stopAll();
+    runtime.takeUpdates();
+    require(host.setDebugAccessObserver({}), "Clear real access observer");
+    runtime.setHostServices({});
+}
+
 void checkZ80(ScriptRuntime& runtime, LibretroHost& host, unsigned expectedHardware) {
     kr_inspect_info catalog{};
     require(host.inspectionCatalog(0, catalog) && (catalog.hardware & expectedHardware),
@@ -565,6 +755,53 @@ end)
     const auto overlay = frame(runtime, host);
     require(overlay && overlay->instance == 1 && overlay->commands.first().text == "B",
             "Link B can inspect both consoles");
+    runtime.setHostPolicy(false, false, false, true, true);
+    expectStatus(run(runtime, host, 2, R"(
+local ram
+for _, d in ipairs(memory.domains()) do
+    if d.base == 0xc000 then ram = d.id end
+end
+assert(ram and memory.write(ram, 0x20, 0x6d))
+assert(memory.setregister(2, "BC", 0x1234))
+assert(memory.watch(ram, 0x20, 1, "Peer RAM"))
+assert(memory.label(2, 0x0005, "Peer loop"))
+local seen
+assert(memory.on(2, "exec", 0x0005, nil, function(e)
+    assert(e.instance == 1 and e.cpu == 2 and e.address == 0x0005)
+    assert(e.frame == emu.framecount() + 1)
+    assert(memory.peek(2, 0xc020) == 0x6d and memory.peek(2, 0xc020, 1, nil, false, 0) == 0xba)
+    assert(memory.registers(2).values.BC == 0x1234)
+    seen = e.frame
+end))
+emu.on("frame", function(e)
+    assert(e.instance == 1 and seen == e.frame)
+    assert(memory.hookstats().callbacks > 0)
+    draw.text(0, 0, "peer hook")
+end)
+)"), 2, ScriptStatus::Running);
+    const auto controls = runtime.takeControls();
+    require(controls.size() == 2 && controls[0].instance == 1 && controls[1].instance == 1 &&
+            host.inspectionWrite(1, controls[0].target, controls[0].offset,
+                                 controls[0].bytes.constData(), size_t(controls[0].bytes.size())) &&
+            host.inspectionWriteRegister(1, controls[1].target, controls[1].registerName.constData(),
+                                         controls[1].valueBits),
+            "Apply Lua memory and register writes to the presented peer");
+    const auto notes = runtime.annotations();
+    require(notes.labels.size() == 1 && notes.labels.first().instance == 1 &&
+            notes.watches.size() == 1 && notes.watches.first().instance == 1,
+            "Presented peer is the default Lua annotation target");
+    require(connectAccess(runtime, host), "Subscribe to native accesses only on the peer");
+    runtime.beginAccessFrame(host, host.runClock().frames + 1);
+    host.runFrame();
+    runtime.endAccessFrame();
+    runtime.takeUpdates();
+    const auto observed = frame(runtime, host);
+    require(observed && observed->commands.size() == 2 &&
+            observed->commands.last().text == "peer hook" && runtime.takeUpdates().isEmpty(),
+            "Observe a complete linked frame and filter events by console");
+    require(host.setDebugAccessObserver({}), "Clear peer access observer");
+    runtime.setHostPolicy(false, false, false);
+
     require(host.setLinkCableEnabled(false, error), "Disable GG Link: " + error);
     require(!runtime.compatible(host), "Link teardown invalidates peer catalog");
     runtime.stopAll();
@@ -604,7 +841,9 @@ int main(int argc, char** argv) {
                 runtime.stopAll();
                 runtime.takeUpdates();
             }
+            checkDebuggerExample(runtime, host, QString::fromLocal8Bit(argv[2]));
         }
+        checkAccessAndEdits(runtime, host, data);
         for (const auto& name : {QStringLiteral("watch.sms"), QStringLiteral("watch.sg"), QStringLiteral("watch.gg")}) {
             const bool gg = name.endsWith(".gg"), sg = name.endsWith(".sg");
             host.unload();

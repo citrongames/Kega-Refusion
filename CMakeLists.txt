@@ -47,7 +47,7 @@ add_library(core_host STATIC src/script/ScriptRuntime.cpp src/script/ScriptRunti
     src/core/DebugCoverageMap.cpp src/core/DebugCoverageMap.h
     src/core/DebugTrace.cpp src/core/DebugTrace.h src/core/DebugTraceAbi.h
     src/core/DebugTraceBuffer.cpp src/core/DebugTraceBuffer.h
-    src/core/DebugExecution.cpp src/core/DebugExecution.h src/core/DebugExecutionAbi.h
+    src/core/DebugExecution.cpp src/core/DebugExecution.h src/core/DebugExecutionAbi.h src/core/DebugAccess.h
     src/core/DebugInspection.cpp src/core/DebugInspection.h src/core/DebugInspectionAbi.h
     src/core/CartridgeProfile.h
     src/core/Cheats.cpp src/core/Cheats.h

@@ -107,6 +107,8 @@ public:
 
     int rowCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : rows_.size(); }
     int columnCount(const QModelIndex& parent = {}) const override { return parent.isValid() ? 0 : ColumnCount; }
+    int projectCount() const { return projectCount_; }
+    bool isProjectRow(int row) const { return row >= 0 && row < projectCount_; }
 
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override {
         if (orientation != Qt::Horizontal || role != Qt::DisplayRole) return {};
@@ -144,7 +146,9 @@ public:
         }
         if (role != Qt::DisplayRole && role != Qt::ToolTipRole) return {};
         switch (index.column()) {
-        case Name: return row.entry.name.isEmpty() ? QStringLiteral("—") : row.entry.name;
+        case Name:
+            if (!isProjectRow(index.row())) return text("%1 (Lua)").arg(row.entry.name);
+            return row.entry.name.isEmpty() ? QStringLiteral("—") : row.entry.name;
         case Address:
             return (row.domain.id ? QString() : QStringLiteral("+")) +
                 addressText(row.entry.offset, row.domain.address_base);
@@ -157,25 +161,47 @@ public:
         return row >= 0 && row < rows_.size() ? &rows_.at(row).entry : nullptr;
     }
 
-    QVector<DebugWatchEntry> entries() const {
-        QVector<DebugWatchEntry> result;
-        result.reserve(rows_.size());
-        for (const auto& row : rows_) result.append(row.entry);
-        return result;
-    }
+    QVector<DebugWatchEntry> projectEntries() const { return entries(0, projectCount_); }
+    QVector<DebugWatchEntry> scriptEntries() const { return entries(projectCount_, rows_.size()); }
 
-    void replaceAll(const QVector<DebugWatchEntry>& entries) {
+    void replaceProjectEntries(const QVector<DebugWatchEntry>& entries) {
         beginResetModel();
         rows_.clear();
         rows_.reserve(entries.size());
         for (const auto& entry : entries) rows_.append(Row(entry));
+        projectCount_ = rows_.size();
         endResetModel();
     }
 
+    void replaceScriptEntries(const QVector<DebugWatchEntry>& declarations) {
+        if (rows_.size() > projectCount_) {
+            beginRemoveRows({}, projectCount_, rows_.size() - 1);
+            rows_.erase(rows_.begin() + projectCount_, rows_.end());
+            endRemoveRows();
+        }
+        if (declarations.isEmpty()) return;
+
+        // Saved projects accept any nonzero ID. Remap a conflicting temporary ID
+        // so each requested value still has a unique ID within this snapshot.
+        QSet<quint32> ids;
+        for (const auto& row : rows_) ids.insert(row.entry.id);
+        quint32 spare = std::numeric_limits<quint32>::max();
+        beginInsertRows({}, projectCount_, projectCount_ + declarations.size() - 1);
+        for (auto entry : declarations) {
+            if (!entry.id || ids.contains(entry.id)) {
+                while (ids.contains(spare)) --spare;
+                entry.id = spare--;
+            }
+            ids.insert(entry.id);
+            rows_.append(Row(entry));
+        }
+        endInsertRows();
+    }
+
     void append(const DebugWatchEntry& entry) {
-        const int row = rows_.size();
-        beginInsertRows({}, row, row);
-        rows_.append(Row(entry));
+        beginInsertRows({}, projectCount_, projectCount_);
+        rows_.insert(projectCount_, Row(entry));
+        ++projectCount_;
         endInsertRows();
     }
 
@@ -189,6 +215,7 @@ public:
     void erase(int row) {
         beginRemoveRows({}, row, row);
         rows_.removeAt(row);
+        --projectCount_;
         endRemoveRows();
     }
 
@@ -257,7 +284,15 @@ private:
         bool bigEndian = false;
         bool highlight = false;
     };
+    QVector<DebugWatchEntry> entries(int first, int end) const {
+        QVector<DebugWatchEntry> result;
+        result.reserve(end - first);
+        for (int i = first; i < end; ++i) result.append(rows_.at(i).entry);
+        return result;
+    }
+
     QVector<Row> rows_;
+    int projectCount_ = 0;
     QElapsedTimer clock_;
 };
 
@@ -318,14 +353,19 @@ DebugWatchDialog::DebugWatchDialog(QWidget* parent)
 }
 
 QVector<DebugWatchEntry> DebugWatchDialog::entries() const {
-    return model_->entries();
+    return model_->projectEntries();
+}
+
+QVector<DebugWatchEntry> DebugWatchDialog::scriptEntries() const {
+    return model_->scriptEntries();
 }
 
 quint32 DebugWatchDialog::unusedId() {
     const auto current = entries();
-    while (!nextId_ || std::any_of(current.cbegin(), current.cend(), [this](const auto& entry) {
-        return entry.id == nextId_;
-    })) ++nextId_;
+    const auto temporary = scriptEntries();
+    const auto usesId = [this](const auto& entry) { return entry.id == nextId_; };
+    while (!nextId_ || std::any_of(current.cbegin(), current.cend(), usesId) ||
+           std::any_of(temporary.cbegin(), temporary.cend(), usesId)) ++nextId_;
     return nextId_++;
 }
 
@@ -349,7 +389,8 @@ void DebugWatchDialog::setEntries(const QVector<DebugWatchEntry>& entries) {
         entry.id = nextId_++;
         ids.insert(entry.id);
     }
-    model_->replaceAll(valid);
+    model_->replaceProjectEntries(valid);
+    model_->replaceScriptEntries(scriptDeclarations_);
     model_->applySamples(domains_, {}, true);
     showFeedback({});
     updateActions();
@@ -357,8 +398,21 @@ void DebugWatchDialog::setEntries(const QVector<DebugWatchEntry>& entries) {
     emit inspectionChanged();
 }
 
+void DebugWatchDialog::setScriptEntries(const QVector<DebugWatchEntry>& entries) {
+    if (entries.size() == scriptDeclarations_.size() &&
+        std::equal(entries.cbegin(), entries.cend(), scriptDeclarations_.cbegin(),
+            [](const auto& a, const auto& b) {
+                return a.id == b.id && sameLocation(a, b) && a.name == b.name &&
+                       a.format == b.format && a.order == b.order;
+            })) return;
+    scriptDeclarations_ = entries;
+    model_->replaceScriptEntries(scriptDeclarations_);
+    updateActions();
+    if (isVisible()) emit inspectionChanged();
+}
+
 void DebugWatchDialog::addWatch(const DebugWatchEntry& entry) {
-    if (model_->rowCount() >= DebugWatchLimit) {
+    if (model_->projectCount() >= DebugWatchLimit) {
         showFeedback(text("Достигнут предел в %1 наблюдений.").arg(DebugWatchLimit));
         return;
     }
@@ -367,7 +421,7 @@ void DebugWatchDialog::addWatch(const DebugWatchEntry& entry) {
     item.id = unusedId();
     item.name = item.name.left(nameLimit);
     model_->append(item);
-    table_->selectRow(model_->rowCount() - 1);
+    table_->selectRow(model_->projectCount() - 1);
     table_->scrollTo(table_->currentIndex());
     showFeedback({});
     updateActions();
@@ -400,7 +454,8 @@ void DebugWatchDialog::setSnapshot(const DebugInspectionSnapshot& snapshot) {
 void DebugWatchDialog::editWatch(int row) {
     const auto* existing = model_->entry(row);
     const bool adding = !existing;
-    if (adding && (domains_.isEmpty() || model_->rowCount() >= DebugWatchLimit)) return;
+    if (adding && (domains_.isEmpty() || model_->projectCount() >= DebugWatchLimit)) return;
+    if (existing && !model_->isProjectRow(row)) return;
     DebugWatchEntry original = existing ? *existing : DebugWatchEntry{};
     if (adding) {
         original.instance = activeInstance_;
@@ -554,7 +609,7 @@ void DebugWatchDialog::editWatch(int row) {
 
 void DebugWatchDialog::removeWatch() {
     const int row = table_->currentIndex().row();
-    if (!model_->entry(row)) return;
+    if (!model_->isProjectRow(row)) return;
     model_->erase(row);
     if (model_->rowCount()) table_->selectRow(std::min(row, model_->rowCount() - 1));
     showFeedback({});
@@ -581,10 +636,22 @@ void DebugWatchDialog::showTableMenu(const QPoint& point) {
     if (!index.isValid()) return;
     table_->selectRow(index.row());
     QMenu menu(this);
-    auto* open = menu.addAction(text("Открыть в памяти"), this, [this, row = index.row()] { navigate(row); });
+    const QPersistentModelIndex selected(index);
+    auto* open = menu.addAction(text("Открыть в памяти"), this, [this, selected] {
+        if (selected.isValid()) navigate(selected.row());
+    });
     open->setEnabled(canNavigate(index.row()));
-    menu.addAction(text("Изменить…"), this, [this, row = index.row()] { editWatch(row); });
-    menu.addAction(text("Удалить"), this, &DebugWatchDialog::removeWatch);
+    const bool editable = model_->isProjectRow(index.row());
+    auto* edit = menu.addAction(text("Изменить…"), this, [this, selected] {
+        if (selected.isValid()) editWatch(selected.row());
+    });
+    edit->setEnabled(editable);
+    auto* remove = menu.addAction(text("Удалить"), this, [this, selected] {
+        if (!selected.isValid()) return;
+        table_->selectRow(selected.row());
+        removeWatch();
+    });
+    remove->setEnabled(editable);
     menu.addSeparator();
     menu.addAction(text("Сбросить историю"), this, [this] { model_->clearHistory(); });
     menu.exec(table_->viewport()->mapToGlobal(point));
@@ -592,9 +659,9 @@ void DebugWatchDialog::showTableMenu(const QPoint& point) {
 
 void DebugWatchDialog::updateActions() {
     const int row = table_->currentIndex().row();
-    add_->setEnabled(!domains_.isEmpty() && model_->rowCount() < DebugWatchLimit);
-    edit_->setEnabled(model_->entry(row) != nullptr);
-    remove_->setEnabled(model_->entry(row) != nullptr);
+    add_->setEnabled(!domains_.isEmpty() && model_->projectCount() < DebugWatchLimit);
+    edit_->setEnabled(model_->isProjectRow(row));
+    remove_->setEnabled(model_->isProjectRow(row));
     memory_->setEnabled(canNavigate(row));
 }
 

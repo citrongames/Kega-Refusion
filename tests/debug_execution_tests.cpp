@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QFileInfo>
 #include <QLibrary>
 #include <QTemporaryDir>
 #include <QtEndian>
@@ -507,6 +508,150 @@ void checkProgram(const QString& core, const QString& path, const QString& sandb
     checkLifecycle(host, program);
 }
 
+void checkAccessObserver(const QString& core, const QString& path, const QString& sandbox) {
+    const auto program = makeMdProgram();
+    Frame reference;
+    QString error;
+    {
+        LibretroHost host(core, sandbox + "/reference");
+        require(host.load(path, error), error);
+        host.runFrame();
+        reference = completedFrame(host);
+    }
+
+    LibretroHost host(core, sandbox + "/observed");
+    require(host.load(path, error), error);
+    struct Capture {
+        LibretroHost& host;
+        QVector<DebugAccessEvent> events;
+        quint8 byte = 0;
+        bool guarded = false;
+    } capture{host, {}};
+    const auto observe = +[](void* opaque, const DebugAccessEvent& event) {
+        auto& result = *static_cast<Capture*>(opaque);
+        result.events.append(event);
+        if (event.event == KR_DEBUG_WRITE) {
+            const quint8 replacement = 0x88;
+            result.guarded = result.host.inspectionRead(event.instance, KR_MEM_RAM, 0x20, &result.byte, 1) &&
+                !result.host.inspectionWrite(event.instance, KR_MEM_RAM, 0x20, &replacement, 1) &&
+                !result.host.inspectionWriteRegister(event.instance, event.cpu, "D0", 0x88) &&
+                !result.host.setDebugAccessObserver({});
+        }
+    };
+    const QVector<DebugAccessSubscription> subscriptions{
+        {0, program.cpu, KR_DEBUG_EXEC, program.firstCall, program.firstCall},
+        {0, program.cpu, KR_DEBUG_READ, program.ram, program.ram},
+        {0, program.cpu, KR_DEBUG_WRITE, program.ram - 1, program.ram},
+        {0, program.cpu, KR_DEBUG_WRITE, program.ram, program.ram + 1}
+    };
+
+    require(host.setDebugAccessObserver(subscriptions, observe, &capture) && !host.debuggerAttached(),
+            "Observation does not attach the debugger");
+    require(!host.setDebugAccessObserver({{0, program.cpu, KR_DEBUG_READ, 1, 0}}, observe, &capture),
+            "A rejected range leaves the running observer in place");
+    require(host.runDebugFrame(), "Observation alone runs a complete frame");
+    require(capture.events.size() == 3 && capture.events[0].event == KR_DEBUG_WRITE &&
+            capture.events[0].address == program.ram && capture.events[0].value == 0x45 &&
+            capture.events[0].size == 1 && capture.guarded && capture.byte == 0x45 &&
+            capture.events[1].event == KR_DEBUG_READ && capture.events[1].address == program.ram &&
+            capture.events[1].value == 0x45 && capture.events[1].size == 1 &&
+            capture.events[2].event == KR_DEBUG_EXEC && capture.events[2].address == program.firstCall &&
+            capture.events[2].value == 0 && capture.events[2].size == 0,
+            "Filtered write, read and pre-instruction events retain order and native values");
+    const auto actual = completedFrame(host);
+    require(actual.state == reference.state && actual.video == reference.video &&
+            actual.pcm == reference.pcm && actual.clock.frames == reference.clock.frames &&
+            actual.clock.ticks == reference.clock.ticks && !host.debuggerAttached(),
+            "Observation and callback inspection preserve state, video, PCM and frame clock");
+
+    capture.events.clear();
+    host.reset();
+    host.runRewindPreviewFrame();
+    require(capture.events.isEmpty(), "Reset and hidden rewind previews do not dispatch observers");
+    host.reset();
+    command(host, DebuggerCommand::Configure, program.cpu, {
+        breakpoint(1, program.cpu, KR_DEBUG_WRITE, program.ram)
+    });
+    expectStop(host, program, KR_DEBUG_WRITE, program.ram);
+    require(capture.events.size() == 1 && capture.events.front().event == KR_DEBUG_WRITE,
+            "The same access reaches the observer before the debugger suspends the frame");
+    const quint8 edited = 0x91;
+    require(!host.inspectionWrite(0, KR_MEM_RAM, 0x20, &edited, 1) &&
+            !host.inspectionWriteRegister(0, program.cpu, "D0", edited),
+            "A suspended frame rejects standalone inspection edits");
+    require(host.setDebugAccessObserver({}) && host.debuggerFramePending(),
+            "Clearing observers leaves the debugger stopped");
+    command(host, DebuggerCommand::Continue, program.cpu);
+    require(host.runDebugFrame() && capture.events.size() == 1,
+            "The debugger resumes without dispatching the detached observer");
+
+    capture.events.clear();
+    host.reset();
+    require(host.setDebugAccessObserver(subscriptions, observe, &capture), "Restore observer after detach");
+    host.debuggerDetach();
+    require(host.runDebugFrame() && capture.events.size() == 3 && !host.debuggerAttached(),
+            "Detaching the debugger leaves the observer active");
+    capture.events.clear();
+    require(host.hardReset(error), error);
+    require(capture.events.isEmpty() && host.runDebugFrame() && capture.events.size() == 3,
+            "A power reset rebinds observers for the newly loaded core");
+
+    capture.events.clear();
+    host.unload();
+    require(host.load(path, error), error);
+    host.runFrame();
+    require(capture.events.isEmpty(), "Unloading drops observer callbacks");
+
+    const auto generation = host.inspectionGeneration();
+    kr_cov_location location{};
+    require(host.inspectionDomainWritable(0, KR_MEM_RAM) && !host.inspectionDomainWritable(0, KR_MEM_ROM) &&
+            host.inspectionRegisterWritable(0, program.cpu, "D0") &&
+            !host.inspectionRegisterWritable(0, program.cpu, "INVALID") &&
+            host.inspectionCodeLocation(0, program.cpu, program.firstCall, location) &&
+            location.source && location.offset == program.firstCall &&
+            host.inspectionGeneration() == generation, "Discovery is independent of the debugger and edits");
+    require(!host.inspectionWrite(0, KR_MEM_ROM, 0, &edited, 1) &&
+            !host.inspectionWrite(0, KR_MEM_RAM, 0x10000, &edited, 1) &&
+            !host.inspectionWriteRegister(0, program.cpu, "PC", 3) &&
+            host.inspectionGeneration() == generation,
+            "Invalid edits reject without advancing the inspection generation");
+    quint8 actualByte = 0;
+    kr_debug_cpu registers{};
+    require(host.inspectionWrite(0, KR_MEM_RAM, 0x20, &edited, 1) &&
+            host.inspectionRead(0, KR_MEM_RAM, 0x20, &actualByte, 1) && actualByte == edited &&
+            host.inspectionWriteRegister(0, program.cpu, "D0", 0x12345678) &&
+            host.inspectionRegisters(0, program.cpu, registers) &&
+            std::any_of(registers.regs, registers.regs + registers.count, [](const kr_debug_reg& item) {
+                return std::strcmp(item.name, "D0") == 0 && item.value == 0x12345678;
+            }) &&
+            host.inspectionGeneration() == generation + 2 && !host.debuggerAttached(),
+            "Full-boundary RAM and register edits reach the machine without attaching a debugger");
+
+    const QFileInfo coreFile(core);
+    const auto peer = coreFile.path() + '/' + coreFile.completeBaseName() + "_linkpeer." + coreFile.suffix();
+    if (!QFileInfo::exists(peer)) return;
+    require(host.setLinkCableEnabled(true, error), error);
+    require(host.setDebugAccessObserver({{1, program.cpu, KR_DEBUG_WRITE, dmaControl + 1, dmaControl + 1}},
+                                        observe, &capture),
+            "Subscribe only to a byte inside a linked peer's word accesses");
+    host.reset();
+    command(host, DebuggerCommand::Configure, program.cpu, {
+        breakpoint(2, program.cpu, KR_DEBUG_WRITE, program.ram)
+    });
+    expectStop(host, program, KR_DEBUG_WRITE, program.ram);
+    command(host, DebuggerCommand::Continue, program.cpu);
+    require(host.runDebugFrame() && !capture.events.isEmpty() &&
+            std::all_of(capture.events.cbegin(), capture.events.cend(), [&](const DebugAccessEvent& event) {
+                return event.instance == 1 && event.cpu == program.cpu && event.event == KR_DEBUG_WRITE &&
+                       event.address == dmaControl && event.size >= 2;
+            }),
+            "Peer word overlap is observed while a primary CPU breakpoint can suspend the frame");
+    capture.events.clear();
+    require(host.setLinkCableEnabled(false, error) && host.setLinkCableEnabled(true, error), error);
+    require(host.inspectionInstanceCount() == 2 && host.runDebugFrame() && capture.events.isEmpty(),
+            "Removing a peer disconnects its observer before a new peer is created");
+}
+
 void checkDmaAndIrq(const QString& core, const QString& path, const QString& sandbox) {
     const auto program = makeDmaIrqProgram();
     writeFixture(path, program.rom);
@@ -602,6 +747,8 @@ int main(int argc, char** argv) {
         const auto core = app.arguments().at(1);
         checkProgram(core, temp.filePath("original-debug.md"), temp.filePath("md"), makeMdProgram());
         std::puts("PASS: 68000 breakpoints, stepping, state/output equivalence and suspended-frame lifecycle");
+        checkAccessObserver(core, temp.filePath("original-debug.md"), temp.filePath("access"));
+        std::puts("PASS: filtered CPU observation, debugger coexistence and full-frame inspection edits");
         struct Z80Case { const char* suffix; const char* hardwareName; unsigned hardware; };
         constexpr Z80Case z80Cases[] = {
             {"sms", "Master System", KR_HW_SMS},

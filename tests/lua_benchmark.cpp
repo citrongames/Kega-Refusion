@@ -16,7 +16,7 @@
 
 namespace {
 constexpr int Repeats = 3;
-constexpr const char* Workloads[] = {"baseline", "no-scripts", "hud", "automation"};
+constexpr const char* Workloads[] = {"baseline", "no-scripts", "hud", "automation", "access-hook"};
 
 void require(bool okay, const char* message) {
     if (!okay) throw std::runtime_error(message);
@@ -79,6 +79,19 @@ end)
 )"));
 }
 
+void startAccessHook(ScriptRuntime& runtime, const LibretroHost& host) {
+    startScript(runtime, host, QByteArrayLiteral(R"(
+local vector=assert(memory.read(1,0x78,4))
+local observed=0
+assert(memory.on(1,"exec",vector,nil,function(e)
+    assert(e.address==vector)
+    assert(memory.read(2,0x100,2))
+    observed=observed+1
+end))
+emu.on("draw",function() draw.text(0,0,tostring(observed)) end)
+)"));
+}
+
 template<class BeforeFrame, class AfterFrame>
 double timeFrames(LibretroHost& host, int frames, int stride,
                   BeforeFrame beforeFrame, AfterFrame afterFrame) {
@@ -128,22 +141,34 @@ void measure(LibretroHost& host, const QByteArray& checkpoint, LibretroHost::Run
                     [](MovieInput&) {}, [](bool, const MovieInput&) {});
             } else {
                 ScriptRuntime runtime;
-                runtime.setHostPolicy(true, false, false);
+                runtime.setHostPolicy(true, false, false, false, true);
                 if (workload == 2) startHud(runtime, host);
                 if (workload == 3) startAutomation(runtime, host);
+                if (workload == 4) {
+                    startAccessHook(runtime, host);
+                    require(host.setDebugAccessObserver(runtime.accessSubscriptions(),
+                        +[](void* p,const DebugAccessEvent& event) { static_cast<ScriptRuntime*>(p)->dispatchMemoryAccess(event); },&runtime),
+                        "hook connection");
+                }
                 ScriptOverlayPtr overlay;
                 samples[workload][repeat] = timeFrames(host, frames, stride,
                     [&](MovieInput& input) {
                         if (runtime.hasScripts())
                             runtime.beforeFrame(host, 1, host.runClock().frames, input);
+                        runtime.beginAccessFrame(host,host.runClock().frames+1);
                     },
                     [&](bool present, const MovieInput& input) {
+                        runtime.endAccessFrame();
                         if (runtime.hasScripts())
                             overlay = runtime.event(ScriptEvent::Frame, host, 1,
                                                     host.runClock().frames, 0, present, &input);
                     });
-                if (workload == 3)
+                if (workload == 3 || workload == 4)
                     overlay = runtime.event(ScriptEvent::Draw, host, 1, host.runClock().frames);
+                require(host.setDebugAccessObserver({},nullptr,nullptr),"hook disconnection");
+                if (workload == 4)
+                    require(overlay && overlay->commands.size()==1 && overlay->commands.front().text.toULongLong()>0,
+                        "VBlank hook was never called");
                 for (const auto& update : runtime.takeUpdates())
                     if (update.status == ScriptStatus::Error)
                         throw std::runtime_error(update.text.toStdString());

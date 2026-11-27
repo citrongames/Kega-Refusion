@@ -82,12 +82,17 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
             }
         }
     }
-    if (request.watchCatalog || !request.watches.isEmpty()) {
+    if (request.watchCatalog || !request.watches.isEmpty() || !request.scriptWatches.isEmpty()) {
         // One safe catalog per actual console, then only the requested 1–4 byte
         // values. No bus handlers, whole-memory scan or per-frame subscription.
-        out.watchValues.reserve(std::min(request.watches.size(), qsizetype(DebugWatchLimit)));
-        for (int i=0; i<request.watches.size() && i<DebugWatchLimit; ++i)
-            out.watchValues.push_back({request.watches[i].id, {}, false});
+        const auto projectCount = std::min(request.watches.size(), qsizetype(DebugWatchLimit));
+        const auto scriptCount = std::min(request.scriptWatches.size(), qsizetype(DebugScriptWatchLimit));
+        const auto watchAt = [&](qsizetype i) -> const DebugWatchEntry& {
+            return i < projectCount ? request.watches[i] : request.scriptWatches[i - projectCount];
+        };
+        out.watchValues.reserve(projectCount + scriptCount);
+        for (qsizetype i = 0; i < projectCount + scriptCount; ++i)
+            out.watchValues.push_back({watchAt(i).id, {}, false});
         for (quint32 side=0; side<out.instanceCount; ++side) {
             const auto* console=side==0?this:linkPeer_.get();
             if (!console || !console->loaded_) continue;
@@ -104,8 +109,8 @@ DebugInspectionSnapshot LibretroHost::inspect(const DebugInspectionRequest& requ
                 auto domain=info.domains[d];
                 domain.name[sizeof(domain.name)-1]=0;
                 if (request.watchCatalog) out.watchDomains.push_back({side,domain});
-                for (int i=0; i<out.watchValues.size(); ++i) {
-                    const auto& watch=request.watches[i];
+                for (qsizetype i = 0; i < out.watchValues.size(); ++i) {
+                    const auto& watch = watchAt(i);
                     if (watch.instance!=side || watch.domain!=domain.id || !watch.id ||
                         (watch.width!=1 && watch.width!=2 && watch.width!=4) ||
                         watch.offset>=domain.size || watch.width>domain.size-watch.offset)
@@ -148,9 +153,36 @@ bool LibretroHost::writeInspectionMemory(const DebugMemoryWrite& request, QStrin
         error = Localization::text(QStringLiteral("Байты памяти изменились. Обновите снимок."));
         return false;
     }
-    if (api.inspect_write(request.domain, request.offset, request.after.constData(), size_t(length)) != size_t(length)) {
+    if (!inspectionWrite(request.instance, request.domain, request.offset,
+                         request.after.constData(), size_t(length))) {
         error = Localization::text(QStringLiteral("Значение не подходит для выбранной области памяти."));
         return false;
+    }
+    return true;
+}
+
+bool LibretroHost::canWriteInspection() const {
+    return loaded_ && !moviePlayback_ && !rewindPreview_ &&
+           !debuggerFramePending() && !dispatchingDebugAccess_;
+}
+
+bool LibretroHost::inspectionDomainWritable(unsigned instance, quint32 domain) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->inspect_write || !console->api_->inspect_writable) return false;
+    const Activation scope(const_cast<LibretroHost*>(console));
+    return console->api_->inspect_writable(domain);
+}
+
+bool LibretroHost::inspectionWrite(unsigned instance, quint32 domain, quint32 offset,
+                                  const void* data, size_t size) {
+    if (!canWriteInspection() || !data || !size || size > KR_INSPECT_MAX_WRITE) return false;
+    auto* console = const_cast<LibretroHost*>(inspectionConsole(instance));
+    if (!console || !console->api_->inspect_write || !console->api_->inspect_writable) return false;
+    {
+        const Activation scope(console);
+        if (!console->api_->inspect_writable(domain) ||
+            console->api_->inspect_write(domain, offset, data, size) != size)
+            return false;
     }
     ++inspectionGeneration_;
     debugToolsBoundary(KR_TRACE_MEMORY_EDIT);
@@ -209,6 +241,9 @@ QVector<kr_debug_target> LibretroHost::inspectionCpuTargets(unsigned instance) c
                 std::any_of(result.cbegin(), result.cend(),
                             [&](const auto& item) { return item.cpu == target.cpu; }))
                 continue;
+            if (!api.debug_connect_v2 &&
+                (!api.debug_connect || instance || linkPeer_ || target.cpu > KR_DEBUG_Z80))
+                target.capabilities &= ~(KR_DEBUG_CAP_EXEC | KR_DEBUG_CAP_READ | KR_DEBUG_CAP_WRITE);
             target.name[sizeof(target.name) - 1] = 0;
             result.push_back(target);
         }
@@ -221,6 +256,8 @@ QVector<kr_debug_target> LibretroHost::inspectionCpuTargets(unsigned instance) c
             const bool z80 = cpu == KR_DEBUG_Z80;
             target.cpu = cpu;
             target.address_bits = z80 ? 16 : 24;
+            if (api.debug_connect && !instance && !linkPeer_)
+                target.capabilities = KR_DEBUG_CAP_EXEC | KR_DEBUG_CAP_READ | KR_DEBUG_CAP_WRITE;
             std::strcpy(target.name, z80 ? "Z80" : "Main 68000");
             result.push_back(target);
         }
@@ -250,4 +287,14 @@ bool LibretroHost::inspectionPeek(unsigned instance, unsigned cpu, quint32 addre
     uint8_t validity[KR_DEBUG_MAX_PEEK];
     return console->api_->debug_peek(cpu, address, data, validity, size) == size &&
         std::all_of(validity, validity + size, [](uint8_t valid) { return valid != 0; });
+}
+
+bool LibretroHost::inspectionCodeLocation(unsigned instance, unsigned cpu, quint32 address,
+                                         kr_cov_location& location) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->debug_locations) return false;
+    const Activation scope(const_cast<LibretroHost*>(console));
+    location = {};
+    return console->api_->debug_locations(KR_COV_VERSION, cpu, &address, &location, 1, 0) == 1 &&
+           location.source != 0;
 }

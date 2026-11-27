@@ -2,8 +2,8 @@
 
 Agreed for preservation on 2026-11-21, following research into FCEUX, Mesen 2,
 BizHawk, Gens-rr and mGBA. Baseline: release 0.29.0, repository 9000292.
-Implementation of Phases 1 and 2 was authorized on 2026-11-27. The remaining phases
-remain planned work; they are not advertised as shipped features.
+Implementation of Phases 1–3 was authorized on 2026-11-27. Phase 4 remains
+planned work; it is not advertised as shipped functionality.
 
 ## Progress and direction
 
@@ -11,7 +11,7 @@ remain planned work; they are not advertised as shipped features.
 - [x] Preserve the proposed architecture, delivery order and integration rules.
 - [x] Phase 1: runtime, script window, read-only memory and drawing.
 - [x] Phase 2: input automation, frame control and temporary save objects.
-- [ ] Phase 3: memory/register editing and debugger integration.
+- [x] Phase 3: memory/register editing and debugger integration.
 - [ ] Phase 4: custom panels, Gens compatibility and advanced timeline integration.
 
 Recommended baseline: one embedded Lua 5.5 library, a native versioned API,
@@ -309,3 +309,40 @@ universal game-update detector. File output, Lua movie start/stop, debugger writ
 custom panels and compatibility adapters remain future work. Focused tests
 exercise the real-core/session pipeline and branch replay; performance numbers
 and exact tested scope are recorded in verification.md.
+
+## Phase 3 delivered — 2026-11-27
+
+Lua can queue supported 1/2/4-byte physical memory writes and register edits at
+full frame boundaries. Writes reuse native writable-domain/register validation
+and cache/device invalidation. Effective changes clear rewind history and
+temporary script saves, including already queued old save loads. Recording,
+playback, netplay, Hardcore and export cannot accept script mutations.
+
+Selected read/write/execute callbacks share the existing native CPU connection
+with the debugger. Subscription masks and merged address ranges are rebuilt
+only when the subscription set changes. No access observer exists without
+subscriptions. Basic HUDs still use non-invasive inspection. Explicit CPU
+callbacks run before debugger suspension and cannot mutate, yield or replace
+bus values. Read/write events describe completed bus operations; execute is
+before opcode fetch. Reset initialization, internal previews/replay and forced
+debugger-frame completion suppress observation. Normal debugger Continue
+preserves observation in the interrupted frame.
+
+Callbacks have per-frame instruction/native/time budgets, 32 invocations per
+script and 128 globally. They are tools for selected observations, not an
+unbounded full instruction trace. The first truncated frame produces one
+console notice per script run; memory.hookstats() explicitly reports truncation.
+Use the native trace window for exhaustive traces.
+
+Temporary script labels and RAM Watch rows appear in the existing windows.
+Labels pin available physical code-bank identity when declared; both linked
+consoles are distinguished. Script metadata has independent limits, disappears
+on stop/fault/game change and never modifies the saved debugger project. Watch
+sampling uses the existing window-visible inspection request, not new polling.
+
+Focused validation covers native-event ordering, overlap, coexistence with
+breakpoints/trace/coverage, error and stop cleanup, link A/B isolation, mutation
+policy, deferred commands and UI persistence. Packaged fixture-debugger.lua
+uses an original generated cartridge. Detailed results and two-game normal/fast
+measurements are recorded in verification.md. Panels, file output, movie control,
+Gens adapters and declared script-data restoration remain Phase 4 work.

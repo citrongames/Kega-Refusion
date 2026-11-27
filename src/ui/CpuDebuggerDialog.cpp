@@ -571,10 +571,44 @@ void CpuDebuggerDialog::goToInput() {
     }
     if (found) {
         navigateSymbol(key);
-    } else {
-        feedback_->setText(text("Введите адрес в шестнадцатеричном виде или имя метки."));
-        feedback_->show();
+        return;
     }
+
+    const auto labels = scriptLabels_.constFind(cpuId_);
+    if (labels != scriptLabels_.cend()) {
+        for (auto location = labels->cbegin(); location != labels->cend(); ++location) {
+            for (const auto& label : location.value()) {
+                if (label.name != query) continue;
+                if (found && key != location.key()) {
+                    feedback_->setText(text("Метка встречается по нескольким адресам."));
+                    feedback_->show();
+                    return;
+                }
+                if (!found) {
+                    found = true;
+                    key = location.key();
+                    target = label.address;
+                }
+            }
+        }
+    }
+    if (found) {
+        navigateSymbol(key, target);
+        return;
+    }
+    feedback_->setText(text("Введите адрес в шестнадцатеричном виде или имя метки."));
+    feedback_->show();
+}
+
+void CpuDebuggerDialog::setScriptLabels(const QVector<ScriptDebugLabel>& labels) {
+    scriptLabels_.clear();
+    for (const auto& label : labels) {
+        // Debugger targets encode the linked console in the high byte of the CPU ID.
+        const quint32 cpu = (label.instance << 8) | label.cpu;
+        const quint64 key = label.source ? (quint64(label.source) << 32) | label.offset : label.address;
+        scriptLabels_[cpu][key].append(label);
+    }
+    if (isVisible()) updateCode();
 }
 
 void CpuDebuggerDialog::setSnapshot(const DebuggerSnapshot& snapshot) {
@@ -951,6 +985,7 @@ void CpuDebuggerDialog::updateCode() {
     }
     const auto* state = findCpu(snapshot_, cpuId_);
     const auto codeSymbols = symbols_.constFind(cpuId_);
+    const auto codeLabels = scriptLabels_.constFind(cpuId_);
     code_->setRowCount(snapshot_.instructions.size());
     struct ExecuteMarker { quint32 first, last; bool armed; };
     std::array<ExecuteMarker, maxBreakpoints> executionPoints;
@@ -987,8 +1022,9 @@ void CpuDebuggerDialog::updateCode() {
         cell(code_, row, CodeInstruction, instruction.valid ? QString::fromLatin1(instruction.text) :
                                                              text("Команда недоступна"));
         QString annotation;
+        const quint64 key = codeSymbolKey(row);
         if (codeSymbols != symbols_.cend()) {
-            auto symbol = codeSymbols->constFind(codeSymbolKey(row));
+            auto symbol = codeSymbols->constFind(key);
             if (symbol == codeSymbols->cend()) symbol = codeSymbols->constFind(instruction.address);
             if (symbol != codeSymbols->cend()) {
                 if (symbol->bookmarked) annotation = QStringLiteral("★ ");
@@ -999,7 +1035,19 @@ void CpuDebuggerDialog::updateCode() {
                 }
             }
         }
-        const QString location=symbolLocation(codeSymbolKey(row));
+        if (codeLabels != scriptLabels_.cend()) {
+            const auto appendLabels = [&](quint64 at) {
+                const auto labels = codeLabels->constFind(at);
+                if (labels == codeLabels->cend()) return;
+                for (const auto& label : *labels) {
+                    if (!annotation.isEmpty()) annotation += QStringLiteral(" · ");
+                    annotation += text("%1 (Lua)").arg(label.name);
+                }
+            };
+            appendLabels(key);
+            if (key != instruction.address) appendLabels(instruction.address);
+        }
+        const QString location=symbolLocation(key);
         if (addressCell->toolTip()!=location) addressCell->setToolTip(location);
         cell(code_, row++, CodeAnnotation, annotation);
     }
@@ -1474,13 +1522,20 @@ void CpuDebuggerDialog::navigateSymbol(quint64 key) {
     if(entries==symbols_.cend()) return;
     const auto entry=entries->constFind(key);
     if(entry==entries->cend()) return;
-    if(!(key>>32)) { navigateTo(cpuId_,entry->address); return; }
+    navigateSymbol(key, entry->address);
+}
+
+void CpuDebuggerDialog::navigateSymbol(quint64 key, quint32 address) {
+    if (!(key >> 32)) {
+        navigateTo(cpuId_, address);
+        return;
+    }
     auto request=refreshCommand();
     request.kind=DebuggerCommand::Navigate;
     request.navigationRequestId = pendingNavigation_ = ++nextNavigation_;
     request.gameKey = gameKey_;
     request.followPc=false;
-    request.address=entry->address;
+    request.address=address;
     request.physicalSource=quint32(key>>32);
     request.physicalOffset=quint32(key);
     feedback_->hide();

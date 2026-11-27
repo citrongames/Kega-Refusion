@@ -129,7 +129,7 @@ bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     if(!enabled) {
         stopLinkedPair();linkRequested_=false;buttons_.fill(0);
         if(loaded_) {applyControllerPorts(true);refreshRecordingIdentity();}
-        if (debugger_) { QString ignored; debuggerAttach(ignored); }
+        restoreDebugHooks(true);
         return true;
     }
     linkRequested_=true;
@@ -137,13 +137,13 @@ bool LibretroHost::setLinkCableEnabled(bool enabled,QString& error) {
     if(hardReset(error))return true;
     stopLinkedPair();linkRequested_=false;
     if(loaded_) {applyControllerPorts(true);refreshRecordingIdentity();}
-    if (debugger_) { QString ignored; debuggerAttach(ignored); }
+    restoreDebugHooks(true);
     return false;
 }
 void LibretroHost::stopLinkedPair() {
     coverageDisconnectPeer();
     traceDisconnectPeer();
-    debuggerDisconnectPeer();
+    disconnectPeerDebugHooks();
     if(api_&&api_->link_connect)api_->link_connect(nullptr,nullptr,nullptr);
     if(linkPeer_&&linkPeer_->api_->link_connect)linkPeer_->api_->link_connect(nullptr,nullptr,nullptr);
     linkPair_.reset();

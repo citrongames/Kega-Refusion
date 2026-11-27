@@ -2,6 +2,7 @@
 
 #include "core/LibretroHost.h"
 #include "core/MovieTape.h"
+#include "i18n/Localization.h"
 #include <lauxlib.h>
 #include <lualib.h>
 
@@ -30,8 +31,13 @@ constexpr int MaxLogs = 8;
 constexpr int MaxLogsPerSecond = 32;
 constexpr int MaxTextBytes = 1024;
 constexpr int MaxControls = 32;
+constexpr int AccessCallbacksPerScript = 32;
+constexpr int AccessCallbacksPerFrame = 128;
+constexpr auto AccessTimeLimit = std::chrono::milliseconds(4);
 constexpr auto EventTimeLimit = std::chrono::milliseconds(8);
 constexpr auto StartupTimeLimit = std::chrono::milliseconds(50);
+constexpr std::array<quint32, 3> AccessEvents{KR_DEBUG_EXEC, KR_DEBUG_READ, KR_DEBUG_WRITE};
+constexpr std::array<const char*, 3> AccessNames{"exec", "read", "write"};
 constexpr std::array<const char*, 6> EventNames{
     "frame", "reset", "loadstate", "rewind", "draw", "beforeframe"
 };
@@ -216,6 +222,25 @@ int readWidth(lua_State* L, int arg) {
     return int(width);
 }
 
+quint32 writeValue(lua_State* L, int arg, int width) {
+    if (lua_type(L, arg) == LUA_TSTRING) checkedString(L, arg, 32);
+    const auto value = luaL_checkinteger(L, arg);
+    const auto limit = lua_Integer(1) << (width * 8);
+    if (value < -limit / 2 || value >= limit)
+        luaL_argerror(L, arg, "value does not fit the selected width");
+    return quint32(value);
+}
+
+QByteArrayView annotationName(lua_State* L, int arg) {
+    luaL_checktype(L, arg, LUA_TSTRING);
+    const auto name = checkedString(L, arg, ScriptLimits::MaxAnnotationNameBytes);
+    if (name.trimmed().isEmpty() || std::any_of(name.begin(), name.end(), [](unsigned char c) {
+            return c < 32 || c == 127;
+        }))
+        luaL_argerror(L, arg, "expected a nonempty name without control characters");
+    return name;
+}
+
 int decodeValue(lua_State* L, const uint8_t* bytes, int size, bool big, bool sign) {
     quint32 value = 0;
     for (int i = 0; i < size; ++i)
@@ -269,6 +294,22 @@ struct ScriptRuntime::Script {
     };
     std::array<Save, ScriptLimits::MaxSaveObjects> saves{};
     lua_Integer nextSave = 0;
+    struct AccessHook {
+        DebugAccessSubscription subscription;
+        quint32 addressMask = 0;
+        lua_Integer handle = 0;
+        int callback = LUA_NOREF;
+    };
+    QVector<AccessHook> accessHooks;
+    QVector<ScriptDebugLabel> labels;
+    QVector<DebugWatchEntry> watches;
+    const DebugAccessEvent* accessEvent = nullptr;
+    int accessCallbackRef = LUA_NOREF;
+    int accessCallbacks = 0;
+    lua_Integer nextAccessHook = 0;
+    bool accessFailed = false, accessTruncated = false, accessFramePending = false;
+    bool accessTruncationReported = false;
+    std::optional<quint64> accessStatsFrame;
     QString saveError;
     const LibretroHost* host = nullptr;
     Hardware* hardware = nullptr;
@@ -277,8 +318,14 @@ struct ScriptRuntime::Script {
     ScriptEvent currentEvent = ScriptEvent::Frame;
     quint64 frame = 0;
     unsigned instance = 0;
-    int instructions = 0, calls = 0, nativeBytes = 0, logs = 0, overlayStart = 0;
-    Clock::time_point deadline, logWindow;
+    struct Budget {
+        int instructions = 0, calls = 0, nativeBytes = 0, logs = 0;
+        Clock::time_point deadline;
+    };
+    Budget eventBudget, accessBudget;
+    Budget& budget() { return accessEvent ? accessBudget : eventBudget; }
+    int overlayStart = 0;
+    Clock::time_point logWindow;
     int logsThisSecond = 0;
     bool logTruncated = false;
     bool starting = false;
@@ -292,6 +339,15 @@ struct ScriptRuntime::Script {
         if (L) *static_cast<Script**>(lua_getextraspace(L)) = this;
     }
     ~Script() {
+        if (!accessHooks.isEmpty()) {
+            owner.accessCount_ -= accessHooks.size();
+            ++owner.accessRevision_;
+        }
+        if (!labels.isEmpty() || !watches.isEmpty()) {
+            owner.labelCount_ -= labels.size();
+            owner.watchCount_ -= watches.size();
+            ++owner.annotationRevision_;
+        }
         auto& queue = owner.controls_;
         queue.erase(std::remove_if(queue.begin(), queue.end(), [this](const auto& control) {
             return control.run == run;
@@ -318,21 +374,18 @@ struct ScriptRuntime::Script {
     }
 
     static void instructionHook(lua_State* L, lua_Debug*) {
-        auto& script = self(L);
-        script.instructions -= HookInterval;
-        if (script.instructions <= 0) luaL_error(L, "instruction budget exceeded");
-        if (Clock::now() > script.deadline) luaL_error(L, "callback time budget exceeded");
+        auto& budget = self(L).budget();
+        budget.instructions -= HookInterval;
+        if (budget.instructions <= 0) luaL_error(L, "instruction budget exceeded");
+        if (Clock::now() > budget.deadline) luaL_error(L, "callback time budget exceeded");
     }
 
     void begin(lua_State* runner, const LibretroHost& core, Hardware& catalog, bool startup) {
         host = &core;
         hardware = &catalog;
         starting = startup;
-        instructions = startup ? StartupInstructions : EventInstructions;
-        calls = NativeCalls;
-        nativeBytes = NativeBytes;
-        logs = 0;
-        deadline = Clock::now() + (startup ? StartupTimeLimit : EventTimeLimit);
+        eventBudget = {startup ? StartupInstructions : EventInstructions, NativeCalls, NativeBytes, 0,
+                       Clock::now() + (startup ? StartupTimeLimit : EventTimeLimit)};
         lua_sethook(runner, instructionHook, LUA_MASKCOUNT, HookInterval);
     }
 
@@ -344,9 +397,10 @@ struct ScriptRuntime::Script {
     }
 
     void charge(lua_State* runner, int bytes = 0) {
-        nativeBytes -= bytes;
-        if (--calls < 0 || nativeBytes < 0) luaL_error(runner, "native work budget exceeded");
-        if (Clock::now() > deadline) luaL_error(runner, "callback time budget exceeded");
+        auto& active = budget();
+        active.nativeBytes -= bytes;
+        if (--active.calls < 0 || active.nativeBytes < 0) luaL_error(runner, "native work budget exceeded");
+        if (Clock::now() > active.deadline) luaL_error(runner, "callback time budget exceeded");
     }
 
     void report(ScriptStatus status, const QString& message = {}, int line = 0) {
@@ -371,8 +425,9 @@ struct ScriptRuntime::Script {
     static int print(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        if (!script.starting && (script.currentEvent == ScriptEvent::Rewind ||
-                                 script.currentEvent == ScriptEvent::Draw)) return 0;
+        if (!script.starting && !script.accessEvent &&
+            (script.currentEvent == ScriptEvent::Rewind || script.currentEvent == ScriptEvent::Draw))
+            return 0;
         const auto now = Clock::now();
         if (now - script.logWindow >= std::chrono::seconds(1)) {
             script.logWindow = now;
@@ -380,7 +435,8 @@ struct ScriptRuntime::Script {
             script.logTruncated = false;
         }
         if (script.owner.updates_.size() >= ScriptLimits::MaxUpdates) return 0;
-        if (script.logs >= MaxLogs || script.logsThisSecond >= MaxLogsPerSecond) {
+        auto& logs = script.budget().logs;
+        if (logs >= MaxLogs || script.logsThisSecond >= MaxLogsPerSecond) {
             if (!script.logTruncated) {
                 script.logTruncated = true;
                 script.report(ScriptStatus::Log, QStringLiteral("Script log truncated"));
@@ -401,7 +457,7 @@ struct ScriptRuntime::Script {
             if (lua_type(L, i) != LUA_TSTRING) size = std::strlen(str);
             output.append(str, qsizetype(std::min<size_t>(size, MaxTextBytes - output.size())));
         }
-        ++script.logs;
+        ++logs;
         ++script.logsThisSecond;
         script.report(ScriptStatus::Log, QString::fromUtf8(output));
         return 0;
@@ -410,6 +466,7 @@ struct ScriptRuntime::Script {
     static int on(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
+        if (script.accessEvent) return unavailable(L, "Event registration unavailable in an access hook");
         const auto name = checkedString(L, 1, 12);
         const auto found = std::find_if(EventNames.cbegin(), EventNames.cend(),
                                        [&](const char* event) { return name == event; });
@@ -442,14 +499,21 @@ struct ScriptRuntime::Script {
     }
 
     bool atControlBoundary() const {
-        return starting || currentEvent == ScriptEvent::Frame;
+        return !accessEvent && (starting || currentEvent == ScriptEvent::Frame);
     }
 
-    bool queueControl(ScriptControlType type, bool value = false,
-                      std::shared_ptr<const QByteArray> snapshot = {}) {
-        if (owner.controls_.size() >= MaxControls) return false;
-        owner.controls_.push_back({type, id, run, value, std::move(snapshot)});
-        return true;
+    ScriptControl* queueControl(ScriptControlType type, bool value = false,
+                                std::shared_ptr<const QByteArray> snapshot = {}) {
+        if (owner.controls_.size() >= MaxControls) return nullptr;
+        ScriptControl control{};
+        control.type = type;
+        control.owner = id;
+        control.run = run;
+        control.value = value;
+        control.snapshot = std::move(snapshot);
+        control.saveRevision = owner.saveRevision_;
+        owner.controls_.push_back(std::move(control));
+        return &owner.controls_.last();
     }
 
     static int pause(lua_State* L) {
@@ -491,7 +555,9 @@ struct ScriptRuntime::Script {
     static int frameCount(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        lua_pushinteger(L, lua_Integer(script.host->runClock().frames));
+        // The native host increments its clock before entering the CPU.
+        const auto completed = script.accessEvent ? script.frame - 1 : script.host->runClock().frames;
+        lua_pushinteger(L, lua_Integer(completed));
         return 1;
     }
 
@@ -505,7 +571,7 @@ struct ScriptRuntime::Script {
     static int lagged(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        if (script.starting || script.currentEvent != ScriptEvent::Frame ||
+        if (script.starting || script.accessEvent || script.currentEvent != ScriptEvent::Frame ||
             !script.host->supportsInputPollMetrics())
             return unavailable(L, "Input-poll metrics require a supported completed frame");
         lua_pushboolean(L, !script.host->frameInputPolled());
@@ -554,9 +620,9 @@ struct ScriptRuntime::Script {
         auto& script = self(L);
         script.charge(L);
         const auto player = playerNumber(L, 1);
+        if (!script.input) return unavailable(L, "No input snapshot at this boundary");
         const auto kind = script.inputDevice(player);
         if (kind == InputDisplayDevice::None) return unavailable(L, "Player is disconnected");
-        if (!script.input) return unavailable(L, "No input snapshot at this boundary");
         const auto& controller = Controllers[size_t(kind)];
         const auto buttons = script.input->buttons[player];
         lua_createtable(L, 0, int(controller.buttons.size()) + 3);
@@ -574,7 +640,7 @@ struct ScriptRuntime::Script {
     }
 
     bool maySetInput() const {
-        return owner.services_.inputAllowed &&
+        return !accessEvent && owner.services_.inputAllowed &&
                (atControlBoundary() || currentEvent == ScriptEvent::BeforeFrame);
     }
 
@@ -764,13 +830,15 @@ struct ScriptRuntime::Script {
     static int domains(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        const auto* catalog = script.hardware->memoryCatalog(*script.host, script.instanceFor(L, 1));
+        const auto side = script.instanceFor(L, 1);
+        const auto* catalog = script.hardware->memoryCatalog(*script.host, side);
         if (!catalog) return unavailable(L, "console unavailable");
         const auto& info = *catalog;
         lua_createtable(L, info.domain_count, 0);
         for (unsigned i = 0; i < info.domain_count; ++i) {
             const auto& domain = info.domains[i];
-            lua_createtable(L, 0, 5);
+            lua_createtable(L, 0, 6);
+            booleanField(L, "writable", script.host->inspectionDomainWritable(side, domain.id));
             integerField(L, "id", domain.id);
             integerField(L, "size", domain.size);
             integerField(L, "base", domain.address_base);
@@ -789,7 +857,11 @@ struct ScriptRuntime::Script {
         lua_createtable(L, int(console->cpus.size()), 0);
         for (qsizetype i = 0; i < console->cpus.size(); ++i) {
             const auto& cpu = console->cpus[i];
-            lua_createtable(L, 0, 5);
+            lua_createtable(L, 0, 6);
+            lua_createtable(L, 0, int(AccessEvents.size()));
+            for (size_t event = 0; event < AccessEvents.size(); ++event)
+                booleanField(L, AccessNames[event], cpu.capabilities & AccessEvents[event]);
+            lua_setfield(L, -2, "hooks");
             integerField(L, "id", cpu.cpu);
             integerField(L, "addressBits", cpu.address_bits);
             integerField(L, "addressUnit", 1u << cpu.address_shift);
@@ -874,6 +946,217 @@ struct ScriptRuntime::Script {
             integerField(L, state.regs[i].name, state.regs[i].value);
         lua_setfield(L, -2, "values");
         return 1;
+    }
+
+    static int write(lua_State* L) {
+        auto& script = self(L);
+        const auto id = unsigned32(L, 1);
+        const auto offset = unsigned32(L, 2);
+        const auto width = readWidth(L, 4);
+        const auto value = writeValue(L, 3, width);
+        const auto side = script.instanceFor(L, 6);
+        script.charge(L, width);
+        if (!script.atControlBoundary() || !script.owner.services_.mutationAllowed)
+            return unavailable(L, "Memory writes unavailable here");
+        const auto* domain = script.domain(side, id, offset, width);
+        const auto big = bigEndian(L, 5, domain && domain->big_endian != 0);
+        if (!domain || quint64(offset) + width > domain->size)
+            return unavailable(L, "Memory write outside an available domain");
+        if (!script.host->inspectionDomainWritable(side, id))
+            return unavailable(L, "Memory domain is read-only");
+        auto* request = script.queueControl(ScriptControlType::MemoryWrite);
+        if (!request) return unavailable(L, "Control queue is full");
+        request->instance = side;
+        request->target = id;
+        request->offset = offset;
+        request->bytes.resize(width);
+        for (int i = 0; i < width; ++i) {
+            const int shift = (big ? width - 1 - i : i) * 8;
+            request->bytes[i] = char((value >> shift) & 0xff);
+        }
+        return accepted(L);
+    }
+
+    static int writableRegisters(lua_State* L) {
+        auto& script = self(L);
+        const auto id = unsigned32(L, 1);
+        const auto side = script.instanceFor(L, 2);
+        script.charge(L, sizeof(kr_debug_cpu));
+        kr_debug_cpu state{};
+        if (!script.cpu(side, id) || !script.host->inspectionRegisters(side, id, state))
+            return unavailable(L, "CPU registers unavailable");
+        lua_createtable(L, 0, state.count);
+        for (unsigned i = 0; i < state.count; ++i) {
+            const auto& reg = state.regs[i];
+            if (script.host->inspectionRegisterWritable(side, id, reg.name))
+                integerField(L, reg.name, reg.digits);
+        }
+        return 1;
+    }
+
+    static int setRegister(lua_State* L) {
+        auto& script = self(L);
+        const auto id = unsigned32(L, 1);
+        luaL_checktype(L, 2, LUA_TSTRING);
+        const auto name = checkedString(L, 2, sizeof(kr_debug_reg::name) - 1);
+        if (name.isEmpty() || name.contains('\0'))
+            return luaL_argerror(L, 2, "expected a native register name");
+        const auto value = unsigned32(L, 3);
+        const auto side = script.instanceFor(L, 4);
+        script.charge(L, sizeof(kr_debug_cpu));
+        if (!script.atControlBoundary() || !script.owner.services_.mutationAllowed)
+            return unavailable(L, "Register writes unavailable here");
+        kr_debug_cpu state{};
+        if (!script.cpu(side, id) || !script.host->inspectionRegisters(side, id, state))
+            return unavailable(L, "CPU registers unavailable");
+        const auto* end = state.regs + state.count;
+        const auto* reg = std::find_if(std::as_const(state).regs, end, [&](const auto& entry) { return name == entry.name; });
+        if (reg == end || !script.host->inspectionRegisterWritable(side, id, reg->name))
+            return unavailable(L, "Register is unavailable or read-only");
+        if (reg->digits < 8 && (quint64(value) >> (reg->digits * 4)))
+            return luaL_argerror(L, 3, "value does not fit the register");
+        auto* request = script.queueControl(ScriptControlType::RegisterWrite);
+        if (!request) return unavailable(L, "Control queue is full");
+        request->instance = side;
+        request->target = id;
+        request->registerName = reg->name;
+        request->valueBits = value;
+        return accepted(L);
+    }
+
+    bool mayEditObservers() const { return atControlBoundary() && owner.services_.accessAllowed; }
+
+    static int onAccess(lua_State* L) {
+        auto& script = self(L);
+        const auto id = unsigned32(L, 1);
+        const auto name = checkedString(L, 2, 5);
+        const auto first = unsigned32(L, 3);
+        const auto last = lua_isnil(L, 4) ? first : unsigned32(L, 4);
+        luaL_checktype(L, 5, LUA_TFUNCTION);
+        const auto side = script.instanceFor(L, 6);
+        const auto eventName = std::find_if(AccessNames.cbegin(), AccessNames.cend(),
+                                           [name](const char* text) { return name == text; });
+        if (eventName == AccessNames.cend()) return luaL_argerror(L, 2, "expected 'exec', 'read' or 'write'");
+        if (last < first) return luaL_argerror(L, 4, "range end precedes its start");
+        const auto event = AccessEvents[size_t(eventName - AccessNames.cbegin())];
+        script.charge(L);
+        if (!script.mayEditObservers()) return unavailable(L, "Access hooks unavailable here");
+        const auto* cpu = script.cpu(side, id);
+        if (!cpu || !(cpu->capabilities & event))
+            return unavailable(L, "CPU or access event unavailable");
+        const auto mask = debugAccessAddressMask(*cpu, event);
+        if (last > mask) return unavailable(L, "Address outside CPU event range");
+        if (script.accessHooks.size() >= ScriptLimits::MaxAccessHooksPerScript ||
+            script.owner.accessCount_ >= ScriptLimits::MaxAccessHooks ||
+            script.nextAccessHook == std::numeric_limits<lua_Integer>::max())
+            return unavailable(L, "Access hook limit reached");
+        lua_pushvalue(L, 5);
+        const int callback = luaL_ref(L, LUA_REGISTRYINDEX);
+        const auto handle = ++script.nextAccessHook;
+        script.accessHooks.push_back({{side, id, event, first, last}, mask, handle, callback});
+        ++script.owner.accessCount_;
+        ++script.owner.accessRevision_;
+        lua_pushinteger(L, handle);
+        return 1;
+    }
+
+    static int offAccess(lua_State* L) {
+        auto& script = self(L);
+        if (lua_type(L, 1) == LUA_TSTRING) checkedString(L, 1, 32);
+        const auto handle = luaL_checkinteger(L, 1);
+        script.charge(L);
+        if (!script.mayEditObservers()) return unavailable(L, "Access hook removal unavailable here");
+        auto& hooks = script.accessHooks;
+        const auto found = std::find_if(hooks.begin(), hooks.end(), [handle](const auto& hook) {
+            return hook.handle == handle;
+        });
+        if (found == hooks.end()) return unavailable(L, "Unknown access hook");
+        luaL_unref(L, LUA_REGISTRYINDEX, found->callback);
+        hooks.erase(found);
+        --script.owner.accessCount_;
+        ++script.owner.accessRevision_;
+        return accepted(L);
+    }
+
+    static int hookStats(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (script.starting || script.accessEvent || script.currentEvent != ScriptEvent::Frame ||
+            script.accessStatsFrame != script.frame)
+            return unavailable(L, "Access hook statistics require an observed completed frame");
+        lua_createtable(L, 0, 2);
+        integerField(L, "callbacks", script.accessCallbacks);
+        booleanField(L, "truncated", script.accessTruncated);
+        return 1;
+    }
+
+    static int label(lua_State* L) {
+        auto& script = self(L);
+        const auto id = unsigned32(L, 1);
+        const auto address = unsigned32(L, 2);
+        const auto name = annotationName(L, 3);
+        const auto side = script.instanceFor(L, 4);
+        script.charge(L, int(name.size()));
+        if (!script.atControlBoundary()) return unavailable(L, "Labels unavailable here");
+        const auto* cpu = script.cpu(side, id);
+        if (!cpu || address > debugAccessAddressMask(*cpu, KR_DEBUG_EXEC))
+            return unavailable(L, "CPU or address unavailable");
+        if (script.labels.size() >= ScriptLimits::MaxAnnotationsPerKind ||
+            script.owner.labelCount_ >= ScriptLimits::MaxLabels ||
+            script.owner.nextLabel_ == 0x7fffffff)
+            return unavailable(L, "Label limit reached");
+        const auto handle = ++script.owner.nextLabel_;
+        script.labels.push_back({handle, side, id, address, QString::fromUtf8(name)});
+        ++script.owner.labelCount_;
+        ++script.owner.annotationRevision_;
+        lua_pushinteger(L, handle);
+        return 1;
+    }
+
+    static int watch(lua_State* L) {
+        auto& script = self(L);
+        const auto id = unsigned32(L, 1);
+        const auto offset = unsigned32(L, 2);
+        const auto width = readWidth(L, 3);
+        const auto name = annotationName(L, 4);
+        const auto side = script.instanceFor(L, 5);
+        script.charge(L, int(name.size()));
+        if (!script.atControlBoundary()) return unavailable(L, "RAM watches unavailable here");
+        const auto* domain = script.domain(side, id, offset, width);
+        if (!domain || quint64(offset) + width > domain->size)
+            return unavailable(L, "Watch outside an available domain");
+        if (script.watches.size() >= ScriptLimits::MaxAnnotationsPerKind ||
+            script.owner.watchCount_ >= DebugScriptWatchLimit ||
+            script.owner.nextWatch_ == std::numeric_limits<quint32>::max())
+            return unavailable(L, "Watch limit reached");
+        const auto handle = ++script.owner.nextWatch_;
+        script.watches.push_back({handle, side, id, offset, quint32(width),
+                                  DebugWatchEntry::Unsigned, DebugWatchEntry::Native,
+                                  QString::fromUtf8(name)});
+        ++script.owner.watchCount_;
+        ++script.owner.annotationRevision_;
+        lua_pushinteger(L, handle);
+        return 1;
+    }
+
+    template<bool Watch>
+    static int removeAnnotation(lua_State* L) {
+        auto& script = self(L);
+        const auto handle = unsigned32(L, 1);
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Annotation removal unavailable here");
+        auto& rows = [&]() -> auto& {
+            if constexpr (Watch) return script.watches;
+            else return script.labels;
+        }();
+        const auto found = std::find_if(rows.begin(), rows.end(), [handle](const auto& row) {
+            return row.id == handle;
+        });
+        if (found == rows.end()) return unavailable(L, "Unknown annotation");
+        rows.erase(found);
+        --(Watch ? script.owner.watchCount_ : script.owner.labelCount_);
+        ++script.owner.annotationRevision_;
+        return accepted(L);
     }
 
     bool shouldDraw(lua_State* L) {
@@ -1125,7 +1408,11 @@ struct ScriptRuntime::Script {
         lua_setglobal(L, "savestate");
         const luaL_Reg memory[] = {
             {"domains", domains}, {"cpus", cpus}, {"read", read}, {"range", range},
-            {"peek", peek}, {"registers", registers}, {nullptr, nullptr}
+            {"peek", peek}, {"registers", registers}, {"writableregisters", writableRegisters},
+            {"write", write}, {"setregister", setRegister},
+            {"on", onAccess}, {"off", offAccess}, {"hookstats", hookStats},
+            {"label", label}, {"unlabel", removeAnnotation<false>},
+            {"watch", watch}, {"unwatch", removeAnnotation<true>}, {nullptr, nullptr}
         };
         luaL_newlib(L, memory);
         lua_setglobal(L, "memory");
@@ -1181,6 +1468,60 @@ struct ScriptRuntime::Script {
         topLevel = nullptr;
         topLevelRef = LUA_NOREF;
         return true;
+    }
+
+    static int dispatchAccess(lua_State* L) {
+        const auto& script = self(L);
+        const auto& access = *script.accessEvent;
+        const char* name = access.event == KR_DEBUG_EXEC ? "exec"
+                         : access.event == KR_DEBUG_READ ? "read" : "write";
+        lua_rawgeti(L, LUA_REGISTRYINDEX, script.accessCallbackRef);
+        lua_createtable(L, 0, 7);
+        stringField(L, "event", name);
+        integerField(L, "frame", lua_Integer(script.frame));
+        integerField(L, "instance", access.instance);
+        integerField(L, "cpu", access.cpu);
+        integerField(L, "address", access.address);
+        integerField(L, "value", access.value);
+        integerField(L, "size", access.size);
+        lua_call(L, 1, 0);
+        return 0;
+    }
+
+    void beginAccess() {
+        accessCallbacks = 0;
+        accessBudget = {EventInstructions, NativeCalls, NativeBytes, 0, {}};
+        accessFailed = false;
+        accessTruncated = false;
+        accessFramePending = true;
+    }
+
+    bool accessBudgetExhausted() const {
+        return accessCallbacks >= AccessCallbacksPerScript ||
+               accessBudget.instructions <= HookInterval || accessBudget.calls <= 0;
+    }
+
+    void handleAccess(const DebugAccessEvent& access, int callback, const LibretroHost& core,
+                      Hardware& catalog, quint64 number, Clock::time_point limit) {
+        host = &core;
+        hardware = &catalog;
+        // Video modes can change between two bus events in a frame.
+        catalog.beginEvent();
+        frame = number;
+        instance = access.instance;
+        accessEvent = &access;
+        accessCallbackRef = callback;
+        accessBudget.deadline = limit;
+        // Lua restarts its count timer on each call. Charge the final partial interval too.
+        accessBudget.instructions -= HookInterval;
+        ++accessCallbacks;
+        lua_sethook(L, instructionHook, LUA_MASKCOUNT, HookInterval);
+        lua_pushcfunction(L, dispatchAccess);
+        accessFailed = lua_pcall(L, 0, 0, 0) != LUA_OK;
+        end(L);
+        accessEvent = nullptr;
+        accessCallbackRef = LUA_NOREF;
+        if (accessFailed) reportLuaError(L);
     }
 
     static int dispatch(lua_State* L) {
@@ -1265,17 +1606,22 @@ void ScriptRuntime::stopAll(const QString& reason) {
 }
 
 void ScriptRuntime::setHostServices(ScriptHostServices services) {
-    setHostPolicy(services.inputAllowed, services.controlAllowed, services.saveAllowed);
+    setHostPolicy(services.inputAllowed, services.controlAllowed, services.saveAllowed,
+                  services.mutationAllowed, services.accessAllowed);
     services_ = std::move(services);
 }
 
-void ScriptRuntime::setHostPolicy(bool inputAllowed, bool controlAllowed, bool saveAllowed) {
+void ScriptRuntime::setHostPolicy(bool inputAllowed, bool controlAllowed, bool saveAllowed,
+                                  bool mutationAllowed, bool accessAllowed) {
     if (services_.inputAllowed && !inputAllowed && hasScripts()) {
         for (const auto& script : state_->scripts) script->overrides.fill({});
     }
     services_.inputAllowed = inputAllowed;
     services_.controlAllowed = controlAllowed;
     services_.saveAllowed = saveAllowed;
+    services_.mutationAllowed = mutationAllowed;
+    if (services_.accessAllowed != accessAllowed && accessCount_) ++accessRevision_;
+    services_.accessAllowed = accessAllowed;
 }
 
 QVector<ScriptControl> ScriptRuntime::takeControls() {
@@ -1283,6 +1629,8 @@ QVector<ScriptControl> ScriptRuntime::takeControls() {
 }
 
 bool ScriptRuntime::ownsControl(const ScriptControl& control) const {
+    if (control.type == ScriptControlType::LoadState && control.saveRevision != saveRevision_)
+        return false;
     return hasScripts() && std::any_of(state_->scripts.cbegin(), state_->scripts.cend(),
         [&](const auto& script) { return script->id == control.owner && script->run == control.run; });
 }
@@ -1299,20 +1647,117 @@ void ScriptRuntime::controlFailed(const ScriptControl& control, const QString& e
     if (scripts.empty()) state_.reset();
 }
 
+void ScriptRuntime::discardSavedStates() {
+    ++saveRevision_;
+    controls_.erase(std::remove_if(controls_.begin(), controls_.end(), [](const auto& request) {
+        return request.type == ScriptControlType::LoadState;
+    }), controls_.end());
+    if (!hasScripts()) return;
+    for (const auto& script : state_->scripts) {
+        for (auto& save : script->saves) save.snapshot.reset();
+    }
+}
+
 void ScriptRuntime::invalidateTimeline(bool discardSaves, quint64 preserveRun) {
     controls_.clear();
+    if (discardSaves) discardSavedStates();
     if (!hasScripts()) return;
     auto& scripts = state_->scripts;
     scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [&](const auto& script) {
         script->overrides.fill({});
-        if (discardSaves) {
-            for (auto& save : script->saves) save.snapshot.reset();
-        }
         if (!script->topLevel || script->run == preserveRun) return false;
         script->report(ScriptStatus::Stopped, QStringLiteral("Frame advance interrupted by a timeline change"));
         return true;
     }), scripts.end());
     if (scripts.empty()) state_.reset();
+}
+
+QVector<DebugAccessSubscription> ScriptRuntime::accessSubscriptions() const {
+    QVector<DebugAccessSubscription> result;
+    if (!services_.accessAllowed || !accessCount_ || !hasScripts()) return result;
+    result.reserve(accessCount_);
+    for (const auto& script : state_->scripts) {
+        for (const auto& hook : script->accessHooks) result.push_back(hook.subscription);
+    }
+    return result;
+}
+
+void ScriptRuntime::beginAccessFrame(const LibretroHost& host, quint64 frame) {
+    if (!services_.accessAllowed || !accessCount_ || !hasScripts()) return;
+    accessHost_ = &host;
+    accessFrame_ = frame;
+    accessCallbacks_ = 0;
+    accessActiveScripts_ = 0;
+    accessNanoseconds_ = 0;
+    for (const auto& script : state_->scripts) {
+        if (script->accessHooks.isEmpty()) continue;
+        script->beginAccess();
+        ++accessActiveScripts_;
+    }
+}
+
+void ScriptRuntime::dispatchMemoryAccess(const DebugAccessEvent& event) {
+    constexpr auto limit = std::chrono::duration_cast<std::chrono::nanoseconds>(AccessTimeLimit).count();
+    if (!accessHost_ || !services_.accessAllowed || !accessActiveScripts_ || !hasScripts()) return;
+    for (const auto& script : state_->scripts) {
+        if (!script->accessFramePending || script->accessFailed || script->accessTruncated) continue;
+        for (const auto& hook : script->accessHooks) {
+            const auto& sub = hook.subscription;
+            if (sub.instance != event.instance || sub.cpu != event.cpu || sub.event != event.event ||
+                !debugAccessOverlaps(sub.first, sub.last, event, hook.addressMask))
+                continue;
+
+            if (script->accessBudgetExhausted() || accessCallbacks_ >= AccessCallbacksPerFrame ||
+                accessNanoseconds_ >= limit) {
+                script->accessTruncated = true;
+                --accessActiveScripts_;
+                break;
+            }
+            const auto started = Clock::now();
+            script->handleAccess(event, hook.callback, *accessHost_, state_->hardware, accessFrame_,
+                                 started + std::chrono::nanoseconds(limit - accessNanoseconds_));
+            accessNanoseconds_ += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                Clock::now() - started).count();
+            ++accessCallbacks_;
+            if (!script->accessFailed) continue;
+            accessFailed_ = true;
+            --accessActiveScripts_;
+            break;
+        }
+    }
+}
+
+void ScriptRuntime::endAccessFrame() {
+    const auto* host = std::exchange(accessHost_, nullptr);
+    const bool failed = std::exchange(accessFailed_, false);
+    if (!host || !hasScripts()) return;
+    auto& scripts = state_->scripts;
+    for (const auto& script : scripts) {
+        if (!std::exchange(script->accessFramePending, false)) continue;
+        script->accessStatsFrame = host->runClock().frames;
+        if (script->accessTruncated && !script->accessTruncationReported) {
+            script->accessTruncationReported = true;
+            script->report(ScriptStatus::Log, Localization::text(
+                QStringLiteral("Вызовы обработчиков Lua ограничены бюджетом кадра.")));
+        }
+    }
+    if (!failed) return;
+    scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [](const auto& script) {
+        return script->accessFailed;
+    }), scripts.end());
+    if (scripts.empty()) state_.reset();
+}
+
+ScriptDebugAnnotations ScriptRuntime::annotations() const {
+    ScriptDebugAnnotations result;
+    if (!hasScripts()) return result;
+    result.labels.reserve(labelCount_);
+    result.watches.reserve(watchCount_);
+    for (const auto& script : state_->scripts) {
+        result.labels += script->labels;
+        result.watches += script->watches;
+    }
+    return result;
 }
 
 void ScriptRuntime::beforeFrame(const LibretroHost& host, quint64, quint64 frame, MovieInput& input) {

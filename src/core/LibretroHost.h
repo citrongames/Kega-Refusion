@@ -2,6 +2,7 @@
 #include "ExpansionMode.h"
 #include "DebugInspection.h"
 #include "DebugExecution.h"
+#include "DebugAccess.h"
 #include "DebugTrace.h"
 #include "DebugCoverage.h"
 #include "InputDisplay.h"
@@ -92,6 +93,17 @@ public:
     QVector<kr_debug_target> inspectionCpuTargets(unsigned instance) const;
     bool inspectionRegisters(unsigned instance, unsigned cpu, kr_debug_cpu& state) const;
     bool inspectionPeek(unsigned instance, unsigned cpu, quint32 address, uint8_t* data, size_t size) const;
+    bool inspectionCodeLocation(unsigned instance, unsigned cpu, quint32 address, kr_cov_location& location) const;
+    bool inspectionDomainWritable(unsigned instance, quint32 domain) const;
+    bool inspectionWrite(unsigned instance, quint32 domain, quint32 offset, const void* data, size_t size);
+    bool inspectionRegisterWritable(unsigned instance, unsigned cpu, const char* name) const;
+    bool inspectionWriteRegister(unsigned instance, unsigned cpu, const char* name, quint32 value);
+    // Subscription changes take effect at a frame boundary. An empty list may
+    // also clear the observer while the debugger holds a suspended frame.
+    // The callback runs synchronously on the owner thread and may inspect state.
+    using DebugAccessCallback = void (*)(void*, const DebugAccessEvent&);
+    bool setDebugAccessObserver(const QVector<DebugAccessSubscription>& subscriptions,
+                                DebugAccessCallback callback = nullptr, void* opaque = nullptr);
     bool writeInspectionMemory(const DebugMemoryWrite& request, QString& error);
     bool debuggerAttach(QString& error);
     void debuggerDetach();
@@ -229,6 +241,8 @@ public:
     std::function<void(const QString&)> message;
 private:
     const LibretroHost* inspectionConsole(unsigned instance) const;
+    bool canWriteInspection() const;
+    bool writeDebugRegister(unsigned instance, unsigned cpu, const char* name, quint32 value);
     struct Activation { LibretroHost* previous; explicit Activation(LibretroHost* h) : previous(active_) { active_=h; } ~Activation() { active_=previous; } };
     struct CoverageExecution;
     struct CoverageExecutionDeleter { void operator()(CoverageExecution*) const; };
@@ -244,7 +258,23 @@ private:
     struct DebugExecution;
     struct DebugExecutionDeleter { void operator()(DebugExecution*) const; };
     std::unique_ptr<DebugExecution,DebugExecutionDeleter> debugger_;
-    void debuggerDisconnectPeer();
+    struct DebugAccessObserver;
+    struct DebugAccessObserverDeleter { void operator()(DebugAccessObserver*) const; };
+    std::unique_ptr<DebugAccessObserver,DebugAccessObserverDeleter> debugAccessObserver_;
+    using DebugHookMask = std::array<unsigned, KR_DEBUG_MAX_CPUS>;
+    using DebugHookMasks = std::array<DebugHookMask, 2>;
+    DebugHookMask connectedDebugHooks_{};
+    bool dispatchingDebugAccess_ = false;
+    bool connectDebugHooks(const DebugHookMask& masks);
+    bool applyDebugHookMasks(const DebugHookMasks& debuggerMasks, const DebugAccessObserver* observer);
+    bool configureDebugAccessObserver(const QVector<DebugAccessSubscription>& subscriptions,
+                                      DebugAccessCallback callback, void* opaque, bool ignoreUnavailable);
+    static void debugAccessHook(void* opaque, unsigned cpu, unsigned event, uint32_t address,
+                                uint32_t value, unsigned size);
+    void suspendDebugHooks();
+    void unloadDebugHooks();
+    void restoreDebugHooks(bool changedTargets);
+    void disconnectPeerDebugHooks();
     const QImage* debuggerFramePreview(int role) const;
     struct LinkPair;
     std::unique_ptr<LibretroHost> linkPeer_;

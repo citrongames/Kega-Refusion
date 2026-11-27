@@ -208,6 +208,7 @@ private:
     QAction* debugMemoryAction_ = nullptr;
     DebugWatchDialog* debugWatchDialog_ = nullptr;
     LuaScriptsDialog* luaScriptsDialog_ = nullptr;
+    ScriptDebugAnnotations scriptAnnotations_;
     QAction* debugWatchAction_ = nullptr;
     QAction* debugProjectOpenAction_ = nullptr;
     QAction* debugProjectSaveAction_ = nullptr;

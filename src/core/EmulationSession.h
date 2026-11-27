@@ -31,6 +31,7 @@ public:
     quint64 scriptMachineRevision() const { return scriptMachineRevision_.load(); }
     bool scriptCommand(const ScriptCommand& command);
     QVector<ScriptUpdate> takeScriptUpdates();
+    ScriptDebugAnnotations takeScriptAnnotations();
     void loadGame(const QString& path, int archiveIndex = -1, bool allowPatches = true);
     void loadGame(const QString& path, const RomArchive::Entry& archiveEntry, bool allowPatches = true);
     void closeGame();
@@ -151,6 +152,7 @@ public:
     bool hasGame() const { return loaded_.load(); }
 signals:
     void scriptsReady();
+    void scriptAnnotationsReady();
     void scriptsContextChanged();
     void debuggerReady();
     void debugMemoryWriteFinished(const QString& error);
@@ -244,6 +246,8 @@ private:
     std::mutex scriptMutex_;
     QVector<ScriptUpdate> scriptUpdates_;
     bool scriptUpdatePending_ = false;
+    ScriptDebugAnnotations scriptAnnotations_;
+    bool scriptAnnotationsPending_ = false;
     std::atomic<quint64> scriptMachineRevision_{1};
     ScriptOverlayPtr latestScriptOverlay_;
     std::mutex mutex_, videoMutex_, inspectionMutex_;

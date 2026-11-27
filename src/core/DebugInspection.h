@@ -16,7 +16,7 @@ struct DebugInspectionRequest {
     quint32 length = 256;
     quint32 instance = 0;
     bool watchCatalog = false;
-    QVector<DebugWatchEntry> watches;
+    QVector<DebugWatchEntry> watches, scriptWatches;
 };
 struct DebugInspectionSnapshot {
     quint64 serial = 0;

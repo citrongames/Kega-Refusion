@@ -203,6 +203,31 @@ int main(int argc, char** argv) {
     check(value(4, addressColumn) == QStringLiteral("0xFF0270") && value(4, valueColumn) == QStringLiteral("3"),
           "Manually entered RAM address is sampled as a physical offset");
 
+    int projectEdits = 0;
+    QObject::connect(&dialog, &DebugWatchDialog::entriesChanged, &dialog, [&] { ++projectEdits; });
+    auto marker = entry(s16.id, 0x2a, 2, DebugWatchEntry::Unsigned);
+    marker.name = QStringLiteral("Fixture marker");
+    dialog.setScriptEntries({marker});
+    const auto scriptRows = dialog.scriptEntries();
+    check(model->rowCount() == 6 && dialog.entries().size() == 5 &&
+          scriptRows.size() == 1 && scriptRows.first().id != s16.id && projectEdits == 0,
+          "Temporary watch is presented without entering the project and has a unique sample ID");
+    snapshot.watchValues.append({scriptRows.first().id, QByteArray::fromHex("1234"), true});
+    dialog.setSnapshot(snapshot);
+    table->selectRow(5);
+    check(value(5, 0) == QStringLiteral("Fixture marker (Lua)") &&
+          value(5, valueColumn) == QStringLiteral("4660") &&
+          !edit->isEnabled() && !find<QPushButton>(dialog, "debugWatchRemove")->isEnabled() &&
+          open->isEnabled(), "Lua watch samples in native order and supports navigation");
+    const int beforeDuplicate = subscriptions;
+    dialog.setScriptEntries({marker});
+    check(subscriptions == beforeDuplicate && value(5, valueColumn) == QStringLiteral("4660"),
+          "Repeated declarations preserve current samples");
+    dialog.setScriptEntries({});
+    check(model->rowCount() == 5 && dialog.scriptEntries().isEmpty() &&
+          value(4, valueColumn) == QStringLiteral("3") && projectEdits == 0,
+          "Stopping a script removes its entry while preserving the project and samples");
+
     const int beforeHide = subscriptions;
     dialog.hide();
     dialog.setSnapshot(snapshot);
