@@ -38,6 +38,7 @@ class CoverageDialog;
 class DebugGraphicsDialog;
 class DebugMemoryDialog;
 class DebugWatchDialog;
+class LuaScriptsDialog;
 struct DebugProjectOperation;
 class CheatSearchDialog;
 class DebugAudioDialog;
@@ -93,6 +94,7 @@ private:
     void showCpuDebugger();
     void ensureDebugWatch();
     void showDebugWatch();
+    void showLuaScripts();
     void openDebugProject();
     void saveDebugProjectFile(bool choosePath);
     void startDebugProjectIo(const QString& path, bool save, DebugProject project = {});
@@ -205,6 +207,7 @@ private:
     DebugMemoryDialog* debugMemoryDialog_ = nullptr;
     QAction* debugMemoryAction_ = nullptr;
     DebugWatchDialog* debugWatchDialog_ = nullptr;
+    LuaScriptsDialog* luaScriptsDialog_ = nullptr;
     QAction* debugWatchAction_ = nullptr;
     QAction* debugProjectOpenAction_ = nullptr;
     QAction* debugProjectSaveAction_ = nullptr;

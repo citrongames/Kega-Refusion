@@ -67,3 +67,10 @@ def copy_megald_notices(root: Path, notices: Path) -> None:
         ("src/megald/media/UPSTREAM.md", "UPSTREAM.md"),
     ):
         shutil.copy2(root / relative, component / name)
+
+
+def copy_lua_notices(root: Path, notices: Path) -> None:
+    component = notices / "lua"
+    component.mkdir(parents=True, exist_ok=True)
+    for name in ("LICENSE", "UPSTREAM.md"):
+        shutil.copy2(root / "third_party/lua" / name, component / name)

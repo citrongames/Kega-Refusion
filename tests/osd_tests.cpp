@@ -148,6 +148,79 @@ void testGameBorders() {
             "letterbox fields around loaded game are not black");
 }
 
+void testScriptOverlay() {
+    GameView view;
+    view.resize(800, 480);
+    QImage frame(640, 240, QImage::Format_RGB32);
+    frame.fill(QColor(37, 58, 81));
+    VideoFrameGeometry::setNativeSize(frame, QSize(320, 240));
+    const QRectF active(0.125, 0.125, 0.75, 0.75);
+    view.setFrame(frame, 4.0 / 3.0, {}, active);
+    const QImage baseline = render(view);
+    const QImage clean = view.captureGameImage();
+    const QImage windowCapture = view.captureImage();
+
+    QImage sample(2, 2, QImage::Format_ARGB32_Premultiplied);
+    sample.fill(Qt::yellow);
+    auto overlay = std::make_shared<ScriptOverlay>();
+    overlay->commands = {
+        {ScriptPrimitive::Rectangle, ScriptSpace::Game, QRectF(-15, -12, 42, 30),
+         Qt::transparent, Qt::red},
+        {ScriptPrimitive::Rectangle, ScriptSpace::Hud, QRectF(178, 76, 8, 8),
+         Qt::transparent, Qt::green},
+        {ScriptPrimitive::Image, ScriptSpace::Game, QRectF(10, 9, 2, 2),
+         Qt::transparent, Qt::transparent, {}, sample},
+        {ScriptPrimitive::Circle, ScriptSpace::Hud, QRectF(30, 50, 20, 20),
+         Qt::transparent, QColor(0, 0, 255, 128)},
+        {ScriptPrimitive::Line, ScriptSpace::Hud, QRectF(32, 100.5, -20, 0), Qt::cyan},
+        {ScriptPrimitive::Text, ScriptSpace::Hud, QRectF(20, 120, 0, 0),
+         Qt::white, Qt::transparent, QStringLiteral("Lua HUD")}
+    };
+    view.setFrame(frame, 4.0 / 3.0, {}, active, overlay);
+    const QImage displayed = render(view);
+    require(displayed.pixelColor(161, 65) == Qt::red &&
+            displayed.pixelColor(159, 65) == baseline.pixelColor(159, 65) &&
+            displayed.pixelColor(161, 59) == baseline.pixelColor(161, 59),
+            "script game coordinates did not follow the clipped active raster");
+    require(displayed.pixelColor(179, 78) == Qt::green &&
+            displayed.pixelColor(181, 79) == Qt::yellow,
+            "script images used filtered sample coordinates or broke command ordering");
+    require(displayed.pixelColor(40, 60) == QColor(0, 0, 128),
+            "transparent script HUD shape did not blend over the border");
+    require(displayed.pixelColor(20, 100) == Qt::cyan,
+            "script line lost a reversed endpoint");
+    const QRect textArea(20, 120, 60, 14);
+    require(displayed.copy(textArea) != baseline.copy(textArea),
+            "script HUD text did not render from a top-left anchor");
+    require(view.captureGameImage() == clean && view.captureImage() == windowCapture,
+            "script overlay leaked into a screenshot");
+
+    QImage highDpi(view.size() * 2, QImage::Format_RGB32);
+    highDpi.setDevicePixelRatio(2);
+    view.render(&highDpi);
+    require(highDpi.pixelColor(362, 158) == Qt::yellow &&
+            highDpi.pixelColor(80, 120) == QColor(0, 0, 128),
+            "script overlay used device pixels as logical coordinates");
+
+    view.setOsdEnabled(false);
+    require(render(view) == baseline, "script overlay ignored the global OSD setting");
+    view.setLightgunEnabled(0, true);
+    view.setLightgunAim(0, QPointF(0.5, 0.5));
+    require(render(view) != baseline, "global OSD setting also hid the lightgun crosshair");
+    view.setLightgunEnabled(0, false);
+    view.setOsdEnabled(true);
+    require(render(view) == displayed, "script overlay was lost after unhiding OSD");
+
+    view.resize(840, 530);
+    view.setIntegerScaling(true);
+    require(render(view).pixelColor(181, 90) == Qt::red &&
+            render(view).pixelColor(40, 60) == QColor(0, 0, 128),
+            "script game/HUD coordinate systems disagreed after integer scaling");
+    view.setFrame(frame, 4.0 / 3.0, {}, active);
+    require(render(view).pixelColor(181, 90) == frame.pixelColor(0, 0),
+            "a new frame without script commands kept the old overlay");
+}
+
 void testAnalogPointerEvents() {
     GameView view;
     view.resize(640, 480);
@@ -1030,6 +1103,10 @@ int main(int argc, char** argv) {
             testVideoRecordingOsd();
             std::puts("live MOV recording OSD passed"); return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--script-overlay-only"))) {
+            testScriptOverlay();
+            std::puts("Lua script overlay passed"); return 0;
+        }
         testMuteStatus();
         if (app.arguments().contains(QStringLiteral("--aspect-only"))) {
             testFilteredSquarePixels();
@@ -1040,6 +1117,7 @@ int main(int argc, char** argv) {
         testOverlayScaling();
         testReadinessWaiting();
         testGameBorders();
+        testScriptOverlay();
         testAnalogPointerEvents();
         testCleanScreenshot();
         testFilteredSquarePixels();

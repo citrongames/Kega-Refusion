@@ -11,7 +11,7 @@ import sys
 sys.dont_write_bytecode = True
 from package_manifest import write_manifest
 from package_symbols import strip_binary
-from package_notices import copy_core32x_notices, copy_megald_notices
+from package_notices import copy_core32x_notices, copy_lua_notices, copy_megald_notices
 
 
 def imports(binary: Path) -> set[str]:
@@ -120,6 +120,8 @@ def main() -> None:
 
     shutil.copytree(root / "languages", stage / "languages")
     shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
+    shutil.copytree(root / "assets/scripts/examples", stage / "scripts")
+    shutil.copy2(root / "docs/lua-api.md", stage / "scripts" / "lua-api.md")
     qtbase_ru = qt_root / "translations/qtbase_ru.qm"
     if not qtbase_ru.is_file():
         raise SystemExit(f"Missing Qt Russian translation: {qtbase_ru}")
@@ -133,6 +135,7 @@ def main() -> None:
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
     copy_megald_notices(root, notices)
+    copy_lua_notices(root, notices)
     shutil.copy2(root / "third_party/MMPX-PROVENANCE.md", notices / "MMPX-PROVENANCE.md")
     shutil.copy2(root / "third_party/libco/LICENSE.txt", notices / "libco-LICENSE.txt")
     shutil.copy2(root / "third_party/libco/README.txt", notices / "libco-PROVENANCE.txt")

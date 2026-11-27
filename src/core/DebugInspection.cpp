@@ -156,3 +156,98 @@ bool LibretroHost::writeInspectionMemory(const DebugMemoryWrite& request, QStrin
     debugToolsBoundary(KR_TRACE_MEMORY_EDIT);
     return true;
 }
+
+const LibretroHost* LibretroHost::inspectionConsole(unsigned instance) const {
+    const auto* console = instance == 0 ? this : instance == 1 ? linkPeer_.get() : nullptr;
+    return console && console->loaded_ ? console : nullptr;
+}
+
+unsigned LibretroHost::inspectionInstanceCount() const {
+    return loaded_ ? 1u + unsigned(inspectionConsole(1) != nullptr) : 0;
+}
+
+bool LibretroHost::inspectionCatalog(unsigned instance, kr_inspect_info& catalog) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->inspect_info || !console->api_->inspect_read) return false;
+    const Activation scope(const_cast<LibretroHost*>(console));
+    catalog = {};
+    if (!console->api_->inspect_info(KR_INSPECT_VERSION, KR_INSPECT_MEMORY, &catalog, sizeof(catalog)) ||
+        catalog.version != KR_INSPECT_VERSION || catalog.struct_size != sizeof(catalog) ||
+        catalog.domain_count > KR_INSPECT_MAX_DOMAINS)
+        return false;
+    catalog.system[sizeof(catalog.system) - 1] = 0;
+    for (unsigned i = 0; i < catalog.domain_count; ++i)
+        catalog.domains[i].name[sizeof(catalog.domains[i].name) - 1] = 0;
+    return true;
+}
+
+bool LibretroHost::inspectionRead(unsigned instance, quint32 domain, quint32 offset,
+                                  void* data, size_t size) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->inspect_read || !data || !size || size > KR_INSPECT_MAX_READ)
+        return false;
+    const Activation scope(const_cast<LibretroHost*>(console));
+    return console->api_->inspect_read(domain, offset, data, size) == size;
+}
+
+QVector<kr_debug_target> LibretroHost::inspectionCpuTargets(unsigned instance) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->debug_state || !console->api_->debug_peek)
+        return {};
+    const Activation scope(const_cast<LibretroHost*>(console));
+    const auto& api = *console->api_;
+    QVector<kr_debug_target> result;
+    if (api.debug_targets) {
+        kr_debug_target targets[KR_DEBUG_MAX_CPUS]{};
+        const auto count = std::min<size_t>(KR_DEBUG_MAX_CPUS,
+            api.debug_targets(KR_DEBUG_VERSION, targets, KR_DEBUG_MAX_CPUS));
+        for (size_t i = 0; i < count; ++i) {
+            auto& target = targets[i];
+            if (!target.cpu || (target.cpu & (target.cpu - 1)) ||
+                target.cpu >= (1u << KR_DEBUG_MAX_CPUS) || !target.address_bits ||
+                target.address_bits > 32 || target.address_shift > 1 ||
+                std::any_of(result.cbegin(), result.cend(),
+                            [&](const auto& item) { return item.cpu == target.cpu; }))
+                continue;
+            target.name[sizeof(target.name) - 1] = 0;
+            result.push_back(target);
+        }
+    } else {
+        // Older compatible cores export state/peek for only the main 68k and Z80.
+        for (unsigned cpu : { KR_DEBUG_M68K, KR_DEBUG_Z80 }) {
+            kr_debug_cpu state{};
+            if (!api.debug_state(cpu, &state, sizeof(state))) continue;
+            kr_debug_target target{};
+            const bool z80 = cpu == KR_DEBUG_Z80;
+            target.cpu = cpu;
+            target.address_bits = z80 ? 16 : 24;
+            std::strcpy(target.name, z80 ? "Z80" : "Main 68000");
+            result.push_back(target);
+        }
+    }
+    return result;
+}
+
+bool LibretroHost::inspectionRegisters(unsigned instance, unsigned cpu, kr_debug_cpu& state) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->debug_state) return false;
+    const Activation scope(const_cast<LibretroHost*>(console));
+    state = {};
+    if (!console->api_->debug_state(cpu, &state, sizeof(state)) ||
+        state.cpu != cpu || state.count > KR_DEBUG_MAX_REGS)
+        return false;
+    for (unsigned i = 0; i < state.count; ++i)
+        state.regs[i].name[sizeof(state.regs[i].name) - 1] = 0;
+    return true;
+}
+
+bool LibretroHost::inspectionPeek(unsigned instance, unsigned cpu, quint32 address,
+                                  uint8_t* data, size_t size) const {
+    const auto* console = inspectionConsole(instance);
+    if (!console || !console->api_->debug_peek || !data || !size || size > KR_DEBUG_MAX_PEEK)
+        return false;
+    const Activation scope(const_cast<LibretroHost*>(console));
+    uint8_t validity[KR_DEBUG_MAX_PEEK];
+    return console->api_->debug_peek(cpu, address, data, validity, size) == size &&
+        std::all_of(validity, validity + size, [](uint8_t valid) { return valid != 0; });
+}

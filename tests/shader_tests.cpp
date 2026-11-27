@@ -514,6 +514,51 @@ void screenshotWidgetTests() {
             "disabling shader did not restore unfiltered pixels");
 }
 
+void scriptOverlayWidgetTests() {
+    GameView view;
+    view.resize(801, 480);
+    QImage source(32, 16, QImage::Format_RGB32);
+    for (int y = 0; y < source.height(); ++y)
+        for (int x = 0; x < source.width(); ++x)
+            source.setPixelColor(x, y, x % 2 ? QColor(220, 40, 20) : QColor(20, 40, 220));
+    view.setFrame(source, 4.0 / 3.0);
+    QString error;
+    require(view.setShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp"), &error),
+            qPrintable(error));
+    require(view.setShaderParameter(QStringLiteral("DITHER_STRENGTH"), 1), "script test shader parameter unavailable");
+    const QImage stock = capture(view);
+    const QImage clean = view.captureGameImage();
+
+    auto overlay = std::make_shared<ScriptOverlay>();
+    overlay->commands = {
+        {ScriptPrimitive::Rectangle, ScriptSpace::Game, QRectF(12, 5, 8, 6),
+         Qt::transparent, QColor(231, 89, 173)},
+        {ScriptPrimitive::Rectangle, ScriptSpace::Game, QRectF(0, 4, 4, 4),
+         Qt::transparent, Qt::green},
+        {ScriptPrimitive::Rectangle, ScriptSpace::Hud, QRectF(8, 8, 8, 8),
+         Qt::transparent, QColor(243, 177, 19)}
+    };
+    view.setFrame(source, 4.0 / 3.0, {}, {}, overlay);
+    settle();
+    auto* gpu = view.findChild<QOpenGLWidget*>(QStringLiteral("gpuVideo"));
+    require(gpu, "overlay test lost the GPU view");
+    const QImage painted = gpu->grabFramebuffer();
+    const int midX = painted.width() / 2, midY = painted.height() / 2;
+    const qreal dpr = view.devicePixelRatioF();
+    const int hud = qRound(12 * dpr);
+    require(painted.pixelColor(midX, midY) == QColor(231, 89, 173) &&
+            painted.pixelColor(hud, hud) == QColor(243, 177, 19),
+            "the shader changed the script overlay or its coordinate system");
+    const int gameLeft = qRound(80.5 * dpr), edgeY = qRound(180 * dpr);
+    require(painted.pixelColor(gameLeft, edgeY) == Qt::green &&
+            painted.pixelColor(gameLeft - 1, edgeY) == Qt::black,
+            "game overlay missed the device-aligned shader viewport edge");
+    require(view.captureGameImage() == clean && view.captureImage() == stock,
+            "script overlay leaked into a shader screenshot");
+    view.setOsdEnabled(false);
+    require(gpu->grabFramebuffer() == stock, "GPU script overlay ignored the global OSD setting");
+}
+
 void widgetTests(const QString& directory) {
     GameView view;
     view.resize(920, 620);
@@ -611,6 +656,11 @@ void widgetTests(const QString& directory) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
+        if (app.arguments().contains(QStringLiteral("--script-overlay-only"))) {
+            scriptOverlayWidgetTests();
+            std::puts("Lua script overlay with native shaders passed");
+            return 0;
+        }
         QTemporaryDir directory;
         require(directory.isValid(), "shader test scratch unavailable");
         const bool resourceOnly = app.arguments().contains(QStringLiteral("--resource-only"));
@@ -661,6 +711,7 @@ int main(int argc, char** argv) {
         }
         context.doneCurrent();
         widgetTests(directory.path());
+        scriptOverlayWidgetTests();
         std::puts("Native GameView, unfiltered OSD, integer scaling and GLSL parser, GPU multipass, alpha, orientation, borders and native dither blending tests passed");
         return 0;
     } catch (const std::exception& e) {

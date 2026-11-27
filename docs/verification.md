@@ -729,3 +729,63 @@ Windows HTTP/1.1 and were validated before the draft was published.
 Evidence and final archives are retained under `build/release-0.31.0/` (ignored).
 Temporary package trees, isolated installations and scratch probe executables
 were removed. Useful incremental builds remain.
+
+
+## Lua scripting foundation (2026-11-27)
+
+- Embedded upstream Lua 5.5.1 archive SHA-256:
+  1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce.
+  All 63 upstream files preserved byte-for-byte. Static C++ build uses protected
+  exception unwinding through Qt bindings; notices include the pin and MIT
+  license. No baseline OS/Qt version change.
+- lua_runtime_tests passed original fixtures for MD, SMS, SG-1000, GG, GG Link
+  A/B, 32X, Firecore, Sega CD and CD+32X. Checked native-endian and signed reads,
+  bounded ranges, logical peeks/registers, unsupported reads, separate environments,
+  error/loop/OOM/native-work limits, drawing, log bounds and inactive Stop ACK.
+  Native state bytes stayed identical; debugger, tracing and coverage stayed off.
+- lua_session_tests passed frame/overlay identity, paused redraw, forward/back
+  step, file restore, runaway isolation, Stop clearing the HUD, queued source
+  invalidation including a cold network transition, local netplay observation
+  and cleanup on unload.
+- lua_window_tests passed nonmodal/no-minimize/no-maximize behavior, async
+  source/PNG preparation, machine-token race protection, deferred-start Stop,
+  queue rejection recovery, bounded logs, editor/error navigation, retained
+  unsaved edits and external-save conflict checks.
+- Scoped osd_tests/shader_tests with --script-overlay-only passed raster/GL,
+  active viewport/crop, aspect/stretch, 100% and 150% DPR, alpha, OSD off and
+  clean capture. Full shader suite passed at 100%. Two unrelated existing
+  failures were reproduced in unmodified binaries: live MOV status after a
+  transient message expires, and built-in OSD glyph raster/GL comparison at
+  150%. Neither is counted as a Lua pass.
+- Both Linux and Windows application targets compiled. Windows interactive
+  GUI testing is left to the user; no desktop input was captured or injected.
+
+### Lua CPU cost
+
+Three rotated trials of 1,800 frames each, restored to the same checkpoint
+after 360 startup frames. Native execution + Lua observation/list creation,
+without GUI rendering. The HUD performs three successful RAM reads and emits
+text/shapes. Accelerated cadence renders 1/32 frames and omits PCM output;
+Lua frame events still run each executed frame.
+
+| Game / actual region | Cadence | Baseline µs/frame | Empty runtime | RAM HUD |
+| --- | --- | ---: | ---: | ---: |
+| The Lion King / NTSC-U 59.92274 Hz | Full video/audio | 570.21 | 586.02 | 581.65 |
+| The Lion King / NTSC-U | 1/32 video, muted | 381.29 | 383.99 | 399.09 |
+| Sonic the Hedgehog 2 / PAL 49.70146 Hz | Full video/audio | 635.81 | 650.26 | 661.78 |
+| Sonic the Hedgehog 2 / PAL | 1/32 video, muted | 431.99 | 423.95 | 442.04 |
+
+All compared final native-state and video hashes matched; PCM hashes matched
+normal-output trials. Different cadences are not compared as PCM.
+HUD overhead: 2.0–4.7%; empty-runtime variation: -1.9–+2.8%, so smaller differences
+are not separable from run noise. Core SHA-256:
+3d14d4022cfc670e45a23b9a2de4634f29b57100a67fa9d57bbd31dff614e187.
+Evidence: build/verification/lua-phase1/.
+
+
+The bundled Sonic 1 REV00 example was also run on the real user ROM in place:
+NTSC-U 59.92274 Hz, 2,400 unattended frames, first complete HUD at frame 1,168,
+1,233 frames with complete moving bounds. Position/velocity/radii and
+camera/mode addresses were checked against the SonicRetro disassembly and
+the original Hivebrain RAM documentation; it displays object collision radii,
+not inferred universal hitboxes. Sonic 2 was rejected by the revision guard.

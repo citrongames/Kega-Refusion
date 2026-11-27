@@ -4,6 +4,7 @@
 #include "DebugExecution.h"
 #include "DebugTrace.h"
 #include "DebugCoverage.h"
+#include "script/ScriptTypes.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -27,6 +28,9 @@ class EmulationSession final : public QThread {
 public:
     explicit EmulationSession(QString corePath, QString dataPath, QObject* parent = nullptr);
     ~EmulationSession() override;
+    quint64 scriptMachineRevision() const { return scriptMachineRevision_.load(); }
+    bool scriptCommand(const ScriptCommand& command);
+    QVector<ScriptUpdate> takeScriptUpdates();
     void loadGame(const QString& path, int archiveIndex = -1, bool allowPatches = true);
     void loadGame(const QString& path, const RomArchive::Entry& archiveEntry, bool allowPatches = true);
     void closeGame();
@@ -64,7 +68,7 @@ public:
     void setAudioLowPass(bool enabled);
     void updateAudioClock(qint64 queuedUsecs, qint64 targetUsecs, bool available);
     bool takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership = nullptr,
-                        QRectF* inputViewport = nullptr);
+                        QRectF* inputViewport = nullptr, ScriptOverlayPtr* scriptOverlay = nullptr);
     void setSpriteOwnershipEnabled(bool enabled) { spriteOwnershipEnabled_.store(enabled); }
     void saveState(int slot);
     void loadState(int slot);
@@ -146,6 +150,8 @@ public:
     void shutdown();
     bool hasGame() const { return loaded_.load(); }
 signals:
+    void scriptsReady();
+    void scriptsContextChanged();
     void debuggerReady();
     void debugMemoryWriteFinished(const QString& error);
     void networkQualityChanged(const QJsonObject& quality);
@@ -208,7 +214,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, Cd32xRamCart, AudioLowPass, AutoPatches};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, Cd32xRamCart, AudioLowPass, AutoPatches, Lua};
     struct Command {
         Type type;
         QString path;
@@ -220,6 +226,7 @@ private:
         bool networkAuthorized = false;
         bool allowPatches = true;
         qsizetype retainedCheatBytes = 0;
+        std::shared_ptr<const ScriptCommand> script{};
     };
     static bool networkShared(Type type);
     static QByteArray encodeNetworkCommand(const Command& command);
@@ -232,8 +239,13 @@ private:
     qint64 lastNetworkSaveMs_=0, lastNetworkHeavyMs_=0;
     void enqueue(Command command);
     void publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {},
-                      const QRectF& inputViewport = {});
+                      const QRectF& inputViewport = {}, ScriptOverlayPtr scriptOverlay = {});
     QString corePath_, dataPath_;
+    std::mutex scriptMutex_;
+    QVector<ScriptUpdate> scriptUpdates_;
+    bool scriptUpdatePending_ = false;
+    std::atomic<quint64> scriptMachineRevision_{1};
+    ScriptOverlayPtr latestScriptOverlay_;
     std::mutex mutex_, videoMutex_, inspectionMutex_;
     std::mutex coverageMutex_;
     std::deque<DebugCoverageCommand> coverageCommands_;

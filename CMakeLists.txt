@@ -20,6 +20,7 @@ include(cmake/AchievementsDependencies.cmake)
 include(cmake/NetplayDependencies.cmake)
 include(cmake/Ggpo.cmake)
 include(cmake/VideoDependencies.cmake)
+include(cmake/LuaDependencies.cmake)
 add_library(rom_archive STATIC src/core/RomArchive.cpp src/core/RomArchive.h
     src/core/RomPatch.cpp src/core/RomPatch.h src/core/RomPatchSet.cpp src/core/RomPatchSet.h)
 target_include_directories(rom_archive PUBLIC src)
@@ -36,7 +37,8 @@ add_library(megald_media STATIC src/megald/media/media.c src/megald/media/media.
     src/megald/media/qon.h src/megald/media/qoi2.h)
 set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
-add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
+add_library(core_host STATIC src/script/ScriptRuntime.cpp src/script/ScriptRuntime.h src/script/ScriptTypes.h
+    src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/DebugProject.cpp
     src/core/DebugProject.h
@@ -68,7 +70,7 @@ add_library(core_host STATIC src/core/DataFolders.cpp src/core/DataFolders.h
     src/net/NetRollbackSession.cpp src/net/NetRollbackSession.h)
 target_include_directories(core_host PUBLIC src third_party/libretro PRIVATE third_party)
 target_compile_definitions(core_host PRIVATE KEGA_VERSION="${PROJECT_VERSION}")
-target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE megald_media kega_archive kega_ggpo kega_libco Qt6::Network kega_video_deps)
+target_link_libraries(core_host PUBLIC Qt6::Core Qt6::Gui rom_archive localization rcheevos PRIVATE kega_lua megald_media kega_archive kega_ggpo kega_libco Qt6::Network kega_video_deps)
 add_library(video_renderer STATIC
     src/ui/GameView.cpp src/ui/GameView.h src/ui/ShaderPreset.cpp src/ui/ShaderPipeline.cpp src/ui/ShaderPipeline.h
     src/ui/BlarggPass.cpp src/ui/BlarggKernel.cpp
@@ -140,6 +142,7 @@ add_executable(KegaRefusion WIN32
     src/ui/NetplaySettingsPage.cpp src/ui/NetplaySettingsPage.h
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
+    src/ui/LuaScriptsDialog.cpp src/ui/LuaScriptsDialog.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/CpuDebuggerDialog.cpp src/ui/CpuDebuggerDialog.h
     src/ui/MainWindowDebugProject.cpp
@@ -174,6 +177,17 @@ if(WIN32)
     target_link_libraries(KegaRefusion PRIVATE iphlpapi ws2_32)
 endif()
 if(BUILD_TESTING)
+    add_executable(lua_window_tests tests/lua_window_tests.cpp src/ui/LuaScriptsDialog.cpp src/ui/LuaScriptsDialog.h)
+    target_include_directories(lua_window_tests PRIVATE src)
+    target_link_libraries(lua_window_tests PRIVATE localization Qt6::Widgets)
+    add_test(NAME lua_window_tests COMMAND lua_window_tests)
+    set_tests_properties(lua_window_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_executable(lua_runtime_tests tests/lua_runtime_tests.cpp)
+    target_link_libraries(lua_runtime_tests PRIVATE core_host)
+    add_executable(lua_benchmark EXCLUDE_FROM_ALL tests/lua_benchmark.cpp)
+    target_link_libraries(lua_benchmark PRIVATE core_host)
+    add_executable(lua_session_tests tests/lua_session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
+    target_link_libraries(lua_session_tests PRIVATE core_host)
     add_executable(update_installer_tests tests/update_installer_tests.cpp)
     target_link_libraries(update_installer_tests PRIVATE update_archive kega_archive)
     if(MSVC)

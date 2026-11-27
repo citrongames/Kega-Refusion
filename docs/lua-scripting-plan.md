@@ -2,14 +2,14 @@
 
 Agreed for preservation on 2026-11-21, following research into FCEUX, Mesen 2,
 BizHawk, Gens-rr and mGBA. Baseline: release 0.29.0, repository 9000292.
-This document describes future work, not shipped features. Saving this plan
-is not authorization to begin implementation; start when the user requests it.
+Implementation of Phase 1 was authorized on 2026-11-27. The remaining phases
+remain planned work; they are not advertised as shipped features.
 
 ## Progress and direction
 
 - [x] Research reference APIs and inspect the current host architecture.
 - [x] Preserve the proposed architecture, delivery order and integration rules.
-- [ ] Phase 1: runtime, script window, read-only memory and drawing.
+- [x] Phase 1: runtime, script window, read-only memory and drawing.
 - [ ] Phase 2: input automation, frame control and temporary save objects.
 - [ ] Phase 3: memory/register editing and debugger integration.
 - [ ] Phase 4: custom panels, Gens compatibility and advanced timeline integration.
@@ -216,3 +216,44 @@ batch boundary; recording this document requires no new binaries.
 - [Lua versions](https://www.lua.org/versions.html) and
   [Lua 5.5 manual](https://www.lua.org/manual/5.5/manual.html): runtime,
   allocator and instruction-hook facilities. Recheck the pinned release when implementation starts.
+
+
+## Phase 1 delivered — 2026-11-27
+
+Embedded Lua 5.5.1 is pinned to the official source archive and built statically
+without a system Lua dependency. The [API guide](lua-api.md) defines the native
+versioned subset, limits and timeline behavior. Packages include examples,
+their guide and the Lua MIT notice.
+
+The emulation owner runs independent bounded environments; the GUI prepares
+source and PNG assets asynchronously. Scripts read existing physical-domain
+and logical-CPU inspection interfaces without attaching the debugger. Drawing
+packets share the video mailbox and carry generation/frame/console identity.
+There are no new emulated machines or CPU hooks for scripting.
+
+The nonmodal window supplies a script list, editor, syntax highlighting, line
+numbers, API hints, external-editor action and bounded logs. Source preparation
+carries the original machine revision, so late results cannot start against a
+replacement game. Script startup waits at a CPU breakpoint; Stop can cancel it.
+
+Events include completed frames, reset, state loading, rewind and a separate
+presentation-only draw event. Lua locals are not rewound. Internal replay
+does not re-run ordinary callbacks. Predictive file-state previews and replaced
+rollback pictures are shown clean until matching observations are available.
+Remote rewind images are never paired with stale local memory.
+Hardcore and video export reject execution; ordinary netplay permits local
+read-only scripts. Mutations, input override and compatibility adapters remain
+in the later phases.
+
+Focused checks covered MD, SMS, SG-1000, GG and GG Link A/B, 32X, Firecore,
+Sega CD and CD+32X using original fixtures. State bytes stayed unchanged by
+inspection. MegaLD media-specific scripting and every special cartridge were
+not individually replayed in this batch. Rendering checks covered raster/GL,
+100%/150% scale, clean capture and OSD visibility. Linux session tests covered
+step/back/load/stop, lifecycle generations and local netplay observation.
+Windows was cross-compiled; interactive Windows verification remains with the user.
+
+Core execution plus representative RAM HUD/list generation measured 2.0–4.7%
+above baseline on Lion King NTSC-U and Sonic 2 PAL; no-script comparisons varied
+from -1.9% to +2.8%. This is not an end-to-end GUI benchmark. Exact measurements,
+hash comparisons and existing unrelated test limitations are in verification.

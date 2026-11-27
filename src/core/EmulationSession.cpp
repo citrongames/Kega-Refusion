@@ -1,5 +1,6 @@
 #include "i18n/Localization.h"
 #include "EmulationSession.h"
+#include "script/ScriptRuntime.h"
 #include "LibretroHost.h"
 #include "CheatSearch.h"
 #include "net/NetplayTimeline.h"
@@ -358,14 +359,51 @@ InputDisplayState EmulationSession::inputDisplay() {
     inputDisplayPending_ = false;
     return latestInputDisplay_;
 }
+bool EmulationSession::scriptCommand(const ScriptCommand& request) {
+    // Bounded immutable payloads; no Lua or filesystem work on the GUI thread.
+    if (request.source.size() > ScriptLimits::MaxSourceBytes || request.images.size() > ScriptLimits::MaxImages) return false;
+    qsizetype imageBytes=0;
+    for (const auto& image : request.images) imageBytes += image.sizeInBytes();
+    if (imageBytes > ScriptLimits::MaxImageBytes) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    qsizetype retained=0;
+    unsigned count=0;
+    for (auto it=commands_.begin(); it!=commands_.end();) {
+        if (it->type!=Type::Lua) { ++it; continue; }
+        if (request.action!=ScriptAction::Run &&
+            (request.action==ScriptAction::StopAll || (it->script && it->script->id==request.id))) {
+            it=commands_.erase(it); continue;
+        }
+        ++count;
+        if (it->script) {
+            retained+=it->script->source.size();
+            for (const auto& image : it->script->images) retained+=image.sizeInBytes();
+        }
+        ++it;
+    }
+    if (count>=16 || commands_.size()>=2048 || retained+imageBytes+request.source.size()>32*1024*1024) return false;
+    Command command{Type::Lua,{}};
+    command.requestId=request.machineRevision ? request.machineRevision : scriptMachineRevision_.load();
+    command.script=std::make_shared<const ScriptCommand>(request);
+    commands_.push_back(std::move(command));
+    return true;
+}
+QVector<ScriptUpdate> EmulationSession::takeScriptUpdates() {
+    std::lock_guard<std::mutex> lock(scriptMutex_);
+    QVector<ScriptUpdate> result;
+    result.swap(scriptUpdates_);
+    scriptUpdatePending_=false;
+    return result;
+}
 void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership,
-                                    const QRectF& inputViewport) {
+                                    const QRectF& inputViewport, ScriptOverlayPtr scriptOverlay) {
     bool notify = false;
     {
         std::lock_guard<std::mutex> lock(videoMutex_);
         latestFrame_ = frame; latestAspect_ = aspectRatio;
         latestSpriteOwnership_ = spriteOwnership;
         latestInputViewport_ = inputViewport;
+        latestScriptOverlay_ = std::move(scriptOverlay);
         if (!videoPending_) { videoPending_ = true; notify = true; }
     }
     if (notify) emit videoFrameReady();
@@ -373,13 +411,15 @@ void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, con
     emit videoFrame(frame,aspectRatio);
 }
 bool EmulationSession::takeVideoFrame(QImage& frame, double& aspectRatio, QImage* spriteOwnership,
-                                       QRectF* inputViewport) {
+                                       QRectF* inputViewport, ScriptOverlayPtr* scriptOverlay) {
     std::lock_guard<std::mutex> lock(videoMutex_);
     if (!videoPending_) return false;
     frame = latestFrame_; aspectRatio = latestAspect_; videoPending_ = false;
     if (spriteOwnership) *spriteOwnership = std::move(latestSpriteOwnership_);
     else latestSpriteOwnership_ = {};
     if (inputViewport) *inputViewport = latestInputViewport_;
+    if (scriptOverlay) *scriptOverlay = std::move(latestScriptOverlay_);
+    else latestScriptOverlay_.reset();
     return !frame.isNull();
 }
 void EmulationSession::saveState(int slot) { enqueue({Type::Save,{},slot}); }
@@ -591,6 +631,38 @@ void EmulationSession::shutdown() { quitting_.store(true); if (isRunning()) wait
 void EmulationSession::run() {
     using Clock = std::chrono::steady_clock;
     LibretroHost host(corePath_,dataPath_);
+    ScriptRuntime scripts;
+    ScriptOverlayPtr scriptOverlay;
+    quint64 scriptGeneration=1;
+    auto publishScriptUpdates = [&] {
+        auto updates=scripts.takeUpdates();
+        if (updates.isEmpty()) return;
+        bool notify=false;
+        {
+            std::lock_guard<std::mutex> lock(scriptMutex_);
+            for (auto& update : updates) {
+                if (scriptUpdates_.size()>=256) {
+                    const auto log=std::find_if(scriptUpdates_.begin(),scriptUpdates_.end(),
+                        [](const ScriptUpdate& item) { return item.status==ScriptStatus::Log; });
+                    if (log!=scriptUpdates_.end()) scriptUpdates_.erase(log);
+                    else scriptUpdates_.removeFirst();
+                }
+                scriptUpdates_.append(std::move(update));
+            }
+            notify=!scriptUpdatePending_;
+            scriptUpdatePending_=true;
+        }
+        if (notify) emit scriptsReady();
+    };
+    auto stopScripts = [&] (const QString& reason) {
+        scripts.stopAll(reason);
+        scriptOverlay.reset();
+        ++scriptGeneration;
+        scriptMachineRevision_.fetch_add(1);
+        publishScriptUpdates();
+        emit scriptsContextChanged();
+    };
+
     bool timerEnabled = false;
     LibretroHost::RunClock shownClock;
     auto publishClock = [&](bool force = false) {
@@ -615,13 +687,17 @@ void EmulationSession::run() {
         if (notify) emit inputDisplayChanged();
     };
     auto presentFrame = [&](const QImage& frame, double aspect, const QImage& ownership = {},
-                            const QRectF& inputViewport = {}) {
+                            const QRectF& inputViewport = {}, ScriptOverlayPtr overlay = {}) {
         publishClock();
         if (inputDisplayEnabled) publishInput();
-        publishVideo(frame,aspect,ownership,inputViewport);
+        publishVideo(frame,aspect,ownership,inputViewport,std::move(overlay));
     };
     auto presentHostFrame = [&] {
-        presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership(),host.inputViewport());
+        const bool matches=scriptOverlay && scriptOverlay->generation==scriptGeneration &&
+            scriptOverlay->frame==host.runClock().frames &&
+            scriptOverlay->instance==(int(host.inspectionPresentedInstance()));
+        presentFrame(host.frame(),host.aspectRatio(),host.spriteOwnership(),host.inputViewport(),
+                     matches ? scriptOverlay : ScriptOverlayPtr{});
     };
     auto addNetworkClock = [&](QJsonObject& metadata) {
         const auto clock = host.runClock();
@@ -652,6 +728,20 @@ void EmulationSession::run() {
     int networkMode=0, achievementNetworkRole=0;
     const QByteArray* confirmedAchievementMemory=nullptr;
     QString achievementStatusOverride;
+    auto scriptEvent = [&] (ScriptEvent event, bool draw=true) {
+        if (!scripts.hasScripts()) { scriptOverlay.reset(); return; }
+        if (achievementHardcore || videoExport) {
+            stopScripts(Localization::text(QStringLiteral("Lua недоступен в Hardcore и при экспорте видео.")));
+            return;
+        }
+        if (event!=ScriptEvent::Frame && !scripts.compatible(host)) {
+            stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
+            return;
+        }
+        const int instance=int(host.inspectionPresentedInstance());
+        scriptOverlay=scripts.event(event,host,scriptGeneration,host.runClock().frames,instance,draw);
+        publishScriptUpdates();
+    };
     AchievementsClient achievements(dataPath_, {
         [&](uint32_t address, uint8_t* buffer, uint32_t count) {
             return confirmedAchievementMemory
@@ -1164,7 +1254,9 @@ void EmulationSession::run() {
             needsFirstPicture = frame.width() <= 1 || frame.height() <= 1;
         }
         const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
-        if (!selected.isNull()) presentFrame(selected,aspect);
+        ++scriptGeneration;
+        scriptEvent(ScriptEvent::Rewind);
+        if (!selected.isNull()) presentFrame(selected,aspect,{},host.inputViewport(),scriptOverlay);
         if (networkMode) { networkRewindImage = frame; networkRewindAspect = aspect; }
         movieStatus(exactStep && movie.active());
         refreshMegaLdSide();
@@ -1331,10 +1423,16 @@ void EmulationSession::run() {
     auto finishFramePipeline = [&] {
         if (!debugFrame.active) return;
         const auto context=debugFrame;debugFrame.active=false;
+        scriptEvent(ScriptEvent::Frame,context.present);
+        const auto scriptPictureKey=scriptOverlay ? host.frame().cacheKey() : 0;
+        const auto discardReplacedScriptPicture = [&] {
+            if (scriptOverlay && host.frame().cacheKey()!=scriptPictureKey) scriptOverlay.reset();
+        };
         if (context.manual) {
             captureVideo();
             if (!achievementSuppressed && !networkMode) achievements.frame();
             afterFrame();
+            discardReplacedScriptPicture();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
             if (optionsPending) optionsPending = false;
             if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
@@ -1351,6 +1449,7 @@ void EmulationSession::run() {
         if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
         if (!achievementSuppressed && !networkMode) achievements.frame();
         afterFrame();
+        discardReplacedScriptPicture();
         if (host.isCd() && host.discEjected() != lastDiscEjected) {
             clearHistory(); discStatus();
         }
@@ -1405,7 +1504,9 @@ void EmulationSession::run() {
         if(!networkMode)frameRequested=false;
         // A suspended retro_run retains its entire CPU/device stack. Complete
         // that frame before state changes; never serialize an in-flight stack.
-        const bool boundaryRequested=!pending.empty() || rewind_.load() || frameBackHeld_.load();
+        const bool boundaryRequested=std::any_of(pending.begin(),pending.end(),
+            [](const Command& command) { return command.type!=Type::Lua; }) ||
+            rewind_.load() || frameBackHeld_.load();
         if (host.debuggerAttached() && boundaryRequested) {
             host.finishDebugFrame();finishFramePipeline();
         }
@@ -1441,6 +1542,7 @@ void EmulationSession::run() {
                 host.finishDebugFrame();finishFramePipeline();
                 const bool attached=host.debuggerAttached();
                 if(!host.setLinkCableEnabled(command.linkEnabled,error)) {publishDebugger(error);continue;}
+                stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
                 clearHistory();clearAudio();resetMetrics();pacer.reset(nowNs());
                 rewind_.store(false);rewindStatus(false);frameRequested=false;
                 host.setLinkPresentationRole(1);
@@ -1476,6 +1578,29 @@ void EmulationSession::run() {
                 } else {stoppedInDebugger();}
             }
             if (host.debuggerFramePending()) {
+                // Read-only script startup waits for a complete frame; it must
+                // not resume a stopped CPU just to inspect it. Stops need no
+                // core access and can free their environments immediately.
+                for (auto& command : pending) {
+                    if (command.type!=Type::Lua || !command.script) continue;
+                    if (command.script->action==ScriptAction::Run) continue;
+                    const auto stop=command.script;
+                    scripts.command(*stop,host);
+                    for (auto& queued : pending)
+                        if (queued.type==Type::Lua && queued.script &&
+                            queued.script->action==ScriptAction::Run &&
+                            (stop->action==ScriptAction::StopAll || queued.script->id==stop->id))
+                            queued.script.reset();
+                    command.script.reset();
+                    scriptOverlay.reset();
+                    publishScriptUpdates();
+                    presentHostFrame();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    for (auto it=pending.rbegin();it!=pending.rend();++it)
+                        if (it->type==Type::Lua && it->script) commands_.push_front(std::move(*it));
+                }
                 // No battery writes, preview frames or background hardware
                 // setters while a CPU hook holds the native execution stack.
                 processInspection();
@@ -1494,7 +1619,7 @@ void EmulationSession::run() {
             QString error;
             // Export is a read-only pass over a fixed recording. GUI changes,
             // background pauses and input must not alter its deterministic timeline.
-            if (videoExport && command.type != Type::VideoStop && command.type != Type::RunTimer &&
+            if (videoExport && command.type != Type::Lua && command.type != Type::VideoStop && command.type != Type::RunTimer &&
                 command.type != Type::InputDisplay &&
                 command.type != Type::AchievementsResponse && command.type != Type::AchievementsRefresh)
                 continue;
@@ -1557,7 +1682,60 @@ void EmulationSession::run() {
                     continue;
                 }
             }
+            // These commands can rebuild a machine even when no Lua VM exists.
+            // Cancel in-flight starts conservatively; running compatible scripts
+            // are retained. Simple view/audio/input changes do not enter here.
             switch (command.type) {
+            case Type::NetMode: case Type::NetLinkCable: case Type::NetReceiveState:
+            case Type::MovieRecord: case Type::MoviePlay: case Type::MovieResume:
+            case Type::MovieFork: case Type::MovieStop: case Type::Region:
+            case Type::HardReset: case Type::Disc: case Type::DiscIndex:
+                scriptMachineRevision_.fetch_add(1);
+                emit scriptsContextChanged();
+                break;
+            default: break;
+            }
+            // A restored/replaced native machine may have the same numeric frame.
+            // Never carry its previous drawing packet across the boundary.
+            switch (command.type) {
+            case Type::NetMode: case Type::NetLinkCable: case Type::NetReceiveState:
+            case Type::MovieRecord: case Type::MoviePlay: case Type::MovieResume:
+            case Type::MovieFork: case Type::MovieStop: case Type::Region:
+            case Type::Reset: case Type::HardReset: case Type::Restore: case Type::RestoreFile:
+            case Type::Load: case Type::Close: case Type::NetRole:
+                scriptOverlay.reset(); break;
+            default: break;
+            }
+            switch (command.type) {
+            case Type::Lua: {
+                if (!command.script) break;
+                const auto& request=*command.script;
+                QString rejection;
+                if (request.action==ScriptAction::Run) {
+                    if (command.requestId!=scriptMachineRevision_.load())
+                        rejection=Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились."));
+                    else if (achievementHardcore || videoExport)
+                        rejection=Localization::text(QStringLiteral("Lua недоступен в Hardcore и при экспорте видео."));
+                    else if (!host.loaded())
+                        rejection=Localization::text(QStringLiteral("Сначала откройте игру."));
+                }
+                if (!rejection.isEmpty()) {
+                    std::lock_guard<std::mutex> lock(scriptMutex_);
+                    if (scriptUpdates_.size()>=256) scriptUpdates_.removeFirst();
+                    scriptUpdates_.append({request.id,request.path,ScriptStatus::Error,rejection});
+                    if (!scriptUpdatePending_) { scriptUpdatePending_=true; emit scriptsReady(); }
+                } else {
+                    scripts.command(request,host);
+                    publishScriptUpdates();
+                    // A received remote rewind image has no matching local memory.
+                    // Keep it visible until a canonical network snapshot arrives.
+                    if (!networkRemoteRewinding) {
+                        scriptEvent(ScriptEvent::Draw);
+                        if (host.loaded() && !host.frame().isNull()) presentHostFrame();
+                    } else scriptOverlay.reset();
+                }
+                break;
+            }
             case Type::NetMode: {
                 // Preserve offline progress before joining somebody else's game.
                 if (command.value==2 && networkMode!=2 && !host.flushSaveRam(error)) {
@@ -1612,6 +1790,7 @@ void EmulationSession::run() {
                 resetNetworkAchievements();
                 configureAchievements();
                 host.setLinkPresentationRole(command.value);
+                scriptEvent(ScriptEvent::Draw);
                 clearAudio();
                 if(host.loaded() && !host.frame().isNull() && networkRewindImage.isNull())presentHostFrame();
                 break;
@@ -1706,13 +1885,16 @@ void EmulationSession::run() {
                                 emit movieHardwareChanged(QJsonDocument(QJsonObject{{"adapter",config.value("adapter")},{"controllers",config.value("controllers")},{"jcart",config.value("jcart")},{"jcartBase",config.value("jcartBase")}}).toJson(QJsonDocument::Compact));
                                 clearHistory(); clearAudio(); pacer.reset(nowNs()); cheatStatus(); discStatus();
                                 QByteArray preview=QByteArray::fromBase64(meta.value("image").toString().toLatin1());
+                                ++scriptGeneration;
+                                // Canonical state was successfully restored above.
+                                scriptEvent(ScriptEvent::LoadState);
                                 if(!preview.isEmpty()) {
                                 QBuffer imageBuffer(&preview);imageBuffer.open(QIODevice::ReadOnly);
                                 QImageReader reader(&imageBuffer,"PNG");const auto size=reader.size();
                                 if(size.isValid()&&size.width()<=2048&&size.height()<=2048) {
                                     const auto image=reader.read();double aspect=meta.value("aspect").toDouble(4.0/3.0);
                                     const auto selected=selectLinkPreview(image,QByteArray::fromBase64(meta.value("linkPreview").toString().toLatin1()),networkRole_.load(),aspect);
-                                    if(!selected.isNull())presentFrame(selected,aspect);
+                                    if(!selected.isNull())presentFrame(selected,aspect,{},host.inputViewport(),scriptOverlay);
                                 }
                                 }
                             }
@@ -1862,6 +2044,8 @@ void EmulationSession::run() {
                 achievementSuppressed = command.type != Type::MovieRecord;
                 achievements.reset(); achievements.refresh();
                 releaseButtons(); movieBoundary(); optionsPending = false;
+                ++scriptGeneration;
+                scriptEvent(command.type==Type::MovieRecord ? ScriptEvent::Reset : ScriptEvent::LoadState);
                 if ((command.type == Type::MoviePlay || command.type == Type::MovieResume) &&
                     !host.movieCompatibilityWarning().isEmpty()) {
                     emit movieCompatibilityWarning(host.movieCompatibilityWarning());
@@ -1885,6 +2069,7 @@ void EmulationSession::run() {
                     if (!movie.finish(true,error)) { emit errorOccurred(error); break; }
                     movieBoundary();
                 }
+                stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
                 if (host.load(command.path,error,command.value,
                               command.archiveEntry ? &*command.archiveEntry : nullptr,command.allowPatches)) {
                     debugAvailable = {}; emit debugControlsChanged(0,0);
@@ -1927,6 +2112,7 @@ void EmulationSession::run() {
                     break;
                 }
                 achievements.unloadGame(); achievementSuppressed = false;
+                stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
                 host.unload(); achievements.refresh();
                 loaded_.store(false);
                 releaseButtons();
@@ -2043,6 +2229,7 @@ void EmulationSession::run() {
             case Type::Reset:
                 if (host.loaded()) {
                     host.reset(); achievements.reset(); clearHistory(); clearAudio(); resetMetrics();
+                    ++scriptGeneration; scriptEvent(ScriptEvent::Reset);
                     emit actionCompleted(Localization::text(QStringLiteral("Сброс")));
                     pacer.reset(nowNs());
                 }
@@ -2050,6 +2237,9 @@ void EmulationSession::run() {
             case Type::HardReset:
                 if (host.loaded()) {
                     if (host.hardReset(error)) {
+                        if (scripts.hasScripts() && !scripts.compatible(host))
+                            stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
+                        ++scriptGeneration; scriptEvent(ScriptEvent::Reset);
                         achievements.reset();
                         clearHistory(); clearAudio(); rewindStatus(false); resetMetrics();
                         emit actionCompleted(Localization::text(QStringLiteral("Перезапуск питания")));
@@ -2175,10 +2365,11 @@ void EmulationSession::run() {
                     const bool restored = named ? movie.loadFile(command.path,frame,aspect,missing,error)
                                                 : movie.loadSlot(command.value,frame,aspect,missing,error);
                     if (restored) {
+                        ++scriptGeneration; scriptEvent(ScriptEvent::LoadState);
                         if (inputDisplayEnabled) { frameInput = host.inputDisplay(false); publishInput(); }
                         achievements.reset();
                         clearHistory(); clearAudio(); resetMetrics();
-                        if (!frame.isNull()) presentFrame(frame,aspect);
+                        if (!frame.isNull()) presentFrame(frame,aspect,{},host.inputViewport(),scriptOverlay);
                         movieStatus(true);
                         emit actionCompleted(named ? Localization::text(QStringLiteral("Загружено из файла: %1")).arg(QFileInfo(command.path).fileName())
                                                    : Localization::text(QStringLiteral("Загружено: слот %1")).arg(command.value));
@@ -2191,12 +2382,17 @@ void EmulationSession::run() {
                                      : host.loadState(command.value,error,&failure);
                     };
                     if (loadState()) {
+                        ++scriptGeneration; scriptEvent(ScriptEvent::LoadState);
                         if (inputDisplayEnabled) { frameInput = host.inputDisplay(false); publishInput(); }
                         clearHistory(); clearAudio(); resetMetrics();
                         if (paused || backgroundPaused_.load() || networkMode == 1) {
                             networkRewindImage = {};
                             networkRewindLinkPreview.clear();
                             if (host.previewLoadedState()) {
+                                // This is a predictive video preview: the core is restored
+                                // to the pre-preview state. Keep its image free of Lua
+                                // drawings until the next actually executed game frame.
+                                scriptOverlay.reset();
                                 presentHostFrame();
                             } else {
                                 // A failed preview restore must not become the live timeline.
@@ -2223,6 +2419,19 @@ void EmulationSession::run() {
             case Type::DebugBackdrop: host.setDebugBackdrop(quint32(command.value)); break;
             case Type::DebugGain: host.setDebugAudioGain(unsigned(command.value),unsigned(command.requestId)); break;
             case Type::Slots: slotStatus(command.value); break;
+            }
+            if (scripts.hasScripts()) {
+                switch (command.type) {
+                case Type::NetMode: case Type::NetLinkCable: case Type::NetReceiveState:
+                case Type::MovieRecord: case Type::MoviePlay: case Type::MovieResume:
+                case Type::MovieFork: case Type::MovieStop: case Type::Region:
+                case Type::Disc: case Type::DiscIndex: case Type::Eject:
+                    if (!scripts.compatible(host)) {
+                        stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
+                    }
+                    break;
+                default: break;
+                }
             }
             if (inputDisplayEnabled) {
                 switch (command.type) {
@@ -2271,6 +2480,10 @@ void EmulationSession::run() {
         }
         // Between complete frame executions, after all queued state changes.
         // An inactive inspector costs one atomic check; no timer or memory copy.
+        if ((achievementHardcore || videoExport) && scripts.hasScripts()) {
+            stopScripts(Localization::text(QStringLiteral("Lua недоступен в Hardcore и при экспорте видео.")));
+            if (host.loaded() && !host.frame().isNull()) presentHostFrame();
+        }
         processInspection();
         processTrace();
         processCoverage();
@@ -2570,6 +2783,7 @@ void EmulationSession::run() {
     host.captureAchievementProgress = {}; host.restoreAchievementProgress = {};
     networkTimeline.stop();
     if(networkQualityVisible)emit networkQualityChanged(QJsonObject{{"active",false}});
+    scripts.stopAll({});
     host.unload();
     loaded_.store(false);
 }

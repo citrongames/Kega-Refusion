@@ -13,7 +13,7 @@ import sys
 sys.dont_write_bytecode = True
 from package_manifest import write_manifest
 from package_symbols import strip_binary
-from package_notices import copy_core32x_notices, copy_megald_notices
+from package_notices import copy_core32x_notices, copy_lua_notices, copy_megald_notices
 
 
 PLUGIN_FILES = (
@@ -154,6 +154,8 @@ def main() -> None:
     copy(build / "core/genesis_plus_gx_libretro_linkpeer.so", stage / "cores/genesis_plus_gx_libretro_linkpeer.so")
     shutil.copytree(root / "languages", stage / "languages")
     shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
+    shutil.copytree(root / "assets/scripts/examples", stage / "scripts")
+    shutil.copy2(root / "docs/lua-api.md", stage / "scripts" / "lua-api.md")
     qt_ru = Path("/usr/share/qt6/translations/qtbase_ru.qm")
     if qt_ru.is_file():
         copy(qt_ru, stage / "languages/qtbase_ru.qm")
@@ -223,6 +225,7 @@ Windows и Linux x86_64 используют общий контракт сет�
     notice = stage / "licenses"
     copy_core32x_notices(root, notice)
     copy_megald_notices(root, notice)
+    copy_lua_notices(root, notice)
     shutil.copy2(root / "third_party/MMPX-PROVENANCE.md", notice / "MMPX-PROVENANCE.md")
     for name in ("LICENSE", "PROVENANCE.md"):
         copy(root / "src/paprium" / name, notice / "paprium" / name)

@@ -6,6 +6,7 @@
 #include "DebugDialogs.h"
 #include "DebugInspectorWidgets.h"
 #include "DebugWatchDialog.h"
+#include "LuaScriptsDialog.h"
 #include "AudioOutput.h"
 #include "ControlsPage.h"
 #include "CheatsDialog.h"
@@ -722,12 +723,20 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     const QByteArray geometry = settings_.value(QStringLiteral("window/geometry")).toByteArray();
     if (!geometry.isEmpty()) restoreGeometry(geometry);
 
+    connect(&session_, &EmulationSession::scriptsReady, this, [this] {
+        auto updates=session_.takeScriptUpdates();
+        if (luaScriptsDialog_) luaScriptsDialog_->applyUpdates(updates);
+    });
+    connect(&session_, &EmulationSession::scriptsContextChanged, this, [this] {
+        if (luaScriptsDialog_) luaScriptsDialog_->discardPendingStarts();
+    });
     connect(&session_, &EmulationSession::videoFrameReady, view_, [this] {
         QImage image, spriteOwnership; double ratio = 4.0 / 3.0;
         QRectF inputViewport;
-        if (session_.takeVideoFrame(image, ratio, &spriteOwnership, &inputViewport)) {
+        ScriptOverlayPtr scriptOverlay;
+        if (session_.takeVideoFrame(image, ratio, &spriteOwnership, &inputViewport, &scriptOverlay)) {
             const QRectF previousViewport = view_->inputViewport();
-            view_->setFrame(image, ratio, spriteOwnership, inputViewport);
+            view_->setFrame(image, ratio, spriteOwnership, inputViewport, std::move(scriptOverlay));
             if (previousViewport != view_->inputViewport())
                 for (unsigned player = 0; player < MaxGunPlayers; ++player)
                     updateGunAim(player,gunAims_[player],gunAimOffscreen_[player]);
@@ -1457,6 +1466,9 @@ void MainWindow::buildMenus() {
     cheatsMenu->addAction(debugWatchAction_);
     debugWatchAction_->setObjectName(QStringLiteral("debugWatchAction"));
     connect(debugWatchAction_, &QAction::triggered, this, &MainWindow::showDebugWatch);
+    auto* luaAction=debugMenu_->addAction(Localization::text(QStringLiteral("Lua-скрипты…")));
+    luaAction->setObjectName(QStringLiteral("luaScriptsAction"));
+    connect(luaAction,&QAction::triggered,this,&MainWindow::showLuaScripts);
     debugMenu_->addSeparator();
     auto* projectMenu = debugMenu_->addMenu(Localization::text(QStringLiteral("Проект отладки")));
     projectMenu->setObjectName(QStringLiteral("debugProjectMenu"));
@@ -1769,6 +1781,23 @@ QString MainWindow::traceBlockedReason() const {
     if (debugCaptureRestricted())
         return Localization::text(QStringLiteral("Трассировка недоступна в Hardcore, сетевой игре и при экспорте видео."));
     return {};
+}
+
+void MainWindow::showLuaScripts() {
+    if (!luaScriptsDialog_) {
+        luaScriptsDialog_=new LuaScriptsDialog(this);
+        luaScriptsDialog_->setMachineRevisionProvider([this] { return session_.scriptMachineRevision(); });
+        connect(luaScriptsDialog_,&LuaScriptsDialog::commandRequested,this,[this](const ScriptCommand& command) {
+            if (!session_.scriptCommand(command)) {
+                luaScriptsDialog_->rejectCommand(command,
+                    Localization::text(QStringLiteral("Очередь команд Lua заполнена.")));
+            }
+        });
+    }
+    luaScriptsDialog_->setExecutionAvailable(session_.hasGame() && !loading_ && !achievementsHardcore_ && !videoExporting_);
+    luaScriptsDialog_->show();
+    luaScriptsDialog_->raise();
+    luaScriptsDialog_->activateWindow();
 }
 
 void MainWindow::showTraceDialog() {
@@ -3803,6 +3832,7 @@ void MainWindow::updateInputEnabled() {
     if (cheatsAction_) cheatsAction_->setEnabled(session_.hasGame() && cheatsSupported_ && !loading_ &&
                                                   movieMode_ == 0 && !videoExporting_ && !achievementsHardcore_);
     updateFrameActions();
+    if (luaScriptsDialog_) luaScriptsDialog_->setExecutionAvailable(session_.hasGame() && !loading_ && !achievementsHardcore_ && !videoExporting_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     const bool modalActive = QApplication::activeModalWidget();
     const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
@@ -3810,7 +3840,7 @@ void MainWindow::updateInputEnabled() {
     for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
         if (active == debugGraphicsDialog_ || active == debugAudioDialog_ ||
             active == debugMemoryDialog_ || active == cpuDebuggerDialog_ || active == traceDialog_ ||
-            active == coverageDialog_ || active == debugWatchDialog_) {
+            active == coverageDialog_ || active == debugWatchDialog_ || active == luaScriptsDialog_) {
             debugWindowActive = true;
             break;
         }
@@ -4308,6 +4338,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         }
         return;
     }
+    if (luaScriptsDialog_ && !luaScriptsDialog_->confirmDiscardEdits()) { event->ignore(); return; }
     if (volumeSaveTimer_ && volumeSaveTimer_->isActive()) flushVolumePreference();
     settings_.setValue(QStringLiteral("window/geometry"),
                        isFullScreen() && !windowedGeometry_.isEmpty() ?

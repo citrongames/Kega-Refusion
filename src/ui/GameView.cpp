@@ -192,6 +192,7 @@ protected:
             return;
         }
         const qreal dpr = devicePixelRatioF();
+        const QRect presented = presentationRect();
         // Invalidate Qt's cached GL state around native drawing; otherwise its
         // font atlas can be mistaken for the video texture on subsequent paints.
         QPainter painter(this);
@@ -199,11 +200,12 @@ protected:
         QString error;
         if (!pipeline_->render(owner_->frame_, defaultFramebufferObject(),
                                QSize(qRound(width() * dpr), qRound(height() * dpr)),
-                               presentationRect(), owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_, owner_->aspectRatio_)) {
+                               presented, owner_->frameCount_, owner_->rewinding_ ? -1 : 1, error, owner_->spriteOwnership_, owner_->aspectRatio_)) {
             failed(error);
         }
         painter.endNativePainting();
-        owner_->paintOverlays(painter);
+        owner_->paintOverlays(painter, QRectF(presented.x() / dpr, presented.y() / dpr,
+                                             presented.width() / dpr, presented.height() / dpr));
     }
 private:
     QRect presentationRect() const {
@@ -258,6 +260,12 @@ GameView::GameView(QWidget* parent) : QWidget(parent) {
     }
     if (osdFamily_.isEmpty())
         osdFamily_ = QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+    scriptGameFont_ = QFont(osdFamily_);
+    scriptGameFont_.setPixelSize(8);
+    scriptGameAscent_ = QFontMetricsF(scriptGameFont_).ascent();
+    scriptHudFont_ = scriptGameFont_;
+    scriptHudFont_.setPixelSize(14);
+    scriptHudAscent_ = QFontMetricsF(scriptHudFont_).ascent();
     achievementFallbackBadge_ = QImage(QStringLiteral(":/icons/app.png"))
         .scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     osdClock_.start();
@@ -268,13 +276,13 @@ GameView::GameView(QWidget* parent) : QWidget(parent) {
 QImage GameView::captureImage() {
     QImage image;
     {
-        // Captures omit the aiming overlay while leaving on-screen reticles intact.
-        const QScopedValueRollback<bool> capture(capturingReticles_, true);
+        // Omit aiming, controller and Lua overlays from the captured image.
+        const QScopedValueRollback<bool> capture(capturingImage_, true);
         // QWidget::grab does not include a composited QOpenGLWidget on every driver.
         image = shaderView_ && shaderView_->isVisible() && shaderView_->isValid()
             ? shaderView_->grabFramebuffer() : grab().toImage();
     }
-    if (inputDisplayEnabled_ || std::any_of(std::begin(guns_), std::end(guns_),
+    if (scriptOverlay_ || inputDisplayEnabled_ || std::any_of(std::begin(guns_), std::end(guns_),
                     [](const GunState& gun) { return gun.enabled; })) repaintView();
     return image;
 }
@@ -305,12 +313,13 @@ QImage GameView::captureGameImage() {
 }
 
 void GameView::setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership,
-                        const QRectF& inputViewport) {
+                        const QRectF& inputViewport, ScriptOverlayPtr scriptOverlay) {
     const bool hadFrame = !frame_.isNull();
     const QSize previousNative = VideoFrameGeometry::nativeSize(frame_);
     const double previousAspect = aspectRatio_;
     inputViewport_ = inputViewport.isValid() ? inputViewport : QRectF(0,0,1,1);
     frame_ = frame;
+    scriptOverlay_ = frame_.isNull() ? ScriptOverlayPtr{} : std::move(scriptOverlay);
     spriteOwnership_ = shaderPreset_.usesSpriteOwnership() && spriteOwnership.size() == frame.size()
         && spriteOwnership.format() == QImage::Format_Grayscale8 ? spriteOwnership : QImage();
     if (frame_.isNull()) { clearMouseGun(); clearAnalogMouse(); }
@@ -752,14 +761,16 @@ qreal GameView::osdScale() const {
     return qMax(0.5, referenceHeight / 720.0);
 }
 
-void GameView::paintOverlays(QPainter& painter) {
+void GameView::paintOverlays(QPainter& painter, const QRectF& presentedVideo) {
     if (osdEnabled_) {
+        if (scriptOverlay_ && !scriptOverlay_->commands.isEmpty() && !loading_ && !capturingImage_)
+            paintScriptOverlay(painter, presentedVideo.isEmpty() ? gameRect() : presentedVideo);
         const bool status = !notices_.isEmpty() || stateSlots_.expiresAt ||
             paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
             movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||
             (!frame_.isNull() && !loading_ && !runTimerText_.isEmpty());
         const bool metrics = !frame_.isNull() && (performanceMetricsEnabled_ || gameFpsEnabled_);
-        const bool input = inputDisplayEnabled_ && !frame_.isNull() && !loading_ && !capturingReticles_;
+        const bool input = inputDisplayEnabled_ && !frame_.isNull() && !loading_ && !capturingImage_;
         if (status || metrics || input || !achievementPixmap_.isNull() || loading_) {
             const qreal scale = osdScale();
             const QSize canvas(qRound(width() / scale), qRound(height() / scale));
@@ -775,6 +786,67 @@ void GameView::paintOverlays(QPainter& painter) {
         }
     }
     paintCrosshairs(painter);
+}
+
+void GameView::paintScriptOverlay(QPainter& painter, const QRectF& video) {
+    if (video.isEmpty()) return;
+    const QSize native = VideoFrameGeometry::nativeSize(frame_);
+    const QRectF active(video.x() + inputViewport_.x() * video.width(),
+                        video.y() + inputViewport_.y() * video.height(),
+                        inputViewport_.width() * video.width(), inputViewport_.height() * video.height());
+    const QRectF visibleGame = video.intersected(active);
+    const auto& commands = scriptOverlay_->commands;
+
+    // Switch transforms without regrouping the commands so HUD and game
+    // drawings still cover one another in script order.
+    painter.save();
+    ScriptSpace space = commands.first().space;
+    const auto setSpace = [&](ScriptSpace next) {
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        const bool game = next == ScriptSpace::Game;
+        painter.setFont(game ? scriptGameFont_ : scriptHudFont_);
+        if (game) {
+            painter.setClipRect(visibleGame, Qt::IntersectClip);
+            painter.translate(active.topLeft());
+            painter.scale(video.width() / native.width(), video.height() / native.height());
+        }
+    };
+    setSpace(space);
+    for (const auto& command : commands) {
+        if (command.space != space) {
+            painter.restore();
+            painter.save();
+            space = command.space;
+            setSpace(space);
+        }
+        if (space == ScriptSpace::Game && visibleGame.isEmpty()) continue;
+        switch (command.primitive) {
+        case ScriptPrimitive::Text: {
+            const qreal ascent = space == ScriptSpace::Game ? scriptGameAscent_ : scriptHudAscent_;
+            painter.setPen(command.color);
+            painter.drawText(command.bounds.topLeft() + QPointF(0, ascent), command.text);
+            break;
+        }
+        case ScriptPrimitive::Line:
+            painter.setPen(QPen(command.color, 1, Qt::SolidLine, Qt::FlatCap));
+            painter.drawLine(command.bounds.topLeft(), command.bounds.bottomRight());
+            break;
+        case ScriptPrimitive::Rectangle:
+        case ScriptPrimitive::Circle:
+            painter.setPen(command.color.alpha() ? QPen(command.color) : QPen(Qt::NoPen));
+            painter.setBrush(command.fill.alpha() ? QBrush(command.fill) : QBrush(Qt::NoBrush));
+            if (command.primitive == ScriptPrimitive::Rectangle)
+                painter.drawRect(command.bounds);
+            else
+                painter.drawEllipse(command.bounds);
+            break;
+        case ScriptPrimitive::Image:
+            painter.drawImage(command.bounds, command.image);
+            break;
+        }
+    }
+    painter.restore();
 }
 
 void GameView::paintInputDisplay(QPainter& painter, const QSize& canvas) {
@@ -1336,7 +1408,7 @@ void GameView::focusOutEvent(QFocusEvent* event) {
 }
 
 void GameView::paintCrosshairs(QPainter& painter) {
-    if (frame_.isNull() || loading_ || capturingReticles_) return;
+    if (frame_.isNull() || loading_ || capturingImage_) return;
     const bool visible = std::any_of(std::begin(guns_), std::end(guns_),
         [](const GunState& gun) { return gun.enabled && gun.crosshairVisible && gun.hasAim && !gun.offscreen; });
     if (!visible) return;

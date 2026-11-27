@@ -84,6 +84,14 @@ public:
     struct DebugCapabilities { quint32 video = 0; quint64 audio = 0; bool firecore = false; };
     DebugCapabilities debugCapabilities() const;
     DebugInspectionSnapshot inspect(const DebugInspectionRequest& request) const;
+    // Owner-thread inspection without debugger attachment or a GUI snapshot.
+    unsigned inspectionInstanceCount() const;
+    unsigned inspectionPresentedInstance() const { return linkPeer_ && linkPresentationRole_ == 2 ? 1u : 0u; }
+    bool inspectionCatalog(unsigned instance, kr_inspect_info& catalog) const;
+    bool inspectionRead(unsigned instance, quint32 domain, quint32 offset, void* data, size_t size) const;
+    QVector<kr_debug_target> inspectionCpuTargets(unsigned instance) const;
+    bool inspectionRegisters(unsigned instance, unsigned cpu, kr_debug_cpu& state) const;
+    bool inspectionPeek(unsigned instance, unsigned cpu, quint32 address, uint8_t* data, size_t size) const;
     bool writeInspectionMemory(const DebugMemoryWrite& request, QString& error);
     bool debuggerAttach(QString& error);
     void debuggerDetach();
@@ -220,6 +228,7 @@ public:
     QString contentName() const { return contentName_; }
     std::function<void(const QString&)> message;
 private:
+    const LibretroHost* inspectionConsole(unsigned instance) const;
     struct Activation { LibretroHost* previous; explicit Activation(LibretroHost* h) : previous(active_) { active_=h; } ~Activation() { active_=previous; } };
     struct CoverageExecution;
     struct CoverageExecutionDeleter { void operator()(CoverageExecution*) const; };

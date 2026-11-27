@@ -3,9 +3,11 @@
 #include "ShaderPipeline.h"
 #include "input/ControllerType.h"
 #include "core/InputDisplay.h"
+#include "script/ScriptTypes.h"
 
 #include <cstdint>
 #include <QElapsedTimer>
+#include <QFont>
 #include <QCursor>
 #include <QImage>
 #include <QPointF>
@@ -36,7 +38,7 @@ public:
     QVector<ShaderParameter> shaderParameters() const { return shaderPreset_.parameters; }
     bool setShaderParameter(const QString& id, float value);
     void setFrame(const QImage& frame, double aspectRatio, const QImage& spriteOwnership = {},
-                  const QRectF& inputViewport = {});
+                  const QRectF& inputViewport = {}, ScriptOverlayPtr scriptOverlay = {});
     QRectF inputViewport() const { return inputViewport_; }
     void clearGame();
     void resetShaderHistory();
@@ -180,7 +182,8 @@ private:
     void startAchievementPopup();
     void rebuildAchievementPixmap();
     qreal osdScale() const;
-    void paintOverlays(QPainter& painter);
+    void paintOverlays(QPainter& painter, const QRectF& presentedVideo = {});
+    void paintScriptOverlay(QPainter& painter, const QRectF& video);
     QRect achievementPopupRect(const QSize& canvas) const;
     void paintOsd(QPainter& painter, const QSize& canvas);
     void paintInputDisplay(QPainter& painter, const QSize& canvas);
@@ -188,6 +191,11 @@ private:
     void paintLoading(QPainter& painter, const QSize& canvas);
 
     QImage frame_;
+    ScriptOverlayPtr scriptOverlay_;
+    QFont scriptGameFont_;
+    QFont scriptHudFont_;
+    qreal scriptGameAscent_ = 0;
+    qreal scriptHudAscent_ = 0;
     QRectF inputViewport_{0,0,1,1};
     double aspectRatio_ = 4.0 / 3.0;
     AspectMode aspectMode_ = AspectMode::Console;
@@ -208,7 +216,7 @@ private:
     double emulatedFps_ = 0.0;
     double gameFps_ = 0.0;
     QStringList metricsLines_;
-    bool capturingReticles_ = false;
+    bool capturingImage_ = false;
     struct GunState {
         QPointF aim{0.5, 0.5};
         bool enabled = false;

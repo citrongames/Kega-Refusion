@@ -48,3 +48,5 @@ Additional per-feature validation files remain beside these reports. Consult Git
 - [Road Rash CD32X load audit](roadrash-cd32x-load-audit.md): BIOS queue, ares comparison and scoped loader compatibility.
 
 - [Nuked YM2612 audio investigation](nuked-audio-issue-1.md): issue #1, exact PCM comparisons and VDP timing isolation.
+
+- [Lua scripting API and examples](lua-api.md) — read-only inspection and frame-aligned HUDs.

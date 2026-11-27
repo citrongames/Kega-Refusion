@@ -77,3 +77,11 @@ Both binary packages include the full notices under `licenses/cpu-debugger`.
 ## MMPX Advanced shader
 
 The built-in MMPX Advanced v3.5 shader is adapted from CrashGG's MIT-licensed Libretro Slang implementation, retaining the original MMPX credits to Morgan McGuire and Mara Gagiu and the Slang port credit to hunterk. The pinned source revision, local GLSL 1.20 adaptations, and full MIT notice are in `third_party/MMPX-PROVENANCE.md`, also included in both binary packages.
+
+
+## Lua scripting runtime
+
+Kega Refusion statically links [Lua 5.5.1](https://www.lua.org/).
+The pinned release, source build configuration and MIT notice are
+recorded in `third_party/lua`. Both packages include the notice and upstream
+reference under `licenses/lua`.
