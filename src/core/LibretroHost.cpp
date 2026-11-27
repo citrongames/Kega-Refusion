@@ -7,6 +7,7 @@
 #include <rc_hash.h>
 #include <rc_consoles.h>
 #include "RomArchive.h"
+#include "RomPatchSet.h"
 #include "CartridgeLimits.h"
 #include "CartridgeProfile.h"
 #include "VideoFrameGeometry.h"
@@ -658,7 +659,7 @@ bool LibretroHost::changeDisc(const QString& path, QString& error, bool* timelin
     return setDiscEjected(false,error);
 }
 bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
-                        const RomArchive::Entry* archiveEntry) {
+                        const RomArchive::Entry* archiveEntry, bool allowPatches) {
     error.clear();
     if (QFileInfo(path).suffix().compare("mmi",Qt::CaseInsensitive) == 0) return loadMegaLd(path,error);
     if (DiscMedia::isDisc(path)) return loadCd(path,error);
@@ -704,7 +705,13 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     if (!supported.contains(ext) || content.size() < 512 || content.size() > CartridgeLimits::MaxRomSize) {
         error = Localization::text(QStringLiteral("Неподдерживаемый картридж или неверный размер ROM.")); return false;
     }
-    // Resolve hardware once from original bytes, before checksum/attachment options.
+    QStringList appliedPatches;
+    if (autoApplyPatches_ && allowPatches && !RomPatchSet::apply(content, path, name,
+            DataFolders::path(dataPath_, QStringLiteral("patches")), appliedPatches, error)) return false;
+    if (content.size() < 512 || content.size() > CartridgeLimits::MaxRomSize) {
+        error = Localization::text(QStringLiteral("Неподдерживаемый картридж или неверный размер ROM.")); return false;
+    }
+    // Resolve hardware from final patched bytes, before checksum/attachment options.
     const auto sourceRomHash = digest(content);
     const bool firecore = CartridgeProfile::firecore(ext, content, sourceRomHash);
     const auto encodedPath = QDir::toNativeSeparators(info.absoluteFilePath()).toUtf8();
@@ -750,6 +757,7 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     unload();
     if (!selectDataFolders(error)) return false;
     content_ = std::move(content);
+    appliedPatches_ = std::move(appliedPatches);
     contentNeeds32x_ = needs32x;
     contentFirecore_ = firecore;
     encodedGamePath_ = encodedPath;
@@ -792,6 +800,11 @@ bool LibretroHost::load(const QString& path, QString& error, int archiveIndex,
     romHash_ = sourceRomHash;
     legacyGameKey_ = QString::fromLatin1(romHash_.toHex());
     gameKey_ = readableSaveStem(name);
+    if (!appliedPatches_.isEmpty()) {
+        gameKey_ += QStringLiteral(" [p-%1]").arg(QString::fromLatin1(romHash_.toHex().left(12)));
+        // Do not import unrelated legacy saves into a newly patched game.
+        legacyGameKey_.clear();
+    }
     api_->get_system_av_info(&av_);
     if (!validAvInfo(av_)) {
         error = Localization::text(QStringLiteral("Ядро вернуло некорректные параметры видео/звука.")); unload(); return false;
@@ -834,6 +847,7 @@ void LibretroHost::unload() {
     loaded_ = false;
     { QString ignored; applyGameGearLcd(ignored); }
     active32xBiosFingerprints_ = {};
+    appliedPatches_.clear();
     contentNeeds32x_ = false;
     contentFirecore_ = false;
     megaLd_ = false; megaLdRegion_ = 0; megaLdMediaIdentity_.clear();

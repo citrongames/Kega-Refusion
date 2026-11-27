@@ -332,6 +332,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setFirecoreDmcPcm(settings_.value(QStringLiteral("audio/firecoreDmcPcm"), true).toBool());
     session_.setNukedYm2612(settings_.value(QStringLiteral("audio/ym2612Core"),
         QStringLiteral("mame")).toString() == QLatin1String("nuked"));
+    session_.setAutoApplyPatches(settings_.value(QStringLiteral("emulation/autoApplyPatches"), false).toBool());
     session_.setAutoFixChecksum(settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool());
     session_.setFastCdLoading(settings_.value(QStringLiteral("emulation/fastCdLoading"), false).toBool());
     session_.setPerGameCdBackup(settings_.value(QStringLiteral("emulation/perGameCdBackup"), true).toBool());
@@ -2182,7 +2183,7 @@ void MainWindow::openGameDialog() {
     else view_->setFocus();
 }
 
-void MainWindow::openRom(const QString& path) {
+void MainWindow::openRom(const QString& path, bool allowPatches) {
     if (loading_ || videoExporting_) return;
     const QFileInfo file(path);
     if (!file.exists() || !file.isFile()) {
@@ -2201,7 +2202,7 @@ void MainWindow::openRom(const QString& path) {
             if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"),
                 error.isEmpty() ? Localization::text(QStringLiteral("В архиве нет поддерживаемых игр.")) : error);
             // Let the session report the same failure to the smoke-test observer.
-            if (smokeTest_) session_.loadGame(path);
+            if (smokeTest_) session_.loadGame(path, -1, allowPatches);
             else { view_->setFocus(); updateInputEnabled(); }
             return;
         }
@@ -2253,8 +2254,8 @@ void MainWindow::openRom(const QString& path) {
     input_->setProfile(isCdPath(path) ? ConsoleProfile::MegaDrive :
                        profileFor(QFileInfo(archiveEntry ? archiveEntry->name : path)));
     settings_.setValue(QStringLiteral("files/lastDirectory"), file.absolutePath());
-    if (archiveEntry) session_.loadGame(file.absoluteFilePath(), *archiveEntry);
-    else session_.loadGame(file.absoluteFilePath());
+    if (archiveEntry) session_.loadGame(file.absoluteFilePath(), *archiveEntry, allowPatches);
+    else session_.loadGame(file.absoluteFilePath(), -1, allowPatches);
 }
 
 void MainWindow::editSettings(int initialPage) {
@@ -2421,6 +2422,17 @@ void MainWindow::editSettings(int initialPage) {
         "Включает режим совместимости загрузчиков, как в ares. "
         "Применяется при загрузке или перезапуске питания.")));
     games->addRow(Localization::text(QStringLiteral("ОЗУ программ CD32X:")), cd32xRamCart);
+    const bool applyPatches = settings_.value(QStringLiteral("emulation/autoApplyPatches"), false).toBool();
+    auto* patches = new QCheckBox(Localization::text(QStringLiteral("Автоматически применять патчи IPS/BPS")), &dialog);
+    patches->setObjectName(QStringLiteral("autoApplyPatches"));
+    patches->setChecked(applyPatches);
+    games->addRow(patches);
+    auto* patchesHelp = new QLabel(Localization::text(QStringLiteral(
+        "При загрузке патчи ищутся рядом с ROM, затем в папке «Патчи». "
+        "Для цепочки можно добавить Game.bps и файлы с номерами от 1 без пропусков, "
+        "например Game.1.ips и Game.2.bps. Для каждого шага BPS имеет приоритет над IPS.")), &dialog);
+    patchesHelp->setWordWrap(true);
+    games->addRow(patchesHelp);
     const bool fixChecksum = settings_.value(QStringLiteral("emulation/autoFixChecksum"), false).toBool();
     auto* checksum = new QCheckBox(Localization::text(QStringLiteral("Автоисправлять контрольную сумму ROM")), &dialog);
     checksum->setObjectName(QStringLiteral("autoFixChecksum"));
@@ -2987,6 +2999,7 @@ void MainWindow::editSettings(int initialPage) {
         {QStringLiteral("bios"), QStringLiteral("BIOS")},
         {QStringLiteral("cheats"), Localization::text(QStringLiteral("Читы"))},
         {QStringLiteral("movies"), Localization::text(QStringLiteral("Записи ввода"))},
+        {QStringLiteral("patches"), Localization::text(QStringLiteral("Патчи"))},
         {QStringLiteral("saves"), Localization::text(QStringLiteral("Память игр"))},
         {QStringLiteral("screenshots"), Localization::text(QStringLiteral("Скриншоты"))},
         {QStringLiteral("shaders"), Localization::text(QStringLiteral("Шейдеры"))},
@@ -3229,6 +3242,10 @@ void MainWindow::editSettings(int initialPage) {
             settings_.setValue(QStringLiteral("emulation/fastForwardFactor"), selectedSpeed);
             session_.setFastForwardFactor(selectedSpeed);
             view_->setFastForwardFactor(selectedSpeed);
+        }
+        if (patches->isChecked() != applyPatches) {
+            settings_.setValue(QStringLiteral("emulation/autoApplyPatches"), patches->isChecked());
+            session_.setAutoApplyPatches(patches->isChecked());
         }
         if (checksum->isEnabled() && checksum->isChecked() != fixChecksum) {
             settings_.setValue(QStringLiteral("emulation/autoFixChecksum"), checksum->isChecked());

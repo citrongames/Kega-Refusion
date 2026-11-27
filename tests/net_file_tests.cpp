@@ -46,7 +46,8 @@ QByteArray storedRomArchive(const QByteArray& name, const QByteArray& data) {
     check(zip.status() == QDataStream::Ok, "write generated ROM archive");
     return bytes;
 }
-QString transfer(NetFileTransfer::Prepared prepared, const QString& destination) {
+QString transfer(NetFileTransfer::Prepared prepared, const QString& destination,
+                 const QByteArray& expectedRom = {}) {
     QString error;
     const auto parsed = NetFileTransfer::Manifest::fromBytes(prepared.manifest.toBytes(), &error);
     check(bool(parsed), "manifest roundtrip");
@@ -70,6 +71,11 @@ QString transfer(NetFileTransfer::Prepared prepared, const QString& destination)
         }
         check(resumed.complete(), "download complete");
         const QString path = resumed.completedPath();
+        if (!expectedRom.isEmpty()) {
+            QFile downloaded(path);
+            check(downloaded.open(QIODevice::ReadOnly) && downloaded.readAll() == expectedRom,
+                  "received exact effective ROM bytes");
+        }
         QFile changed(path);
         check(changed.open(QIODevice::WriteOnly | QIODevice::Append), "modify completed fixture");
         check(changed.write("x", 1) == 1, "modify completed contents");
@@ -200,16 +206,28 @@ int main(int argc, char** argv) {
     check(bool(numbered) && numbered->manifest.files.size() == 6,
           "structural YX5200 ROM includes only supported adjacent numbered tracks");
     check(numbered->manifest.entry == "game.gen", "GEN transfer preserves supported ROM extension");
+    const QByteArray numberedManifest = numbered->manifest.id;
     const QString numberedPath = transfer(std::move(*numbered), directory.filePath("downloads"));
     QFile downloadedTrack(QFileInfo(numberedPath).absolutePath() + "/01.mp3");
     check(downloadedTrack.open(QIODevice::ReadOnly) && downloadedTrack.readAll() == numberedAudio,
           "received numbered track remains beside ROM with original padding and bytes");
     auto nearMiss = yx5200Rom;
     nearMiss[0x405] = char(0xf0); // An ordinary cartridge register, not the YX5200 UART.
-    put(directory.filePath("numbered/Death & Lead.gen"), nearMiss);
-    auto ordinaryCart = NetFileTransfer::prepare(directory.filePath("numbered/Death & Lead.gen"), {}, &error);
+    const QString basePath = directory.filePath("numbered/Death & Lead.gen");
+    put(basePath, nearMiss);
+    auto ordinaryCart = NetFileTransfer::prepare(basePath, {}, &error);
     check(bool(ordinaryCart) && ordinaryCart->manifest.files.size() == 1,
           "game filename never enables unrelated numbered soundtrack transfer");
+    put(directory.filePath("numbered/Death & Lead.ips"), "PATCHEOF");
+    auto patched = NetFileTransfer::prepare(basePath, {}, &error, nullptr, yx5200Rom);
+    check(bool(patched) && patched->manifest.id == numberedManifest,
+          "effective ROM enables numbered tracks and matches an equivalent local ROM");
+    check(patched->sources.front().path.isEmpty() && patched->sources.front().contents == yx5200Rom,
+          "effective ROM originates in memory");
+    const QString patchedPath = transfer(std::move(*patched), directory.filePath("patched"), yx5200Rom);
+    const QDir patchedDirectory(QFileInfo(patchedPath).absolutePath());
+    check(patchedDirectory.entryList({"*.ips", "*.bps"}, QDir::Files).isEmpty(),
+          "patch sidecars stay out of the download");
     auto swapped = yx5200Rom;
     for (qsizetype byte = 0; byte < swapped.size(); byte += 2)
         std::swap(swapped[byte], swapped[byte + 1]);
@@ -239,6 +257,11 @@ int main(int argc, char** argv) {
           "archived YX5200 ROM includes numbered tracks adjacent to archive");
     check(archived->sources.front().contents == yx5200Rom,
           "archive transfer preserves canonical ROM bytes");
+    auto patchedArchive = NetFileTransfer::prepare(archivePath, archiveEntries.front(),
+                                                   &error, nullptr, nearMiss);
+    check(bool(patchedArchive) && patchedArchive->manifest.id == ordinaryCart->manifest.id &&
+          patchedArchive->sources.front().contents == nearMiss,
+          "effective archive ROM uses the selected extension and disables absent soundtrack hardware");
 
     put(directory.filePath("media/escape.cue"),
         "FILE \"../outside.bin\" BINARY\nTRACK 01 MODE1/2352\n");

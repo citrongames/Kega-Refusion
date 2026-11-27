@@ -586,3 +586,41 @@ open/close, held-input takeover and dual-binding checks passed in the same run.
 Windows Release was packaged to testbuild and the deployed EXE matched the
 stripped build. Windows GUI testing is left to the user; no Windows application
 was launched. Evidence: `build/verification/exclusive-speed-modes/` (ignored).
+
+### Automatic IPS/BPS patch chains — 2026-11-27
+
+Implemented cartridge soft-patching on the worker before hardware/region/hash
+selection, with the portable Patches folder, local-file precedence, numbered
+chains and per-step BPS preference. Source files remain read-only. Patch failures
+leave the running game intact. Patched save/cheat names use a final-ROM hash
+suffix. Netplay forwards the loaded bytes and suppresses repeat patching on
+received media; existing external soundtrack discovery uses those final bytes.
+
+Focused checks passed:
+
+- Format/discovery tests: IPS records, RLE and final-size extension; all BPS
+  commands including overlapping target copies; source/result/patch CRCs;
+  malformed/overflow/bounds cases; mixed numbered chains, duplicates, gaps,
+  folder precedence and failure rollback. The parser/discovery suite also ran
+  under AddressSanitizer and UndefinedBehaviorSanitizer.
+- Real-core generated MD fixture: default-off behavior; patched PAL selection
+  from an NTSC source; separate SRAM and quick slots; rewind frame/audio equality;
+  input recording/replay frame equality; unchanged bytes across power reset and
+  changed settings; original-game rejection of patched recording; archive member
+  patches; bypass for downloaded content. The initial region assertion exposed
+  invalid FF padding in the generated fixture; the fixture now uses a valid
+  space-padded region field. No region-emulation change was needed.
+- Net file transfer: downloaded bytes equal the effective patched ROM, equivalent
+  local content has the same manifest, external tracks follow patched hardware
+  detection, and archive overrides retain the selected cartridge extension.
+- Existing battery/folder policy and localization checks passed.
+- User files: Altered Beast (USA, Europe) IPS, Contra - Hard Corps (USA, Korea)
+  IPS, and Phantasy Star IV (USA) BPS each loaded at 59.923 Hz, executed 180 frames
+  and passed a save/load roundtrip. Each original file remained identical.
+  This is startup coverage, not full playthroughs.
+
+Linux and Windows application builds passed with no new warnings. Windows was
+packaged to testbuild; the deployed stripped EXE and en/ru catalogs matched.
+Windows GUI and a full two-peer lobby run were not performed for this change.
+No emulation-core binaries or serialized-state formats changed. Evidence and
+final-ROM hashes are under ignored `build/verification/rom-patches/`.

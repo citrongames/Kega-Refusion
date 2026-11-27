@@ -34,7 +34,7 @@ public:
     void unban(const QString&);
 signals:
     void activeChanged(bool);
-    void openRomRequested(const QString&);
+    void openRomRequested(const QString& path, bool allowPatches);
     void notice(const QString&);
     void sessionEnded(const QString& message);
     void connectionWaitingChanged(bool waiting);
@@ -62,7 +62,7 @@ private:
     void normalizeRoles();
     int activePlayerCount() const;
     void compareContent();
-    void prepareSource(const QString&,int archiveIndex=-1);
+    void prepareSource(const QString&, int archiveIndex, const QByteArray& effectiveRom);
     bool reserveTemporarySession(QString* error);
     void queueTemporaryCleanup();    EmulationSession& session_;
     QString dataPath_;
@@ -104,6 +104,7 @@ private:
     std::vector<std::unique_ptr<NetFileTransfer::TemporaryArea>> temporaryAreas_;
     bool temporaryModeCleared_ = false;
     int sourceArchiveIndex_=-1;
+    quint64 sourceRevision_=0;
     quint64 hostEpoch_ = 0;
     quint64 localId_ = 0;
     int localRole_ = 0, reconnectAttempts_ = 0;

@@ -100,8 +100,8 @@ bool validPath(const QString& value) {
 
 QStringList DataFolders::categories() {
     return {QStringLiteral("bios"), QStringLiteral("cheats"), QStringLiteral("movies"),
-            QStringLiteral("saves"), QStringLiteral("screenshots"), QStringLiteral("shaders"), QStringLiteral("states"),
-            QStringLiteral("videos")};
+            QStringLiteral("patches"), QStringLiteral("saves"), QStringLiteral("screenshots"),
+            QStringLiteral("shaders"), QStringLiteral("states"), QStringLiteral("videos")};
 }
 
 QString DataFolders::defaultSetting(const QString& dataRoot, const QString& category) {
@@ -155,7 +155,8 @@ bool DataFolders::save(const QString& dataRoot, const Folders& changes,
         if (!QDir().mkpath(folder))
             return fail(QStringLiteral("Не удалось создать папку: %1"), folder);
         const QFileInfo info(folder);
-        const bool readOnlyAllowed = key == QLatin1String("bios") || key == QLatin1String("shaders");
+        const bool readOnlyAllowed = key == QLatin1String("bios") || key == QLatin1String("patches") ||
+                                     key == QLatin1String("shaders");
         if (!info.isReadable() || (!readOnlyAllowed && !info.isWritable()))
             return fail(QStringLiteral("Нет доступа к папке: %1"), folder);
         validated.insert(key, value);

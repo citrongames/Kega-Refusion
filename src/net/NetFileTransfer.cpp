@@ -549,11 +549,12 @@ std::optional<NetFileTransfer::Manifest> NetFileTransfer::Manifest::fromBytes(
 
 std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
     const QString& sourcePath, const std::optional<RomArchive::Entry>& archiveEntry,
-    QString* error, const std::atomic_bool* cancelled) {
+    QString* error, const std::atomic_bool* cancelled, const QByteArray& cartridgeOverride) {
     Prepared result;
     result.cancelled = cancelled;
     const QFileInfo selected(sourcePath);
-    if (selected.suffix().compare("mmi",Qt::CaseInsensitive)==0) {
+    const QString extension = selected.suffix().toLower();
+    if (extension == "mmi") {
         fail(error, "MegaLD MMI images are local-only and cannot be transferred"); return std::nullopt;
     }
     if (!selected.isFile() || selected.isSymLink() || QFileInfo(selected.absolutePath()).isSymLink()) {
@@ -562,14 +563,20 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
     result.sourceRoot = QDir::cleanPath(selected.absolutePath());
     const QString path = QDir::cleanPath(selected.absoluteFilePath());
     if (!pathIsSafe(path, result.sourceRoot, error)) return std::nullopt;
-    if (RomArchive::isArchive(path)) {
-        if (!archiveEntry) { fail(error, "Select a ROM archive entry first"); return std::nullopt; }
+    const bool archived = RomArchive::isArchive(path);
+    const bool discImage = QStringList{"cue", "iso", "chd"}.contains(extension);
+    if (!cartridgeOverride.isEmpty() && (discImage || extension == "m3u")) {
+        fail(error, "Only cartridge ROMs support a media override"); return std::nullopt;
+    }
+    if (archived || !cartridgeOverride.isEmpty()) {
+        if (archived && !archiveEntry) { fail(error, "Select a ROM archive entry first"); return std::nullopt; }
         QString archiveError;
-        QByteArray rom = RomArchive::extract(path, *archiveEntry, &archiveError);
+        QByteArray rom = cartridgeOverride;
+        if (rom.isEmpty()) rom = RomArchive::extract(path, *archiveEntry, &archiveError);
         if (rom.isEmpty() || rom.size() > RomArchive::MaxMemberSize) {
             fail(error, archiveError.isEmpty() ? "Invalid selected ROM" : archiveError); return std::nullopt;
         }
-        const QString ext = suffix(archiveEntry->name);
+        const QString ext = suffix(archived ? archiveEntry->name : path);
         result.manifest.entry = "game." + ext;
         SourceFile source;
         source.file = {result.manifest.entry, rom.size(), hashBytes(rom)};
@@ -579,7 +586,7 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
         result.sources.append(std::move(source));
         if ((paprium && !addPapriumTracks(&result, path, error)) ||
             (yx5200 && !addYx5200Tracks(&result, path, error))) return std::nullopt;
-    } else if (selected.suffix().compare("m3u", Qt::CaseInsensitive) == 0) {
+    } else if (extension == "m3u") {
         QFile playlist(path);
         if (!playlist.open(QIODevice::ReadOnly) || playlist.size() <= 0 || playlist.size() > 65536) {
             fail(error, "Cannot read M3U or M3U is too large"); return std::nullopt;
@@ -605,7 +612,7 @@ std::optional<NetFileTransfer::Prepared> NetFileTransfer::prepare(
         if (disc == 0) { fail(error, "M3U is empty"); return std::nullopt; }
         result.manifest.entry = "game.m3u";
         if (!addMemory(&result, result.manifest.entry, rewritten, error)) return std::nullopt;
-    } else if (QStringList{"cue", "iso", "chd"}.contains(selected.suffix().toLower())) {
+    } else if (discImage) {
         if (!addImage(&result, path, -1, &result.manifest.entry, error)) return std::nullopt;
     } else {
         result.manifest.entry = "game." + suffix(path);

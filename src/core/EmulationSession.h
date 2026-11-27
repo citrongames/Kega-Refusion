@@ -27,8 +27,8 @@ class EmulationSession final : public QThread {
 public:
     explicit EmulationSession(QString corePath, QString dataPath, QObject* parent = nullptr);
     ~EmulationSession() override;
-    void loadGame(const QString& path, int archiveIndex = -1);
-    void loadGame(const QString& path, const RomArchive::Entry& archiveEntry);
+    void loadGame(const QString& path, int archiveIndex = -1, bool allowPatches = true);
+    void loadGame(const QString& path, const RomArchive::Entry& archiveEntry, bool allowPatches = true);
     void closeGame();
     void setPaused(bool paused);
     void setInputDisplayEnabled(bool enabled);
@@ -57,6 +57,7 @@ public:
     void setPerGameCdBackup(bool enabled);
     void setRemoveSpriteLimit(bool enabled);
     void setAutoFixChecksum(bool enabled);
+    void setAutoApplyPatches(bool enabled);
     void setSmsFmEnabled(bool enabled);
     void setFirecoreDmcPcm(bool enabled);
     void setNukedYm2612(bool enabled);
@@ -163,7 +164,7 @@ signals:
     void networkSnapshotDiscarded();
     void networkResyncRequested();
     void networkGameLoading(const QString& path,int archiveIndex);
-    void networkGameSource(const QString& path, int archiveIndex);
+    void networkGameSource(const QString& path, int archiveIndex, const QByteArray& effectiveRom);
     void achievementsChanged(const AchievementsState& state);
     void achievementNotice(const AchievementNotice& notice);
     void achievementHttpRequest(const AchievementHttpRequest& request);
@@ -207,7 +208,7 @@ signals:
 protected:
     void run() override;
 private:
-    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, Cd32xRamCart, AudioLowPass};
+    enum class Type { Load, Close, Pause, Reset, HardReset, Region, Filter, CdLoading, SpriteLimit, Checksum, Port, ControllerType, ControllerKind, FrameAdvance, Cheats, Save, Restore, Slots, Disc, DiscIndex, Eject, MovieRecord, MoviePlay, MovieResume, MovieFork, MovieStop, MovieTakeOver, AchievementsConfigure, AchievementsLogin, AchievementsLogout, AchievementsRefresh, AchievementsResponse, PerformanceMetrics, GameFps, Expansions , NetMode, NetSnapshot, NetReceiveState, NetReceiveFrame, NetFast, NetReverse, NetFactor, NetStepHold, NetSlots, NetRoster, NetDatagram, NetAdvance, NetRewindPreview, SmsFm, NetRole, NetLinkCable, DebugMasks, DebugBackdrop, DebugGain, Adapter, CheatSearch, CheatSearchClear, SaveFile, RestoreFile, VideoStart, VideoExport, VideoStop, FrameBack, RunTimer, InputDisplay, PerGameCdBackup, GameGearLcd, NukedYm2612, FirecoreDmcPcm, Cd32xRamCart, AudioLowPass, AutoPatches};
     struct Command {
         Type type;
         QString path;
@@ -217,6 +218,7 @@ private:
         QByteArray bytes{};
         quint64 requestId = 0;
         bool networkAuthorized = false;
+        bool allowPatches = true;
         qsizetype retainedCheatBytes = 0;
     };
     static bool networkShared(Type type);

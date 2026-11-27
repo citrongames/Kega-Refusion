@@ -249,9 +249,13 @@ bool EmulationSession::takeInspection(DebugInspectionSnapshot& snapshot) {
     inspectionSnapshotPending_ = false;
     return true;
 }
-void EmulationSession::loadGame(const QString& path, int archiveIndex) { enqueue({Type::Load,path,archiveIndex}); }
-void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry) {
-    enqueue({Type::Load,path,archiveEntry.index,archiveEntry});
+void EmulationSession::loadGame(const QString& path, int archiveIndex, bool allowPatches) {
+    Command command{Type::Load,path,archiveIndex}; command.allowPatches = allowPatches;
+    enqueue(std::move(command));
+}
+void EmulationSession::loadGame(const QString& path, const RomArchive::Entry& archiveEntry, bool allowPatches) {
+    Command command{Type::Load,path,archiveEntry.index,archiveEntry}; command.allowPatches = allowPatches;
+    enqueue(std::move(command));
 }
 void EmulationSession::closeGame() { enqueue({Type::Close,{}}); }
 void EmulationSession::setPaused(bool paused) { enqueue({Type::Pause,{},paused ? 1 : 0}); }
@@ -286,6 +290,7 @@ void EmulationSession::setGameGearLcd(bool enabled) { enqueue({Type::GameGearLcd
 void EmulationSession::setFastCdLoading(bool enabled) { enqueue({Type::CdLoading,{},enabled ? 1 : 0}); }
 void EmulationSession::setPerGameCdBackup(bool enabled) { enqueue({Type::PerGameCdBackup,{},enabled ? 1 : 0}); }
 void EmulationSession::setRemoveSpriteLimit(bool enabled) { enqueue({Type::SpriteLimit,{},enabled ? 1 : 0}); }
+void EmulationSession::setAutoApplyPatches(bool enabled) { enqueue({Type::AutoPatches,{},enabled ? 1 : 0}); }
 void EmulationSession::setAutoFixChecksum(bool enabled) { enqueue({Type::Checksum,{},enabled ? 1 : 0}); }
 void EmulationSession::setControllerAdapter(ControllerAdapter adapter) {
     // Connected participants follow host hardware; local bindings remain editable.
@@ -1598,7 +1603,7 @@ void EmulationSession::run() {
                 else if (!achievementState.gameId && !achievements.loading()) loadAchievements();
                 clearHistory(); clearAudio(); fastForward_.store(false); rewind_.store(false);
                 pacer.reset(nowNs());
-                if(networkMode && host.loaded()) emit networkGameSource(host.gamePath(),loadedArchiveIndex);
+                if(networkMode && host.loaded()) emit networkGameSource(host.gamePath(),loadedArchiveIndex,host.patchedRomForTransfer());
                 emit networkModeApplied(networkMode);
                 break;
             }
@@ -1881,7 +1886,7 @@ void EmulationSession::run() {
                     movieBoundary();
                 }
                 if (host.load(command.path,error,command.value,
-                              command.archiveEntry ? &*command.archiveEntry : nullptr)) {
+                              command.archiveEntry ? &*command.archiveEntry : nullptr,command.allowPatches)) {
                     debugAvailable = {}; emit debugControlsChanged(0,0);
                     host.setLinkPresentationRole(networkRole_.load());
                     loaded_.store(true); releaseButtons(); paused = false;
@@ -1890,17 +1895,21 @@ void EmulationSession::run() {
                     networkReady=networkMode==1; networkDirty=networkMode==1;
                     lastNetworkConfiguration={};
                     loadedArchiveIndex=command.value;
-                    if(networkMode) emit networkGameSource(command.path,command.value);
+                    if(networkMode) emit networkGameSource(command.path,command.value,host.patchedRomForTransfer());
                     rewind_.store(false); rewindStatus(false); clearHistory();
                     clearAudio();
                     resetMetrics();
                     emit gameLoaded(host.gamePath(),host.fps(),host.contentName(),host.controllerProfile());
+                    if (host.appliedPatches().size() == 1)
+                        emit actionCompleted(Localization::text(QStringLiteral("Патч применён: %1")).arg(QFileInfo(host.appliedPatches().first()).fileName()));
+                    else if (!host.appliedPatches().isEmpty())
+                        emit actionCompleted(Localization::text(QStringLiteral("Применено патчей: %1")).arg(host.appliedPatches().size()));
                     emit stateSlotsChanged(-1,host.occupiedStateSlots());
                     emit pausedChanged(false);
                     pacer.reset(nowNs());
                 } else {
                     if (!host.loaded()) { clearHistory(); rewindStatus(false); emit gameClosed(); }
-                    else if(networkMode)emit networkGameSource(host.gamePath(),loadedArchiveIndex);
+                    else if(networkMode)emit networkGameSource(host.gamePath(),loadedArchiveIndex,host.patchedRomForTransfer());
                     emit errorOccurred(error);
                 }
                 loaded_.store(host.loaded());
@@ -2108,6 +2117,10 @@ void EmulationSession::run() {
             }
             case Type::PerGameCdBackup:
                 host.setPerGameCdBackup(command.value != 0);
+                break;
+            case Type::AutoPatches:
+                // Only a new load reads sidecars; resets and replay reuse loaded content.
+                host.setAutoApplyPatches(command.value != 0);
                 break;
             case Type::Checksum:
                 // Update the policy only. load() and an explicit hard reset

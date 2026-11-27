@@ -143,7 +143,9 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(lobby_,&NetplayLobby::joinRequested,this,&NetplayController::startJoin);
     connect(lobby_,&NetplayLobby::leaveRequested,this,&NetplayController::leaveSession);
     connect(lobby_,&NetplayLobby::stopWaitingRequested,this,&NetplayController::stopWaiting);
-    connect(lobby_,&NetplayLobby::selectRomRequested,this,&NetplayController::openRomRequested);
+    connect(lobby_, &NetplayLobby::selectRomRequested, this, [this](const QString& path) {
+        emit openRomRequested(path, true);
+    });
     connect(lobby_,&NetplayLobby::roleRequested,this,[this](const QString& text,const QString& role) {
         if(!active_ || !hosting_)return;
         bool valid=false;const auto id=text.toULongLong(&valid);if(!valid || !participants_.contains(id))return;
@@ -189,8 +191,8 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(lobby_,&NetplayLobby::cancelTransferRequested,this,[this]{
         files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);downloading_=false;refreshLobby();
     });
-    connect(files_,&NetTransferWorker::preparedSource,this,[this](const QString& source,int index,const QByteArray& bytes,const QString& error){
-        if(!active_ || source!=gamePath_ || index!=sourceArchiveIndex_)return;
+    connect(files_,&NetTransferWorker::preparedSource,this,[this](quint64 revision,const QString& source,int index,const QByteArray& bytes,const QString& error){
+        if(!active_ || revision!=sourceRevision_ || source!=gamePath_ || index!=sourceArchiveIndex_)return;
         if(bytes.isEmpty()){status_=error;emit notice(error);refreshLobby();return;}
         localManifest_=bytes;
         if(hosting_){manifest_=bytes;gameReady_=true;status_=t("Игра готова к подключению участников");announceContent();participants_[0].insert("readiness","ready");}
@@ -202,7 +204,11 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(files_,&NetTransferWorker::progress,this,[this](qint64 done,qint64 total){if(!active_)return;transferDone_=done;transferTotal_=total;refreshLobby();});
     connect(files_,&NetTransferWorker::completed,this,[this](const QString& path){
         if(!active_||hosting_||!downloading_)return;
-        downloading_=false;downloadedPath_=path;localManifest_=manifest_;emit openRomRequested(path);refreshLobby();
+        downloading_ = false;
+        downloadedPath_ = path;
+        localManifest_ = manifest_;
+        emit openRomRequested(path, false);
+        refreshLobby();
     });
     connect(files_,&NetTransferWorker::requestFailed,this,[this](quint64 id,const QString& error){
         filePending_.remove(id);if(hosting_)transport_.send(id,MessageKind::Control,json({{"op","file-error"},{"text",error.left(1024)}}));
@@ -352,7 +358,8 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
     connect(&session_,&EmulationSession::networkGameLoading,this,[this](const QString& path,int index){
         if(!active_)return;
         networkQuality_={};lobby_->setNetworkQuality({});
-        gameReady_=false;gamePath_=path;sourceArchiveIndex_=index;files_->requestCancel();
+        gameReady_=false;gamePath_=path;sourceArchiveIndex_=index;
+        ++sourceRevision_;files_->requestCancel();
         if(hosting_){roleKinds_ = {};jcart_=false;jcartBase_=0;}
         // Preserve verification only for the explicitly completed download.
         if(path!=downloadedPath_)localManifest_.clear();
@@ -360,7 +367,10 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         if(hosting_){manifest_.clear();readyPeers_.clear();for(auto& p:participants_)p.insert("matched",false);announceContent();}
         session_.setNetworkWaiting(!hosting_);
     });
-    connect(&session_,&EmulationSession::networkGameSource,this,[this](const QString& path,int index){if(active_)prepareSource(path,index);});
+    connect(&session_, &EmulationSession::networkGameSource, this,
+            [this](const QString& path, int index, const QByteArray& effectiveRom) {
+        if (active_) prepareSource(path, index, effectiveRom);
+    });
     connect(&session_,&EmulationSession::gameLoaded,this,[this](const QString& path,double,const QString& name){
         loadedGamePath_=path;gamePath_=path;gameName_=name;onGameLoaded(path);
         if(temporaryModeCleared_&&!active_)queueTemporaryCleanup();
@@ -369,6 +379,9 @@ NetplayController::NetplayController(EmulationSession& session,const QString& da
         loadedGamePath_.clear();
         if(temporaryModeCleared_&&!active_)queueTemporaryCleanup();
         networkQuality_={};lobby_->setNetworkQuality({});
+        ++sourceRevision_;
+        files_->requestCancel();
+        QMetaObject::invokeMethod(files_, &NetTransferWorker::clearSource);
         gamePath_.clear();gameName_.clear();localManifest_.clear();gameReady_=false;roleKinds_ = {};jcart_=false;jcartBase_=0;
         if(active_&&hosting_){manifest_.clear();readyPeers_.clear();announceContent();}
         refreshLobby();
@@ -468,8 +481,13 @@ void NetplayController::leaveSession(){
     transport_.stop();temporaryModeCleared_=false;
     session_.setNetworkMode(0);session_.setNetworkWaiting(false);
     downloadRoot_.clear();storageId_.clear();
-    files_->requestCancel();QMetaObject::invokeMethod(files_,&NetTransferWorker::cancel);
-    QMetaObject::invokeMethod(files_,[this]{files_->setSharingEnabled(false);});
+    ++sourceRevision_;
+    files_->requestCancel();
+    QMetaObject::invokeMethod(files_, [this] {
+        files_->cancel();
+        files_->clearSource();
+        files_->setSharingEnabled(false);
+    });
     participants_.clear();inputs_.clear();readyPeers_.clear();filePending_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();heldFrames_.clear();disconnectedAt_.clear();
     incomingSnapshot_.clear();manifest_.clear();localManifest_.clear();transferDone_=transferTotal_=0;
     hosting_=false;linkCable_=false;gameReady_=false;downloading_=false;snapshotRequested_=false;applyingEpoch_=incomingEpoch_=pendingIncomingEpoch_=0;linkCableRevision_=applyingLinkCableRevision_=0;incomingSize_=pendingIncomingSize_=0;fileChunkExpected_=false;stopping_=false;
@@ -509,16 +527,25 @@ void NetplayController::finishTemporarySessions() {
     temporaryAreas_.clear();
 }
 void NetplayController::onGameLoaded(const QString&){if(active_){gameReady_=hosting_;refreshLobby();}}
-void NetplayController::prepareSource(const QString& path,int archiveIndex){
+void NetplayController::prepareSource(const QString& path, int archiveIndex,
+                                     const QByteArray& effectiveRom) {
+    const quint64 revision = ++sourceRevision_;
     files_->requestCancel();gamePath_=path;sourceArchiveIndex_=archiveIndex;
-    if(!hosting_&&path==downloadedPath_&&localManifest_==manifest_&&!manifest_.isEmpty()) {downloadedPath_.clear();compareContent();return;}
+    if (!hosting_ && effectiveRom.isEmpty() && path == downloadedPath_ &&
+        localManifest_ == manifest_ && !manifest_.isEmpty()) {
+        downloadedPath_.clear();
+        compareContent();
+        return;
+    }
     localManifest_.clear();
     if(hosting_){
         manifest_.clear();readyPeers_.clear();outgoingSnapshots_.clear();outgoingOffsets_.clear();
         for(auto it=participants_.begin();it!=participants_.end();++it)if(it.key())it->insert("matched",false);
         updateRoster();announceContent();
     }
-    const auto source=path;QMetaObject::invokeMethod(files_,[this,source,archiveIndex]{files_->prepare(source,archiveIndex);});
+    QMetaObject::invokeMethod(files_, [this, path, archiveIndex, effectiveRom, revision] {
+        files_->prepare(path, archiveIndex, effectiveRom, revision);
+    });
     status_=t("Проверка файлов игры…");refreshLobby();
 }
 void NetplayController::applyLinkCableConfiguration(bool enabled){

@@ -58,10 +58,12 @@ public:
     };
     struct Request { int fileIndex = -1; qint64 offset = 0; };
     struct Chunk { int fileIndex = -1; qint64 offset = 0; QByteArray data; QByteArray sha256; };
+    // A cartridge override provides the effective ROM bytes captured by the emulation thread.
     static std::optional<Prepared> prepare(const QString& sourcePath,
                                            const std::optional<RomArchive::Entry>& archiveEntry,
                                            QString* error = nullptr,
-                                           const std::atomic_bool* cancelled = nullptr);
+                                           const std::atomic_bool* cancelled = nullptr,
+                                           const QByteArray& cartridgeOverride = {});
     class Sender final {
     public:
         explicit Sender(Prepared prepared);

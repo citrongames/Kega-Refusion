@@ -80,12 +80,13 @@ void NetTransferWorker::setSharingEnabled(bool enabled) {
     sharingEnabled_ = enabled;
 }
 
-void NetTransferWorker::prepare(const QString& path, int archiveIndex) {
+void NetTransferWorker::prepare(const QString& path, int archiveIndex,
+                                const QByteArray& effectiveRom, quint64 sourceRevision) {
     sender_.reset();
     cancelled_.store(false);
-    const auto finish = [this,&path,archiveIndex](const QByteArray& bytes, const QString& error) {
-        emit prepared(bytes,error);
-        emit preparedSource(path,archiveIndex,bytes,error);
+    const auto finish = [this, &path, archiveIndex, sourceRevision](const QByteArray& bytes, const QString& error) {
+        emit prepared(bytes, error);
+        emit preparedSource(sourceRevision, path, archiveIndex, bytes, error);
     };
     std::optional<RomArchive::Entry> selected;
     QString error;
@@ -103,13 +104,17 @@ void NetTransferWorker::prepare(const QString& path, int archiveIndex) {
             return;
         }
     }
-    auto source = NetFileTransfer::prepare(path, selected, &error, &cancelled_);
+    auto source = NetFileTransfer::prepare(path, selected, &error, &cancelled_, effectiveRom);
     if (!source || cancelled_.load()) {
         finish({}, error.isEmpty() ? QStringLiteral("Media preparation cancelled") : error);
         return;
     }
     sender_.emplace(std::move(*source));
     finish(sender_->manifest().toBytes(), {});
+}
+
+void NetTransferWorker::clearSource() {
+    sender_.reset();
 }
 
 void NetTransferWorker::acceptManifest(const QByteArray& manifestBytes,

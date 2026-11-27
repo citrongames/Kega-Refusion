@@ -16,7 +16,9 @@ public:
 
 public slots:
     void setSharingEnabled(bool enabled);
-    void prepare(const QString& path, int archiveIndex = -1);
+    void prepare(const QString& path, int archiveIndex, const QByteArray& effectiveRom,
+                 quint64 sourceRevision);
+    void clearSource();
     void acceptManifest(const QByteArray& manifestBytes, const QString& dataPath,
                         const QString& downloadRoot = {});
     void cleanupTemporary(const QStringList& directories);
@@ -27,7 +29,7 @@ public slots:
 
 signals:
     void prepared(const QByteArray& manifestBytes, const QString& error);
-    void preparedSource(const QString& sourcePath, int archiveIndex,
+    void preparedSource(quint64 sourceRevision, const QString& sourcePath, int archiveIndex,
                         const QByteArray& manifestBytes, const QString& error);
     void chunkReady(quint64 peerId, const QByteArray& bytes);
     void requestFailed(quint64 peerId, const QString& error);

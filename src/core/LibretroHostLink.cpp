@@ -184,6 +184,7 @@ bool LibretroHost::startLinkedPair(QString& error) {
             if(peer->exactCoreHash_!=exactCoreHash_)error=QStringLiteral("Link Cable core modules must be from the same build");
             else {
                 peer->content_=content_;peer->coreContent_=coreContent_;
+                peer->appliedPatches_=appliedPatches_;
                 peer->encodedGamePath_=encodedGamePath_;peer->gamePath_=gamePath_;
                 peer->contentExtension_=contentExtension_;peer->contentName_=contentName_;
                 peer->contentFirecore_=contentFirecore_;

@@ -67,7 +67,7 @@ static int participant(QApplication& app,const QStringList& args) {
     QObject::connect(&session,&EmulationSession::networkModeFailed,&app,fail);
     QObject::connect(&session,&EmulationSession::networkResyncRequested,&app,[&]{++resyncs;});
     QObject::connect(&controller,&NetplayController::notice,&app,[&](const QString& reason){std::fprintf(stderr,"%s notice: %s\n",qPrintable(prefix),qPrintable(reason));});
-    QObject::connect(&controller,&NetplayController::openRomRequested,&session,[&](const QString& p){session.loadGame(p);});
+    QObject::connect(&controller,&NetplayController::openRomRequested,&session,[&](const QString& p,bool allowPatches){session.loadGame(p,-1,allowPatches);});
     QObject::connect(&session,&EmulationSession::gameLoaded,&app,[&]{
         if(!hosting||created)return;created=true;NetplayScenario::host(controller);NetplayScenario::link(controller);
         write(out+"/invite",NetplayScenario::invite(controller).toUtf8());std::puts("READY");std::fflush(stdout);

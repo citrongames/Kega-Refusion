@@ -3,6 +3,8 @@
 #include <archive_entry.h>
 #include "core/RewindBuffer.h"
 #include "core/LibretroHost.h"
+#include "core/MovieSession.h"
+#include "core/RomPatchSet.h"
 #include "core/VideoFrameGeometry.h"
 
 #include <QCoreApplication>
@@ -2162,19 +2164,110 @@ void testRewind(const QString& corePath) {
     require(history.capture(states.back(),frames.back(),4.0/3.0) && history.size()==0, "disabled rewind recorded history");
 }
 
+
+void testRomPatches(const QString& corePath) {
+    QTemporaryDir temp; require(temp.isValid(), "patch integration temp failed");
+    auto source = makeSaveRamRom();
+    source.replace(0x1f0,16,"U               ");
+    auto target = source; target[0x1f0] = 'E';
+    const QString path = temp.path()+"/generated.md", data = temp.path()+"/data";
+    const QString patch = temp.path()+"/generated.ips";
+    writeFile(path, source);
+    writeFile(patch, QByteArray::fromHex("50415443480001f0000145454f46"));
+    LibretroHost host(corePath,data); QString error;
+    require(host.load(path,error) && host.appliedPatches().isEmpty() && host.fps()>59,
+            "patching was not off by default");
+    const auto originalIdentity = host.movieGameIdentity();
+    host.setAutoApplyPatches(true);
+    require(host.load(path,error), qPrintable(error));
+    require(host.appliedPatches().size()==1 && host.patchedRomForTransfer()==target && host.fps()<51,
+            "patch was not applied before region detection");
+    const auto patchedIdentity = host.movieGameIdentity();
+    require(patchedIdentity!=originalIdentity, "patched recording identity equals original");
+    const auto suffix = QStringLiteral(" [p-%1]").arg(QString::fromLatin1(
+        QCryptographicHash::hash(target,QCryptographicHash::Sha256).toHex().left(12)));
+    for (int i=0;i<4;++i) host.runFrame();
+    require(host.saveState(1,error) && host.flushSaveRam(error), qPrintable(error));
+    require(QFile::exists(data+"/saves/generated"+suffix+".srm"), "patched SRAM namespace missing");
+    require(host.occupiedStateSlots()==(1u<<1), "patched slot not found");
+    const auto checkpoint = host.captureRewindState();
+    host.runFrame(); const auto expected = host.frame(); const auto audio = host.audio();
+    require(host.restoreRewindState(checkpoint), "patched rewind restore failed");
+    host.runFrame(); require(host.frame()==expected && host.audio()==audio, "patched rewind resumed differently");
+    require(host.loadState(1,error), qPrintable(error));
+    host.runFrame(); require(host.frame()==expected, "patched quick state resumed differently");
+    // Future policy and changed sidecars must not alter an already running session.
+    host.setAutoApplyPatches(false); writeFile(patch,"broken");
+    require(host.hardReset(error) && host.movieGameIdentity()==patchedIdentity,
+            "hard reset reapplied/removed sidecar instead of retaining loaded bytes");
+    MovieSession movie(host,data); const auto tape=temp.path()+"/patched.krm";
+    require(movie.startRecording(tape,error), qPrintable(error));
+    std::vector<QImage> movieFrames;
+    for (int i=0;i<5;++i) {
+        require(movie.beforeFrame(MovieInput{},error), qPrintable(error));
+        host.runFrame(); movie.afterFrame(); movieFrames.push_back(host.frame());
+    }
+    require(movie.finish(false,error) && movie.play(tape,false,error), qPrintable(error));
+    for (const auto& frame : movieFrames) {
+        require(movie.beforeFrame(MovieInput{},error), qPrintable(error));
+        host.runFrame(); movie.afterFrame(); require(host.frame()==frame, "patched input replay differs");
+    }
+    require(movie.finish(false,error), qPrintable(error));
+    require(host.load(path,error) && host.movieGameIdentity()==originalIdentity && host.occupiedStateSlots()==0,
+            "original inherited patched identity or slots");
+    require(!movie.play(tape,false,error), "original accepted patched recording");
+    host.setAutoApplyPatches(true);
+    require(!host.load(path,error) && host.loaded() && host.movieGameIdentity()==originalIdentity,
+            "invalid patch destroyed the previous game or silently launched original");
+    writeFile(patch,QByteArray::fromHex("50415443480001f0000145454f46"));
+    const QString packed = temp.path()+"/collection.zip";
+    writeFile(packed,packedRom(false,source));
+    require(host.load(packed,error) && host.movieGameIdentity()==patchedIdentity &&
+            host.occupiedStateSlots()==(1u<<1), "archive member sidecar or storage identity failed");
+    // Downloaded games bypass even a matching sidecar, including global lookup.
+    require(host.load(path,error,-1,nullptr,false) && host.appliedPatches().isEmpty() &&
+            host.movieGameIdentity()==originalIdentity, "download bypass did not suppress automatic patching");
+    require(readFile(path)==source, "original ROM was modified on disk");
+}
+
+void testUserPatches(const QString& corePath, const QString& directory) {
+    QTemporaryDir temp; require(temp.isValid(), "user patch temp failed");
+    LibretroHost host(corePath,temp.path()+"/data"); host.setAutoApplyPatches(true);
+    for (const auto& name : {"Altered Beast (USA, Europe).md", "Contra - Hard Corps (USA, Korea).md", "Phantasy Star IV (USA).md"}) {
+        const QString path=QDir(directory).filePath(QString::fromUtf8(name));
+        const auto original=readFile(path); QString error;
+        require(host.load(path,error),qPrintable(error));
+        require(host.appliedPatches().size()==1 && host.patchedRomForTransfer()!=original,"real patch not applied");
+        for(int frame=0;frame<180;++frame)host.runFrame();
+        require(!host.frame().isNull(),"patched ROM produced no frame");
+        require(host.saveState(0,error) && host.loadState(0,error),qPrintable(error));
+        host.runFrame();
+        require(readFile(path)==original,"real source ROM was changed");
+        std::printf("%s: patch loaded, %.3f Hz, 180 frames, state roundtrip; final SHA256=%s\n",name,host.fps(),
+            QCryptographicHash::hash(host.patchedRomForTransfer(),QCryptographicHash::Sha256).toHex().constData());
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     const auto mode = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
-    if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--video-geometry") ||
+    if (argc != 2 && !(argc == 3 && (mode == QLatin1String("--patches") || mode == QLatin1String("--video-geometry") ||
                                      mode == QLatin1String("--state-files") || mode == QLatin1String("--archive-only") || mode == QLatin1String("--controller-ports") ||
                                      mode == QLatin1String("--lightguns") || mode == QLatin1String("--sms-fm") || mode == QLatin1String("--checksum-only") || mode == QLatin1String("--vmv-audio") || mode == QLatin1String("--pirate-mappers") || mode == QLatin1String("--aq-microwire") || mode == QLatin1String("--sonic-mapper") || mode == QLatin1String("--large-ssf-mapper") || mode == QLatin1String("--svp-bus") || mode == QLatin1String("--sdk99-hardware") || mode == QLatin1String("--barver-hardware"))) &&
-        !(argc == 4 && (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
+        !(argc == 4 && (mode == QLatin1String("--user-patches") || mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")))) {
         std::fprintf(stderr, "usage: core_integration_tests /path/to/genesis_plus_gx_libretro.so [--barver-hardware|--sdk99-hardware|--svp-bus|--sonic-mapper|--large-ssf-mapper|--aq-microwire|--pirate-mappers|--vmv-audio|--checksum-only|--video-geometry|--archive-only|--controller-ports|--lightguns|--sms-fm|--network-opll-write DIR|--network-opll-read DIR]\n");
         return 2;
     }
     try {
+        if (mode == QLatin1String("--patches")) {
+            testRomPatches(QString::fromLocal8Bit(argv[1]));
+            std::puts("Patching, region, isolated saves, rewind, input replay, archive and download bypass passed"); return 0;
+        }
+        if (mode == QLatin1String("--user-patches")) {
+            testUserPatches(QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[3])); return 0;
+        }
         if (mode == QLatin1String("--network-opll-write") || mode == QLatin1String("--network-opll-read")) {
             testNetworkOpll(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[3]),
                             mode == QLatin1String("--network-opll-read"));

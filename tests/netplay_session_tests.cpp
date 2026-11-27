@@ -943,7 +943,7 @@ int main(int argc,char** argv){
     QSettings settings(data+"/settings.ini",QSettings::IniFormat);settings.setValue("netplay/nickname",hosting?"Host":"Client");
     EmulationSession session(args[2],data);
     NetplayController controller(session,data,settings,nullptr);
-    QObject::connect(&controller,&NetplayController::openRomRequested,&session,[&](const QString& p){session.loadGame(p);});
+    QObject::connect(&controller,&NetplayController::openRomRequested,&session,[&](const QString& p,bool allowPatches){session.loadGame(p,-1,allowPatches);});
     QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& e){std::fprintf(stderr,"CORE: %s\n",qPrintable(e));app.exit(1);});
     QObject::connect(&controller,&NetplayController::notice,&app,[&](const QString& e){std::fprintf(stderr,"NOTICE: %s\n",qPrintable(e));});
     int phase=hosting?-1:0,combined=0,frames=0,applied=0,resyncs=0,pausedFrames=0;

@@ -34,8 +34,13 @@ public:
     explicit LibretroHost(QString corePath, QString dataPath);
     ~LibretroHost();
     bool load(const QString& path, QString& error, int archiveIndex = -1,
-              const RomArchive::Entry* archiveEntry = nullptr);
+              const RomArchive::Entry* archiveEntry = nullptr, bool allowPatches = true);
     void unload();
+    void setAutoApplyPatches(bool enabled) { autoApplyPatches_ = enabled; }
+    const QStringList& appliedPatches() const { return appliedPatches_; }
+    // Share the exact loaded bytes with the transfer worker, without another copy.
+    QByteArray patchedRomForTransfer() const { return appliedPatches_.isEmpty() ? QByteArray{} : content_; }
+
     bool isCd() const { return loaded_ && !discs_.isEmpty(); }
     bool isMegaLd() const { return loaded_ && megaLd_; }
     bool isFirecore() const { return loaded_ && contentFirecore_; }
@@ -335,6 +340,8 @@ private:
     bool localGameGearLcd_ = false, localScreenBorders_ = false;
     std::map<QByteArray,QList<QByteArray>> variableValues_;
     bool variablesUpdated_ = false, autoFixChecksum_ = false;
+    bool autoApplyPatches_ = false;
+    QStringList appliedPatches_;
     bool firecoreDmcPcm_ = true, activeFirecoreDmcPcm_ = false;
     bool preMovieFirecoreDmcPcm_ = false;
     bool nukedYm2612_ = false;
