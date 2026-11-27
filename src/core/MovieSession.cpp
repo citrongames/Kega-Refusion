@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QtEndian>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -274,16 +275,60 @@ bool MovieSession::loadFile(const QString& path, QImage& frame, double& aspect, 
         std::memcpy(savedFrame.bits(), raw.constData(), size_t(raw.size()));
         if (nw > 0 && nh > 0 && nw <= 4096 && nh <= 4096) VideoFrameGeometry::setNativeSize(savedFrame, QSize(nw,nh));
     } else if (w || h) return bad();
-    MovieTape candidate = tape_;
-    quint64 target = 0;
-    if (!candidate.restoreCheckpoint(payload.mid(header + stateSize, prefixSize), target, readOnly(), error)) return false;
-    bool restoredClock = false;
-    if (!host_.restoreMovieState(payload.mid(header,stateSize), error, false, &restoredClock)) return false;
-    if (!restoredClock) restoreLegacyClock(host_, candidate, target);
-    tape_ = std::move(candidate); cursor_ = target;
-    if (readOnly()) mode_ = cursor_ == tape_.size() ? Finished : Playback;
+    if (!restoreCheckpoint(QByteArray::fromRawData(payload.constData()+header,stateSize),
+                           QByteArray::fromRawData(payload.constData()+header+stateSize,prefixSize),error))
+        return false;
     frame = savedFrame; aspect = ratio;
     return true;
+}
+
+bool MovieSession::restoreCheckpoint(const QByteArray& state, const QByteArray& prefix, QString& error) {
+    quint64 target = 0;
+    bool restoredClock = false;
+    if (!tape_.restoreCheckpoint(prefix,target,readOnly(),error,[&] {
+        return host_.restoreMovieState(state,error,false,&restoredClock);
+    })) return false;
+    if (!restoredClock) restoreLegacyClock(host_,tape_,target);
+    cursor_ = target;
+    if (readOnly()) mode_ = cursor_ == tape_.size() ? Finished : Playback;
+    return true;
+}
+
+QByteArray MovieSession::captureTemporaryState(QString& error, qsizetype maxBytes) const {
+    error.clear();
+    if (!active()) {
+        error = Localization::text(QStringLiteral("Нет активной записи."));
+        return {};
+    }
+    auto state = host_.captureMovieState();
+    constexpr qsizetype lengthBytes = sizeof(quint32);
+    if (state.isEmpty() || state.size() > MaxSnapshot || maxBytes <= state.size()+lengthBytes) {
+        error = Localization::text(QStringLiteral("Состояние записи слишком велико или недоступно."));
+        return {};
+    }
+    const auto prefix = tape_.checkpoint(cursor_,error,std::min(MaxPrefix,maxBytes-state.size()-lengthBytes));
+    if (prefix.isEmpty()) return {};
+    const auto stateSize = qToBigEndian(quint32(state.size()));
+    state.reserve(state.size()+prefix.size()+lengthBytes);
+    state += prefix;
+    state.append(reinterpret_cast<const char*>(&stateSize),lengthBytes);
+    return state;
+}
+
+bool MovieSession::restoreTemporaryState(const QByteArray& bytes, QString& error) {
+    constexpr qsizetype lengthBytes = sizeof(quint32);
+    if (!active() || bytes.size() <= lengthBytes || bytes.size() > MaxSnapshot+MaxPrefix+lengthBytes) {
+        error = Localization::text(QStringLiteral("Сохранение записи повреждено или несовместимо."));
+        return false;
+    }
+    const quint32 stateSize = qFromBigEndian<quint32>(bytes.constData()+bytes.size()-lengthBytes);
+    const qsizetype prefixSize = bytes.size()-lengthBytes-stateSize;
+    if (!stateSize || stateSize > MaxSnapshot || prefixSize <= 0 || prefixSize > MaxPrefix) {
+        error = Localization::text(QStringLiteral("Сохранение записи повреждено или несовместимо."));
+        return false;
+    }
+    return restoreCheckpoint(QByteArray::fromRawData(bytes.constData(),stateSize),
+                             QByteArray::fromRawData(bytes.constData()+stateSize,prefixSize),error);
 }
 
 QByteArray MovieSession::captureRewind() const {

@@ -728,6 +728,10 @@ void EmulationSession::run() {
     int networkMode=0, achievementNetworkRole=0;
     const QByteArray* confirmedAchievementMemory=nullptr;
     QString achievementStatusOverride;
+    auto scriptPolicy = [&] {
+        const bool local = !networkMode && !achievementHardcore && !videoExport;
+        scripts.setHostPolicy(local && !movie.readOnly(), local, local);
+    };
     auto scriptEvent = [&] (ScriptEvent event, bool draw=true) {
         if (!scripts.hasScripts()) { scriptOverlay.reset(); return; }
         if (achievementHardcore || videoExport) {
@@ -739,6 +743,7 @@ void EmulationSession::run() {
             return;
         }
         const int instance=int(host.inspectionPresentedInstance());
+        scriptPolicy();
         scriptOverlay=scripts.event(event,host,scriptGeneration,host.runClock().frames,instance,draw);
         publishScriptUpdates();
     };
@@ -1042,6 +1047,8 @@ void EmulationSession::run() {
         }
     };
     auto movieBoundary = [&] {
+        scripts.invalidateTimeline(true);
+        publishScriptUpdates();
         emit movieHardwareChanged(movie.controllers());
         movieStatus(true); slotStatus();
         clearHistory(); clearAudio(); rewind_.store(false); rewindStatus(false);
@@ -1070,10 +1077,17 @@ void EmulationSession::run() {
 #ifdef KEGA_NETPLAY_TEST_INPUTS
             emit networkFrameReady(NetplayTimeline::frameBytes(networkEpoch,networkPosition,input));
 #endif
-            NetplayTimeline::apply(host,input); return true;
+            frameControls=input; NetplayTimeline::apply(host,input); return true;
         }
         const auto local=liveInput();
-        if (movie.beforeFrame(local, error, &frameControls)) {consumeMouseInput(local);return true;}
+        auto effective=local;
+        if (scripts.hasScripts() && !movie.readOnly()) {
+            scriptPolicy();
+            scripts.beforeFrame(host,scriptGeneration,host.runClock().frames,effective);
+            publishScriptUpdates();
+        }
+        // Consume physical mouse motion, never a scripted replacement delta.
+        if (movie.beforeFrame(effective, error, &frameControls)) {consumeMouseInput(local);return true;}
         paused = true; frameAdvanceHeld_.store(false);
         clearAudio(); emit pausedChanged(true);
         if (movie.recording() && !error.isEmpty()) {
@@ -1254,6 +1268,7 @@ void EmulationSession::run() {
             needsFirstPicture = frame.width() <= 1 || frame.height() <= 1;
         }
         const auto selected = selectLinkPreview(frame,networkRewindLinkPreview,networkRole_.load(),aspect);
+        scripts.invalidateTimeline(false);
         ++scriptGeneration;
         scriptEvent(ScriptEvent::Rewind);
         if (!selected.isNull()) presentFrame(selected,aspect,{},host.inputViewport(),scriptOverlay);
@@ -1420,19 +1435,27 @@ void EmulationSession::run() {
         }
         if (notify) emit debuggerReady();
     };
+    QVector<ScriptControl> scriptSteps;
     auto finishFramePipeline = [&] {
         if (!debugFrame.active) return;
         const auto context=debugFrame;debugFrame.active=false;
-        scriptEvent(ScriptEvent::Frame,context.present);
-        const auto scriptPictureKey=scriptOverlay ? host.frame().cacheKey() : 0;
-        const auto discardReplacedScriptPicture = [&] {
-            if (scriptOverlay && host.frame().cacheKey()!=scriptPictureKey) scriptOverlay.reset();
+        scriptSteps.clear();
+        const auto observeCommittedFrame = [&] {
+            if (!scripts.hasScripts()) { scriptOverlay.reset(); return; }
+            if (achievementHardcore || videoExport) {
+                stopScripts(Localization::text(QStringLiteral("Lua недоступен в Hardcore и при экспорте видео.")));
+                return;
+            }
+            scriptPolicy();
+            scriptOverlay=scripts.event(ScriptEvent::Frame,host,scriptGeneration,
+                host.runClock().frames,int(host.inspectionPresentedInstance()),context.present,&frameControls);
+            publishScriptUpdates();
         };
         if (context.manual) {
             captureVideo();
             if (!achievementSuppressed && !networkMode) achievements.frame();
             afterFrame();
-            discardReplacedScriptPicture();
+            observeCommittedFrame();
             if (host.isCd() && host.discEjected() != lastDiscEjected) { clearHistory(); discStatus(); cheatStatus(); }
             if (optionsPending) optionsPending = false;
             if ((historyEnabled || manualHistory) && historyHealthy && !recordHistory()) {
@@ -1449,7 +1472,7 @@ void EmulationSession::run() {
         if (metricsWindowRunning) metrics.recordFrame(gameFpsEnabled && host.frameInputPolled());
         if (!achievementSuppressed && !networkMode) achievements.frame();
         afterFrame();
-        discardReplacedScriptPicture();
+        observeCommittedFrame();
         if (host.isCd() && host.discEjected() != lastDiscEjected) {
             clearHistory(); discStatus();
         }
@@ -1488,6 +1511,155 @@ void EmulationSession::run() {
         if (!effectivePaused) {effectivePaused=true;emit effectivePauseChanged(true);}
         clearAudio();pacer.reset(nowNs());
         resetMetrics();publishDebugger();
+    };
+    // Lua sees complete canonical states only. Snapshot bytes are owned and
+    // budgeted by the runtime; no file I/O or second emulation session is used.
+    ScriptHostServices scriptServices;
+    scriptServices.captureSave = [&](qsizetype remaining, QString& error) -> QByteArray {
+        if (!host.loaded() || networkMode || achievementHardcore || videoExport ||
+            host.debuggerFramePending()) {
+            error=QStringLiteral("Temporary saves are unavailable in this context"); return {};
+        }
+        const QByteArray progress=achievementSuppressed ? QByteArray() : achievements.saveProgress(false);
+        constexpr qsizetype headerSize=17;
+        if (progress.size()>2*1024*1024 || remaining<=headerSize+progress.size()) {
+            error=QStringLiteral("Temporary save memory limit exceeded"); return {};
+        }
+        QByteArray core=movie.active()
+            ? movie.captureTemporaryState(error,remaining-headerSize-progress.size())
+            : host.captureMovieState();
+        if (core.isEmpty()) {
+            if (error.isEmpty()) error=QStringLiteral("Could not capture temporary save");
+            return {};
+        }
+        if (core.size()>remaining-headerSize-progress.size()) {
+            error=QStringLiteral("Temporary save memory limit exceeded"); return {};
+        }
+        QByteArray packed("KRLUAS01",8);
+        packed.reserve(headerSize+core.size()+progress.size());
+        packed.append(char(movie.active()));
+        for (quint32 length : {quint32(core.size()),quint32(progress.size())}) {
+            const auto encoded=qToBigEndian(length);
+            packed.append(reinterpret_cast<const char*>(&encoded),4);
+        }
+        packed+=core; packed+=progress;
+        return packed;
+    };
+    scripts.setHostServices(std::move(scriptServices));
+    auto processScriptControls = [&] {
+        quint64 repositionedBy=0;
+        bool failed=false;
+        for (const auto& control : scripts.takeControls()) {
+            if (!scripts.ownsControl(control) || (repositionedBy && control.run!=repositionedBy)) continue;
+            QString error;
+            if (!host.loaded() || networkMode || achievementHardcore || videoExport ||
+                host.debuggerFramePending()) {
+                scripts.controlFailed(control,QStringLiteral("Script control is unavailable in this context"));
+                failed=true;
+                continue;
+            }
+            switch (control.type) {
+            case ScriptControlType::FrameAdvance:
+                if (movie.mode()==MovieSession::Finished)
+                    error=QStringLiteral("Input playback has finished");
+                else if (scriptSteps.size()<ScriptLimits::MaxScripts) scriptSteps.append(control);
+                else error=QStringLiteral("Too many pending frame requests");
+                break;
+            case ScriptControlType::Pause:
+                // Resuming a finished recording follows the explicit UI action.
+                if (!control.value && movie.mode()==MovieSession::Finished) {
+                    error=QStringLiteral("Input playback has finished"); break;
+                }
+                paused=control.value;
+                clearAudio(); pacer.reset(nowNs()); emit pausedChanged(paused);
+                break;
+            case ScriptControlType::Reset:
+                if (movie.active()) {
+                    error=QStringLiteral("Finish input recording or playback before resetting"); break;
+                }
+                if (control.value && !host.hardReset(error)) {
+                    loaded_.store(host.loaded());
+                    if (!host.loaded()) emit gameClosed();
+                    if (!scripts.compatible(host)) stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
+                    break;
+                }
+                if (!control.value) host.reset();
+                if (!scripts.compatible(host)) {
+                    stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
+                    break;
+                }
+                scripts.invalidateTimeline(control.value,control.run);
+                repositionedBy=control.run;
+                scriptSteps.clear(); scriptOverlay.reset(); ++scriptGeneration;
+                achievements.reset(); clearHistory(); clearAudio(); resetMetrics();
+                rewind_.store(false); rewindStatus(false); frameBackHeld_.store(false);
+                pacer.reset(nowNs()); discStatus(); updateDebugControls();
+                scriptEvent(ScriptEvent::Reset);
+                break;
+            case ScriptControlType::LoadState: {
+                if (!control.snapshot) { error=QStringLiteral("Temporary save is empty"); break; }
+                const auto& packed=*control.snapshot;
+                if (packed.size()<17 || !packed.startsWith("KRLUAS01") ||
+                    (packed[8]!=char(0) && packed[8]!=char(1)) ||
+                    bool(packed[8])!=movie.active()) {
+                    error=QStringLiteral("Temporary save belongs to a different recording context"); break;
+                }
+                const auto coreSize=qFromBigEndian<quint32>(packed.constData()+9);
+                const auto progressSize=qFromBigEndian<quint32>(packed.constData()+13);
+                if (!coreSize || progressSize>2*1024*1024 ||
+                    quint64(coreSize)+progressSize+17!=quint64(packed.size())) {
+                    error=QStringLiteral("Invalid temporary save"); break;
+                }
+                const auto state=QByteArray::fromRawData(packed.constData()+17,coreSize);
+                const bool restored=movie.active() ? movie.restoreTemporaryState(state,error)
+                    : host.restoreMovieState(state,error);
+                if (!restored) {
+                    if (error.isEmpty()) error=QStringLiteral("Could not restore temporary save");
+                    break;
+                }
+                if (!achievementSuppressed) achievements.restoreProgress(packed.mid(17+coreSize,progressSize),true);
+                scripts.invalidateTimeline(false,control.run);
+                repositionedBy=control.run;
+                scriptSteps.clear(); scriptOverlay.reset(); ++scriptGeneration;
+                clearHistory(); clearAudio(); resetMetrics(); pacer.reset(nowNs());
+                rewind_.store(false); rewindStatus(false); frameBackHeld_.store(false);
+                frameAdvanceHeld_.store(false); frameRequested=false;
+                if (inputDisplayEnabled) {frameInput=host.inputDisplay(false);publishInput();}
+                scriptEvent(ScriptEvent::LoadState);
+                // As with file loading, this is a predictive picture. The next
+                // actual frame supplies matching script observations again.
+                if (paused || backgroundPaused_.load()) {
+                    if (host.previewLoadedState()) {
+                        scriptOverlay.reset(); presentHostFrame();
+                    } else {
+                        // Failed prediction must not become the live timeline.
+                        QString recovery;
+                        const bool recovered=movie.active() ? movie.restoreTemporaryState(state,recovery)
+                            : host.restoreMovieState(state,recovery);
+                        if (!recovered) {
+                            paused=true; emit pausedChanged(true);
+                            error=QStringLiteral("Could not restore temporary save after preview failure: %1").arg(recovery);
+                        } else error=QStringLiteral("Could not render temporary save preview");
+                        loaded_.store(host.loaded());
+                        if (!host.loaded()) {
+                            emit gameClosed();
+                            stopScripts(Localization::text(QStringLiteral("Скрипты остановлены: игра или оборудование изменились.")));
+                        }
+                    }
+                }
+                movieStatus(true); discStatus(); publishClock(true);
+                break;
+            }
+            }
+            if (!error.isEmpty()) { scripts.controlFailed(control,error); failed=true; }
+        }
+        if (failed && host.loaded() && !networkRemoteRewinding) {
+            scriptEvent(ScriptEvent::Draw);
+            if (!host.frame().isNull()) presentHostFrame();
+        }
+        scriptSteps.erase(std::remove_if(scriptSteps.begin(),scriptSteps.end(),
+            [&](const ScriptControl& request) { return !scripts.ownsControl(request); }),scriptSteps.end());
+        publishScriptUpdates();
     };
     while (!quitting_.load()) {
         std::deque<Command> pending;
@@ -1682,6 +1854,22 @@ void EmulationSession::run() {
                     continue;
                 }
             }
+            if (scripts.hasScripts()) {
+                switch (command.type) {
+                case Type::Reset: case Type::Restore: case Type::RestoreFile:
+                    scripts.invalidateTimeline(false); break;
+                case Type::NetMode: case Type::NetLinkCable: case Type::NetReceiveState:
+                case Type::MovieRecord: case Type::MoviePlay: case Type::MovieResume:
+                case Type::MovieFork: case Type::MovieStop: case Type::MovieTakeOver:
+                case Type::HardReset: case Type::Region: case Type::Disc:
+                case Type::DiscIndex: case Type::Eject: case Type::Cheats:
+                case Type::Port: case Type::ControllerType: case Type::ControllerKind:
+                case Type::Adapter: case Type::CdLoading: case Type::SpriteLimit:
+                    scripts.invalidateTimeline(true); break;
+                default: break;
+                }
+                publishScriptUpdates();
+            }
             // These commands can rebuild a machine even when no Lua VM exists.
             // Cancel in-flight starts conservatively; running compatible scripts
             // are retained. Simple view/audio/input changes do not enter here.
@@ -1725,6 +1913,7 @@ void EmulationSession::run() {
                     scriptUpdates_.append({request.id,request.path,ScriptStatus::Error,rejection});
                     if (!scriptUpdatePending_) { scriptUpdatePending_=true; emit scriptsReady(); }
                 } else {
+                    scriptPolicy();
                     scripts.command(request,host);
                     publishScriptUpdates();
                     // A received remote rewind image has no matching local memory.
@@ -2484,6 +2673,7 @@ void EmulationSession::run() {
             stopScripts(Localization::text(QStringLiteral("Lua недоступен в Hardcore и при экспорте видео.")));
             if (host.loaded() && !host.frame().isNull()) presentHostFrame();
         }
+        processScriptControls();
         processInspection();
         processTrace();
         processCoverage();
@@ -2701,7 +2891,9 @@ void EmulationSession::run() {
             frameRequested = true; nextHeldFrameNs = nowNs() + 33333333;
         }
         stepHeldLatched = stepHeld;
-        if (frameRequested && host.loaded() && paused && !background && !achievementHardcore && !networkRemoteRewinding) {
+        const bool scriptFrameRequested=std::any_of(scriptSteps.cbegin(),scriptSteps.cend(),
+            [&](const ScriptControl& request) { return scripts.ownsControl(request); });
+        if ((frameRequested || scriptFrameRequested) && host.loaded() && paused && !background && !achievementHardcore && !networkRemoteRewinding) {
             if(networkMode==1 && !networkStepAnnounced) {
                 networkStepAnnounced=true;emit networkStepRequested(networkEpoch);
             }

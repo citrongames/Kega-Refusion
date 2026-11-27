@@ -20,6 +20,9 @@ public:
     bool loadSlot(int slot, QImage& frame, double& aspect, bool& missing, QString& error);
     bool loadFile(const QString& path, QImage& frame, double& aspect, bool& missing, QString& error);
     unsigned occupiedSlots() const;
+    // In-memory movie state with the input prefix through the current cursor.
+    QByteArray captureTemporaryState(QString& error, qsizetype maxBytes = 32 * 1024 * 1024) const;
+    bool restoreTemporaryState(const QByteArray& state, QString& error);
     QByteArray captureRewind() const;
     bool restoreRewind(const QByteArray& state, QString& error);
     // Restore only the core/battery payload for a preview; leave tape/cursor untouched.
@@ -34,6 +37,7 @@ public:
     QByteArray controllers() const;
     double frameRate() const;
 private:
+    bool restoreCheckpoint(const QByteArray& state, const QByteArray& prefix, QString& error);
     bool saveSlotFile(const QString& path, QString& error, bool keepPrevious);
     QString slotPath(int slot) const;
     bool saveRecording(QString& error);

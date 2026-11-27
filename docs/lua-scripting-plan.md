@@ -2,7 +2,7 @@
 
 Agreed for preservation on 2026-11-21, following research into FCEUX, Mesen 2,
 BizHawk, Gens-rr and mGBA. Baseline: release 0.29.0, repository 9000292.
-Implementation of Phase 1 was authorized on 2026-11-27. The remaining phases
+Implementation of Phases 1 and 2 was authorized on 2026-11-27. The remaining phases
 remain planned work; they are not advertised as shipped features.
 
 ## Progress and direction
@@ -10,7 +10,7 @@ remain planned work; they are not advertised as shipped features.
 - [x] Research reference APIs and inspect the current host architecture.
 - [x] Preserve the proposed architecture, delivery order and integration rules.
 - [x] Phase 1: runtime, script window, read-only memory and drawing.
-- [ ] Phase 2: input automation, frame control and temporary save objects.
+- [x] Phase 2: input automation, frame control and temporary save objects.
 - [ ] Phase 3: memory/register editing and debugger integration.
 - [ ] Phase 4: custom panels, Gens compatibility and advanced timeline integration.
 
@@ -211,13 +211,13 @@ game activity, not a universal measure of completed game updates.
 
 For Kega Refusion, reuse native input recordings and attach measurement data
 by emulated frame instead of duplicating input storage in the example. Pending
-APIs include nominal refresh/lag observations, recording control and bounded
-asynchronous result-file access. Obtain refresh from the actual console/region,
+APIs include recording control and bounded asynchronous result-file access.
+Nominal refresh and per-frame lag observations are available in Phase 2. Obtain refresh from the actual console/region,
 not a fixed NTSC value. Define rewind/load/re-record behavior before promising
 aligned historical graphs. A game-specific update counter can supply a better
 metric when its meaning is known. Existing frame callbacks and drawing primitives
-already cover the live observation/graph portion; these pending APIs are not
-part of Phase 1. This is a recorded use case, not implementation authorization.
+cover the live observation/graph portion, with a bundled live graph in Phase 2;
+recording control and file access are not shipped yet. This is a recorded use case, not implementation authorization.
 
 ## Research references
 
@@ -277,3 +277,35 @@ Core execution plus representative RAM HUD/list generation measured 2.0–4.7%
 above baseline on Lion King NTSC-U and Sonic 2 PAL; no-script comparisons varied
 from -1.9% to +2.8%. This is not an end-to-end GUI benchmark. Exact measurements,
 hash comparisons and existing unrelated test limitations are in verification.
+
+## Phase 2 delivered — 2026-11-27
+
+The native API now discovers logical controllers, reads effective input and
+merges per-script button/analog overrides before input recording. Playback
+ignores overrides and does not dispatch input automation. Controller topology
+comes from the existing host, including adapters, J-Cart, guns, mouse, paddle
+and linked console players; no hardware-specific second input pipeline exists.
+
+The main Lua chunk can yield through frameadvance to the normal scheduler.
+Pause and reset are deferred boundary commands; no recursive core execution
+or GUI event pumping is used. Script errors/stops discard their queued controls
+and overrides. External seeks cancel suspended continuations instead of resuming
+a future coroutine stack. Read-only callbacks remain available on playback and
+netplay; scripting still cannot bypass Hardcore or mutate netplay.
+
+Reusable save objects hold native machine/clock/battery and achievement progress.
+During input recording they also retain a validated input prefix, allowing a
+saved branch to be restored after later edits. Eight objects per script, 32 MiB
+per object and 64 MiB aggregate limit retained snapshots, including pending
+loads. Snapshot creation is explicit and does no disk I/O. Playback checkpoints
+validate the existing tape rather than modifying it. Changes of recording
+context, game or hardware invalidate old snapshot payloads. Arbitrary Lua
+locals/coroutine stacks are not part of saved state.
+
+The shipped input-automation example demonstrates 30 input frames and a temporary
+restore; input-activity draws a bounded live graph from nominal refresh and
+per-frame controller-poll observations. This is an activity estimate, not a
+universal game-update detector. File output, Lua movie start/stop, debugger writes,
+custom panels and compatibility adapters remain future work. Focused tests
+exercise the real-core/session pipeline and branch replay; performance numbers
+and exact tested scope are recorded in verification.md.

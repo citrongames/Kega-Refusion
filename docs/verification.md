@@ -807,3 +807,45 @@ to File → Scripts. The existing offscreen window checks now initialize the
 shipped English and Russian catalogs and verify translated controls; they pass.
 The Windows testbuild executable, example and language files match the staged
 package byte for byte. Windows GUI testing remains with the user.
+
+### Lua Phase 2 — input automation and temporary states (2026-11-27)
+
+The real-core Lua runtime checks cover independent input overrides, restart
+precedence, before-frame/after-frame ordering, yielded main-chunk continuation,
+mouse axes and two Justifiers, local policy rejection, temporary object reuse
+and snapshot accounting including queued loads. Existing read-only platform
+fixtures still pass. Session checks use an original MD controller-polling ROM:
+scripted Right reaches the hardware port and work RAM; a paused coroutine steps
+without unpausing; save/load restores the native frame clock and releases overrides;
+errors and external reset cancel waiting automation. Script-requested soft/power
+reset, pause/resume and rejection of a reset during recording also pass. Recording a branch, restoring
+an earlier script checkpoint and replacing the branch produces a two-frame native
+recording. Both frames replay with matching controls and polled RAM without the
+automation script. The shipped live input-activity graph runs on the real session.
+
+Movie integration tests cover repeated temporary restores, older/newer recorded
+branches, read-only playback validation, fork identity, damaged payload failure
+atomicity, and clock restoration. Existing slots, rewind, deterministic replay,
+resume and battery guards pass. The existing Lua session and English/Russian
+window checks also pass. Windows was cross-compiled; no interactive Windows app
+was launched for verification. Native core sources and binaries were not changed.
+
+Performance uses the same native core, real ROMs read in place, 360 warm-up frames
+and 1,800 measured frames per trial, three rotated trials. All workloads include
+the canonical MovieSession input application; active scripts also run the new
+before-frame callback and post-commit observation. Automation reads/reapplies
+neutral pad fields, exercising the new input path without changing the game.
+Each workload retains identical final native state, image and normal-speed PCM
+digests. Times are microseconds per emulated frame, medians; GUI rendering is
+excluded. These compare workloads in the same build, not two release binaries.
+
+| Game/region | Output | No Lua baseline | Empty runtime | HUD | Input automation |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Lion King / NTSC-U 59.92274 Hz | Full video/audio | 545.51 | 546.30 | 573.51 | 589.99 |
+| Lion King / NTSC-U | 1/32 video, muted | 368.51 | 373.40 | 374.97 | 377.27 |
+| Sonic 2 / PAL 49.70146 Hz | Full video/audio | 622.36 | 630.43 | 628.51 | 635.72 |
+| Sonic 2 / PAL | 1/32 video, muted | 420.73 | 410.24 | 415.96 | 424.91 |
+
+No-script variation spans -2.49% to +1.33%; automation adds 2.15–8.15% in
+full output and 0.99–2.37% when presenting one frame in 32. Evidence is retained
+under ignored build/verification/lua-phase2.

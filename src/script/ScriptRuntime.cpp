@@ -1,6 +1,7 @@
 #include "ScriptRuntime.h"
 
 #include "core/LibretroHost.h"
+#include "core/MovieTape.h"
 #include <lauxlib.h>
 #include <lualib.h>
 
@@ -12,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,9 +29,12 @@ constexpr int MaxDraws = 128;
 constexpr int MaxLogs = 8;
 constexpr int MaxLogsPerSecond = 32;
 constexpr int MaxTextBytes = 1024;
+constexpr int MaxControls = 32;
 constexpr auto EventTimeLimit = std::chrono::milliseconds(8);
 constexpr auto StartupTimeLimit = std::chrono::milliseconds(50);
-constexpr std::array<const char*, 5> EventNames{"frame", "reset", "loadstate", "rewind", "draw"};
+constexpr std::array<const char*, 6> EventNames{
+    "frame", "reset", "loadstate", "rewind", "draw", "beforeframe"
+};
 using Clock = std::chrono::steady_clock;
 
 struct Catalog {
@@ -44,6 +49,7 @@ struct Hardware {
     QString path, content;
     unsigned instances = 0;
     std::array<Catalog, 2> catalog;
+    std::optional<InputDisplayState> topology;
 
     explicit Hardware(const LibretroHost& host)
         : path(host.gamePath()), content(host.contentName()),
@@ -62,6 +68,12 @@ struct Hardware {
         // An explicit catalog request or a video domain read can refresh
         // metadata. Reuse that refresh across scripts during this event.
         for (auto& console : catalog) console.fresh = false;
+        topology.reset();
+    }
+
+    const InputDisplayState& controllers(const LibretroHost& host) {
+        if (!topology) topology = host.inputDisplay(false);
+        return *topology;
     }
 
     const kr_inspect_info* memoryCatalog(const LibretroHost& host, unsigned side) {
@@ -92,10 +104,69 @@ struct Hardware {
     }
 };
 
+enum Axis : unsigned { AxisX = 1, AxisY = 2, Offscreen = 4 };
+
+struct Controller {
+    const char* kind;
+    std::array<const char*, 12> buttons;
+    unsigned axes = 0;
+};
+
+// Names in logical device order, mapped to their canonical MovieInput bits.
+constexpr Controller Controllers[] = {
+    {"none", {}},
+    {"md3", {"b", "a", nullptr, "start", "up", "down", "left", "right", "c"}},
+    {"md6", {"b", "a", "mode", "start", "up", "down", "left", "right", "c", "y", "x", "z"}},
+    {"sms", {"button1", nullptr, nullptr, "pause", "up", "down", "left", "right", "button2"}},
+    {"gg", {"button1", nullptr, nullptr, "start", "up", "down", "left", "right", "button2"}},
+    {"sg1000", {"button1", nullptr, nullptr, nullptr, "up", "down", "left", "right", "button2"}},
+    {"lightphaser", {nullptr, "trigger", "reload"}, AxisX | AxisY | Offscreen},
+    {"menacer", {"auxA", "trigger", "reload", "start", nullptr, nullptr, nullptr, nullptr, "auxB"},
+                 AxisX | AxisY | Offscreen},
+    {"justifier", {nullptr, "trigger", "reload", "start"}, AxisX | AxisY | Offscreen},
+    {"mouse", {"right", "left", nullptr, "middle", nullptr, nullptr, nullptr, nullptr, "wheelDown"},
+               AxisX | AxisY},
+    {"paddle", {"button"}, AxisX}
+};
+static_assert(std::size(Controllers) == size_t(InputDisplayDevice::Paddle) + 1);
+
+struct InputOverride {
+    InputDisplayDevice device = InputDisplayDevice::None;
+    quint16 mask = 0, buttons = 0;
+    quint64 aimMask = 0, aim = 0;
+
+    bool active() const { return mask || aimMask; }
+
+    void apply(MovieInput& input, unsigned player) const {
+        input.buttons[player] = (input.buttons[player] & ~mask) | buttons;
+        if (aimMask && player < input.aim.size())
+            input.aim[player] = (input.aim[player] & ~aimMask) | aim;
+    }
+};
+
+struct Snapshot {
+    std::shared_ptr<qsizetype> used;
+    QByteArray bytes;
+
+    Snapshot(std::shared_ptr<qsizetype> budget, QByteArray data)
+        : used(std::move(budget)), bytes(std::move(data)) { *used += bytes.size(); }
+    ~Snapshot() { *used -= bytes.size(); }
+};
+
 int unavailable(lua_State* L, const char* reason) {
     lua_pushnil(L);
     lua_pushstring(L, reason);
     return 2;
+}
+
+void booleanField(lua_State* L, const char* field, bool value) {
+    lua_pushboolean(L, value);
+    lua_setfield(L, -2, field);
+}
+
+int accepted(lua_State* L) {
+    lua_pushboolean(L, true);
+    return 1;
 }
 
 void integerField(lua_State* L, const char* field, lua_Integer value) {
@@ -183,14 +254,25 @@ ScriptSpace space(lua_State* L, int arg) {
 
 struct ScriptRuntime::Script {
     ScriptRuntime& owner;
-    quint64 id;
+    quint64 id, run;
     QString path;
     QHash<QString, QImage> images;
     size_t allocated = 0;
     lua_State* L = nullptr;
-    std::array<int, EventNames.size()> callbacks{LUA_NOREF, LUA_NOREF, LUA_NOREF, LUA_NOREF, LUA_NOREF};
+    lua_State* topLevel = nullptr;
+    int topLevelRef = LUA_NOREF;
+    std::array<int, EventNames.size()> callbacks;
+    std::array<InputOverride, MaxControllerPlayers> overrides{};
+    struct Save {
+        lua_Integer handle = 0;
+        std::shared_ptr<const QByteArray> snapshot;
+    };
+    std::array<Save, ScriptLimits::MaxSaveObjects> saves{};
+    lua_Integer nextSave = 0;
+    QString saveError;
     const LibretroHost* host = nullptr;
     Hardware* hardware = nullptr;
+    const MovieInput* input = nullptr;
     QVector<ScriptDraw>* draws = nullptr;
     ScriptEvent currentEvent = ScriptEvent::Frame;
     quint64 frame = 0;
@@ -200,13 +282,22 @@ struct ScriptRuntime::Script {
     int logsThisSecond = 0;
     bool logTruncated = false;
     bool starting = false;
+    bool capturedSave = false;
 
     Script(ScriptRuntime& owner, const ScriptCommand& command)
-        : owner(owner), id(command.id), path(command.path.left(4096)), images(command.images) {
+        : owner(owner), id(command.id), run(++owner.nextRun_),
+          path(command.path.left(4096)), images(command.images) {
+        callbacks.fill(LUA_NOREF);
         L = lua_newstate(allocate, this, luaL_makeseed(nullptr));
         if (L) *static_cast<Script**>(lua_getextraspace(L)) = this;
     }
-    ~Script() { if (L) lua_close(L); }
+    ~Script() {
+        auto& queue = owner.controls_;
+        queue.erase(std::remove_if(queue.begin(), queue.end(), [this](const auto& control) {
+            return control.run == run;
+        }), queue.end());
+        if (L) lua_close(L);
+    }
 
     static Script& self(lua_State* L) { return **static_cast<Script**>(lua_getextraspace(L)); }
 
@@ -233,7 +324,7 @@ struct ScriptRuntime::Script {
         if (Clock::now() > script.deadline) luaL_error(L, "callback time budget exceeded");
     }
 
-    void begin(const LibretroHost& core, Hardware& catalog, bool startup) {
+    void begin(lua_State* runner, const LibretroHost& core, Hardware& catalog, bool startup) {
         host = &core;
         hardware = &catalog;
         starting = startup;
@@ -242,28 +333,27 @@ struct ScriptRuntime::Script {
         nativeBytes = NativeBytes;
         logs = 0;
         deadline = Clock::now() + (startup ? StartupTimeLimit : EventTimeLimit);
-        lua_sethook(L, instructionHook, LUA_MASKCOUNT, HookInterval);
+        lua_sethook(runner, instructionHook, LUA_MASKCOUNT, HookInterval);
     }
 
-    void end() {
-        lua_sethook(L, nullptr, 0, 0);
+    void end(lua_State* runner) {
+        lua_sethook(runner, nullptr, 0, 0);
         host = nullptr;
         hardware = nullptr;
-        draws = nullptr;
         starting = false;
     }
 
-    void charge(int bytes = 0) {
+    void charge(lua_State* runner, int bytes = 0) {
         nativeBytes -= bytes;
-        if (--calls < 0 || nativeBytes < 0) luaL_error(L, "native work budget exceeded");
-        if (Clock::now() > deadline) luaL_error(L, "callback time budget exceeded");
+        if (--calls < 0 || nativeBytes < 0) luaL_error(runner, "native work budget exceeded");
+        if (Clock::now() > deadline) luaL_error(runner, "callback time budget exceeded");
     }
 
     void report(ScriptStatus status, const QString& message = {}, int line = 0) {
         owner.update({id, path, status, message, line});
     }
 
-    void reportLuaError() {
+    void reportLuaError(lua_State* L) {
         const auto type = lua_type(L, -1);
         size_t size = 0;
         const char* str = type == LUA_TSTRING ? lua_tolstring(L, -1, &size) : nullptr;
@@ -280,7 +370,7 @@ struct ScriptRuntime::Script {
 
     static int print(lua_State* L) {
         auto& script = self(L);
-        script.charge();
+        script.charge(L);
         if (!script.starting && (script.currentEvent == ScriptEvent::Rewind ||
                                  script.currentEvent == ScriptEvent::Draw)) return 0;
         const auto now = Clock::now();
@@ -319,7 +409,7 @@ struct ScriptRuntime::Script {
 
     static int on(lua_State* L) {
         auto& script = self(L);
-        script.charge();
+        script.charge(L);
         const auto name = checkedString(L, 1, 12);
         const auto found = std::find_if(EventNames.cbegin(), EventNames.cend(),
                                        [&](const char* event) { return name == event; });
@@ -335,20 +425,305 @@ struct ScriptRuntime::Script {
 
     static int instances(lua_State* L) {
         auto& script = self(L);
-        script.charge();
+        script.charge(L);
         lua_pushinteger(L, script.hardware->instances);
         return 1;
     }
 
     static int screen(lua_State* L) {
         auto& script = self(L);
-        script.charge();
+        script.charge(L);
         const auto raster = script.host->nativeVideoSize();
         const auto viewport = script.host->inputViewport();
         lua_createtable(L, 0, 2);
         integerField(L, "width", viewport.isEmpty() ? raster.width() : qRound(viewport.width() * raster.width()));
         integerField(L, "height", viewport.isEmpty() ? raster.height() : qRound(viewport.height() * raster.height()));
         return 1;
+    }
+
+    bool atControlBoundary() const {
+        return starting || currentEvent == ScriptEvent::Frame;
+    }
+
+    bool queueControl(ScriptControlType type, bool value = false,
+                      std::shared_ptr<const QByteArray> snapshot = {}) {
+        if (owner.controls_.size() >= MaxControls) return false;
+        owner.controls_.push_back({type, id, run, value, std::move(snapshot)});
+        return true;
+    }
+
+    static int pause(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const bool paused = lua_isnoneornil(L, 1) || flag(L, 1);
+        if (!script.atControlBoundary() || !script.owner.services_.controlAllowed)
+            return unavailable(L, "Pause control unavailable here");
+        return script.queueControl(ScriptControlType::Pause, paused)
+            ? accepted(L) : unavailable(L, "Control queue is full");
+    }
+
+    static int reset(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const bool hard = flag(L, 1);
+        if (!script.atControlBoundary() || !script.owner.services_.controlAllowed)
+            return unavailable(L, "Reset control unavailable here");
+        return script.queueControl(ScriptControlType::Reset, hard)
+            ? accepted(L) : unavailable(L, "Control queue is full");
+    }
+
+    static int frameAdvanced(lua_State* L, int, lua_KContext) {
+        return accepted(L);
+    }
+
+    static int frameAdvance(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (L != script.topLevel || !lua_isyieldable(L))
+            return unavailable(L, "frameadvance is only available from the top-level script");
+        if (!script.owner.services_.controlAllowed)
+            return unavailable(L, "Frame advance unavailable here");
+        if (!script.queueControl(ScriptControlType::FrameAdvance))
+            return unavailable(L, "Control queue is full");
+        return lua_yieldk(L, 0, 0, frameAdvanced);
+    }
+
+    static int frameCount(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        lua_pushinteger(L, lua_Integer(script.host->runClock().frames));
+        return 1;
+    }
+
+    static int framesPerSecond(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        lua_pushnumber(L, script.host->fps());
+        return 1;
+    }
+
+    static int lagged(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (script.starting || script.currentEvent != ScriptEvent::Frame ||
+            !script.host->supportsInputPollMetrics())
+            return unavailable(L, "Input-poll metrics require a supported completed frame");
+        lua_pushboolean(L, !script.host->frameInputPolled());
+        return 1;
+    }
+
+    static unsigned playerNumber(lua_State* L, int arg) {
+        const unsigned player = unsigned32(L, arg);
+        if (player < 1 || player > MaxControllerPlayers)
+            luaL_argerror(L, arg, "invalid logical player number");
+        return player - 1;
+    }
+
+    InputDisplayDevice inputDevice(unsigned player) {
+        return hardware->controllers(*host).players[player].device;
+    }
+
+    static int devices(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const auto& topology = script.hardware->controllers(*script.host);
+        int row = 0;
+        lua_createtable(L, MaxControllerPlayers, 0);
+        for (unsigned player = 0; player < topology.players.size(); ++player) {
+            const auto kind = topology.players[player].device;
+            if (kind == InputDisplayDevice::None) continue;
+            const auto& controller = Controllers[size_t(kind)];
+            lua_createtable(L, 0, 4);
+            integerField(L, "player", player + 1);
+            integerField(L, "instance", script.hardware->instances == 2 && player == 1 ? 1 : 0);
+            stringField(L, "kind", controller.kind);
+            lua_createtable(L, int(controller.buttons.size()), 0);
+            int buttonIndex = 0;
+            for (const auto* name : controller.buttons) {
+                if (!name) continue;
+                lua_pushstring(L, name);
+                lua_rawseti(L, -2, ++buttonIndex);
+            }
+            lua_setfield(L, -2, "buttons");
+            lua_rawseti(L, -2, ++row);
+        }
+        return 1;
+    }
+
+    static int getInput(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const auto player = playerNumber(L, 1);
+        const auto kind = script.inputDevice(player);
+        if (kind == InputDisplayDevice::None) return unavailable(L, "Player is disconnected");
+        if (!script.input) return unavailable(L, "No input snapshot at this boundary");
+        const auto& controller = Controllers[size_t(kind)];
+        const auto buttons = script.input->buttons[player];
+        lua_createtable(L, 0, int(controller.buttons.size()) + 3);
+        for (unsigned bit = 0; bit < controller.buttons.size(); ++bit) {
+            if (const auto* name = controller.buttons[bit])
+                booleanField(L, name, (buttons & (1u << bit)) != 0);
+        }
+        if (controller.axes && player < script.input->aim.size()) {
+            const auto aim = script.input->aim[player];
+            if (controller.axes & AxisX) integerField(L, "x", qint16(aim & 0xffff));
+            if (controller.axes & AxisY) integerField(L, "y", qint16((aim >> 16) & 0xffff));
+            if (controller.axes & Offscreen) booleanField(L, "offscreen", (aim >> 32) & 1u);
+        }
+        return 1;
+    }
+
+    bool maySetInput() const {
+        return owner.services_.inputAllowed &&
+               (atControlBoundary() || currentEvent == ScriptEvent::BeforeFrame);
+    }
+
+    static int setInput(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const auto player = playerNumber(L, 1);
+        luaL_checktype(L, 2, LUA_TTABLE);
+        if (!script.maySetInput()) return unavailable(L, "Input override unavailable here");
+        const auto kind = script.inputDevice(player);
+        if (kind == InputDisplayDevice::None) return unavailable(L, "Player is disconnected");
+        const auto& controller = Controllers[size_t(kind)];
+        auto patch = script.overrides[player];
+        if (patch.device != kind) {
+            patch = {};
+            patch.device = kind;
+        }
+        lua_pushnil(L);
+        while (lua_next(L, 2)) {
+            script.charge(L);
+            if (lua_type(L, -2) != LUA_TSTRING)
+                return luaL_argerror(L, 2, "expected named controller fields");
+            const auto field = checkedString(L, -2, 16);
+            const auto button = std::find_if(controller.buttons.begin(), controller.buttons.end(),
+                                             [field](const char* name) { return name && field == name; });
+            if (button != controller.buttons.end()) {
+                const auto bit = quint16(1u << (button - controller.buttons.begin()));
+                patch.mask |= bit;
+                patch.buttons = (patch.buttons & ~bit) | (flag(L, -1) ? bit : 0);
+            } else if ((field == "x" && (controller.axes & AxisX)) ||
+                       (field == "y" && (controller.axes & AxisY))) {
+                if (lua_type(L, -1) == LUA_TSTRING) checkedString(L, -1, 32);
+                const auto value = luaL_checkinteger(L, -1);
+                const int minimum = (controller.axes & Offscreen) ? -32767 : -32768;
+                if (value < minimum || value > 32767)
+                    return luaL_argerror(L, 2, "controller coordinate out of range");
+                const int shift = field == "x" ? 0 : 16;
+                const auto mask = quint64(0xffff) << shift;
+                patch.aimMask |= mask;
+                patch.aim = (patch.aim & ~mask) | (quint64(quint16(value)) << shift);
+            } else if (field == "offscreen" && (controller.axes & Offscreen)) {
+                constexpr auto mask = quint64(1) << 32;
+                patch.aimMask |= mask;
+                patch.aim = (patch.aim & ~mask) | (flag(L, -1) ? mask : 0);
+            } else {
+                return luaL_argerror(L, 2, "field is unsupported for this controller");
+            }
+            lua_pop(L, 1);
+        }
+        script.overrides[player] = patch;
+        return accepted(L);
+    }
+
+    static int clearInput(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.maySetInput()) return unavailable(L, "Input override unavailable here");
+        if (lua_isnoneornil(L, 1)) script.overrides.fill({});
+        else script.overrides[playerNumber(L, 1)] = {};
+        return accepted(L);
+    }
+
+    bool maySave() const {
+        return atControlBoundary() && owner.services_.saveAllowed;
+    }
+
+    Save* saveObject(lua_State* L) {
+        if (lua_type(L, 1) == LUA_TSTRING) checkedString(L, 1, 32);
+        const auto handle = luaL_checkinteger(L, 1);
+        const auto found = std::find_if(saves.begin(), saves.end(), [handle](const Save& save) {
+            return save.handle != 0 && save.handle == handle;
+        });
+        return found != saves.end() ? &*found : nullptr;
+    }
+
+    static int createSave(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.maySave()) return unavailable(L, "Save objects unavailable here");
+        const auto found = std::find_if(script.saves.begin(), script.saves.end(),
+                                        [](const Save& save) { return !save.handle; });
+        if (found == script.saves.end() || script.nextSave == std::numeric_limits<lua_Integer>::max())
+            return unavailable(L, "Save object limit reached");
+        found->handle = ++script.nextSave;
+        lua_pushinteger(L, found->handle);
+        return 1;
+    }
+
+    bool captureSave(Save& save) {
+        capturedSave = true;
+        if (!owner.saveBytes_) owner.saveBytes_ = std::make_shared<qsizetype>(0);
+        const auto remaining = std::min(ScriptLimits::MaxSaveObjectBytes,
+                                        ScriptLimits::MaxSaveBytes - *owner.saveBytes_);
+        if (remaining <= 0) {
+            saveError = QStringLiteral("Script snapshot byte limit reached");
+            return false;
+        }
+        saveError.clear();
+        auto bytes = owner.services_.captureSave(remaining, saveError);
+        if (bytes.isEmpty()) {
+            if (saveError.isEmpty()) saveError = QStringLiteral("Unable to capture an in-memory state");
+            return false;
+        }
+        if (bytes.size() > remaining) {
+            saveError = QStringLiteral("Script snapshot byte limit reached");
+            return false;
+        }
+        const auto storage = std::make_shared<Snapshot>(owner.saveBytes_, std::move(bytes));
+        save.snapshot = std::shared_ptr<const QByteArray>(storage, &storage->bytes);
+        return true;
+    }
+
+    static int saveState(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.maySave() || !script.owner.services_.captureSave)
+            return unavailable(L, "State capture unavailable here");
+        auto* save = script.saveObject(L);
+        if (!save) return unavailable(L, "Unknown save object");
+        if (script.capturedSave) return unavailable(L, "Only one capture per script at this boundary");
+        if (script.captureSave(*save)) return accepted(L);
+
+        char message[MaxTextBytes + 1]{};
+        {
+            auto utf8 = script.saveError.left(MaxTextBytes).toUtf8();
+            std::memcpy(message, utf8.constData(), size_t(std::min<qsizetype>(utf8.size(), MaxTextBytes)));
+        }
+        return unavailable(L, message);
+    }
+
+    static int loadState(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.maySave() || !script.owner.services_.controlAllowed)
+            return unavailable(L, "State restore unavailable here");
+        const auto* save = script.saveObject(L);
+        if (!save || !save->snapshot) return unavailable(L, "Save object is empty or unknown");
+        return script.queueControl(ScriptControlType::LoadState, false, save->snapshot)
+            ? accepted(L) : unavailable(L, "Control queue is full");
+    }
+
+    static int freeSave(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.maySave()) return unavailable(L, "Save objects unavailable here");
+        auto* save = script.saveObject(L);
+        if (!save) return unavailable(L, "Unknown save object");
+        *save = {};
+        return accepted(L);
     }
 
     unsigned instanceFor(lua_State* L, int arg) const {
@@ -388,7 +763,7 @@ struct ScriptRuntime::Script {
 
     static int domains(lua_State* L) {
         auto& script = self(L);
-        script.charge();
+        script.charge(L);
         const auto* catalog = script.hardware->memoryCatalog(*script.host, script.instanceFor(L, 1));
         if (!catalog) return unavailable(L, "console unavailable");
         const auto& info = *catalog;
@@ -408,7 +783,7 @@ struct ScriptRuntime::Script {
 
     static int cpus(lua_State* L) {
         auto& script = self(L);
-        script.charge();
+        script.charge(L);
         const auto* console = script.console(script.instanceFor(L, 1));
         if (!console) return unavailable(L, "console unavailable");
         lua_createtable(L, int(console->cpus.size()), 0);
@@ -431,7 +806,7 @@ struct ScriptRuntime::Script {
         const auto offset = unsigned32(L, 2);
         const auto width = readWidth(L, 3);
         const auto side = script.instanceFor(L, 6);
-        script.charge(width);
+        script.charge(L, width);
         const auto* domain = script.domain(side, id, offset, width);
         if (!domain) return unavailable(L, "memory domain unavailable");
         if (quint64(offset) + width > domain->size) return unavailable(L, "offset outside memory domain");
@@ -450,7 +825,7 @@ struct ScriptRuntime::Script {
         const auto length = unsigned32(L, 3);
         if (length > MaxRangeBytes) return luaL_argerror(L, 3, "range exceeds 4096 bytes");
         const auto side = script.instanceFor(L, 4);
-        script.charge(int(length));
+        script.charge(L, int(length));
         const auto* domain = script.domain(side, id, offset, int(length));
         if (!domain) return unavailable(L, "memory domain unavailable");
         if (quint64(offset) + length > domain->size)
@@ -469,7 +844,7 @@ struct ScriptRuntime::Script {
         const auto width = readWidth(L, 3);
         const auto side = script.instanceFor(L, 6);
         const auto* cpu = script.cpu(side, id);
-        script.charge(width);
+        script.charge(L, width);
         if (!cpu) return unavailable(L, "CPU unavailable");
         const auto end = (quint64(address) << cpu->address_shift) + width;
         if (end > (quint64(1) << (cpu->address_bits + cpu->address_shift)))
@@ -486,7 +861,7 @@ struct ScriptRuntime::Script {
         auto& script = self(L);
         const auto id = unsigned32(L, 1);
         const auto side = script.instanceFor(L, 2);
-        script.charge(sizeof(kr_debug_cpu));
+        script.charge(L, sizeof(kr_debug_cpu));
         kr_debug_cpu state{};
         if (!script.cpu(side, id) || !script.host->inspectionRegisters(side, id, state))
             return unavailable(L, "CPU registers unavailable");
@@ -501,8 +876,8 @@ struct ScriptRuntime::Script {
         return 1;
     }
 
-    bool shouldDraw() {
-        charge();
+    bool shouldDraw(lua_State* L) {
+        charge(L);
         if (!draws) return false;
         if (draws->size() - overlayStart >= MaxDraws) luaL_error(L, "drawing budget exceeded");
         return true;
@@ -510,7 +885,7 @@ struct ScriptRuntime::Script {
 
     static int drawText(lua_State* L) {
         auto& script = self(L);
-        if (!script.shouldDraw()) return 0;
+        if (!script.shouldDraw(L)) return 0;
         const auto x = coordinate(L, 1), y = coordinate(L, 2);
         const auto text = checkedString(L, 3, MaxTextBytes);
         ScriptDraw command;
@@ -518,7 +893,7 @@ struct ScriptRuntime::Script {
         command.space = space(L, 5);
         command.bounds = QRectF(x, y, 0, 0);
         command.color = color(L, 4, Qt::white);
-        script.charge(int(text.size()));
+        script.charge(L, int(text.size()));
         command.text = QString::fromUtf8(text);
         script.draws->push_back(std::move(command));
         return 0;
@@ -526,7 +901,7 @@ struct ScriptRuntime::Script {
 
     static int drawLine(lua_State* L) {
         auto& script = self(L);
-        if (!script.shouldDraw()) return 0;
+        if (!script.shouldDraw(L)) return 0;
         const auto x = coordinate(L, 1), y = coordinate(L, 2);
         const auto x2 = coordinate(L, 3), y2 = coordinate(L, 4);
         ScriptDraw command;
@@ -540,7 +915,7 @@ struct ScriptRuntime::Script {
 
     static int drawRect(lua_State* L) {
         auto& script = self(L);
-        if (!script.shouldDraw()) return 0;
+        if (!script.shouldDraw(L)) return 0;
         const auto x = coordinate(L, 1), y = coordinate(L, 2);
         const auto width = coordinate(L, 3, 0), height = coordinate(L, 4, 0);
         ScriptDraw command;
@@ -555,7 +930,7 @@ struct ScriptRuntime::Script {
 
     static int drawCircle(lua_State* L) {
         auto& script = self(L);
-        if (!script.shouldDraw()) return 0;
+        if (!script.shouldDraw(L)) return 0;
         const auto x = coordinate(L, 1), y = coordinate(L, 2);
         const auto radius = coordinate(L, 3, 0);
         ScriptDraw command;
@@ -573,7 +948,7 @@ struct ScriptRuntime::Script {
         const auto name = QString::fromUtf8(checkedString(L, 1, ScriptLimits::MaxImageNameBytes));
         const auto image = script.images.constFind(name);
         if (image == script.images.cend()) return unavailable(L, "image is not prepared");
-        if (script.shouldDraw()) {
+        if (script.shouldDraw(L)) {
             const auto x = coordinate(L, 2), y = coordinate(L, 3);
             ScriptDraw command;
             command.primitive = ScriptPrimitive::Image;
@@ -634,7 +1009,7 @@ struct ScriptRuntime::Script {
                 }
             }
         }
-        script.charge(cost);
+        script.charge(L, cost);
         lua_pushvalue(L, lua_upvalueindex(1));
         lua_insert(L, 1);
         lua_call(L, count, LUA_MULTRET);
@@ -654,7 +1029,7 @@ struct ScriptRuntime::Script {
     }
 
     static int next(lua_State* L) {
-        self(L).charge();
+        self(L).charge(L);
         luaL_checktype(L, 1, LUA_TTABLE);
         lua_settop(L, 2);
         if (lua_next(L, 1)) return 2;
@@ -663,7 +1038,7 @@ struct ScriptRuntime::Script {
     }
 
     static int pairs(lua_State* L) {
-        self(L).charge();
+        self(L).charge(L);
         luaL_checktype(L, 1, LUA_TTABLE);
         lua_pushcfunction(L, next);
         lua_pushvalue(L, 1);
@@ -728,11 +1103,26 @@ struct ScriptRuntime::Script {
         lua_pop(L, 1);
 
         const luaL_Reg emu[] = {
-            {"on", on}, {"instances", instances}, {"screen", screen}, {nullptr, nullptr}
+            {"on", on}, {"instances", instances}, {"screen", screen},
+            {"pause", pause}, {"reset", reset}, {"frameadvance", frameAdvance},
+            {"framecount", frameCount}, {"fps", framesPerSecond}, {"lagged", lagged},
+            {nullptr, nullptr}
         };
         luaL_newlib(L, emu);
         integerField(L, "apiVersion", 1);
         lua_setglobal(L, "emu");
+        const luaL_Reg input[] = {
+            {"devices", devices}, {"get", getInput}, {"set", setInput}, {"clear", clearInput},
+            {nullptr, nullptr}
+        };
+        luaL_newlib(L, input);
+        lua_setglobal(L, "input");
+        const luaL_Reg savestate[] = {
+            {"create", createSave}, {"save", saveState}, {"load", loadState}, {"free", freeSave},
+            {nullptr, nullptr}
+        };
+        luaL_newlib(L, savestate);
+        lua_setglobal(L, "savestate");
         const luaL_Reg memory[] = {
             {"domains", domains}, {"cpus", cpus}, {"read", read}, {"range", range},
             {"peek", peek}, {"registers", registers}, {nullptr, nullptr}
@@ -745,6 +1135,9 @@ struct ScriptRuntime::Script {
         };
         luaL_newlib(L, draw);
         lua_setglobal(L, "draw");
+        auto& script = self(L);
+        script.topLevel = lua_newthread(L);
+        script.topLevelRef = luaL_ref(L, LUA_REGISTRYINDEX);
         return 0;
     }
 
@@ -758,20 +1151,36 @@ struct ScriptRuntime::Script {
             const auto newline = source.indexOf('\n');
             source = newline < 0 ? QByteArrayView{} : source.sliced(newline);
         }
-        begin(core, catalog, true);
         instance = core.inspectionPresentedInstance();
+        frame = core.runClock().frames;
         lua_pushcfunction(L, initialize);
         int result = lua_pcall(L, 0, 0, 0);
         if (result == LUA_OK)
             result = luaL_loadbufferx(L, source.data() ? source.data() : "", size_t(source.size()), "=script", "t");
-        if (result == LUA_OK) result = lua_pcall(L, 0, 0, 0);
-        end();
-        if (result == LUA_OK) {
-            report(ScriptStatus::Running);
-            return true;
+        if (result != LUA_OK) {
+            reportLuaError(L);
+            return false;
         }
-        reportLuaError();
-        return false;
+        lua_xmove(L, topLevel, 1);
+        if (!resumeTopLevel(core, catalog, true)) return false;
+        report(ScriptStatus::Running);
+        return true;
+    }
+
+    bool resumeTopLevel(const LibretroHost& core, Hardware& catalog, bool startup) {
+        int results = 0;
+        begin(topLevel, core, catalog, startup);
+        const auto status = lua_resume(topLevel, L, 0, &results);
+        end(topLevel);
+        if (status == LUA_YIELD) return true;
+        if (status != LUA_OK) {
+            reportLuaError(topLevel);
+            return false;
+        }
+        luaL_unref(L, LUA_REGISTRYINDEX, topLevelRef);
+        topLevel = nullptr;
+        topLevelRef = LUA_NOREF;
+        return true;
     }
 
     static int dispatch(lua_State* L) {
@@ -787,23 +1196,34 @@ struct ScriptRuntime::Script {
     }
 
     bool handle(ScriptEvent event, const LibretroHost& core, Hardware& catalog,
-                quint64 number, unsigned side, QVector<ScriptDraw>* overlay) {
-        if (callbacks[size_t(event)] == LUA_NOREF || callbacks[size_t(event)] == LUA_REFNIL) return true;
-        begin(core, catalog, false);
+                quint64 number, unsigned side, QVector<ScriptDraw>* overlay,
+                const MovieInput* sampledInput) {
+        const bool resume = event == ScriptEvent::Frame && topLevel;
+        const auto callback = callbacks[size_t(event)];
+        const bool dispatchCallback = callback != LUA_NOREF && callback != LUA_REFNIL;
+        if (!resume && !dispatchCallback) return true;
         currentEvent = event;
         frame = number;
         instance = side;
         draws = overlay;
+        input = sampledInput;
         overlayStart = overlay ? int(overlay->size()) : 0;
-        lua_pushcfunction(L, dispatch);
-        const int result = lua_pcall(L, 0, 0, 0);
-        end();
-        if (result != LUA_OK) {
-            if (overlay) overlay->resize(overlayStart);
-            reportLuaError();
+        if (event == ScriptEvent::Frame) capturedSave = false;
+        bool ok = true;
+        if (dispatchCallback) {
+            begin(L, core, catalog, false);
+            lua_pushcfunction(L, dispatch);
+            ok = lua_pcall(L, 0, 0, 0) == LUA_OK;
+            end(L);
+            if (!ok) reportLuaError(L);
         }
-        return result == LUA_OK;
+        if (ok && resume) ok = resumeTopLevel(core, catalog, false);
+        draws = nullptr;
+        input = nullptr;
+        if (!ok && overlay) overlay->resize(overlayStart);
+        return ok;
     }
+
 };
 
 struct ScriptRuntime::State {
@@ -842,6 +1262,79 @@ void ScriptRuntime::stopAll(const QString& reason) {
     if (!state_) return;
     for (const auto& script : state_->scripts) script->report(ScriptStatus::Stopped, reason);
     state_.reset();
+}
+
+void ScriptRuntime::setHostServices(ScriptHostServices services) {
+    setHostPolicy(services.inputAllowed, services.controlAllowed, services.saveAllowed);
+    services_ = std::move(services);
+}
+
+void ScriptRuntime::setHostPolicy(bool inputAllowed, bool controlAllowed, bool saveAllowed) {
+    if (services_.inputAllowed && !inputAllowed && hasScripts()) {
+        for (const auto& script : state_->scripts) script->overrides.fill({});
+    }
+    services_.inputAllowed = inputAllowed;
+    services_.controlAllowed = controlAllowed;
+    services_.saveAllowed = saveAllowed;
+}
+
+QVector<ScriptControl> ScriptRuntime::takeControls() {
+    return std::exchange(controls_, {});
+}
+
+bool ScriptRuntime::ownsControl(const ScriptControl& control) const {
+    return hasScripts() && std::any_of(state_->scripts.cbegin(), state_->scripts.cend(),
+        [&](const auto& script) { return script->id == control.owner && script->run == control.run; });
+}
+
+void ScriptRuntime::controlFailed(const ScriptControl& control, const QString& error) {
+    if (!hasScripts()) return;
+    auto& scripts = state_->scripts;
+    const auto found = std::find_if(scripts.begin(), scripts.end(), [&](const auto& script) {
+        return script->id == control.owner && script->run == control.run;
+    });
+    if (found == scripts.end()) return;
+    (*found)->report(ScriptStatus::Error, error);
+    scripts.erase(found);
+    if (scripts.empty()) state_.reset();
+}
+
+void ScriptRuntime::invalidateTimeline(bool discardSaves, quint64 preserveRun) {
+    controls_.clear();
+    if (!hasScripts()) return;
+    auto& scripts = state_->scripts;
+    scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [&](const auto& script) {
+        script->overrides.fill({});
+        if (discardSaves) {
+            for (auto& save : script->saves) save.snapshot.reset();
+        }
+        if (!script->topLevel || script->run == preserveRun) return false;
+        script->report(ScriptStatus::Stopped, QStringLiteral("Frame advance interrupted by a timeline change"));
+        return true;
+    }), scripts.end());
+    if (scripts.empty()) state_.reset();
+}
+
+void ScriptRuntime::beforeFrame(const LibretroHost& host, quint64, quint64 frame, MovieInput& input) {
+    if (!hasScripts() || !services_.inputAllowed) return;
+    auto& hardware = state_->hardware;
+    hardware.beginEvent();
+    auto& scripts = state_->scripts;
+    scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [&](const auto& script) {
+        return !script->handle(ScriptEvent::BeforeFrame, host, hardware, frame,
+                               host.inspectionPresentedInstance(), nullptr, &input);
+    }), scripts.end());
+    if (scripts.empty()) {
+        state_.reset();
+        return;
+    }
+    for (const auto& script : scripts) {
+        for (unsigned player = 0; player < script->overrides.size(); ++player) {
+            const auto& patch = script->overrides[player];
+            if (patch.active() && patch.device == hardware.controllers(host).players[player].device)
+                patch.apply(input, player);
+        }
+    }
 }
 
 void ScriptRuntime::command(const ScriptCommand& command, const LibretroHost& host) {
@@ -899,26 +1392,25 @@ void ScriptRuntime::command(const ScriptCommand& command, const LibretroHost& ho
         imageBytes += image->sizeInBytes();
     }
 
-    if (!scripts.empty()) state_->hardware.beginEvent();
+    const auto position = found - scripts.begin();
+    if (found != scripts.end()) scripts.erase(found);
+    state_->hardware.beginEvent();
     auto script = std::make_unique<Script>(*this, command);
-    if (script->launch(host, state_->hardware, command.source)) {
-        if (found == scripts.end()) scripts.push_back(std::move(script));
-        else *found = std::move(script);
-    } else if (found != scripts.end()) {
-        scripts.erase(found);
-    }
+    if (script->launch(host, state_->hardware, command.source))
+        scripts.insert(scripts.begin() + position, std::move(script));
     if (scripts.empty()) state_.reset();
 }
 
 ScriptOverlayPtr ScriptRuntime::event(ScriptEvent event, const LibretroHost& host,
-                                     quint64 generation, quint64 frame, int instance, bool draw) {
+                                     quint64 generation, quint64 frame, int instance, bool draw,
+                                     const MovieInput* input) {
     if (!hasScripts()) return {};
     QVector<ScriptDraw> commands;
     state_->hardware.beginEvent();
     auto& scripts = state_->scripts;
     scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [&](const auto& script) {
         return !script->handle(event, host, state_->hardware, frame, unsigned(instance),
-                               draw ? &commands : nullptr);
+                               draw ? &commands : nullptr, input);
     }), scripts.end());
     if (scripts.empty()) state_.reset();
     if (commands.isEmpty()) return {};

@@ -1,4 +1,5 @@
 #include "core/LibretroHost.h"
+#include "core/MovieTape.h"
 #include "script/ScriptRuntime.h"
 
 #include <QCoreApplication>
@@ -230,6 +231,220 @@ end))"), 3, ScriptStatus::Running);
     require(!runtime.hasScripts(), "Stop does not create an environment");
 }
 
+void checkAutomation(ScriptRuntime& runtime, LibretroHost& host) {
+    require(host.setControllerSixButton(0, false), "Select three-button fixture controller");
+    const auto beforeFrame = [&] {
+        MovieInput input;
+        input.buttons[0] = 1u << 7; // Physical right.
+        runtime.beforeFrame(host, 45, host.runClock().frames, input);
+        return input;
+    };
+    const auto afterFrame = [&](const MovieInput& input) {
+        return runtime.event(ScriptEvent::Frame, host, 45, host.runClock().frames, 0, true, &input);
+    };
+    runtime.setHostServices({true, true, true, [&](qsizetype limit, QString&) {
+        const auto bytes = host.captureMovieState();
+        require(bytes.size() <= limit, "Native snapshot fits Lua budget");
+        return bytes;
+    }});
+    const auto anchor = host.runClock().frames;
+    expectStatus(run(runtime, host, 10, R"(
+local dev = input.devices()[1]
+assert(dev.player == 1 and dev.instance == 0 and dev.kind == "md3")
+assert(input.get(1) == nil and emu.lagged() == nil)
+assert(emu.fps() >= 59 and emu.fps() <= 61)
+local anchor = emu.framecount()
+local save = assert(savestate.create())
+assert(savestate.save(save))
+assert(not savestate.save(save))
+assert(emu.pause())
+assert(input.set(1, {a = true, right = false}))
+emu.on("beforeframe", function(e)
+    assert(e.event == "beforeframe" and input.get(1).right)
+    assert(not emu.pause())
+    assert(input.set(1, {c = true}))
+end)
+emu.on("frame", function()
+    assert(not emu.frameadvance())
+    assert(emu.lagged() == true)
+    draw.text(0, 0, "frame")
+end)
+emu.on("loadstate", function()
+    assert(emu.framecount() == anchor and input.get(1) == nil)
+    assert(not emu.pause() and not input.set(1, {a = true}))
+    draw.text(0, 0, "restored")
+end)
+assert(emu.frameadvance())
+local state = input.get(1)
+assert(emu.framecount() == anchor + 1 and state.a and not state.right and state.c)
+draw.text(0, 0, "resume")
+assert(savestate.load(save))
+assert(emu.frameadvance())
+local state = input.get(1)
+assert(emu.framecount() == anchor + 1 and not state.a and state.right and state.c)
+assert(savestate.load(save))
+assert(savestate.free(save))
+)"), 10, ScriptStatus::Running);
+    const auto first = runtime.takeControls();
+    require(first.size() == 2 && first[0].type == ScriptControlType::Pause && first[0].value &&
+            first[1].type == ScriptControlType::FrameAdvance && runtime.ownsControl(first[1]),
+            "Pause and frame advance are deferred and owned");
+    auto input = beforeFrame();
+    require(input.buttons[0] == ((1u << 1) | (1u << 8)), "Sparse overrides before canonical poll");
+    require(host.runClock().frames == anchor, "Lua startup and beforeframe do not run the core");
+    host.runFrame();
+    const auto overlay = afterFrame(input);
+    require(overlay && overlay->commands.size() == 2 && overlay->commands[0].text == "frame" &&
+            overlay->commands[1].text == "resume", "Callback precedes coroutine continuation");
+    auto requested = runtime.takeControls();
+    require(requested.size() == 2 && requested[0].type == ScriptControlType::LoadState &&
+            requested[0].snapshot && requested[1].type == ScriptControlType::FrameAdvance &&
+            runtime.ownsControl(requested[0]), "Restore request retains the saved bytes");
+    QString error;
+    require(host.restoreMovieState(*requested[0].snapshot, error), "Restore captured state: " + error);
+    runtime.invalidateTimeline(false, requested[0].run);
+    const auto restored = runtime.event(ScriptEvent::LoadState, host, 46, host.runClock().frames);
+    require(restored && restored->commands.first().text == "restored" && runtime.ownsControl(requested[1]),
+            "Own restore keeps the waiting coroutine and runs the loadstate observer");
+    input = beforeFrame();
+    require(input.buttons[0] == ((1u << 7) | (1u << 8)), "Restore clears prior overrides");
+    host.runFrame();
+    require(bool(afterFrame(input)), "Frame after restore succeeds");
+    const auto again = runtime.takeControls();
+    require(again.size() == 1 && again[0].type == ScriptControlType::LoadState &&
+            requested[0].snapshot == again[0].snapshot, "A save is reusable and survives free while queued");
+
+    expectStatus(run(runtime, host, 10, "assert(emu.frameadvance())\nerror('resumed failure')"),
+                 10, ScriptStatus::Running);
+    require(!runtime.ownsControl(again[0]), "Restart invalidates queued operations by instance");
+    const auto suspended = runtime.takeControls();
+    require(suspended.size() == 1 && runtime.ownsControl(suspended[0]), "New run owns its frame request");
+    host.runFrame();
+    afterFrame(input);
+    const auto errorUpdates = runtime.takeUpdates();
+    expectStatus(errorUpdates, 10, ScriptStatus::Error);
+    require(errorUpdates.last().line == 2 && !runtime.ownsControl(suspended[0]),
+            "Coroutine errors retain Lua source line and revoke ownership");
+    expectStatus(run(runtime, host, 10, "assert(emu.frameadvance())\nerror('must never resume')"),
+                 10, ScriptStatus::Running);
+    runtime.invalidateTimeline(true);
+    expectStatus(runtime.takeUpdates(), 10, ScriptStatus::Stopped);
+    require(runtime.takeControls().isEmpty() && !runtime.hasScripts(), "External seek stops suspended code");
+
+    expectStatus(run(runtime, host, 10, "assert(emu.pause())\nerror('startup failure')"),
+                 10, ScriptStatus::Error);
+    require(runtime.takeControls().isEmpty(), "Startup error revokes already queued controls");
+    expectStatus(run(runtime, host, 10, "assert(input.set(1, {a = true}))"), 10, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 11, "assert(input.set(1, {a = false, b = true}))"),
+                 11, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 10, "assert(input.set(1, {a = true}))"), 10, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 12, R"(
+emu.on("beforeframe", function()
+    assert(input.set(1, {right = false}))
+    error("reject input from failed callback")
+end)
+)"), 12, ScriptStatus::Running);
+    input = beforeFrame();
+    require(input.buttons[0] == ((1u << 7) | 1u), "Later slot wins after restart and failed input is removed");
+    expectStatus(runtime.takeUpdates(), 12, ScriptStatus::Error);
+    runtime.command({ScriptAction::Stop, 11}, host);
+    expectStatus(runtime.takeUpdates(), 11, ScriptStatus::Stopped);
+    require(beforeFrame().buttons[0] == ((1u << 7) | (1u << 1)), "Stop releases just that writer");
+    runtime.setHostPolicy(false, false, false);
+    require(beforeFrame().buttons[0] == (1u << 7), "Read-only mode removes overrides");
+    expectStatus(run(runtime, host, 11, R"(
+assert(not input.set(1, {a = true}))
+assert(not emu.reset() and not emu.frameadvance())
+assert(not savestate.create())
+emu.on("frame", function()
+    assert(input.get(1).right)
+    draw.text(0, 0, "read-only")
+end)
+)"), 11, ScriptStatus::Running);
+    const auto observing = afterFrame(beforeFrame());
+    require(observing && observing->commands.first().text == "read-only", "Read-only mode observes input");
+    runtime.stopAll();
+    runtime.takeUpdates();
+
+    runtime.setHostPolicy(true, true, true);
+    require(host.setControllerKind(0, ControllerType::Mouse) &&
+            host.setControllerKind(1, ControllerType::Justifier) &&
+            host.setControllerConnected(1, true) && host.setControllerConnected(2, true),
+            "Enable mouse and chained Justifiers");
+    expectStatus(run(runtime, host, 13, R"(
+local devices = input.devices()
+assert(devices[1].kind == "mouse" and devices[2].kind == "justifier" and devices[3].player == 3)
+assert(input.set(1, {left = true, x = -32768, y = 22}))
+assert(input.set(3, {trigger = false, reload = true, x = 456, offscreen = true}))
+emu.on("frame", function()
+    local m = input.get(1)
+    local g = input.get(3)
+    assert(m.left and m.x == -32768 and m.y == 22 and m.offscreen == nil)
+    assert(not g.trigger and g.reload and g.x == 456 and g.y == -123 and g.offscreen)
+    draw.text(0, 0, "analog")
+end)
+)"), 13, ScriptStatus::Running);
+    input = {};
+    input.buttons[2] = 1u << 1; // Live gun trigger.
+    input.aim[2] = quint64(quint16(-123)) << 16;
+    runtime.beforeFrame(host, 45, host.runClock().frames, input);
+    require(input.buttons[0] == (1u << 1) && input.buttons[2] == (1u << 2) &&
+            input.aim[0] == (quint64(22) << 16 | 0x8000) &&
+            input.aim[2] == (quint64(1) << 32 | quint64(quint16(-123)) << 16 | 456),
+            "Button and each analog axis override independently");
+    const auto analog = afterFrame(input);
+    require(analog && analog->commands.first().text == "analog", "Input API decodes full analog range");
+    runtime.stopAll();
+    runtime.takeUpdates();
+    host.setControllerConnected(2, false);
+    host.setControllerConnected(1, false);
+    host.setControllerKind(1, ControllerType::Pad);
+    host.setControllerKind(0, ControllerType::Pad);
+    host.setControllerSixButton(0, true);
+    runtime.setHostServices({});
+}
+
+void checkSaveLimits(ScriptRuntime& runtime, const LibretroHost& host) {
+    int captures = 0;
+    runtime.setHostServices({true, true, true, [&](qsizetype limit, QString&) {
+        ++captures;
+        require(limit == ScriptLimits::MaxSaveObjectBytes, "Capture size budget");
+        return QByteArray(limit, Qt::Uninitialized);
+    }});
+    expectStatus(run(runtime, host, 20, R"(
+local saves = {}
+for i = 1, 8 do saves[i] = assert(savestate.create()) end
+assert(not savestate.create())
+assert(savestate.save(saves[1]))
+assert(savestate.load(saves[1]))
+assert(savestate.free(saves[1]))
+local new = assert(savestate.create())
+assert(new ~= saves[1] and not savestate.load(saves[1]))
+)"), 20, ScriptStatus::Running);
+    auto retained = runtime.takeControls();
+    expectStatus(run(runtime, host, 21, R"(
+local save = assert(savestate.create())
+assert(not savestate.load(1))
+assert(savestate.save(save))
+)"), 21, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 22, R"(
+local save = assert(savestate.create())
+assert(not savestate.save(save))
+emu.on("frame", function()
+    assert(savestate.save(save))
+    assert(savestate.load(save))
+end)
+)"), 22, ScriptStatus::Running);
+    require(captures == 2 && retained.size() == 1, "Queued load storage counts toward aggregate byte limit");
+    retained.clear();
+    frame(runtime, host);
+    require(captures == 3 && runtime.takeControls().size() == 1 && runtime.takeUpdates().isEmpty(),
+            "Released queue storage is available for future captures");
+    runtime.stopAll();
+    runtime.takeUpdates();
+    runtime.setHostServices({});
+}
+
 void checkZ80(ScriptRuntime& runtime, LibretroHost& host, unsigned expectedHardware) {
     kr_inspect_info catalog{};
     require(host.inspectionCatalog(0, catalog) && (catalog.hardware & expectedHardware),
@@ -378,6 +593,8 @@ int main(int argc, char** argv) {
         host.runFrame();
         checkMd(runtime, host);
         checkLimits(runtime, host);
+        checkAutomation(runtime, host);
+        checkSaveLimits(runtime, host);
         if (argc == 3) {
             for (const QString& example : {QStringLiteral("memory-hud.lua"), QStringLiteral("fixture-hitbox.lua")}) {
                 QFile source(QString::fromLocal8Bit(argv[2]) + QLatin1Char('/') + example);

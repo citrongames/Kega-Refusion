@@ -1,6 +1,7 @@
 // Explicit real-ROM probe. Never reads or writes the player's saved game data.
 // lua_benchmark CORE ROM REGION [WARMUP_FRAMES] [MEASURED_FRAMES]
 #include "core/LibretroHost.h"
+#include "core/MovieSession.h"
 #include "script/ScriptRuntime.h"
 
 #include <QCoreApplication>
@@ -15,19 +16,29 @@
 
 namespace {
 constexpr int Repeats = 3;
-constexpr const char* Workloads[] = {"baseline", "no-scripts", "hud"};
+constexpr const char* Workloads[] = {"baseline", "no-scripts", "hud", "automation"};
 
 void require(bool okay, const char* message) {
     if (!okay) throw std::runtime_error(message);
 }
 
-void startHud(ScriptRuntime& runtime, const LibretroHost& host) {
+void startScript(ScriptRuntime& runtime, const LibretroHost& host, const QByteArray& source) {
     ScriptCommand command;
     command.id = 1;
-    command.path = QStringLiteral("benchmark-hud.lua");
+    command.path = QStringLiteral("benchmark.lua");
+    command.source = source;
+    runtime.command(command, host);
+    for (const auto& update : runtime.takeUpdates()) {
+        if (update.status == ScriptStatus::Error)
+            throw std::runtime_error(update.text.toStdString());
+    }
+    require(runtime.hasScripts(), "Benchmark script did not start");
+}
+
+void startHud(ScriptRuntime& runtime, const LibretroHost& host) {
     // Exercise three independent work RAM reads, formatted HUD text and
     // native-pixel graphics. Values need no game-specific address table.
-    command.source = QByteArrayLiteral(R"(
+    startScript(runtime, host, QByteArrayLiteral(R"(
 local ram
 for _, domain in ipairs(memory.domains()) do
     if domain.base == 0xff0000 and domain.size >= 0x10000 then
@@ -44,25 +55,47 @@ emu.on("frame", function()
     draw.rect(96 + (a % 32), 100 + (b % 32), 16, 16, 0x00ffffff, 0xff802040)
     draw.line(96, 96, 96 + (c % 32), 116, 0xffff00ff)
 end)
-)");
-    runtime.command(command, host);
-    for (const auto& update : runtime.takeUpdates()) {
-        if (update.status == ScriptStatus::Error)
-            throw std::runtime_error(update.text.toStdString());
-    }
-    require(runtime.hasScripts(), "HUD did not start");
+)"));
 }
 
-template<class AfterFrame>
-double timeFrames(LibretroHost& host, int frames, int stride, AfterFrame afterFrame) {
+void startAutomation(ScriptRuntime& runtime, const LibretroHost& host) {
+    // Exercise the controller tables and merge without changing the neutral
+    // input sequence. After timing, read the completed count via a draw event.
+    startScript(runtime, host, QByteArrayLiteral(R"(
+local sampled, observed = nil, 0
+emu.on("beforeframe", function()
+    sampled = assert(input.get(1))
+    assert(input.set(1, {left = sampled.left, right = sampled.right}))
+end)
+emu.on("frame", function()
+    local effective = assert(input.get(1))
+    assert(sampled and effective.left == sampled.left and effective.right == sampled.right)
+    sampled = nil
+    observed = observed + 1
+end)
+emu.on("draw", function()
+    draw.text(0, 0, tostring(observed))
+end)
+)"));
+}
+
+template<class BeforeFrame, class AfterFrame>
+double timeFrames(LibretroHost& host, int frames, int stride,
+                  BeforeFrame beforeFrame, AfterFrame afterFrame) {
     const bool audio = stride == 1;
+    MovieSession movie(host, {});
+    QString error;
     QElapsedTimer elapsed;
     elapsed.start();
     // End on one of the presented frames for a comparable video digest.
     for (int remaining = frames - 1; remaining >= 0; --remaining) {
         const bool present = remaining % stride == 0;
+        MovieInput input;
+        beforeFrame(input);
+        if (!movie.beforeFrame(input, error)) throw std::runtime_error(error.toStdString());
         host.runFrame(present, audio);
-        afterFrame(present);
+        movie.afterFrame();
+        afterFrame(present, input);
     }
     return double(elapsed.nsecsElapsed()) / (1000.0 * frames);
 }
@@ -91,21 +124,36 @@ void measure(LibretroHost& host, const QByteArray& checkpoint, LibretroHost::Run
             host.setRunClock(clock);
 
             if (workload == 0) {
-                samples[workload][repeat] = timeFrames(host, frames, stride, [](bool) {});
+                samples[workload][repeat] = timeFrames(host, frames, stride,
+                    [](MovieInput&) {}, [](bool, const MovieInput&) {});
             } else {
                 ScriptRuntime runtime;
+                runtime.setHostPolicy(true, false, false);
                 if (workload == 2) startHud(runtime, host);
+                if (workload == 3) startAutomation(runtime, host);
                 ScriptOverlayPtr overlay;
-                samples[workload][repeat] = timeFrames(host, frames, stride, [&](bool present) {
-                    if (runtime.hasScripts())
-                        overlay = runtime.event(ScriptEvent::Frame, host, 1, host.runClock().frames, 0, present);
-                });
+                samples[workload][repeat] = timeFrames(host, frames, stride,
+                    [&](MovieInput& input) {
+                        if (runtime.hasScripts())
+                            runtime.beforeFrame(host, 1, host.runClock().frames, input);
+                    },
+                    [&](bool present, const MovieInput& input) {
+                        if (runtime.hasScripts())
+                            overlay = runtime.event(ScriptEvent::Frame, host, 1,
+                                                    host.runClock().frames, 0, present, &input);
+                    });
+                if (workload == 3)
+                    overlay = runtime.event(ScriptEvent::Draw, host, 1, host.runClock().frames);
                 for (const auto& update : runtime.takeUpdates())
                     if (update.status == ScriptStatus::Error)
                         throw std::runtime_error(update.text.toStdString());
                 if (workload == 2)
                     require(overlay && overlay->commands.size() == 3 &&
                             overlay->frame == host.runClock().frames, "HUD did not produce three commands for the last video frame");
+                if (workload == 3)
+                    require(overlay && overlay->commands.size() == 1 &&
+                            overlay->commands.first().text == QString::number(frames),
+                            "Automation did not sample and observe every frame");
             }
 
             const Digests actual = digests(host, stride == 1);

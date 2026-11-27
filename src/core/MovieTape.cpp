@@ -364,20 +364,25 @@ bool MovieTape::truncate(quint64 frameCount) {
     return true;
 }
 
-QByteArray MovieTape::checkpoint(quint64 cursor, QString& error) const {
+QByteArray MovieTape::checkpoint(quint64 cursor, QString& error, qsizetype maxBytes) const {
     error.clear();
     if (!isValid() || cursor > frameCount_) {
         error = Localization::text(QStringLiteral("Недопустимая позиция записи."));
         return {};
     }
     quint32 count = 0;
-    for (const Run& run : runs_) {
-        if (cursor == 0) break;
-        ++count;
-        if (run.endFrame >= cursor) break;
+    if (cursor) {
+        const auto last = std::lower_bound(runs_.cbegin(),runs_.cend(),cursor,
+            [](const Run& run, quint64 target) { return run.endFrame < target; });
+        count = quint32(last-runs_.cbegin()+1);
+    }
+    const qsizetype size = CheckpointHeaderBytes + qsizetype(count)*InputBytes + HashBytes;
+    if (size > MaxCheckpointBytes || (maxBytes >= 0 && size > maxBytes)) {
+        error = Localization::text(QStringLiteral("Превышен предел контрольной точки записи."));
+        return {};
     }
     QByteArray bytes;
-    bytes.reserve(CheckpointHeaderBytes + qsizetype(count)*InputBytes + HashBytes);
+    bytes.reserve(size);
     bytes.append(CheckpointMagic, 8);
     add32(bytes, FormatVersion);
     add64(bytes, cursor);
@@ -399,7 +404,8 @@ bool MovieTape::prefixMatches(const std::deque<Run>& prefix, quint64 cursor) con
 }
 
 bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
-                                  bool readOnly, QString& error) {
+                                  bool readOnly, QString& error,
+                                  const std::function<bool()>& restoreState) {
     error.clear();
     if (!isValid() || bytes.size() < CheckpointHeaderBytes+HashBytes ||
         bytes.size() > MaxCheckpointBytes ||
@@ -426,12 +432,12 @@ bool MovieTape::restoreCheckpoint(const QByteArray& bytes, quint64& cursor,
     std::deque<Run> prefix;
     if (!parseRuns(bytes.constData()+CheckpointHeaderBytes, count, savedCursor, version, prefix, error))
         return false;
-    if (readOnly) {
-        if (!prefixMatches(prefix, savedCursor)) {
-            error = Localization::text(QStringLiteral("Контрольная точка не совпадает с текущей веткой воспроизведения."));
-            return false;
-        }
-    } else {
+    if (readOnly && !prefixMatches(prefix, savedCursor)) {
+        error = Localization::text(QStringLiteral("Контрольная точка не совпадает с текущей веткой воспроизведения."));
+        return false;
+    }
+    if (restoreState && !restoreState()) return false;
+    if (!readOnly) {
         runs_.swap(prefix);
         frameCount_ = savedCursor;
         invalidateResume();

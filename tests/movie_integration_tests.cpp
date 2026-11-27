@@ -138,6 +138,74 @@ QByteArray step(MovieSession& movie, LibretroHost& host, Memory memory,
     host.runFrame(true,false); movie.afterFrame();
     return observation(host,memory);
 }
+void temporaryMovieStates(const QString& core) {
+    QTemporaryDir temp;
+    require(temp.isValid(), "temporary movie fixture directory failed");
+    const QString romPath = temp.filePath("temporary.md");
+    const QString tapePath = temp.filePath("temporary.krm");
+    writeFile(romPath,makeInputRom());
+    LibretroHost host(core,temp.filePath("data"));
+    QString error;
+    require(host.load(romPath,error),qPrintable(error));
+    QLibrary library(core);
+    const auto memory = reinterpret_cast<Memory>(library.resolve("retro_get_memory_data"));
+    require(memory,"core memory API missing");
+    MovieSession movie(host,temp.filePath("data"));
+    require(movie.startRecording(tapePath,error),qPrintable(error));
+    const auto initialTapeFile = readFile(tapePath);
+
+    std::array<QByteArray,9> expected;
+    for (int frame=0; frame<4; ++frame)
+        expected[frame] = step(movie,host,memory,inputFor(frame),error);
+    const auto early = movie.captureTemporaryState(error);
+    require(!early.isEmpty(),qPrintable(error));
+    require(movie.captureTemporaryState(error,early.size()-1).isEmpty() && !error.isEmpty(),
+            "temporary movie checkpoint exceeded its byte limit");
+    for (int frame=4; frame<8; ++frame)
+        expected[frame] = step(movie,host,memory,inputFor(frame),error);
+    const auto later = movie.captureTemporaryState(error);
+    require(!later.isEmpty(),qPrintable(error));
+    const auto clock = host.runClock();
+    expected[8] = step(movie,host,memory,inputFor(8),error);
+
+    require(movie.restoreTemporaryState(early,error) && movie.position()==4,qPrintable(error));
+    for (int frame=4; frame<6; ++frame) step(movie,host,memory,inputFor(frame,true),error);
+    const auto divergent = movie.captureTemporaryState(error);
+    require(!divergent.isEmpty(),qPrintable(error));
+    auto corrupt = later;
+    corrupt[128] ^= 1; // Corrupt the core payload while leaving the input checkpoint valid.
+    require(!movie.restoreTemporaryState(corrupt,error) && movie.position()==6,
+            "failed temporary movie restore changed the recording cursor");
+    require(movie.captureTemporaryState(error)==divergent,
+            "failed temporary movie restore changed the input branch or machine");
+
+    for (int repeat=0; repeat<2; ++repeat) {
+        require(movie.restoreTemporaryState(later,error) &&
+                movie.position()==8 && movie.length()==8,qPrintable(error));
+        require(host.runClock().frames==clock.frames && host.runClock().ticks==clock.ticks,
+                "temporary movie restore did not restore the run clock");
+        require(step(movie,host,memory,inputFor(8),error)==expected[8],
+                "restored movie branch diverged in the real core");
+    }
+    require(readFile(tapePath)==initialTapeFile,"temporary movie state wrote to the recording file");
+
+    require(movie.finish(false,error) && movie.play(tapePath,false,error),qPrintable(error));
+    for (const auto& frame : expected)
+        require(step(movie,host,memory,MovieInput{},error)==frame,
+                "movie playback diverged after temporary branch restoration");
+    require(movie.mode()==MovieSession::Finished &&
+            !movie.restoreTemporaryState(divergent,error) &&
+            movie.mode()==MovieSession::Finished && movie.position()==expected.size(),
+            "read-only playback accepted a divergent temporary input prefix");
+    require(movie.restoreTemporaryState(later,error) && movie.mode()==MovieSession::Playback &&
+            movie.position()==8 && movie.length()==expected.size(),qPrintable(error));
+    require(step(movie,host,memory,MovieInput{},error)==expected[8],
+            "read-only temporary seek changed the published recording");
+    require(movie.rerecord(temp.filePath("temporary-fork.krm"),error),qPrintable(error));
+    require(!movie.restoreTemporaryState(later,error) && movie.position()==expected.size(),
+            "fork accepted a temporary state from a different recording identity");
+    require(movie.finish(false,error),qPrintable(error));
+}
 // Original Z80 loop; a four-byte CRC fixup selects the PAL metadata rule
 // without including copyrighted game code or graphics.
 QByteArray makeSmsRegionFixture() {
@@ -719,7 +787,8 @@ int main(int argc, char** argv) {
         } else {
             integration(QString::fromLocal8Bit(argv[1]));
             multitapRecording(QString::fromLocal8Bit(argv[1]));
-            std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard, fork and multitap passed");
+            temporaryMovieStates(QString::fromLocal8Bit(argv[1]));
+            std::puts("Movie integration: deterministic replay, slots, rewind, resume, battery guard, fork, multitap and temporary saves passed");
         }
         return 0;
     } catch (const std::exception& failure) {

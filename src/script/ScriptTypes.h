@@ -17,6 +17,9 @@ inline constexpr int MaxImageSide = 1024;
 inline constexpr int MaxImageNameBytes = 128;
 inline constexpr int MaxImageBytes = 8 * 1024 * 1024;
 inline constexpr int MaxUpdates = 128;
+inline constexpr int MaxSaveObjects = 8;
+inline constexpr qsizetype MaxSaveObjectBytes = 32 * 1024 * 1024;
+inline constexpr qsizetype MaxSaveBytes = 64 * 1024 * 1024;
 }
 
 enum class ScriptAction { Run, Stop, StopAll };
@@ -38,7 +41,7 @@ struct ScriptUpdate {
     int line = 0;
 };
 
-enum class ScriptEvent { Frame, Reset, LoadState, Rewind, Draw };
+enum class ScriptEvent { Frame, Reset, LoadState, Rewind, Draw, BeforeFrame };
 enum class ScriptSpace { Game, Hud };
 enum class ScriptPrimitive { Text, Line, Rectangle, Circle, Image };
 struct ScriptDraw {

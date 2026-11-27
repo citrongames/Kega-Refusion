@@ -6,6 +6,7 @@
 #include <QtGlobal>
 #include <array>
 #include <deque>
+#include <functional>
 #include "input/ControllerTopology.h"
 
 // One canonical poll of all logical controller players. Aim uses signed 16-bit X
@@ -48,8 +49,10 @@ public:
     // A checkpoint contains the complete input prefix through cursor. It can
     // restore a recording after a later branch without copying the full tape
     // on every frame or retaining historical branches in the MovieTape.
-    QByteArray checkpoint(quint64 cursor, QString& error) const;
-    bool restoreCheckpoint(const QByteArray& bytes, quint64& cursor, bool readOnly, QString& error);
+    QByteArray checkpoint(quint64 cursor, QString& error, qsizetype maxBytes = -1) const;
+    // Restore the machine only after validation, then commit the tape on success.
+    bool restoreCheckpoint(const QByteArray& bytes, quint64& cursor, bool readOnly, QString& error,
+                           const std::function<bool()>& restoreState = {});
     // Playback takeover copies the chosen prefix into a new movie identity.
     bool forkAt(quint64 frameCount, QString& error);
     void clear();

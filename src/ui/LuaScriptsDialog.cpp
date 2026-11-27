@@ -204,7 +204,21 @@ const char* const apiSignatures[] = {
     "emu.apiVersion",
     "emu.screen() → {width, height}",
     "emu.instances() → 1 | 2",
-    "emu.on('frame' | 'reset' | 'loadstate' | 'rewind' | 'draw', function(event) … end)",
+    "emu.on('beforeframe' | 'frame' | 'reset' | 'loadstate' | 'rewind' | 'draw', function(event) … end)",
+    "emu.framecount()",
+    "emu.fps()",
+    "emu.lagged()",
+    "emu.pause([paused])",
+    "emu.reset([hard])",
+    "emu.frameadvance()",
+    "input.devices()",
+    "input.get(player)",
+    "input.set(player, controls)",
+    "input.clear([player])",
+    "savestate.create()",
+    "savestate.save(handle)",
+    "savestate.load(handle)",
+    "savestate.free(handle)",
     "memory.domains([instance])",
     "memory.cpus([instance])",
     "memory.read(domain, offset[, width[, endian[, signed[, instance]]]])",
@@ -258,7 +272,8 @@ protected:
             QStringLiteral("while")
         };
         static const QSet<QString> libraries = {
-            QStringLiteral("emu"), QStringLiteral("memory"), QStringLiteral("draw"), QStringLiteral("print")
+            QStringLiteral("emu"), QStringLiteral("memory"), QStringLiteral("draw"),
+            QStringLiteral("input"), QStringLiteral("savestate"), QStringLiteral("print")
         };
         static const QRegularExpression numeric(
             QStringLiteral(R"((?:0[xX][0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?(?:[pP][+-]?\d+)?|\d+(?:\.\d*)?(?:[eE][+-]?\d+)?))"));
@@ -298,7 +313,7 @@ protected:
             } else if (c.isLetter() || c == QLatin1Char('_')) {
                 while (index < size && (source[index].isLetterOrNumber() || source[index] == QLatin1Char('_')))
                     ++index;
-                if (index - start <= 8) {
+                if (index - start <= 9) {
                     const auto word = source.mid(start, index - start);
                     if (keywords.contains(word)) setFormat(start, index - start, keyword_);
                     else if (libraries.contains(word)) setFormat(start, index - start, api_);
