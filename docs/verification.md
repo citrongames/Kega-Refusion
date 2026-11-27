@@ -624,3 +624,46 @@ packaged to testbuild; the deployed stripped EXE and en/ru catalogs matched.
 Windows GUI and a full two-peer lobby run were not performed for this change.
 No emulation-core binaries or serialized-state formats changed. Evidence and
 final-ROM hashes are under ignored `build/verification/rom-patches/`.
+
+### MMPX Advanced shader — 2026-11-27
+
+Added MMPX Advanced v3.5 as a separate built-in shader. The existing dither
+shader and emulation core are unchanged. The new pass works at 2x source size,
+then uses normal presentation scaling/aspect; the GPU requirements remain
+OpenGL 2.1 / GLSL 1.20. Both package scripts include the MIT attribution.
+
+The port matched the pinned upstream implementation on all 6,419,920 RGBA8
+output pixels across 20 fixtures, including border taps, angled bands and all
+65,536 binary 4x4 tiles. The comparison also passed with OpenGL 2.1 / GLSL 1.20
+forced. Focused pipeline checks passed for 160x144, 256x192, 320x224, 320x240 and
+320x448 inputs, resize reuse, orientation, one-pixel text, flat colors, letterbox
+bounds, and switching MMPX -> existing dither -> stock. Existing GPU shader
+tests passed on the hardware renderer. The initial high-contrast triangle
+fixture incorrectly assumed mixing was unconditional; the corrected moderate-
+contrast fixture checks blending within the upstream algorithm's color gate.
+
+Captured 30 consecutive frames from the user's Lion King and Contra slot-0
+saves. Only temporary copies of the validated Windows save envelopes had their
+platform identity changed for the compatible Linux core; original ROMs and
+saves were untouched. Visual review used native-source and filtered captures.
+The initial benchmark filled its viewport and produced stretched screenshots;
+final captures and timings preserve the aspect supplied by the core.
+
+Renderer: NVIDIA GeForce RTX 2060 via WSLg/Mesa D3D12. Input 320x224; output
+1280x720 with a 940x720 active viewport. Median of three 300-frame batches after
+120 warmup frames per filter, rotating order, synchronized with glFinish.
+Includes frame upload and presentation rendering, excludes emulation, readback,
+PNG saving and swap/vsync. Longer warmup removed large initial timing variance.
+
+| Scene | Stock | Existing dither | MMPX Advanced |
+| --- | ---: | ---: | ---: |
+| Lion King gameplay | 0.123 ms | 0.340 ms | 0.448 ms |
+| Contra gameplay | 0.118 ms | 0.356 ms | 0.619 ms |
+
+These are renderer costs on this GPU, not whole-emulator FPS or Windows-native
+benchmarks. Windows Release built and was packaged to testbuild; the deployed
+EXE matched the stripped build and the packaged MIT notice matched its source.
+No Windows GUI session was launched. Evidence is under
+`build/verification/mmpx-advanced/` and `build/mmpx-validation/` (ignored).
+Temporary save copies, parity output blobs and standalone scratch executables
+were removed; logs, source harness and comparison screenshots remain.

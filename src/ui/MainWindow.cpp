@@ -1235,9 +1235,11 @@ void MainWindow::buildMenus() {
     shaderMenu->addSeparator();
     shaderDitherAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Сглаживание дизеринга")));
     shaderDitherAction_->setObjectName(QStringLiteral("shaderDither"));
+    shaderMmpxAction_ = shaderMenu->addAction(QStringLiteral("MMPX Advanced"));
+    shaderMmpxAction_->setObjectName(QStringLiteral("shaderMmpx"));
     shaderCustomAction_ = shaderMenu->addAction(Localization::text(QStringLiteral("Пользовательский")));
     shaderCustomAction_->setObjectName(QStringLiteral("shaderCustom"));
-    for (QAction* action : {shaderDitherAction_, shaderCustomAction_}) {
+    for (QAction* action : {shaderDitherAction_, shaderMmpxAction_, shaderCustomAction_}) {
         action->setCheckable(true); shaderGroup->addAction(action);
     }
     shaderCustomAction_->setEnabled(false);
@@ -1248,6 +1250,7 @@ void MainWindow::buildMenus() {
         }
     });
     connect(shaderDitherAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/refusion-dither.glslp")); });
+    connect(shaderMmpxAction_, &QAction::triggered, this, [this] { applyShaderPreset(QStringLiteral(":/shaders/mmpx-advanced.glslp")); });
     shaderMenu->addSeparator();
     QAction* shaderLoad = shaderMenu->addAction(Localization::text(QStringLiteral("Загрузить GLSL-пресет…")));
     connect(shaderLoad, &QAction::triggered, this, [this] {
@@ -1995,6 +1998,8 @@ void MainWindow::updateShaderActions() {
     }
     else if (path == QLatin1String(":/shaders/refusion-dither.glslp"))
         shaderDitherAction_->setChecked(true);
+    else if (path == QLatin1String(":/shaders/mmpx-advanced.glslp"))
+        shaderMmpxAction_->setChecked(true);
     else shaderCustomAction_->setChecked(true);
     shaderParametersAction_->setEnabled(!view_->shaderParameters().isEmpty());
 }

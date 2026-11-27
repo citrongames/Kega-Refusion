@@ -223,6 +223,7 @@ Windows и Linux x86_64 используют общий контракт сет�
     notice = stage / "licenses"
     copy_core32x_notices(root, notice)
     copy_megald_notices(root, notice)
+    shutil.copy2(root / "third_party/MMPX-PROVENANCE.md", notice / "MMPX-PROVENANCE.md")
     for name in ("LICENSE", "PROVENANCE.md"):
         copy(root / "src/paprium" / name, notice / "paprium" / name)
     shutil.copytree(root / "build/deps/video-minimal/linux/share/kegarefusion-ffmpeg", notice / "ffmpeg")

@@ -133,6 +133,7 @@ def main() -> None:
     shutil.copy2(root / "THIRD_PARTY.md", notices / "THIRD_PARTY.md")
     copy_core32x_notices(root, notices)
     copy_megald_notices(root, notices)
+    shutil.copy2(root / "third_party/MMPX-PROVENANCE.md", notices / "MMPX-PROVENANCE.md")
     shutil.copy2(root / "third_party/libco/LICENSE.txt", notices / "libco-LICENSE.txt")
     shutil.copy2(root / "third_party/libco/README.txt", notices / "libco-PROVENANCE.txt")
     shutil.copy2(root / "tools/patches/genesis-plus-gx-link-cable.README.md", notices / "LinkCable-PROVENANCE.md")

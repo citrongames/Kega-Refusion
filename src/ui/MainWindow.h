@@ -279,6 +279,7 @@ private:
     QAction* gameGearLcdAction_ = nullptr;
     QAction* shaderOffAction_ = nullptr;
     QAction* shaderDitherAction_ = nullptr;
+    QAction* shaderMmpxAction_ = nullptr;
     QAction* shaderCustomAction_ = nullptr;
     QAction* shaderParametersAction_ = nullptr;
     QAction* screenshotAction_ = nullptr;
