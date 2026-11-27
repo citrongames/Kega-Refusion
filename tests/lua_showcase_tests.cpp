@@ -57,12 +57,88 @@ static bool hasText(const ScriptOverlayPtr& overlay) {
     for(const auto& c:overlay->commands) if(c.primitive==ScriptPrimitive::Text) return true;
     return false;
 }
+// Synthetic slot cases check decoding and bounded drawing, not game progression.
+static void healthCases(LibretroHost& host, const QByteArray& source, const QString& path) {
+    const auto saved=host.serialize();
+    const auto word=[&](quint32 offset,quint16 value) {
+        const char bytes[]={char(value>>8),char(value)};
+        check(host.inspectionWrite(0,2,offset,bytes,2),"seed health word");
+    };
+    const auto clear=[&] {for(quint32 offset=0xb000;offset<0xd700;offset+=2)word(offset,0);};
+    const auto actor=[&](int slot,int id,int state) {
+        const auto base=0xb000+slot*128;
+        word(base,id);word(base+2,state);word(base+6,200);word(base+10,200);
+        return base;
+    };
+    ScriptRuntime lua;lua.setHostPolicy(false,false,false,false,true);
+    ScriptCommand command;command.id=1;command.source=source;command.path=path;
+    lua.command(command,host);errors(lua);
+    const auto lines=[&] {
+        const auto overlay=lua.event(ScriptEvent::Draw,host,1,host.runClock().frames);
+        errors(lua);check(bool(overlay),"health overlay");
+        QStringList text;
+        for(const auto& c:overlay->commands)
+            if(c.primitive==ScriptPrimitive::Text)text<<c.text;
+        return text;
+    };
+    clear();const auto a=actor(0,0x295,11);word(a+0x36,990);
+    check(lines().join("\n").contains("HP 990/1000"),"direct late-enemy HP");
+    clear();const auto b=actor(0,0x33b,2);word(b+0x70,10);
+    check(lines().join("\n").contains("left 841/851"),"strict damage threshold");
+    clear();actor(0,0x28f,1);actor(1,0x290,1);word(0xa240,300);
+    int copies=0;for(const auto& line:lines())if(line.contains("HP 300"))++copies;
+    check(copies==1,"shared health duplicated");
+    clear();const auto c=actor(0,0x198,4);word(c+0x70,100);
+    check(lines().join("\n").contains("left 2400/2500"),"phase one threshold");
+    word(c+2,10);check(lines().join("\n").contains("left 901/1001"),"phase two threshold");
+    word(c+2,12);check(lines().join("\n").contains("left 1700/1800"),"phase three threshold");
+    clear();
+    for(int i=0;i<78;++i){const auto base=actor(i,0x124,1);word(base+0x36,40);}
+    quint64 sequence=0;
+    const auto controls=lua.uiSnapshot().windows[0].controls;
+    for(const auto& control:controls)
+        if(control.kind==ScriptUiKind::Checkbox && control.enabled && !control.value.toBool())
+            uiEvent(lua,host,control.id,true,ScriptUiEventKind::Change,sequence);
+    int hpRows=0;for(const auto& line:lines())if(line.contains("HP 40/40"))++hpRows;
+    check(hpRows==8,"bounded health rows");
+    // Populate the optional layers together; the script must fit its draw/native budgets.
+    for(int i=0;i<78;++i) {
+        const auto base=0xb000+i*128;
+        word(base+0x24,0x80);
+        word(base+0x2e,200);word(base+0x30,150);word(base+0x32,200);word(base+0x34,150);
+        word(0xaea2+i*2,base);
+    }
+    word(0xa3a2,0xaea2+78*2);
+    for(int i=0;i<14;++i) {
+        const auto base=0xd800+i*64;
+        word(base,1);word(base+0x24,0x20);word(base+6,200);word(base+10,200);
+        word(base+0x2e,200);word(base+0x30,150);word(base+0x32,200);word(base+0x34,150);
+        word(0xafc0+i*2,base);
+    }
+    word(0xafc0+28,0);
+    for(int i=0;i<2;++i) {
+        const auto base=0xd700+i*128;
+        word(base,1);word(base+6,200);word(base+10,200);
+        word(base+0x2e,200);word(base+0x30,150);word(base+0x32,200);word(base+0x34,150);
+    }
+    for(const auto& [name,value]:std::array<std::pair<const char*,quint32>,6>{{
+        {"D2",0x30},{"D4",200},{"D5",150},{"D6",200},{"D7",150},{"A1",0xffb000}}})
+        check(host.inspectionWriteRegister(0,1,name,value),"seed collision register");
+    lua.beginAccessFrame(host,host.runClock().frames);
+    for(int i=0;i<33;++i)lua.dispatchMemoryAccess({0,1,1,0x7ec0,0,2});
+    lua.endAccessFrame();
+    lua.event(ScriptEvent::Frame,host,1,host.runClock().frames);errors(lua);
+    lua.stopAll();check(host.unserialize(saved),"restore after synthetic health cases");
+    std::puts("PASS health decoding: direct, accumulated, phase transitions, shared owners, 78-slot/all-layer budget bound");
+}
 int main(int argc,char** argv) {
     QApplication app(argc,argv);
     try {
         const auto a=app.arguments();
-        check(a.size()>=6,"usage: lua_showcase_tests CORE ROM SCRIPT sonic|contra OUTPUT [WARMUP] [FRAMES]");
-        const bool contra=a[4]=="contra";const int warm=a.size()>6?a[6].toInt():(contra?1900:1200);
+        check(a.size()>=6,"usage: lua_showcase_tests CORE ROM SCRIPT sonic|contra OUTPUT [WARMUP] [FRAMES] [NATIVE_STATE]");
+        const bool contra=a[4]=="contra";
+        const bool healthOnly=contra && a.size()>6 && a[6]=="health";
+        const int warm=healthOnly?1570:(a.size()>6?a[6].toInt():(contra?1900:1200));
         const int frames=a.size()>7?a[7].toInt():360;
         check(warm>=0 && warm<=36000 && frames>=32 && frames<=36000,"frame bounds");
         check(QDir().mkpath(a[5]),"output directory");
@@ -73,6 +149,11 @@ int main(int argc,char** argv) {
         for(int i=1;i<=warm;++i) {
             const auto input=inputAt(i,contra);
             check(movie.beforeFrame(input,error),error);host.runFrame();movie.afterFrame();
+        }
+        if(healthOnly){healthCases(host,read(a[3]),a[3]);return 0;}
+        if (a.size()>8) {
+            check(host.unserialize(read(a[8])),"load explicit native probe state");
+            host.runFrame(); // Reconstruct the image from restored native state.
         }
         check(host.frame().save(a[5]+"/game.png"),"game image");
         QByteArray ram(65536,0);check(host.inspectionRead(0,2,0,ram.data(),size_t(ram.size())),"RAM read");
@@ -164,6 +245,7 @@ int main(int argc,char** argv) {
             std::printf("%s %.5fHz stride %d: baseline %.2fus default %.2fus all-sections %.2fus; state identical\n",
                 qPrintable(host.contentName()),host.fps(),stride,timings[0],timings[1],timings[2]);
         }
+        if(contra && a.size()<=8)healthCases(host,source,a[3]);
         return 0;
     } catch(const std::exception& e) {std::fprintf(stderr,"FAIL: %s\n",e.what());return 1;}
 }

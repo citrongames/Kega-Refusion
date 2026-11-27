@@ -1137,3 +1137,36 @@ released on panel close/stop. Obsolete large research traces and duplicate dumps
 were removed; compact reproducibility probes/logs stay under ignored build paths.
 Windows Release compiled; runtime checks above were performed on Linux without
 taking control of the user's Windows session. No release or version bump.
+
+
+## Contra Lua health coverage — 2026-11-27
+
+Expanded the original US/Korea Combat Lab from eight hardcoded health types to
+134 numeric-health types across the cartridge's actor families. The complete
+dispatcher ledger and bilingual health notes live under docs/games; they separate
+demonstrated health, hit forwarding, one-hit targets, script counters and remaining
+uncertainty. In particular $00FC has no verified initial health value and is not
+given a fabricated meter. Static coverage is not a full-game completion claim.
+
+Native later-route hits confirmed $033B accumulated damage 0→10 (route 1B,
+frames 3708–3709), paired $0295/$0296 health 1000→990 and 800→790 (route 2C,
+frames 1911–1912), and unsigned $00A8 health 50→40 with state zero (route 11,
+frames 2105–2106). Tests used the original loader's stage selection before frame
+1440 in an isolated core and extended only the player's immunity timer. ROMs,
+user saves and normal emulation remained unchanged. The actual game/overlay
+renders were inspected; state hashes matched baseline/default/all-layer runs
+with presentation strides 1 and 32 for each representative snapshot.
+
+The opt-in Lua showcase health cases passed direct/accumulated decoding, strict
+thresholds, phase changes, shared-field deduplication and a synthetic 78-slot
+peak with every overlay layer, 14 projectiles, solid rectangles and saturated
+collision observations. This checks runtime budgets rather than demonstrating
+a real 78-enemy encounter. Avoided decoding unused velocities for every actor;
+only the selected inspector slot needs them.
+
+Removed the damage graph, event history and their per-frame calculations.
+HUD shows up to eight distinct backing fields, prioritizes the selected slot,
+and marks additional HP slots rather than silently dropping them. Origin/solid
+draws remain bounded to reserve capacity for health text and collision overlays.
+No emulator/core binary code or timing changed; updated scripts and guides are
+deployed in the existing Windows test build.
