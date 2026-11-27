@@ -2067,6 +2067,7 @@ void MainWindow::editShaderParameters() {
 void MainWindow::updateDiscMenu() {
     if (!discMenu_) return;
     const bool hasDisc = !discPaths_.isEmpty();
+    discDriveMenu_->setEnabled(hasDisc);
     discDriveMenu_->setTitle(discSides_ ? QStringLiteral("MegaLD") : QStringLiteral("Sega CD"));
     discMenu_->setTitle(Localization::text(discSides_ ? QStringLiteral("Стороны диска") : QStringLiteral("Диски плейлиста")));
     changeDiscAction_->setVisible(!discSides_);

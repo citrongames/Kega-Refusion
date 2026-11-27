@@ -116,7 +116,7 @@ on stop. Do not decode images or read their files on every frame.
 
 ## Script window and lifecycle
 
-Add a compact script window reachable through the debugging tools, with script
+Add a compact script window reachable through File → Scripts, with script
 list, Open, Run, Stop, Restart, bounded log and a collapsible editor. The editor
 should offer syntax highlighting, line numbers, API hints and error navigation,
 plus an action to open the source in an external editor. Avoid a heavyweight IDE.
@@ -198,6 +198,26 @@ costs and limits. Windows interactive testing remains with the user.
 After each authorized completed batch, update this checklist and evidence, clean
 temporary artifacts, commit and push. Build delivery follows the user's requested
 batch boundary; recording this document requires no new binaries.
+
+## User reference: FPS recording and replay graph
+
+The provided FCEUX scripts (2026-11-27), fceux_fps_record_by_rom.lua and
+fceux_fps_replay_by_rom.lua, demonstrate an acceptance scenario for the remaining
+work. The recorder stores per-frame controls and a lag flag in TSV, plus one
+FPS sample per 60 frames. Its estimate is nominal refresh times the fraction
+of non-lag frames. The replay overrides controls and plots the recorded samples;
+it does not measure new FPS during playback. Input polling is an estimate of
+game activity, not a universal measure of completed game updates.
+
+For Kega Refusion, reuse native input recordings and attach measurement data
+by emulated frame instead of duplicating input storage in the example. Pending
+APIs include nominal refresh/lag observations, recording control and bounded
+asynchronous result-file access. Obtain refresh from the actual console/region,
+not a fixed NTSC value. Define rewind/load/re-record behavior before promising
+aligned historical graphs. A game-specific update counter can supply a better
+metric when its meaning is known. Existing frame callbacks and drawing primitives
+already cover the live observation/graph portion; these pending APIs are not
+part of Phase 1. This is a recorded use case, not implementation authorization.
 
 ## Research references
 
