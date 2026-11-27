@@ -77,6 +77,25 @@ static unsigned requested_filter_preset;
 static unsigned requested_ram_cart_mb;
 void kegarefusion_32x_set_ram_cart(unsigned mb)
 { requested_ram_cart_mb=(mb==4 || mb==8 || mb==16)?mb:0; }
+int kegarefusion_32x_legacy_roadrash_active(void)
+{ return ctx && ctx->ram_cart && system_hw == SYSTEM_MCD && cdd_legacy_roadrash(); }
+/* Deliberately game-scoped compatibility, never a RAM-cart hardware rule.
+ * Called only after an odd data read; the ordinary CPU hot path is unchanged.
+ * Check current instructions too, so cheats/modified loaders cannot inherit it. */
+int kegarefusion_32x_legacy_roadrash_read(unsigned address, unsigned pc, unsigned ir)
+{
+    static const uint16_t code[] = {0x23e9,0x0006,0x0000,0xd85c,
+        0x23e9,0x000e,0x0000,0xd860,0x13e9,0x0019,0x0000,0xd864};
+    unsigned offset;
+    if (!ctx || !ctx->ram_cart || system_hw != SYSTEM_MCD ||
+        ir != 0x23e9 || (pc != 0xd616 && pc != 0xd61e) ||
+        address >= 0x80000 || !cdd_legacy_roadrash()) return 0;
+    offset = pc == 0xd616 ? 6 : 14;
+    if (address != ((s68k.dar[9] + offset) & 0xffffff)) return 0;
+    for (unsigned i = 0; i < sizeof(code)/sizeof(code[0]); ++i)
+        if (*(uint16_t *)(scd.prg_ram + 0xd612 + i*2) != code[i]) return 0;
+    return 1;
+}
 static void video_sync(uint64_t);
 static void video_reset(void) {
     unsigned i;

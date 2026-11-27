@@ -667,3 +667,39 @@ No Windows GUI session was launched. Evidence is under
 `build/verification/mmpx-advanced/` and `build/mmpx-validation/` (ignored).
 Temporary save copies, parity output blobs and standalone scratch executables
 were removed; logs, source harness and comparison screenshots remain.
+
+### Scoped Road Rash CD32X loader compatibility — 2026-11-27
+
+Restored compatibility only for the supplied original Road Rash Rapido disc.
+The native mounted-disc probe gates on the generic loader header, checks
+logical sector 36 CRC32 `ea789aae`, then checks the complete 78 KiB APP payload
+(LBAs 26–64, CRC32 `7e749148`; observed SHA-256
+`39323739fc00d0de9ae5ceb3882d31acb7e96757f88f266f6ba51463aea141b3`).
+This is an exact old executable profile, not filename detection or a universal
+32X-loader heuristic. The probe is cached per mounted disc, uses one 2 KiB
+scratch buffer, and never hashes the complete image or runs per frame.
+
+The matched disc enables 32X in Auto, but Disconnected still wins. Program RAM
+remains manual. Only the sub-CPU long data reads at instruction starts D612 and
+D61A may align down, with the exact original instruction sequence and address
+register relationship verified and effective address within Program RAM. Writes,
+instruction fetches, other PCs/opcodes, modified code and unrelated discs retain
+normal Address Error. Native recording/network IDs identify the scoped profile;
+ordinary game IDs and the serialized state layout are unchanged.
+
+The real-core generated fixture passed all RAM capacities, bank/state/JIT checks
+and strict odd-access controls. With the original CUE read in place and an
+isolated generated BIOS, Auto/16 MiB permits exactly the two legacy reads; RAM
+disabled or 32X Disconnected traps them. Wrong PC/IR, altered surrounding code,
+out-of-range address, writes and the identical instructions on another disc
+trap. Disc replacement revokes the exception, reinsertion restores it. A
+generated same-name CUE does not trigger Auto. Recording/network profile IDs
+are present only in the active legacy-disc/RAM scenario.
+
+Using the retail US BIOS and existing menu checkpoint, the actual old game
+reaches The City and runs for 3,000 frames. Final video and complete PCM match
+the historical broad-workaround run exactly. Native state and rewind restore
+the same future video and PCM. This covers the race-start scene, not a complete
+game playthrough. Short 600-frame before/after comparisons on Doom (Japan, USA),
+59.922743 Hz, and Sonic CD (Europe), 49.701459 Hz, retain identical final video
+and complete PCM. Evidence: `build/verification/roadrash-scoped/` (ignored).

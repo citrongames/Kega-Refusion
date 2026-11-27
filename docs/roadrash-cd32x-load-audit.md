@@ -1,5 +1,8 @@
 # Road Rash Rapido CD32X race-load audit
 
+**2026-11-27:** A narrower content- and instruction-scoped exception now supports
+the original image, including 32X Auto detection. See [current cartridge behavior](cd32x-ram-cartridge.md).
+
 **2026-11-24:** The temporary odd-address compatibility profile described below
 was removed at the user's request, pending an author-side loader fix. The RAM
 cartridge remains supported with strict MC68000 address errors. This document

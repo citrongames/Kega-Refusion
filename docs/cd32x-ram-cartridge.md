@@ -13,17 +13,28 @@ MegaLD and other consoles retain their existing maps and allocations.
 
 Road Rash Rapido uses a US Sega CD boot sector. Its author requests the 16 MiB
 board and a US CD BIOS. The disc's generic `SEGA CD Loader` header does not identify
-32X hardware, so select **32X: Connected** explicitly. Open the original CUE;
+32X hardware, so the old image uses the content-based 32X detection described below. Open the original CUE;
 there is no converted/patched game copy.
 
 ## CPU address alignment
 
 The RAM cartridge does not change MC68000 alignment rules. Odd word and longword
-accesses raise Address Error on the Sega CD sub-CPU as well as the main CPU;
-byte accesses may use odd addresses. The temporary ares-style loader workaround
-was removed on 2026-11-24 at the user's request, ahead of an author-side loader
-fix. The old Road Rash image can therefore hit its original address error again.
-The forthcoming fixed image has not been verified yet.
+accesses raise Address Error on both 68000 CPUs; byte accesses may be odd.
+
+A narrow compatibility exception supports the original Road Rash Rapido CD32X
+image. At mount, the core recognizes the exact old APP executable from logical
+Mode 1 sectors, independent of image filenames. It enables 32X in Auto mode;
+an explicit Disconnected selection still wins. Program RAM remains a separate
+manual setting (16 MiB for this game).
+
+Only the two confirmed odd longword reads in the original sub-CPU directory
+scanner are rounded down, with Program RAM attached and the original instruction
+sequence still present. All other addresses/instructions/writes retain their
+normal exceptions. The profile resets on disc replacement/unload. Changed APP
+code does not match; a new repaired release must use its own 32X header/detection.
+The profile is reflected in recording/network compatibility IDs, without
+changing native state layout. This is a game compatibility exception, not a
+claim about physical RAM-cartridge behavior.
 
 ## Bus model
 

@@ -3,6 +3,8 @@
 
 The original synthetic Sega CD BIOS is a 68000 mailbox monitor. All accesses
 under test are guest MOVE instructions. The generated ISO selects CD Mode 2.
+An optional original Road Rash Rapido disc is mounted read-only to exercise
+the revision-specific loader compatibility path with the same generated BIOS.
 """
 import argparse
 import ctypes as C
@@ -73,23 +75,40 @@ def make_disc(directory):
     return path
 
 
+class DiskControl(C.Structure):
+    _fields_ = [
+        ("set_eject_state", C.CFUNCTYPE(C.c_bool, C.c_bool)),
+        ("get_eject_state", C.CFUNCTYPE(C.c_bool)),
+        ("get_image_index", C.CFUNCTYPE(U)),
+        ("set_image_index", C.CFUNCTYPE(C.c_bool, U)),
+        ("get_num_images", C.CFUNCTYPE(U)),
+        ("replace_image_index", C.CFUNCTYPE(C.c_bool, U, C.POINTER(Game))),
+        ("add_image_index", C.CFUNCTYPE(C.c_bool)),
+    ]
+
+
 class CdCore(Core):
-    def __init__(self, core_path, iso, capacity, connect_32x=True):
+    def __init__(self, core_path, disc, capacity, connect_32x=True, bios_dir=None):
         lib = self.lib = C.CDLL(str(core_path))
-        system_dir = str(iso.parent).encode()
+        system_dir = str(bios_dir if bios_dir is not None else disc.parent).encode()
+        attachment = {True: b"connected", False: b"disconnected", None: b"auto"}[connect_32x]
         options = {
             b"genesis_plus_gx_region_detect": b"ntsc-u",
             b"genesis_plus_gx_add_on": b"none",
-            b"genesis_plus_gx_32x_add_on": b"connected" if connect_32x else b"disconnected",
+            b"genesis_plus_gx_32x_add_on": attachment,
             OPTION: str(capacity).encode() if capacity else b"disabled",
         }
         advertised = {}
+        self.disk = None
 
         @C.CFUNCTYPE(C.c_bool, U, P)
         def environment(command, data):
             command &= 0xFFFF
             if command in (9, 30, 31):
                 C.cast(data, C.POINTER(C.c_char_p))[0] = system_dir
+                return True
+            if command == 13:
+                self.disk = C.cast(data, C.POINTER(DiskControl)).contents if data else None
                 return True
             if command == 15:
                 variable = C.cast(data, C.POINTER(Var)).contents
@@ -125,6 +144,7 @@ class CdCore(Core):
         lib.retro_get_memory_data.argtypes, lib.retro_get_memory_data.restype = [U], P
         lib.retro_get_memory_size.argtypes, lib.retro_get_memory_size.restype = [U], SZ
         lib.retro_kegarefusion_system_hw.restype = U
+        lib.retro_kegarefusion_core_features.restype = U
         lib.retro_serialize_size.restype = SZ
         for name in ("retro_serialize", "retro_unserialize"):
             function = getattr(lib, name)
@@ -132,14 +152,29 @@ class CdCore(Core):
 
         lib.retro_init()
         assert advertised.get(OPTION) == b"disabled|4|8|16", advertised.get(OPTION)
-        self.content_path = str(iso).encode()
+        self.content_path = str(disc).encode()
         game = Game(self.content_path, None, 0, None)
-        assert lib.retro_load_game(C.byref(game)), "original Sega CD ISO did not load"
+        assert lib.retro_load_game(C.byref(game)), f"Sega CD disc did not load: {disc}"
         assert lib.retro_kegarefusion_system_hw() == 0x84, "Sega CD hardware path inactive"
         self.ram = lib.retro_get_memory_data(2)
         assert self.ram
-        if connect_32x:
+        if connect_32x is not None:
+            assert self.attached_32x == connect_32x, "32X ignored the selected attachment mode"
+        if self.attached_32x:
             self.grant()
+
+    @property
+    def attached_32x(self):
+        return bool(self.lib.retro_kegarefusion_core_features() & 2)
+
+    def replace_disc(self, disc):
+        assert self.disk is not None, "core did not provide disc controls"
+        index = self.disk.get_image_index()
+        assert index < self.disk.get_num_images()
+        assert self.disk.set_eject_state(True)
+        game = Game(str(disc).encode(), None, 0, None)
+        assert self.disk.replace_image_index(index, C.byref(game)), f"could not insert {disc}"
+        assert self.disk.set_eject_state(False)
 
     def mailbox(self, address):
         return C.c_uint16.from_address(self.ram + (address & 0xFFFF))
@@ -374,9 +409,79 @@ def check_sub_cpu_addressing(core):
             core.expect(prg_ram + 0x1000 + 2 * index, expected, name + " data/byte lanes")
 
 
+def check_legacy_loader_access(core, description, *, expect_rounded=False, pc=0xD612,
+                               source_base=0x2CD75, address_register=1, last_destination=0xD864):
+    prg_window, bank_size = 0x020000, 0x020000
+    memory_mode, reset_busreq, comm = 0xA12003, 0xA12001, 0xA12020
+    loader_pc = 0xD612
+    loader = (
+        0x23E9, 0x0006, 0, 0xD85C,  # MOVE.L (6,A1),$D85C
+        0x23E9, 0x000E, 0, 0xD860,  # MOVE.L (14,A1),$D860
+        0x13E9, 0x0019, 0, 0xD864,  # MOVE.B (25,A1),$D864
+    )
+    done = (0x33FC, 0x51A7, 0x00FF, 0x8028, 0x60FE)
+    vector_3 = (0x33FC, 3, 0x00FF, 0x8028, 0x60FE)
+
+    def write_program(address, words):
+        bank, offset = divmod(address, bank_size)
+        assert offset + 2 * len(words) <= bank_size
+        core.write(memory_mode, bank << 6, byte=True)
+        for index, word in enumerate(words):
+            core.write(prg_window + offset + 2 * index, word)
+
+    core.write(reset_busreq, 0, byte=True)
+    core.write(comm + 8, 0)
+    write_program(0, (0, 0x2000, 0, pc - 6))
+    write_program(0x000C, (0, 0x0300))
+    write_program(0x0300, vector_3)
+    write_program(0xD85C, (0xBEEF,) * 6)
+    write_program(0x2CD7A, (0x1234, 0x5678, 0, 0, 0x89AB, 0xCDEF, 0, 0, 0, 0, 0x6500))
+    # Leave the original signature at $D612 even when exercising a different PC.
+    write_program(loader_pc, loader)
+    instructions = (0x23E8 + address_register,) + loader[1:-1] + (last_destination,)
+    setup = (0x207C | (address_register << 9), source_base >> 16, source_base & 0xFFFF)
+    write_program(pc - 6, setup + instructions + done)
+    core.write(reset_busreq, 1, byte=True)
+    core.expect(comm + 8, 0x51A7 if expect_rounded else 3, description)
+    core.write(reset_busreq, 3, byte=True)
+    expected = (0x1234, 0x5678, 0x89AB, 0xCDEF, 0x65EF) if expect_rounded else (0xBEEF,) * 5
+    for index, word in enumerate(expected):
+        core.expect(prg_window + 0xD85C + 2 * index, word, description + " destination")
+
+
+def check_legacy_disc(core_path, disc, other_disc):
+    for attachment, cart in ((None, 16), (None, 0), (False, 16)):
+        core = CdCore(core_path, disc, cart, connect_32x=attachment, bios_dir=other_disc.parent)
+        try:
+            automatic = attachment is None
+            assert core.attached_32x == automatic, "the legacy disc did not follow Auto/Disconnected"
+            for symbol in ("retro_kegarefusion_recording_abi", "retro_kegarefusion_network_state_abi"):
+                function = getattr(core.lib, symbol)
+                function.restype = C.c_char_p
+                assert (b"roadrash-loader-v1" in function()) == (automatic and bool(cart)), symbol
+            check_legacy_loader_access(core, "legacy loader faulting read sequence",
+                                       expect_rounded=automatic and bool(cart))
+            if automatic and cart:
+                check_legacy_loader_access(core, "wrong instruction PC", pc=0xD652)
+                check_legacy_loader_access(core, "wrong address register in opcode", address_register=2)
+                check_legacy_loader_access(core, "altered surrounding code", last_destination=0xD866)
+                check_legacy_loader_access(core, "odd read outside Program RAM", source_base=0x07FFFB)
+                check_sub_cpu_addressing(core)
+                core.replace_disc(other_disc)
+                assert core.attached_32x, "changing discs unexpectedly disconnected the active 32X"
+                check_legacy_loader_access(core, "replacing the old disc revoked the exception")
+                core.replace_disc(disc)
+                check_legacy_loader_access(core, "reinserting the old disc restored the exception",
+                                           expect_rounded=True)
+        finally:
+            core.close()
+    print("PASS legacy Road Rash 32X Auto and narrow sub-CPU loader reads")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--core", required=True, type=Path)
+    parser.add_argument("--legacy-disc", type=Path, help="optional original Road Rash Rapido CUE")
     args = parser.parse_args()
     core_path = args.core.resolve()
     states = {}
@@ -406,6 +511,8 @@ def main():
             print("PASS SH-2 RAM cartridge data and instruction coherence")
             check_sub_cpu_addressing(core)
             print("PASS Sub CPU Address Error with CD32X RAM enabled; odd byte accesses preserved")
+            check_legacy_loader_access(core, "same faulting instruction in a different title")
+            print("PASS legacy loader instruction traps on unrelated CD media")
         finally:
             core.close()
 
@@ -415,6 +522,19 @@ def main():
             print("PASS Sub CPU Address Error with 32X disconnected")
         finally:
             core.close()
+
+        named_cue = iso.with_name("RoadRashRapido.cue")
+        named_cue.write_text(f'FILE "{iso.name}" BINARY\n  TRACK 01 MODE1/2048\n    INDEX 01 00:00:00\n',
+                             encoding="ascii")
+        core = CdCore(core_path, named_cue, 16, connect_32x=None)
+        try:
+            assert not core.attached_32x, "the CUE filename triggered the legacy 32X profile"
+        finally:
+            core.close()
+        print("PASS same CUE filename does not trigger 32X Auto")
+
+        if args.legacy_disc:
+            check_legacy_disc(core_path, args.legacy_disc.resolve(), iso)
 
 
 if __name__ == "__main__":
