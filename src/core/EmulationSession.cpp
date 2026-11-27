@@ -2782,9 +2782,7 @@ void EmulationSession::run() {
                     clearAudio();
                     resetMetrics();
                     emit gameLoaded(host.gamePath(),host.fps(),host.contentName(),host.controllerProfile());
-                    if (host.appliedPatches().size() == 1)
-                        emit actionCompleted(Localization::text(QStringLiteral("Патч применён: %1")).arg(QFileInfo(host.appliedPatches().first()).fileName()));
-                    else if (!host.appliedPatches().isEmpty())
+                    if (!host.appliedPatches().isEmpty())
                         emit actionCompleted(Localization::text(QStringLiteral("Применено патчей: %1")).arg(host.appliedPatches().size()));
                     emit stateSlotsChanged(-1,host.occupiedStateSlots());
                     emit pausedChanged(false);

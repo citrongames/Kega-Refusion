@@ -544,7 +544,6 @@
     "Авто": "Auto",
     "Автоматически применять патчи IPS/BPS": "Automatically apply IPS/BPS patches",
     "При загрузке патчи ищутся рядом с ROM, затем в папке «Патчи». Для цепочки можно добавить Game.bps и файлы с номерами от 1 без пропусков, например Game.1.ips и Game.2.bps. Для каждого шага BPS имеет приоритет над IPS.": "When loading a game, the emulator looks for patches beside the ROM, then in the Patches folder. A chain can include an optional Game.bps and consecutively numbered files starting at 1, such as Game.1.ips and Game.2.bps. BPS takes priority over IPS at each step.",
-    "Патч применён: %1": "Patch applied: %1",
     "Применено патчей: %1": "Patches applied: %1",
     "Invalid ROM patch number in %1.": "Invalid ROM patch number in %1.",
     "ROM patches %1 and %2 match the same step.": "ROM patches %1 and %2 match the same step.",
