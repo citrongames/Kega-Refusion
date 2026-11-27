@@ -25,6 +25,7 @@ public:
     void rejectCommand(const ScriptCommand& command, const QString& reason);
     void setExecutionAvailable(bool available);
     void setMachineRevisionProvider(std::function<quint64()> provider);
+    void setScriptsDirectoryProvider(std::function<QString()> provider);
     void discardPendingStarts();
     bool confirmDiscardEdits();
 
@@ -79,11 +80,11 @@ private:
     LuaSourceEditor* editor_ = nullptr;
 
     QList<Entry> entries_;
-    QString lastDirectory_;
     quint64 nextId_ = 1;
     quint64 editingId_ = 0;
     quint64 startGeneration_ = 0;
     std::function<quint64()> machineRevision_;
+    std::function<QString()> scriptsDirectory_;
     bool executionAvailable_ = false;
     bool choosingFile_ = false;
     bool settingSource_ = false;

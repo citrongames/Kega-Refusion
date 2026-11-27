@@ -2,8 +2,10 @@
 
 Agreed for preservation on 2026-11-21, following research into FCEUX, Mesen 2,
 BizHawk, Gens-rr and mGBA. Baseline: release 0.29.0, repository 9000292.
-Implementation of Phases 1–3 was authorized on 2026-11-27. Phase 4 remains
-planned work; it is not advertised as shipped functionality.
+Implementation of Phases 1–3 was authorized on 2026-11-27. On the same day the
+user approved continuing Phase 4 with a native API and bilingual documentation,
+explicitly dropping compatibility adapters. Undelivered capabilities remain
+planned work and are not advertised as shipped functionality.
 
 ## Progress and direction
 
@@ -12,10 +14,15 @@ planned work; it is not advertised as shipped functionality.
 - [x] Phase 1: runtime, script window, read-only memory and drawing.
 - [x] Phase 2: input automation, frame control and temporary save objects.
 - [x] Phase 3: memory/register editing and debugger integration.
-- [ ] Phase 4: custom panels, Gens compatibility and advanced timeline integration.
+- [ ] Phase 4: general script files, recording control, custom panels and declared timeline data.
+  - [x] General asynchronous file access and native input-recording control.
+  - [ ] Custom panels with controls and graphs.
+  - [ ] Explicit script-data restoration with save/load and rewind.
+  - [x] Bilingual native API reference and practical examples; keep these current with each batch.
 
-Recommended baseline: one embedded Lua 5.5 library, a native versioned API,
-then explicit compatibility adapters, starting with Gens. Pin a concrete
+Agreed baseline: one embedded Lua 5.5 library and a native versioned API.
+Do not implement Gens/FCEUX compatibility adapters. Existing third-party scripts
+are references for useful capabilities and can be ported against our documented API. Pin a concrete
 upstream release during implementation and include corresponding sources and
 notices in releases. Do not require a system Lua installation or raise the
 existing Windows/Linux distribution baseline. LuaJIT is not an initial dependency;
@@ -89,11 +96,12 @@ Document callback ordering and whether an event is before or after an operation.
 Prevent recursive event handling and defer unsafe lifecycle operations to a safe
 boundary. Keep code/data bank identities consistent with the debugger.
 
-Compatibility adapters must explicitly translate argument order, colors, button
-names, addressing, byte order and callback timing. Identical function names in
-FCEUX, Gens and BizHawk do not guarantee identical behavior. Gens is the first
-candidate because useful Mega Drive scripts already exist; publish the supported
-subset and limitations rather than claiming that all old scripts run unchanged.
+Documentation must describe exact names, argument/return types, defaults, errors,
+limits, event order and timeline behavior in English and Russian. Package both
+guides under executable-adjacent docs. Examples must use only shipped APIs;
+include concise working recipes suitable for humans and code assistants. Do not
+invent compatibility aliases or imply that game-specific memory layouts are
+portable across ROM revisions.
 
 ## Drawing and presentation
 
@@ -183,9 +191,9 @@ where suitable instead of adding periodic full-memory scans or redundant caches.
 3. **Debugger integration.** Safe supported memory/register writes, selected
    access hooks, labels and RAM Watch integration. Verify debugger subscriptions
    coexist and mutations preserve cache/device invariants at supported boundaries.
-4. **Extended tools and compatibility.** Small script panels, a tested Gens subset,
-   explicit script-data restoration, and then any separately designed network or
-   recording mutation support. Do not treat deferred items as available merely
+4. **Extended native tools.** General asynchronous files and input-recording
+   control, small script panels, explicit script-data restoration, and then any
+   separately designed network or recording mutation support. Do not treat deferred items as available merely
    because the runtime can call Lua.
 
 Use generated fixtures for deterministic checks and a small number of representative
@@ -217,7 +225,8 @@ not a fixed NTSC value. Define rewind/load/re-record behavior before promising
 aligned historical graphs. A game-specific update counter can supply a better
 metric when its meaning is known. Existing frame callbacks and drawing primitives
 cover the live observation/graph portion, with a bundled live graph in Phase 2;
-recording control and file access are not shipped yet. This is a recorded use case, not implementation authorization.
+recording control and file access are not shipped yet. The user subsequently authorized native file and recording work on 2026-11-27.
+This scenario is one example, not a restriction on the general file API.
 
 ## Research references
 
@@ -229,8 +238,8 @@ recording control and file access are not shipped yet. This is a recorded use ca
 - [BizHawk Lua API](https://tasvideos.org/Bizhawk/LuaFunctions): memory domains,
   event callbacks, forms and explicit compatibility differences.
 - [Gens-rr Lua documentation](https://github.com/TASEmulators/gens-rerecording/blob/master/Gens-rr/Output/LuaSamples/gens-lua.html).
-- [Sonic Gens HUD](https://github.com/flamewing/sonic-gens-hud): a candidate for
-  practical compatibility work, not yet tested in Kega Refusion.
+- [Sonic Gens HUD](https://github.com/flamewing/sonic-gens-hud): a reference for
+  useful game tools; compatibility adapters were explicitly removed from scope.
 - [mGBA development scripting API](https://mgba.io/docs/dev/scripting.html):
   canvas, images and storage; development documentation, not a stable-release claim.
 - [Lua versions](https://www.lua.org/versions.html) and
@@ -262,8 +271,8 @@ does not re-run ordinary callbacks. Predictive file-state previews and replaced
 rollback pictures are shown clean until matching observations are available.
 Remote rewind images are never paired with stale local memory.
 Hardcore and video export reject execution; ordinary netplay permits local
-read-only scripts. Mutations, input override and compatibility adapters remain
-in the later phases.
+read-only scripts. Mutations and input override were delivered in later phases; compatibility
+adapters were subsequently removed from the plan.
 
 Focused checks covered MD, SMS, SG-1000, GG and GG Link A/B, 32X, Firecore,
 Sega CD and CD+32X using original fixtures. State bytes stayed unchanged by
@@ -306,7 +315,8 @@ The shipped input-automation example demonstrates 30 input frames and a temporar
 restore; input-activity draws a bounded live graph from nominal refresh and
 per-frame controller-poll observations. This is an activity estimate, not a
 universal game-update detector. File output, Lua movie start/stop, debugger writes,
-custom panels and compatibility adapters remain future work. Focused tests
+and custom panels were future work at this milestone; compatibility adapters
+were subsequently removed from the plan. Focused tests
 exercise the real-core/session pipeline and branch replay; performance numbers
 and exact tested scope are recorded in verification.md.
 
@@ -344,5 +354,41 @@ Focused validation covers native-event ordering, overlap, coexistence with
 breakpoints/trace/coverage, error and stop cleanup, link A/B isolation, mutation
 policy, deferred commands and UI persistence. Packaged fixture-debugger.lua
 uses an original generated cartridge. Detailed results and two-game normal/fast
-measurements are recorded in verification.md. Panels, file output, movie control,
-Gens adapters and declared script-data restoration remain Phase 4 work.
+measurements are recorded in verification.md. Panels, file output, movie control and declared script-data restoration
+remained Phase 4 work at this milestone. Gens adapters were subsequently removed.
+
+
+## Phase 4A delivered — 2026-11-27
+
+The user chose the native API and comprehensive English/Russian documentation
+instead of emulator compatibility adapters. Both references now ship under
+executable-adjacent docs. Settings > Folders includes Scripts, with a portable
+default beside the executable, shared relative overrides and platform-specific
+absolute overrides.
+
+General script files use storage.read/write/result, not a measurement-specific
+format. A lazy serial worker performs reads and atomic replacement. Each source
+has a separate portable identity under scripts-data; requests/results are bounded,
+abandoned runs cancel pending work, and no file reads/writes occur inside Lua
+callbacks. Bounded string slices can inspect file data without rescanning it.
+The script decides its data format and when a write is necessary.
+
+The movie library uses the native .krm implementation for status, record, play,
+resume, branch, stop and takeover. File preparation/parsing and explicit stop
+writes run outside emulation. Applying native core/media configuration and capture
+still happen at the existing safe boundary. Stopping a recording detaches a
+bounded tape, so gameplay continues while it is saved. Failures retain the tape
+for retry. New Lua recordings cannot overwrite an occupied filename. Existing
+GUI Stop uses the same detached-save path; ordinary game close retains its
+existing final save path.
+
+Examples demonstrate a generic file round trip and native recording/playback
+with a separately stored input-activity graph. The latter uses actual recording
+refresh, identity and frame position. It is a controller-poll estimate, not a
+universal game-update measurement. Source identity and graph parsing are tested
+through the shipped script itself. Exact evidence is in verification.md.
+
+Remaining Phase 4 work: custom script panels/controls/graphs, followed by bounded
+declared script-data restoration with saves and rewind. Arbitrary Lua locals,
+closures and coroutine stacks are not restored. No new Gens compatibility work
+is planned.

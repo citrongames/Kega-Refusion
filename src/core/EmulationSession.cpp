@@ -3,6 +3,7 @@
 #include "script/ScriptRuntime.h"
 #include "LibretroHost.h"
 #include "CheatSearch.h"
+#include "DataFolders.h"
 #include "net/NetplayTimeline.h"
 #include "net/NetRollbackSession.h"
 #include <QJsonDocument>
@@ -20,12 +21,69 @@
 #include <QPainter>
 #include <cstring>
 #include <QFileInfo>
+#include <QDir>
+#include <QStringDecoder>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <future>
+#include <system_error>
 #include <thread>
 
 namespace {
+struct MovieFileResult {
+    QString path, error;
+    std::optional<MovieTape> tape;
+};
+
+#ifdef KEGA_LUA_MOVIE_TESTS
+void delayMovieFileOperationForTest() {
+    const int delay = qEnvironmentVariableIntValue("KEGA_TEST_MOVIE_FILE_DELAY_MS");
+    if (delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+}
+#endif
+
+MovieFileResult prepareScriptMovie(const QString& dataPath, const QByteArray& name, bool load) {
+    MovieFileResult result;
+    QStringDecoder decoder(QStringDecoder::Utf8,QStringConverter::Flag::Stateless);
+    QString fileName = decoder.decode(name);
+    const QString stem = fileName.section('.', 0, 0).toUpper();
+    if (decoder.hasError() || stem.isEmpty() || fileName != fileName.trimmed() ||
+        fileName.endsWith('.') || stem.endsWith(' ') ||
+        stem == QLatin1String("CON") || stem == QLatin1String("PRN") ||
+        stem == QLatin1String("AUX") || stem == QLatin1String("NUL") ||
+        (stem.size() == 4 && stem.back().isDigit() &&
+         (stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT")))) ||
+        std::any_of(fileName.cbegin(), fileName.cend(), [](QChar c) {
+            return c.unicode() < 32 || QStringView(u"<>:\"/\\|?*").contains(c);
+        })) {
+        result.error = QStringLiteral("Expected a valid movie filename in the Movies folder");
+        return result;
+    }
+    if (!fileName.endsWith(QLatin1String(".krm"), Qt::CaseInsensitive)) fileName += QLatin1String(".krm");
+    const QString folder = DataFolders::path(dataPath, QStringLiteral("movies"));
+    if (!load && !QDir().mkpath(folder)) {
+        result.error = QStringLiteral("Could not create the Movies folder");
+        return result;
+    }
+    const QString physical = QDir(folder).canonicalPath();
+    if (physical.isEmpty()) {
+        result.error = QStringLiteral("Movies folder is unavailable");
+        return result;
+    }
+    result.path = QDir(physical).filePath(fileName);
+    const QFileInfo file(result.path);
+    if (file.isSymLink() || (load && !file.isFile())) {
+        result.error = QStringLiteral("Expected a regular movie file in the Movies folder");
+    } else if (!load && (file.exists() || QFileInfo(result.path + QLatin1String(".bak")).isSymLink())) {
+        result.error = QStringLiteral("Choose a new movie filename");
+    } else if (load) {
+        result.tape.emplace();
+        result.tape->load(result.path, result.error);
+    }
+    return result;
+}
+
 // Device playback follows the chosen speed. Keep fractional sample position
 // across video frames; the recorder continues to consume the original core PCM.
 class PlaybackResampler {
@@ -748,6 +806,28 @@ void EmulationSession::run() {
     };
     host.message = [this](const QString& message) { emit notification(message); };
     MovieSession movie(host, dataPath_);
+    struct MovieFileRequest {
+        ScriptControl control{};
+        quint64 revision = 0, generation = 0;
+        bool saving = false;
+        std::future<MovieFileResult> future;
+    };
+    struct DetachedMovie {
+        QString path;
+        std::shared_ptr<const MovieTape> tape;
+        bool scriptPath = false, requiresNewFile = false;
+    };
+    std::optional<MovieFileRequest> movieFile;
+    DetachedMovie detachedMovie;
+    QString scriptMovieError;
+    bool guiMovieSaveRequested = false, scriptMoviePath = false;
+    auto publishMovieFileStatus = [&] {
+        const bool saving = bool(detachedMovie.tape);
+        const bool pending = movieFile.has_value();
+        const bool wasSaving = unsavedMovie_.exchange(saving);
+        const bool wasPending = movieFilePending_.exchange(pending);
+        if (saving != wasSaving || pending != wasPending) emit movieFileOperationChanged();
+    };
     VideoRecorder videoRecorder;
     bool videoPending = false, videoExport = false;
     QString videoPath;
@@ -1094,12 +1174,13 @@ void EmulationSession::run() {
     };
     auto movieStatus = [&](bool force = false) {
         if (force || (movie.active() && nowNs() >= nextMovieStatusNs)) {
+            activeMovieRecording_.store(movie.recording());
             emit movieStatusChanged(int(movie.mode()), movie.path(), movie.position(), movie.length(), movie.frameRate());
             nextMovieStatusNs = nowNs() + 100000000;
         }
     };
-    auto movieBoundary = [&] {
-        scripts.invalidateTimeline(true);
+    auto movieBoundary = [&](quint64 preserveRun = 0) {
+        scripts.invalidateTimeline(true,preserveRun);
         publishScriptUpdates();
         emit movieHardwareChanged(movie.controllers());
         movieStatus(true); slotStatus();
@@ -1493,11 +1574,15 @@ void EmulationSession::run() {
         if (notify) emit debuggerReady();
     };
     QVector<ScriptControl> scriptSteps;
+    auto movieWaitsFor = [&](const ScriptControl& control) {
+        return movieFile && movieFile->control.run && movieFile->control.run == control.run;
+    };
     auto finishFramePipeline = [&] {
         if (!debugFrame.active) return;
         const auto context=debugFrame;debugFrame.active=false;
         scripts.endAccessFrame();
-        scriptSteps.clear();
+        scriptSteps.erase(std::remove_if(scriptSteps.begin(),scriptSteps.end(),
+            [&](const auto& step) { return !movieWaitsFor(step); }),scriptSteps.end());
         const auto observeCommittedFrame = [&] {
             if (!scripts.hasScripts()) { scriptOverlay.reset(); return; }
             if (achievementHardcore || videoExport) {
@@ -1572,7 +1657,174 @@ void EmulationSession::run() {
     };
     // Lua sees complete canonical states only. Snapshot bytes are owned and
     // budgeted by the runtime; no file I/O or second emulation session is used.
+    auto publishMovieTopology = [&] {
+        if (inputDisplayEnabled) { frameInput = host.inputDisplay(false); publishInput(); }
+        const bool sms = host.isMasterSystem();
+        if (sms != masterSystem) { masterSystem = sms; emit masterSystemChanged(sms); }
+        const bool gg = host.isGameGear();
+        if (gg != gameGear) { gameGear = gg; emit gameGearChanged(gg); }
+        const bool jcart = host.hasJCart();
+        if (jcart_.exchange(jcart) != jcart) emit jcartChanged(jcart);
+        const auto adapter = int(host.controllerAdapter());
+        const auto players = host.controllerPlayerCount();
+        const auto oldAdapter = controllerAdapter_.exchange(adapter);
+        const auto oldPlayers = controllerPlayerCount_.exchange(players);
+        if (oldAdapter != adapter || oldPlayers != players) emit controllerTopologyChanged(adapter,players);
+        updateDebugControls();
+        publishClock(true);
+    };
+    auto completeMovieStart = [&](Type type, quint64 preserveRun = 0) {
+        scriptMoviePath = preserveRun != 0;
+        achievementSuppressed = type != Type::MovieRecord;
+        achievements.reset(); achievements.refresh();
+        releaseButtons(); movieBoundary(preserveRun); optionsPending = false;
+        scriptOverlay.reset(); ++scriptGeneration;
+        if (!preserveRun || movie.mode() == MovieSession::Finished) {
+            paused = movie.mode() == MovieSession::Finished;
+            emit pausedChanged(paused);
+        }
+        scriptEvent(type == Type::MovieRecord ? ScriptEvent::Reset : ScriptEvent::LoadState);
+        if ((type == Type::MoviePlay || type == Type::MovieResume) &&
+            !host.movieCompatibilityWarning().isEmpty()) {
+            emit movieCompatibilityWarning(host.movieCompatibilityWarning());
+            emit notification(host.movieCompatibilityWarning());
+        }
+    };
+    auto completeMovieStop = [&](bool takeOver, quint64 preserveRun = 0) {
+        scriptMoviePath = false;
+        scriptOverlay.reset(); ++scriptGeneration;
+        if (preserveRun) {
+            scriptMachineRevision_.fetch_add(1);
+            emit scriptsContextChanged();
+        }
+        achievementSuppressed = false; achievements.reset(); achievements.refresh();
+        movieBoundary(preserveRun); cheatStatus(); discStatus();
+        if (takeOver) { paused = false; emit pausedChanged(false); }
+        publishMovieTopology();
+        if (paused && !host.frame().isNull()) presentHostFrame();
+    };
+    auto reportScriptMovieError = [&](const ScriptControl& control, const QString& error) {
+        scriptMovieError = error;
+        scripts.movieFailed(control,error);
+        publishScriptUpdates();
+    };
+    const auto rejectMovie = [&](ScriptMovieAction action) -> const char* {
+        if (!host.loaded() || networkMode || achievementHardcore || videoExport)
+            return "Movie control is unavailable in this session";
+        if (movieFile) return "A movie operation is pending";
+        if (detachedMovie.tape)
+            return action == ScriptMovieAction::Stop ? nullptr : "Retry saving the previous recording first";
+        switch (action) {
+        case ScriptMovieAction::Record: case ScriptMovieAction::Play: case ScriptMovieAction::Resume:
+            return movie.active() ? "Finish the current input recording or playback first" : nullptr;
+        case ScriptMovieAction::Rerecord: case ScriptMovieAction::TakeOver:
+            return movie.readOnly() ? nullptr : "Start input playback first";
+        case ScriptMovieAction::Stop:
+            return movie.active() ? nullptr : "No input recording or playback is active";
+        }
+        return "Unknown movie operation";
+    };
+    auto startMovieSave = [&](const ScriptControl& control, QString& error) {
+        const bool starting = !detachedMovie.tape;
+        if (starting) {
+            auto tape = std::make_shared<MovieTape>();
+            const QString path = movie.path();
+            const bool requiresNewFile = movie.requiresNewFile();
+            if (!movie.detachRecording(*tape,error)) {
+                if (error.isEmpty()) error = QStringLiteral("Could not capture the end of the recording");
+                return false;
+            }
+            detachedMovie = {path,std::move(tape),scriptMoviePath,requiresNewFile};
+        }
+        scriptMovieError.clear();
+        try {
+            auto future = std::async(std::launch::async,[recording = detachedMovie] {
+#ifdef KEGA_LUA_MOVIE_TESTS
+                delayMovieFileOperationForTest();
+#endif
+                MovieFileResult result;
+                const QFileInfo target(recording.path);
+                if ((target.exists() && !target.isFile()) ||
+                    (recording.scriptPath &&
+                     (target.isSymLink() || QFileInfo(recording.path + QLatin1String(".bak")).isSymLink() ||
+                      target.absolutePath() != QDir(target.absolutePath()).canonicalPath()))) {
+                    result.error = QStringLiteral("Movie output path is unavailable or no longer a regular path");
+                } else {
+                    recording.tape->save(recording.path,result.error,recording.requiresNewFile);
+                }
+                return result;
+            });
+            movieFile.emplace(MovieFileRequest{control,0,0,true,std::move(future)});
+            scripts.waitForMovie(control.run);
+        } catch (const std::system_error&) {
+            error = QStringLiteral("Unable to start the movie file worker");
+        }
+        publishMovieFileStatus();
+        if (starting) completeMovieStop(false,control.run);
+        return error.isEmpty();
+    };
+    auto processMovieFile = [&] {
+        if (!movieFile || movieFile->future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        auto request = std::move(*movieFile);
+        movieFile.reset();
+        scripts.waitForMovie(0);
+        MovieFileResult result;
+        try {
+            result = request.future.get();
+        } catch (const std::exception&) {
+            result.error = QStringLiteral("The movie file worker failed");
+        }
+        if (request.saving) {
+            if (result.error.isEmpty()) detachedMovie = {};
+            else {
+                reportScriptMovieError(request.control,result.error);
+                if (guiMovieSaveRequested || !scripts.ownsControl(request.control)) emit errorOccurred(result.error);
+            }
+            guiMovieSaveRequested = false;
+            publishMovieFileStatus();
+            movieStatus(true);
+            return;
+        }
+        if (!scripts.ownsControl(request.control)) { publishMovieFileStatus(); return; }
+        const auto action = request.control.movieAction;
+        if (request.revision != scriptMachineRevision_.load() || request.generation != scriptGeneration ||
+            host.debuggerFramePending()) {
+            result.error = QStringLiteral("The movie request was cancelled because the emulation context changed");
+        } else if (const auto* reason = rejectMovie(action)) result.error = QString::fromLatin1(reason);
+        if (result.error.isEmpty()) {
+            const Type type = action == ScriptMovieAction::Record ? Type::MovieRecord
+                : action == ScriptMovieAction::Rerecord ? Type::MovieFork
+                : action == ScriptMovieAction::Resume ? Type::MovieResume : Type::MoviePlay;
+            const bool ok = type == Type::MovieRecord ? movie.startRecording(result.path,result.error,false)
+                : type == Type::MovieFork ? movie.rerecord(result.path,result.error,false)
+                : movie.playPrepared(result.path,std::move(*result.tape),type == Type::MovieResume,result.error);
+            loaded_.store(host.loaded());
+            if (ok) {
+                scriptMachineRevision_.fetch_add(1);
+                emit scriptsContextChanged();
+                completeMovieStart(type,request.control.run);
+                if (paused && !host.frame().isNull()) presentHostFrame();
+                discStatus(); cheatStatus(); publishMovieTopology();
+            } else {
+                if (!host.loaded()) { emit gameClosed(); stopScripts(result.error); }
+                if (result.error.isEmpty()) result.error = QStringLiteral("Unable to apply the movie operation");
+            }
+        }
+        if (!result.error.isEmpty()) reportScriptMovieError(request.control,result.error);
+        publishMovieFileStatus();
+        if (movie.mode() == MovieSession::Finished) {
+            for (const auto& step : scriptSteps)
+                scripts.controlFailed(step,QStringLiteral("Input playback has finished"));
+            scriptSteps.clear();
+        }
+    };
     ScriptHostServices scriptServices;
+    scriptServices.movieStatus = [&] {
+        constexpr std::array modes{"off","recording","playback","finished"};
+        return ScriptMovieStatus{modes[size_t(movie.mode())],movie.position(),movie.length(),movie.frameRate(),
+            movie.path(),scriptMovieError,movie.id().toHex(),movieFile.has_value()};
+    };
+    scriptServices.movieRejection = rejectMovie;
     scriptServices.captureSave = [&](qsizetype remaining, QString& error) -> QByteArray {
         if (!host.loaded() || networkMode || achievementHardcore || videoExport ||
             host.debuggerFramePending()) {
@@ -1656,8 +1908,40 @@ void EmulationSession::run() {
                 }
                 break;
             }
+            case ScriptControlType::Movie: {
+                const auto action = control.movieAction;
+                if (const auto* reason = rejectMovie(action)) error = QString::fromLatin1(reason);
+                else if ((action == ScriptMovieAction::Stop && movie.recording()) || detachedMovie.tape) {
+                    if (startMovieSave(control,error)) repositionedBy = control.run;
+                } else if (action == ScriptMovieAction::Stop || action == ScriptMovieAction::TakeOver) {
+                    if (movie.finish(false,error)) {
+                        scriptMovieError.clear();
+                        completeMovieStop(action == ScriptMovieAction::TakeOver,control.run);
+                        repositionedBy = control.run;
+                    }
+                } else {
+                    scriptMovieError.clear();
+                    const bool load = action == ScriptMovieAction::Play || action == ScriptMovieAction::Resume;
+                    try {
+                        auto future = std::async(std::launch::async,[root = dataPath_,name = control.bytes,load] {
+#ifdef KEGA_LUA_MOVIE_TESTS
+                            delayMovieFileOperationForTest();
+#endif
+                            return prepareScriptMovie(root,name,load);
+                        });
+                        movieFile.emplace(MovieFileRequest{control,scriptMachineRevision_.load(),scriptGeneration,
+                                                           false,std::move(future)});
+                        scripts.waitForMovie(control.run);
+                        publishMovieFileStatus();
+                    } catch (const std::system_error&) {
+                        error = QStringLiteral("Unable to start the movie file worker");
+                    }
+                }
+                if (!error.isEmpty()) reportScriptMovieError(control,error);
+                break;
+            }
             case ScriptControlType::FrameAdvance:
-                if (movie.mode()==MovieSession::Finished)
+                if (movie.mode()==MovieSession::Finished && !movieWaitsFor(control))
                     error=QStringLiteral("Input playback has finished");
                 else if (scriptSteps.size()<ScriptLimits::MaxScripts) scriptSteps.append(control);
                 else error=QStringLiteral("Too many pending frame requests");
@@ -1748,7 +2032,9 @@ void EmulationSession::run() {
                 break;
             }
             }
-            if (!error.isEmpty()) { scripts.controlFailed(control,error); failed=true; }
+            if (!error.isEmpty() && control.type != ScriptControlType::Movie) {
+                scripts.controlFailed(control,error); failed=true;
+            }
         }
         if (mutated) {
             inspectionRequested_.store(true);
@@ -1876,6 +2162,7 @@ void EmulationSession::run() {
                     for (auto it=pending.rbegin();it!=pending.rend();++it)
                         if (it->type==Type::Lua && it->script) commands_.push_front(std::move(*it));
                 }
+                if (movieFile && movieFile->saving) processMovieFile();
                 // No battery writes, preview frames or background hardware
                 // setters while a CPU hook holds the native execution stack.
                 processInspection();
@@ -1957,9 +2244,28 @@ void EmulationSession::run() {
                     continue;
                 }
             }
+            if (command.type == Type::MovieStop && detachedMovie.tape) {
+                guiMovieSaveRequested = true;
+                if (!movieFile && !startMovieSave({},error)) {
+                    guiMovieSaveRequested = false;
+                    scriptMovieError = error;
+                    emit errorOccurred(error);
+                }
+                continue;
+            }
+            if ((movieFile || detachedMovie.tape) &&
+                (command.type == Type::MovieRecord || command.type == Type::MoviePlay ||
+                 command.type == Type::MovieResume || command.type == Type::MovieFork ||
+                 command.type == Type::VideoExport)) {
+                const auto busy = Localization::text(QStringLiteral("Дождитесь завершения текущей операции с записью."));
+                if (command.type == Type::VideoExport) emit videoRecordingFinished(command.path,busy);
+                else emit errorOccurred(busy);
+                continue;
+            }
             if (scripts.hasScripts()) {
                 switch (command.type) {
                 case Type::Reset: case Type::Restore: case Type::RestoreFile:
+                    if (movieFile && !movieFile->saving) movieFile->revision = 0;
                     scripts.invalidateTimeline(false); break;
                 case Type::NetMode: case Type::NetLinkCable: case Type::NetReceiveState:
                 case Type::MovieRecord: case Type::MoviePlay: case Type::MovieResume:
@@ -1968,6 +2274,7 @@ void EmulationSession::run() {
                 case Type::DiscIndex: case Type::Eject: case Type::Cheats:
                 case Type::Port: case Type::ControllerType: case Type::ControllerKind:
                 case Type::Adapter: case Type::CdLoading: case Type::SpriteLimit:
+                    if (movieFile && !movieFile->saving) movieFile->revision = 0;
                     scripts.invalidateTimeline(true); break;
                 default: break;
                 }
@@ -2017,7 +2324,18 @@ void EmulationSession::run() {
                     if (!scriptUpdatePending_) { scriptUpdatePending_=true; emit scriptsReady(); }
                 } else {
                     scriptPolicy();
-                    scripts.command(request,host);
+                    auto prepared = request;
+                    if (prepared.action == ScriptAction::Run) {
+                        prepared.storageRoot = QDir(dataPath_).filePath(QStringLiteral("scripts-data"));
+                        if (QDir::isAbsolutePath(prepared.path)) {
+                            const QDir root(DataFolders::path(dataPath_,QStringLiteral("scripts")));
+                            const QString relative = root.relativeFilePath(QDir::cleanPath(prepared.path));
+                            if (!QDir::isAbsolutePath(relative) && relative != QLatin1String("..") &&
+                                !relative.startsWith(QLatin1String("../")))
+                                prepared.storageIdentity = QStringLiteral("scripts/") + relative;
+                        }
+                    }
+                    scripts.command(prepared,host);
                     publishScriptUpdates();
                     // A received remote rewind image has no matching local memory.
                     // Keep it visible until a canonical network snapshot arrives.
@@ -2333,27 +2651,21 @@ void EmulationSession::run() {
                     if (!host.loaded()) emit gameClosed();
                     emit errorOccurred(error); break;
                 }
-                achievementSuppressed = command.type != Type::MovieRecord;
-                achievements.reset(); achievements.refresh();
-                releaseButtons(); movieBoundary(); optionsPending = false;
-                ++scriptGeneration;
-                scriptEvent(command.type==Type::MovieRecord ? ScriptEvent::Reset : ScriptEvent::LoadState);
-                if ((command.type == Type::MoviePlay || command.type == Type::MovieResume) &&
-                    !host.movieCompatibilityWarning().isEmpty()) {
-                    emit movieCompatibilityWarning(host.movieCompatibilityWarning());
-                    emit notification(host.movieCompatibilityWarning());
-                }
-                paused = movie.mode() == MovieSession::Finished;
-                emit pausedChanged(paused);
+                completeMovieStart(command.type);
                 break;
             }
             case Type::MovieStop:
             case Type::MovieTakeOver:
-                if (movie.active()) {
+                if (command.type == Type::MovieStop && movie.recording()) {
+                    guiMovieSaveRequested = true;
+                    if (!startMovieSave({},error)) {
+                        guiMovieSaveRequested = false;
+                        scriptMovieError = error;
+                        emit errorOccurred(error);
+                    }
+                } else if (movie.active()) {
                     if (!movie.finish(false,error)) { emit errorOccurred(error); break; }
-                    achievementSuppressed = false; achievements.reset(); achievements.refresh();
-                    movieBoundary(); cheatStatus(); discStatus();
-                    if (command.type == Type::MovieTakeOver) { paused = false; emit pausedChanged(false); }
+                    completeMovieStop(command.type == Type::MovieTakeOver);
                 } else movieStatus(true); // Acknowledge stop after a failed pending start (window-close handshake).
                 break;
             case Type::Load:
@@ -2776,6 +3088,7 @@ void EmulationSession::run() {
             stopScripts(Localization::text(QStringLiteral("Lua недоступен в Hardcore и при экспорте видео.")));
             if (host.loaded() && !host.frame().isNull()) presentHostFrame();
         }
+        processMovieFile();
         processScriptControls();
         processInspection();
         processTrace();
@@ -2995,7 +3308,7 @@ void EmulationSession::run() {
         }
         stepHeldLatched = stepHeld;
         const bool scriptFrameRequested=std::any_of(scriptSteps.cbegin(),scriptSteps.cend(),
-            [&](const ScriptControl& request) { return scripts.ownsControl(request); });
+            [&](const ScriptControl& request) { return scripts.ownsControl(request) && !movieWaitsFor(request); });
         if ((frameRequested || scriptFrameRequested) && host.loaded() && paused && !background && !achievementHardcore && !networkRemoteRewinding) {
             if(networkMode==1 && !networkStepAnnounced) {
                 networkStepAnnounced=true;emit networkStepRequested(networkEpoch);
@@ -3069,6 +3382,14 @@ void EmulationSession::run() {
     }
     host.finishDebugFrame();finishFramePipeline();host.debuggerDetach();
     finishVideo();
+    // Join the single movie worker before releasing its detached tape. A
+    // prepared load is discarded during shutdown, even if it passed validation.
+    if (movieFile) {
+        movieFile->future.wait();
+        if (movieFile->saving) processMovieFile();
+        else movieFile.reset();
+    }
+    if (detachedMovie.tape && !scriptMovieError.isEmpty()) emit errorOccurred(scriptMovieError);
     // The encoder drains its bounded queue in its own destructor, after core shutdown.
     QString movieError;
     if (movie.active()) {

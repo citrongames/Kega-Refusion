@@ -38,6 +38,7 @@ add_library(megald_media STATIC src/megald/media/media.c src/megald/media/media.
 set_target_properties(megald_media PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(megald_media PUBLIC src)
 add_library(core_host STATIC src/script/ScriptRuntime.cpp src/script/ScriptRuntime.h src/script/ScriptTypes.h
+    src/script/ScriptStorage.cpp src/script/ScriptStorage.h
     src/core/DataFolders.cpp src/core/DataFolders.h
     src/core/LibretroHost.cpp src/core/LibretroHost.h src/core/LibretroHostLink.cpp src/core/LibretroHostApi.h
     src/core/DebugProject.cpp
@@ -190,6 +191,7 @@ if(BUILD_TESTING)
     target_link_libraries(lua_automation_tests PRIVATE core_host)
     add_executable(lua_session_tests tests/lua_session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
     target_link_libraries(lua_session_tests PRIVATE core_host)
+    target_compile_definitions(lua_session_tests PRIVATE KEGA_LUA_MOVIE_TESTS KEGA_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     add_executable(update_installer_tests tests/update_installer_tests.cpp)
     target_link_libraries(update_installer_tests PRIVATE update_archive kega_archive)
     if(MSVC)

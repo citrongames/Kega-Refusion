@@ -36,6 +36,8 @@ struct ScriptCommand {
     QByteArray source;
     QHash<QString, QImage> images;
     quint64 machineRevision = 0;
+    QString storageRoot{};
+    QString storageIdentity{};
 };
 
 enum class ScriptStatus { Running, Stopped, Error, Log };

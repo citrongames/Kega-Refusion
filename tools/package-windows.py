@@ -121,7 +121,10 @@ def main() -> None:
     shutil.copytree(root / "languages", stage / "languages")
     shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
     shutil.copytree(root / "assets/scripts/examples", stage / "scripts")
-    shutil.copy2(root / "docs/lua-api.md", stage / "scripts" / "lua-api.md")
+    docs = stage / "docs"
+    docs.mkdir()
+    for name in ("lua-api.md", "lua-api.ru.md"):
+        shutil.copy2(root / "docs" / name, docs / name)
     qtbase_ru = qt_root / "translations/qtbase_ru.qm"
     if not qtbase_ru.is_file():
         raise SystemExit(f"Missing Qt Russian translation: {qtbase_ru}")

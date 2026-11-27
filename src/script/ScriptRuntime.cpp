@@ -1,4 +1,5 @@
 #include "ScriptRuntime.h"
+#include "ScriptStorage.h"
 
 #include "core/LibretroHost.h"
 #include "core/MovieTape.h"
@@ -282,6 +283,8 @@ struct ScriptRuntime::Script {
     quint64 id, run;
     QString path;
     QHash<QString, QImage> images;
+    QString storageRoot, storageIdentity;
+    std::unique_ptr<ScriptStorage> storage;
     size_t allocated = 0;
     lua_State* L = nullptr;
     lua_State* topLevel = nullptr;
@@ -321,6 +324,7 @@ struct ScriptRuntime::Script {
     struct Budget {
         int instructions = 0, calls = 0, nativeBytes = 0, logs = 0;
         Clock::time_point deadline;
+        bool storageTransfer = false;
     };
     Budget eventBudget, accessBudget;
     Budget& budget() { return accessEvent ? accessBudget : eventBudget; }
@@ -333,7 +337,8 @@ struct ScriptRuntime::Script {
 
     Script(ScriptRuntime& owner, const ScriptCommand& command)
         : owner(owner), id(command.id), run(++owner.nextRun_),
-          path(command.path.left(4096)), images(command.images) {
+          path(command.path.left(4096)), images(command.images),
+          storageRoot(command.storageRoot), storageIdentity(command.storageIdentity) {
         callbacks.fill(LUA_NOREF);
         L = lua_newstate(allocate, this, luaL_makeseed(nullptr));
         if (L) *static_cast<Script**>(lua_getextraspace(L)) = this;
@@ -352,6 +357,7 @@ struct ScriptRuntime::Script {
         queue.erase(std::remove_if(queue.begin(), queue.end(), [this](const auto& control) {
             return control.run == run;
         }), queue.end());
+        storage.reset();
         if (L) lua_close(L);
     }
 
@@ -534,6 +540,54 @@ struct ScriptRuntime::Script {
             return unavailable(L, "Reset control unavailable here");
         return script.queueControl(ScriptControlType::Reset, hard)
             ? accepted(L) : unavailable(L, "Control queue is full");
+    }
+
+    static int movieStatus(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const auto& services = script.owner.services_;
+        const auto status = services.movieStatus ? services.movieStatus() : ScriptMovieStatus{};
+        const auto& controls = script.owner.controls_;
+        const bool pending = status.pending || std::any_of(controls.cbegin(), controls.cend(),
+            [](const auto& control) { return control.type == ScriptControlType::Movie; });
+        lua_createtable(L, 0, 8);
+        stringField(L, "mode", status.mode);
+        integerField(L, "frame", lua_Integer(status.frame));
+        integerField(L, "length", lua_Integer(status.length));
+        lua_pushnumber(L, status.fps);
+        lua_setfield(L, -2, "fps");
+        booleanField(L, "pending", pending);
+        if (!status.path.isEmpty()) stringField(L, "path", status.path.toUtf8().constData());
+        if (!status.id.isEmpty()) stringField(L, "id", status.id.constData());
+        if (!pending && !status.error.isEmpty()) stringField(L, "error", status.error.toUtf8().constData());
+        return 1;
+    }
+
+    template<ScriptMovieAction Action>
+    static int movieControl(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        QByteArrayView name;
+        if constexpr (Action != ScriptMovieAction::Stop && Action != ScriptMovieAction::TakeOver) {
+            luaL_checktype(L, 1, LUA_TSTRING);
+            name = checkedString(L, 1, 200);
+            if (name.isEmpty() || name.contains('/') || name.contains('\\') ||
+                name.contains(':') || name.contains('\0'))
+                return unavailable(L, "Expected a movie filename in the Movies folder");
+        }
+        const auto& services = script.owner.services_;
+        if (!script.atControlBoundary() || !services.controlAllowed || !services.movieRejection)
+            return unavailable(L, "Movie control unavailable here");
+        if (const char* reason = services.movieRejection(Action)) return unavailable(L, reason);
+        const auto& controls = script.owner.controls_;
+        if (std::any_of(controls.cbegin(), controls.cend(),
+                        [](const auto& control) { return control.type == ScriptControlType::Movie; }))
+            return unavailable(L, "A movie operation is pending");
+        auto* request = script.queueControl(ScriptControlType::Movie);
+        if (!request) return unavailable(L, "Control queue is full");
+        request->movieAction = Action;
+        request->bytes = name.toByteArray();
+        return accepted(L);
     }
 
     static int frameAdvanced(lua_State* L, int, lua_KContext) {
@@ -1244,7 +1298,7 @@ struct ScriptRuntime::Script {
         return 1;
     }
 
-    enum class Work { Arguments, Repeat, Table, Concat };
+    enum class Work { Arguments, Repeat, Table, Concat, Slice, Bytes };
 
     static int guardedLibraryCall(lua_State* L) {
         auto& script = self(L);
@@ -1254,11 +1308,24 @@ struct ScriptRuntime::Script {
         int cost = 0;
         for (int i = 1; i <= count; ++i) {
             if (lua_type(L, i) != LUA_TSTRING) continue;
+            if (i == 1 && (work == Work::Slice || work == Work::Bytes)) continue;
             const auto size = lua_rawlen(L, i);
             if (size > MaxRangeBytes) return luaL_argerror(L, i, "library string exceeds 4096 bytes");
             cost += int(size);
         }
-        if (work == Work::Repeat) {
+        if (work == Work::Slice || work == Work::Bytes) {
+            size_t length = 0;
+            luaL_checklstring(L, 1, &length);
+            const auto size = lua_Integer(length); // Bounded by this environment's allocator.
+            const auto first = work == Work::Bytes ? luaL_optinteger(L, 2, 1) : luaL_checkinteger(L, 2);
+            const auto last = luaL_optinteger(L, 3, work == Work::Bytes ? first : -1);
+            // Match Lua's posrelatI/getendpos, including extreme negative indices.
+            const auto begin = first > 0 ? first : (first == 0 || first < -size ? 1 : size + first + 1);
+            const auto end = last > size ? size : (last >= 0 ? last : (last < -size ? 0 : size + last + 1));
+            const auto bytes = begin <= end ? end - begin + 1 : 0;
+            if (bytes > MaxRangeBytes) return luaL_error(L, "string slice exceeds 4096 bytes");
+            cost += int(bytes);
+        } else if (work == Work::Repeat) {
             const auto text = checkedString(L, 1, MaxRangeBytes);
             const auto repetitions = luaL_checkinteger(L, 2);
             const auto separator = lua_isnoneornil(L, 3) ? QByteArrayView{} : checkedString(L, 3, MaxRangeBytes);
@@ -1329,6 +1396,76 @@ struct ScriptRuntime::Script {
         return 3;
     }
 
+    ScriptStorage& storageService() {
+        if (!storage) storage = std::make_unique<ScriptStorage>(storageRoot, path, storageIdentity);
+        return *storage;
+    }
+
+    static QByteArrayView storageName(lua_State* L) {
+        luaL_checktype(L, 1, LUA_TSTRING);
+        const auto name = checkedString(L, 1, ScriptStorage::MaxNameBytes);
+        if (!ScriptStorage::validName(name)) luaL_argerror(L, 1, "expected a portable storage filename");
+        return name;
+    }
+
+    static int storageRead(lua_State* L) {
+        auto& script = self(L);
+        const auto name = storageName(L);
+        if (!lua_isnoneornil(L, 2)) luaL_checktype(L, 2, LUA_TNUMBER);
+        if (!lua_isnoneornil(L, 3)) luaL_checktype(L, 3, LUA_TNUMBER);
+        const auto offset = luaL_optinteger(L, 2, 0);
+        const auto length = luaL_optinteger(L, 3, ScriptStorage::MaxFileBytes);
+        if (offset < 0 || offset > ScriptStorage::MaxFileBytes)
+            return luaL_argerror(L, 2, "storage read offset outside 0 to 1048576");
+        if (length < 1 || length > ScriptStorage::MaxFileBytes)
+            return luaL_argerror(L, 3, "storage read length outside 1 to 1048576");
+        script.charge(L, int(name.size()));
+        if (!script.atControlBoundary()) return unavailable(L, "Script storage unavailable here");
+        const auto request = script.storageService().read(name, int(offset), int(length));
+        if (request.error) return unavailable(L, request.error);
+        lua_pushinteger(L, request.id);
+        return 1;
+    }
+
+    static int storageWrite(lua_State* L) {
+        auto& script = self(L);
+        const auto name = storageName(L);
+        luaL_checktype(L, 2, LUA_TSTRING);
+        const auto data = checkedString(L, 2, ScriptStorage::MaxFileBytes);
+        script.charge(L, int(name.size()));
+        if (!script.atControlBoundary()) return unavailable(L, "Script storage unavailable here");
+        if (script.budget().storageTransfer) return unavailable(L, "Script storage transfer limit reached");
+        const auto request = script.storageService().write(name, data);
+        if (request.error) return unavailable(L, request.error);
+        script.budget().storageTransfer = true;
+        lua_pushinteger(L, request.id);
+        return 1;
+    }
+
+    static int storageResult(lua_State* L) {
+        auto& script = self(L);
+        luaL_checktype(L, 1, LUA_TNUMBER);
+        const auto id = luaL_checkinteger(L, 1);
+        if (id <= 0) return luaL_argerror(L, 1, "expected a positive storage request ID");
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Script storage unavailable here");
+        if (!script.storage) return unavailable(L, "unknown storage request");
+        const auto result = script.storage->result(id);
+        if (result.error) {
+            if (result.ready) script.storage->release(id);
+            return unavailable(L, result.error);
+        }
+        if (result.written) {
+            script.storage->release(id);
+            return accepted(L);
+        }
+        if (script.budget().storageTransfer) return unavailable(L, "Script storage transfer limit reached");
+        lua_pushlstring(L, result.data.data() ? result.data.data() : "", size_t(result.data.size()));
+        script.budget().storageTransfer = true;
+        script.storage->release(id);
+        return 1;
+    }
+
     static int initialize(lua_State* L) {
         // No Lua finalizers, nested protected calls, coroutine hooks, binary
         // chunks, module lookup, environment loading or OS/file access.
@@ -1349,8 +1486,10 @@ struct ScriptRuntime::Script {
         luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1);
         for (const char* name : {"dump", "find", "gmatch", "gsub", "match", "pack", "packsize", "unpack"})
             erase(L, name);
-        for (const char* name : {"byte", "char", "format", "len", "lower", "reverse", "sub", "upper"})
+        for (const char* name : {"char", "format", "len", "lower", "reverse", "upper"})
             guard(L, name);
+        guard(L, "sub", Work::Slice);
+        guard(L, "byte", Work::Bytes);
         guard(L, "rep", Work::Repeat);
         lua_pushliteral(L, "");
         if (lua_getmetatable(L, -1)) {
@@ -1394,6 +1533,14 @@ struct ScriptRuntime::Script {
         luaL_newlib(L, emu);
         integerField(L, "apiVersion", 1);
         lua_setglobal(L, "emu");
+        const luaL_Reg movie[] = {
+            {"status", movieStatus}, {"record", movieControl<ScriptMovieAction::Record>},
+            {"play", movieControl<ScriptMovieAction::Play>}, {"resume", movieControl<ScriptMovieAction::Resume>},
+            {"rerecord", movieControl<ScriptMovieAction::Rerecord>}, {"stop", movieControl<ScriptMovieAction::Stop>},
+            {"takeover", movieControl<ScriptMovieAction::TakeOver>}, {nullptr, nullptr}
+        };
+        luaL_newlib(L, movie);
+        lua_setglobal(L, "movie");
         const luaL_Reg input[] = {
             {"devices", devices}, {"get", getInput}, {"set", setInput}, {"clear", clearInput},
             {nullptr, nullptr}
@@ -1422,6 +1569,12 @@ struct ScriptRuntime::Script {
         };
         luaL_newlib(L, draw);
         lua_setglobal(L, "draw");
+        const luaL_Reg storage[] = {
+            {"read", storageRead}, {"write", storageWrite}, {"result", storageResult},
+            {nullptr, nullptr}
+        };
+        luaL_newlib(L, storage);
+        lua_setglobal(L, "storage");
         auto& script = self(L);
         script.topLevel = lua_newthread(L);
         script.topLevelRef = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -1539,7 +1692,7 @@ struct ScriptRuntime::Script {
     bool handle(ScriptEvent event, const LibretroHost& core, Hardware& catalog,
                 quint64 number, unsigned side, QVector<ScriptDraw>* overlay,
                 const MovieInput* sampledInput) {
-        const bool resume = event == ScriptEvent::Frame && topLevel;
+        const bool resume = event == ScriptEvent::Frame && topLevel && run != owner.movieWaitingRun_;
         const auto callback = callbacks[size_t(event)];
         const bool dispatchCallback = callback != LUA_NOREF && callback != LUA_REFNIL;
         if (!resume && !dispatchCallback) return true;
@@ -1645,6 +1798,16 @@ void ScriptRuntime::controlFailed(const ScriptControl& control, const QString& e
     (*found)->report(ScriptStatus::Error, error);
     scripts.erase(found);
     if (scripts.empty()) state_.reset();
+}
+
+void ScriptRuntime::movieFailed(const ScriptControl& control, const QString& error) {
+    if (!hasScripts()) return;
+    for (const auto& script : state_->scripts) {
+        if (script->id == control.owner && script->run == control.run) {
+            script->report(ScriptStatus::Log, QStringLiteral("Movie operation failed: %1").arg(error));
+            break;
+        }
+    }
 }
 
 void ScriptRuntime::discardSavedStates() {

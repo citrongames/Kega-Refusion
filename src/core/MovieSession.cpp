@@ -56,7 +56,7 @@ void applyInput(LibretroHost& host, const MovieInput& input) {
 MovieSession::MovieSession(LibretroHost& host, QString)
     : host_(host) {}
 
-bool MovieSession::startRecording(const QString& path, QString& error) {
+bool MovieSession::startRecording(const QString& path, QString& error, bool persistStart) {
     if (active() || !host_.loaded()) { error = Localization::text(QStringLiteral("Сначала откройте игру и закончите текущую запись.")); return false; }
     if (!host_.flushSaveRam(error)) return false;
     const int previousDisc = host_.discIndex();
@@ -77,13 +77,14 @@ bool MovieSession::startRecording(const QString& path, QString& error) {
     // Normalize the record start through exactly the same restoration path as replay.
     if (initial.isEmpty() || !host_.restoreMovieState(initial, error) ||
         !candidate.create(config, initial, error) ||
-        !candidate.setResumeState(initial, 0, error) || !candidate.save(path, error)) {
+        !candidate.setResumeState(initial, 0, error) || (persistStart && !candidate.save(path, error))) {
         restorePreviousSession(host_, previous, previousDisc, true, error);
         if (error.isEmpty()) error = Localization::text(QStringLiteral("Не удалось подготовить начальное состояние записи."));
         return false;
     }
     tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
     cursor_ = 0; mode_ = Recording;
+    requiresNewFile_ = !persistStart;
     return true;
 }
 
@@ -91,6 +92,11 @@ bool MovieSession::play(const QString& path, bool resumeRecording, QString& erro
     if (active() || !host_.loaded()) { error = Localization::text(QStringLiteral("Сначала откройте игру и закончите текущую запись.")); return false; }
     MovieTape candidate;
     if (!candidate.load(path, error)) return false;
+    return playPrepared(path, std::move(candidate), resumeRecording, error);
+}
+
+bool MovieSession::playPrepared(const QString& path, MovieTape candidate, bool resumeRecording, QString& error) {
+    if (active() || !host_.loaded()) { error = Localization::text(QStringLiteral("Сначала откройте игру и закончите текущую запись.")); return false; }
     if (resumeRecording && candidate.resumeState().isEmpty()) {
         error = Localization::text(QStringLiteral("В этой записи нет точки продолжения. Воспроизведите его и выберите запись с нужного места.")); return false;
     }
@@ -111,37 +117,60 @@ bool MovieSession::play(const QString& path, bool resumeRecording, QString& erro
     if (!restoredClock) restoreLegacyClock(host_, candidate, cursor_);
     tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
     mode_ = resumeRecording ? Recording : (tape_.size() ? Playback : Finished);
+    requiresNewFile_ = false;
     host_.setMoviePlayback(true);
     return true;
 }
 
-bool MovieSession::rerecord(const QString& path, QString& error) {
+bool MovieSession::rerecord(const QString& path, QString& error, bool persistStart) {
     if (!readOnly()) { error = Localization::text(QStringLiteral("Сначала включите воспроизведение записи.")); return false; }
     if (QFileInfo(path).absoluteFilePath() == QFileInfo(path_).absoluteFilePath()) {
         error = Localization::text(QStringLiteral("Выберите новое имя: исходная запись останется без изменений.")); return false;
     }
-    MovieTape candidate = tape_;
-    if (!candidate.forkAt(cursor_, error) ||
-        !candidate.setResumeState(host_.captureMovieState(), cursor_, error) ||
-        !candidate.save(path, error)) return false;
-    tape_ = std::move(candidate); path_ = QFileInfo(path).absoluteFilePath();
+    const auto state = host_.captureMovieState();
+    if (state.isEmpty() || state.size() > MovieTape::MaxInitialBytes) {
+        error = Localization::text(QStringLiteral("Недопустимое состояние для продолжения записи."));
+        return false;
+    }
+    // If persistence is deferred, the old prefix has already served playback
+    // and can be branched in place once its anchor is known to be valid.
+    MovieTape candidate = persistStart ? tape_ : MovieTape();
+    auto& branch = persistStart ? candidate : tape_;
+    if (!branch.forkAt(cursor_, error) || !branch.setResumeState(state, cursor_, error) ||
+        (persistStart && !branch.save(path, error))) return false;
+    if (persistStart) tape_ = std::move(candidate);
+    path_ = QFileInfo(path).absoluteFilePath();
     mode_ = Recording; host_.setMoviePlayback(true);
+    requiresNewFile_ = !persistStart;
     return true;
 }
 
-bool MovieSession::saveRecording(QString& error) {
-    if (!recording()) return true;
+bool MovieSession::prepareRecordingEnd(QString& error) {
     // A session ended after rewinding is a deliberate shorter final timeline.
-    if (!tape_.truncate(cursor_) ||
-        !tape_.setResumeState(host_.captureMovieState(), cursor_, error)) return false;
-    return tape_.save(path_, error);
+    return tape_.truncate(cursor_) &&
+        tape_.setResumeState(host_.captureMovieState(), cursor_, error);
 }
-bool MovieSession::finish(bool unload, QString& error) {
-    if (!saveRecording(error)) return false;
+
+bool MovieSession::leaveMovie(bool unload, QString& error) {
     if (unload) host_.unload(); // Keep the read-only battery guard until after unloading.
     if (active() && !host_.restoreMovieConfiguration(error,!unload)) return false;
     host_.setMoviePlayback(false);
-    mode_ = Off; cursor_ = 0; path_.clear(); tape_.clear();
+    mode_ = Off; cursor_ = 0; path_.clear();
+    requiresNewFile_ = false;
+    return true;
+}
+
+bool MovieSession::detachRecording(MovieTape& tape, QString& error) {
+    if (!recording() || !prepareRecordingEnd(error) || !leaveMovie(false,error)) return false;
+    tape = std::move(tape_);
+    tape_.clear();
+    return true;
+}
+
+bool MovieSession::finish(bool unload, QString& error) {
+    if (recording() && (!prepareRecordingEnd(error) || !tape_.save(path_,error,requiresNewFile_))) return false;
+    if (!leaveMovie(unload,error)) return false;
+    tape_.clear();
     return true;
 }
 

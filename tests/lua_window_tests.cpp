@@ -49,10 +49,11 @@ void writeSource(const QString& path, const QByteArray& source) {
     check(file.open(QIODevice::WriteOnly) && file.write(source) == source.size(), "Write script fixture");
 }
 
-void openSource(LuaScriptsDialog& dialog, const QString& path) {
+void openSource(LuaScriptsDialog& dialog, const QString& path, const QString& initialDirectory) {
     find<QPushButton>(dialog, "luaOpen")->click();
     auto* picker = dialog.findChild<QFileDialog*>();
     check(picker && picker->isVisible(), "Modeless script picker");
+    check(picker->directory().absolutePath() == initialDirectory, "Picker uses current scripts folder");
     picker->fileSelected(path);
     picker->reject();
     QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -81,7 +82,9 @@ int main(int argc, char** argv) {
               (russian ? QStringLiteral("Скрипты…") : QStringLiteral("Scripts…")), "Localized File menu entry");
     }
     const auto sourcePath = fixtures.filePath(QStringLiteral("draw.lua"));
-    const auto secondPath = fixtures.filePath(QStringLiteral("other.lua"));
+    const auto otherDirectory = fixtures.filePath(QStringLiteral("other"));
+    check(QDir().mkpath(otherDirectory), "Create second scripts folder");
+    const auto secondPath = QDir(otherDirectory).filePath(QStringLiteral("other.lua"));
     const auto imagePath = fixtures.filePath(QStringLiteral("sprite.png"));
     const QByteArray source("-- @image sprite.png\nprint('first')\n");
     QImage sprite(QSize(4, 4), QImage::Format_ARGB32_Premultiplied);
@@ -93,6 +96,8 @@ int main(int argc, char** argv) {
     LuaScriptsDialog dialog;
     quint64 machineRevision = 12;
     dialog.setMachineRevisionProvider([&] { return machineRevision; });
+    QString scriptsDirectory = fixtures.path();
+    dialog.setScriptsDirectoryProvider([&] { return scriptsDirectory; });
     QList<ScriptCommand> commands;
     QObject::connect(&dialog, &LuaScriptsDialog::commandRequested, &dialog,
                      [&](const ScriptCommand& command) { commands.append(command); });
@@ -106,7 +111,7 @@ int main(int argc, char** argv) {
     auto* edit = find<QPlainTextEdit>(dialog, "luaSource");
     auto* expanded = find<QToolButton>(dialog, "luaEditorToggle");
     check(!expanded->isChecked(), "Editor initially collapsed");
-    openSource(dialog, sourcePath);
+    openSource(dialog, sourcePath, fixtures.path());
     waitFor([&] { return edit->toPlainText().toUtf8() == source; }, "Open loads source asynchronously");
     check(commands.isEmpty() && !run->isEnabled(), "Opening never runs a script");
 
@@ -153,7 +158,8 @@ int main(int argc, char** argv) {
     check(commands.last().action == ScriptAction::Run && commands.last().id == first.id, "Restart replaces existing id");
     dialog.applyUpdates({{first.id, sourcePath, ScriptStatus::Running, {}}});
 
-    openSource(dialog, secondPath);
+    scriptsDirectory = otherDirectory;
+    openSource(dialog, secondPath, otherDirectory);
     waitFor([&] { return run->isEnabled(); }, "Second script loaded independently");
     check(scripts->topLevelItemCount() == 2, "Two loaded scripts");
     run->click();

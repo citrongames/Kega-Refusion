@@ -7,11 +7,19 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QTemporaryFile>
 #include <QUuid>
 #include <QtEndian>
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 namespace {
 constexpr char MovieMagic[8] = {'K','R','M','O','V','I','E','1'};
@@ -104,6 +112,35 @@ bool writeAtomic(const QString& path, const QByteArray& bytes, QString& error) {
         return false;
     }
     return true;
+}
+bool writeNewMovie(const QString& path, const QByteArray& bytes, QString& error) {
+    QTemporaryFile temporary(QFileInfo(path).absolutePath() + QStringLiteral("/.kega-movie-XXXXXX"));
+    const auto failed = [&](const QString& reason) {
+        error = Localization::text(QStringLiteral("Не удалось сохранить запись %1: %2")).arg(path,reason);
+        return false;
+    };
+    if (!temporary.open() || temporary.write(bytes) != bytes.size() || !temporary.flush())
+        return failed(temporary.errorString());
+#ifdef Q_OS_LINUX
+    // Qt may fall back to a replacing rename on filesystems without hard links.
+    // A first publication must fail atomically if somebody claims the name.
+    const auto from = QFile::encodeName(temporary.fileName());
+    const auto to = QFile::encodeName(path);
+#if defined(SYS_renameat2) && defined(RENAME_NOREPLACE)
+    if (::syscall(SYS_renameat2,AT_FDCWD,from.constData(),AT_FDCWD,to.constData(),RENAME_NOREPLACE) == 0) {
+        temporary.setAutoRemove(false); // The temporary name moved.
+        return true;
+    }
+    if (errno != ENOSYS && errno != EINVAL && errno != EOPNOTSUPP)
+        return failed(QString::fromLocal8Bit(std::strerror(errno)));
+#endif
+    if (::link(from.constData(),to.constData()) == 0) return true;
+    return failed(QString::fromLocal8Bit(std::strerror(errno)));
+#else
+    if (!temporary.rename(path)) return failed(temporary.errorString());
+    temporary.setAutoRemove(false);
+    return true;
+#endif
 }
 bool movieEnvelopeValid(const QByteArray& bytes) {
     if (bytes.size() < MovieHeaderBytes + HashBytes || bytes.size() > MaxMovieFileBytes ||
@@ -255,7 +292,7 @@ bool MovieTape::load(const QString& path, QString& error) {
     return true;
 }
 
-bool MovieTape::save(const QString& path, QString& error) const {
+bool MovieTape::save(const QString& path, QString& error, bool newFile) const {
     error.clear();
     if (!isValid() || !path.endsWith(QStringLiteral(".krm"), Qt::CaseInsensitive)) {
         error = Localization::text(QStringLiteral("Для записи нужен путь файла .krm."));
@@ -279,6 +316,7 @@ bool MovieTape::save(const QString& path, QString& error) const {
     bytes.append(resumeState_);
     appendRuns(bytes, frameCount_, FormatVersion);
     seal(bytes);
+    if (newFile) return writeNewMovie(path,bytes,error);
     if (QFileInfo::exists(path)) {
         QFile old(path);
         if (!old.open(QIODevice::ReadOnly) || old.size() > MaxMovieFileBytes || old.size() < 0) {

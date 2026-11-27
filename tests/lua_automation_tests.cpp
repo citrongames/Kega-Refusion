@@ -119,7 +119,8 @@ print('recorded branch passed')
 )");
         waitFor([&]{return logged(20,"recorded branch passed");},"recording and temporary branch restore");
         stop();waitFor([&]{return status(20,ScriptStatus::Stopped);},"stop recording script");
-        session.stopMovie();waitFor([&]{return movieMode==0 && QFile::exists(moviePath);},"movie saved");
+        session.stopMovie();waitFor([&]{return movieMode==0 && !session.hasUnsavedMovie() &&
+            !session.movieFileOperationPending() && QFile::exists(moviePath);},"movie saved");
         MovieTape tape;QString error;check(tape.load(moviePath,error),qPrintable(error));
         check(tape.size()==2,"restored movie branch length");
         MovieInput first,second;check(tape.inputAt(0,first)&&tape.inputAt(1,second),"movie inputs");

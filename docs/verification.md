@@ -921,3 +921,49 @@ The final Windows testbuild matches all 83 staged package files byte for byte, i
 the executable, languages, example and API guide. No Windows application was
 launched or controlled. Generated package staging and the old benchmark copy
 were removed after verification; incremental builds and small evidence logs remain.
+
+### Lua Phase 4A: files and native recordings — 2026-11-27
+
+The native core and its deterministic format were not changed. The frontend
+adds general asynchronous script storage and control over its existing native
+input recordings. File preparation, parsing and explicit-stop persistence are
+off-thread. Native configuration/state capture still use the established safe
+emulation boundary. No filesystem operation or waiting occurs in Lua callbacks.
+
+Focused Linux checks passed:
+
+- lua_runtime_tests: binary file round trip, partial reads and EOF, per-source
+  identity and restart, bounded queues/results, unsafe names/links and oversized
+  files, large-string bounded slices, and the shipped file-roundtrip.lua example.
+- movie_tape_tests: existing input file readers/writers plus exclusive creation
+  that leaves an occupied destination unchanged.
+- lua_session_tests on the real core and generated MD fixture: exact recorded
+  controls, start/reset continuation, playback, new branch identity and shared
+  prefix, resume with backup, finished playback takeover, and stale preparation
+  cancellation after reset. A test-only 200 ms worker delay confirmed live game
+  frames continue during a detached save. Deliberate output failure retained the
+  captured tape, and retry saved the original endpoint rather than later gameplay.
+- The same session check executes the shipped recording-activity.lua in record
+  and replay modes, including its file data and visible graph aligned to the
+  native recording. It does not substitute a simplified implementation.
+- lua_automation_tests: existing input merge, paused steps, temporary-state branch,
+  script-free playback, error cleanup and timeline cancellation. Its old file
+  completion assertion was updated to wait for the new asynchronous save.
+- lua_window_tests and a focused folder check: configured Scripts directory,
+  changing the directory between opens, portable relative defaults/overrides and
+  platform-specific absolute overrides.
+
+Review also corrected the active-recording close race, GUI acknowledgment for
+rejected busy movie/export actions, and a sample that could continue stepping
+after a failed start. Storage and movie workers have explicit queue/ownership
+bounds; scripts never spawn new emulated machines. No broad hardware audit or
+Windows interactive testing was repeated for these frontend changes.
+
+Linux and Windows Release applications compile successfully. Windows testbuild
+contains both English/Russian API references under docs, the configurable Scripts
+path and the two new examples. All 85 package entries match their SHA-256
+manifest and staging byte-for-byte. EXE SHA-256:
+500bec08f0a189fd8c749f49525198e379a19e313f2788d522355c65db971031.
+Build/packaging logs and hash verification remain under ignored
+build/verification/lua-phase4; package staging was removed. User files were
+retained. No GitHub release or updater version was created for this batch.

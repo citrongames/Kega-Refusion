@@ -630,7 +630,9 @@ void LuaScriptsDialog::showSource(const Entry* script) {
 
 void LuaScriptsDialog::openScript() {
     if (choosingFile_ || entries_.size() >= ScriptLimits::MaxScripts) return;
-    auto* dialog = new QFileDialog(this, text("Открыть скрипт…"), lastDirectory_,
+    const QString directory = scriptsDirectory_ ? scriptsDirectory_() : QString{};
+    auto* dialog = new QFileDialog(this, text("Открыть скрипт…"),
+                                  QFileInfo(directory).isDir() ? directory : QString{},
                                   text("Скрипты Lua (*.lua);;Все файлы (*)"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowModality(Qt::NonModal);
@@ -649,7 +651,6 @@ void LuaScriptsDialog::openScript() {
 void LuaScriptsDialog::addScript(const QString& path) {
     if (path.isEmpty() || entries_.size() >= ScriptLimits::MaxScripts) return;
     const auto absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-    lastDirectory_ = QFileInfo(absolute).absolutePath();
 #ifdef Q_OS_WIN
     constexpr auto pathCase = Qt::CaseInsensitive;
 #else
@@ -894,6 +895,10 @@ void LuaScriptsDialog::setExecutionAvailable(bool available) {
 
 void LuaScriptsDialog::setMachineRevisionProvider(std::function<quint64()> provider) {
     machineRevision_ = std::move(provider);
+}
+
+void LuaScriptsDialog::setScriptsDirectoryProvider(std::function<QString()> provider) {
+    scriptsDirectory_ = std::move(provider);
 }
 
 void LuaScriptsDialog::discardPendingStarts() {

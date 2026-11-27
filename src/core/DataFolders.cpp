@@ -101,11 +101,12 @@ bool validPath(const QString& value) {
 QStringList DataFolders::categories() {
     return {QStringLiteral("bios"), QStringLiteral("cheats"), QStringLiteral("movies"),
             QStringLiteral("patches"), QStringLiteral("saves"), QStringLiteral("screenshots"),
-            QStringLiteral("shaders"), QStringLiteral("states"), QStringLiteral("videos")};
+            QStringLiteral("scripts"), QStringLiteral("shaders"), QStringLiteral("states"),
+            QStringLiteral("videos")};
 }
 
 QString DataFolders::defaultSetting(const QString& dataRoot, const QString& category) {
-    if (category == QLatin1String("shaders")) {
+    if (category == QLatin1String("shaders") || category == QLatin1String("scripts")) {
         const QString bundled = QDir(QCoreApplication::applicationDirPath()).filePath(category);
         return QDir(dataRoot).relativeFilePath(bundled);
     }
@@ -156,7 +157,7 @@ bool DataFolders::save(const QString& dataRoot, const Folders& changes,
             return fail(QStringLiteral("Не удалось создать папку: %1"), folder);
         const QFileInfo info(folder);
         const bool readOnlyAllowed = key == QLatin1String("bios") || key == QLatin1String("patches") ||
-                                     key == QLatin1String("shaders");
+                                     key == QLatin1String("shaders") || key == QLatin1String("scripts");
         if (!info.isReadable() || (!readOnlyAllowed && !info.isWritable()))
             return fail(QStringLiteral("Нет доступа к папке: %1"), folder);
         validated.insert(key, value);

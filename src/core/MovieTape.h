@@ -36,7 +36,7 @@ public:
 
     bool create(const QJsonObject& metadata, const QByteArray& initialState, QString& error);
     bool load(const QString& path, QString& error);
-    bool save(const QString& path, QString& error) const;
+    bool save(const QString& path, QString& error, bool newFile = false) const;
     // Stored in the same .krm for fast continuation across app sessions.
     // The caller captures a full core snapshot at cursor after settling any
     // recording branch; subsequent timeline changes invalidate this anchor.

@@ -1,10 +1,18 @@
 # Kega Refusion Lua API 1
 
+[Русская версия](lua-api.ru.md)
+
 Open **File → Scripts…** while a game is loaded. Open a
 UTF-8 `.lua` source file and choose **Run**. You can edit the code in the
 script window or in an external editor, then restart it. The console shows
-`print(...)` output and Lua errors for each script. Both packages include
-examples in the `scripts` folder.
+`print(...)` output and Lua errors for each script.
+
+The file picker starts in the `scripts` folder beside the emulator, which
+contains the included examples. To choose a different starting folder, open
+**Settings → Emulator Settings… → Folders → Scripts**. Relative paths are
+resolved from the folder containing `settings.ini`. Absolute paths are stored
+separately for Windows and Linux. Both language versions of this guide ship in
+the emulator's `docs` folder.
 
 ## Events and lifecycle
 
@@ -264,6 +272,73 @@ hardware, controller topology or cheats can discard snapshots. A restore
 recovers the machine and its clock. The requesting sequence continues from
 its current Lua state and can reuse its handles. Restore clears input overrides.
 
+## Input recordings
+
+Use the `movie` library to control the same `.krm` recordings as the Input menu.
+The control functions are available in local play at script startup, in the
+`frame` callback and after `emu.frameadvance()` resumes. Netplay permits status
+inspection. Hardcore and video export disable Lua.
+
+### Recording status
+
+`movie.status()` returns a table. The frame is the number of movie inputs already
+applied. In a `frame` callback it includes the frame that just completed.
+
+| Field | Value |
+| --- | --- |
+| `mode` | `"off"`, `"recording"`, `"playback"` or `"finished"` |
+| `frame` | Current position in the input tape. Zero before its first frame. |
+| `length` | Number of input frames in the tape. |
+| `fps` | Recorded refresh rate when a tape is active and the current console rate otherwise. |
+| `path` | Absolute path of the active movie, or `nil` when off. |
+| `id` | Native movie identity as 32 lowercase hexadecimal characters, or `nil` when off. A resumed recording keeps its identity. A branch receives a new one. |
+| `pending` | True while a queued request is being prepared or a stopped recording is being written. |
+| `error` | Reason the last operation failed, or `nil` while pending or after success. |
+
+### Recording commands
+
+- `movie.record(name)` begins a recording from power-on and sends a `reset` event.
+- `movie.play(name)` opens an existing movie at its first frame and sends a
+  `loadstate` event. The emulator pauses when playback reaches the end.
+- `movie.resume(name)` restores the saved continuation point of an existing movie
+  and continues recording into its identity. An older file without a continuation
+  point can be played and branched. Resume sends a `loadstate` event.
+- `movie.rerecord(name)` begins a new recording with the input prefix through the
+  current playback position, including at the end of a movie. It sends a
+  `loadstate` event. Pause before requesting a branch at an exact frame.
+- `movie.stop()` ends the current recording or playback. When stopping a recording,
+  the emulator captures the completed prefix and its continuation state, then
+  releases the game to live input while the file is saved. The pause setting is
+  preserved.
+- `movie.takeover()` ends playback and resumes the game with live input. It is
+  available during playback and at the end of a movie.
+
+Names are UTF-8 filenames within the configured **Movies** folder, up to 200
+bytes. The `.krm` suffix is optional. Absolute paths, directory separators and
+symbolic links at movie filenames are rejected. Record and rerecord require
+fresh filenames. A movie started by Lua is written when it is stopped or the
+game closes.
+
+Each command returns `true` when queued, or `nil, reason` if the command is
+unavailable. Only one movie operation can be pending at a time. Preparation and
+movie file I/O run separately from emulation. The game can continue running
+during preparation. The native transition runs on the emulation worker between
+completed frames and preserves pause, except at the end of playback or on
+takeover. A top-level `emu.frameadvance()` following an asynchronous movie
+command resumes after that command and the next eligible frame. A successful
+transition releases Lua input overrides and clears temporary Lua save states.
+
+A later failure appears in `movie.status().error` and is reported to the
+requester's console. If a stopped recording cannot be saved, the emulator
+keeps its captured tape in memory. Call `movie.stop()` again once the file can
+be saved. The retry also appears in the Input menu. The application waits for
+the outstanding recording before closing.
+
+The native movie stores controller inputs, hardware metadata and core states.
+Lua variables are live in the script's current environment. Save any
+measurements to script storage and use the recorded movie's identity and frame
+position to align them during playback.
+
 ## Drawing
 
 Drawing from a callback follows its exact presented video frame. Game space
@@ -298,6 +373,47 @@ x, y)`. The app reads and decodes these files before execution. Up to 16 images
 per script are allowed, each up to 1,024 pixels per side and together up to
 8 MiB decoded.
 
+## Script files
+
+`storage.write(name, data)` queues replacement of a file with the given Lua
+string. Embedded zero bytes and empty strings are supported. The worker writes
+a temporary file, then replaces the destination atomically.
+
+`storage.read(name[, offset[, length]])` queues a read. The offset is zero-based
+and defaults to zero. Length defaults to 1,048,576 bytes and must be between
+1 and 1,048,576. Offsets from zero through 1,048,576 are accepted. At or past
+end of file, the result is an empty string. A read that reaches the end early
+returns the remaining bytes.
+
+Both functions return a positive request ID or `nil, reason`. Poll
+`storage.result(id)` in a `"frame"` callback or after `emu.frameadvance()`:
+
+- `nil, "pending"` while the worker is still handling the request.
+- `true` after a successful write or a Lua byte string after a successful read.
+- `nil, reason` if the operation failed or the current script has no such request.
+
+A completed result is consumed when returned. One write submission or successful
+read result can transfer data per Lua invocation. If a completed read exceeds that
+invocation's transfer limit, its result remains available on a later invocation.
+File operations can be requested and polled at startup and after completed frames.
+Stopping or restarting a script drops its results and cancels pending work. A
+write already committing can finish.
+
+Files live under `<data folder>/scripts-data` in a separate directory per source
+script, identified by its filename stem and a hash of its path. For sources
+inside the configured Scripts folder, that identity follows the relative path
+within that folder. Use a filename of up to 96 ASCII characters beginning with
+a letter or digit. Letters, digits, periods, dashes and underscores are
+permitted. Trailing periods, reserved Windows device names and filesystem links
+are rejected. Each file can be up to 1 MiB. The runtime allows eight outstanding
+requests per script, 32 total and 8 MiB across pending data and results.
+
+Large file strings can be inspected in bounded pieces with string.sub and
+string.byte. These two functions accept a large source string and charge only
+the selected range (at most 4,096 bytes per call). The other guarded string
+helpers still accept at most 4,096 bytes per argument. Use #data for the length
+of a large string. Parsing incrementally keeps a script within its frame budget.
+
 ## Runtime limits
 
 Eight scripts can run at once. Each uses up to 4 MiB of Lua allocations,
@@ -312,12 +428,33 @@ The log shows one truncation notice per window in which the limit is reached.
 The runtime provides selected Lua 5.5 base, math, string, table and UTF-8
 functions. Use ordinary tables, functions and loops. The available string
 helpers include formatting, slicing and repetition of bounded strings.
-Table sequence helpers are limited to 256 entries. Filesystem, process,
+Table sequence helpers are limited to 256 entries. General filesystem, process,
 network, bytecode, dynamic code loading, the general coroutine library, Lua metatable access,
 protected call functions, string patterns and binary string packing are
-unavailable.
+unavailable. Use the asynchronous storage API for script-owned files.
 
 ## Included examples
+
+file-roundtrip.lua writes one small text file, reads it back asynchronously,
+and checks the contents. It does not change game memory or record input.
+
+recording-activity.lua demonstrates native input recording with a separate saved
+graph. Set mode to "record" or "replay" and choose recordingName near the top.
+By default it records 30 seconds, measured using the recording's actual refresh
+rate. Set seconds to 0 to stop through the Input menu instead. A new recording
+requires a fresh name. Run the same script file for replay so its storage identity
+stays the same. The graph is loaded before native input playback starts and is
+matched to that recording's identity.
+
+Each graph point estimates activity over 60 emulated frames from controller
+polls; this is not a universal measure of game-update FPS. The example keeps at
+most 4,096 points and writes its data once when recording finishes. On rewind
+or load during recording, it discards future points and starts a new sample window;
+it does not pretend to restore an interrupted window or arbitrary Lua locals.
+Stopping the script itself before it saves does not save its observations.
+File preparation/parsing uses explicit frame stepping; scripts needing different
+interaction should use frame callbacks or their own controls.
+
 
 `input-automation.lua` finds a pad with a right direction, captures a
 temporary checkpoint and holds Right for 30 emulated frames. It restores

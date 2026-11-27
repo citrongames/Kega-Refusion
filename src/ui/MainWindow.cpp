@@ -535,7 +535,17 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
         moviePath_ = path;
         view_->setMovieStatus(mode, frame, length, fps);
         if (completed || changed) updateMovieActions();
-        if (closeAfterMovie_ && mode == 0) {
+        if (closeAfterMovie_ && mode == 0 && !session_.hasUnsavedMovie() &&
+            !session_.movieFileOperationPending()) {
+            closeAfterMovie_ = false;
+            QTimer::singleShot(0, this, [this] { close(); });
+        }
+    });
+    connect(&session_, &EmulationSession::movieFileOperationChanged, this, [this] {
+        updateMovieActions();
+        updateVideoActions();
+        if (closeAfterMovie_ && movieMode_ == 0 && !session_.hasUnsavedMovie() &&
+            !session_.movieFileOperationPending()) {
             closeAfterMovie_ = false;
             QTimer::singleShot(0, this, [this] { close(); });
         }
@@ -1794,6 +1804,9 @@ void MainWindow::showLuaScripts() {
     if (!luaScriptsDialog_) {
         luaScriptsDialog_=new LuaScriptsDialog(this);
         luaScriptsDialog_->setMachineRevisionProvider([this] { return session_.scriptMachineRevision(); });
+        luaScriptsDialog_->setScriptsDirectoryProvider([this] {
+            return DataFolders::path(dataPath_, QStringLiteral("scripts"));
+        });
         connect(luaScriptsDialog_,&LuaScriptsDialog::commandRequested,this,[this](const ScriptCommand& command) {
             if (!session_.scriptCommand(command)) {
                 luaScriptsDialog_->rejectCommand(command,
@@ -3045,6 +3058,7 @@ void MainWindow::editSettings(int initialPage) {
         {QStringLiteral("patches"), Localization::text(QStringLiteral("Патчи"))},
         {QStringLiteral("saves"), Localization::text(QStringLiteral("Память игр"))},
         {QStringLiteral("screenshots"), Localization::text(QStringLiteral("Скриншоты"))},
+        {QStringLiteral("scripts"), Localization::text(QStringLiteral("Скрипты"))},
         {QStringLiteral("shaders"), Localization::text(QStringLiteral("Шейдеры"))},
         {QStringLiteral("states"), Localization::text(QStringLiteral("Быстрые сохранения"))},
         {QStringLiteral("videos"), Localization::text(QStringLiteral("Видео"))}};
@@ -3643,7 +3657,8 @@ void MainWindow::startVideoCapture() {
 
 void MainWindow::exportInputVideo() {
     if (!session_.hasGame() || loading_ || videoActive_ || videoPending_ || videoExporting_ || movieMode_ != 0 ||
-        moviePending_ || achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
+        moviePending_ || session_.hasUnsavedMovie() || session_.movieFileOperationPending() ||
+        achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
     releaseInput();
     const QString source = QFileDialog::getOpenFileName(this,
         Localization::text(QStringLiteral("Экспортировать запись ввода в видео")),
@@ -3653,7 +3668,8 @@ void MainWindow::exportInputVideo() {
     if (source.isEmpty()) return;
     const QString path = chooseVideoSavePath(true);
     if (path.isEmpty() || !session_.hasGame() || loading_ || movieMode_ != 0 ||
-        moviePending_ || achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
+        moviePending_ || session_.hasUnsavedMovie() || session_.movieFileOperationPending() ||
+        achievementsHardcore_ || session_.networkActive() || netplay_->active()) return;
     videoPending_ = true;
     videoExporting_ = true;
     videoStopping_ = false;
@@ -3701,6 +3717,7 @@ void MainWindow::updateVideoActions() {
     videoStartAction_->setToolTip(Localization::text(QStringLiteral(
         "MOV: видео PNG без потерь в исходном разрешении, звук AAC 256 кбит/с; без OSD.")));
     videoExportAction_->setEnabled(game && !busy && movieMode_ == 0 && !moviePending_ &&
+        !session_.hasUnsavedMovie() && !session_.movieFileOperationPending() &&
         !achievementsHardcore_ && !session_.networkActive() && !netplay_->active());
     videoStopAction_->setEnabled(busy && !videoStopping_);
     if (openGameAction_) openGameAction_->setEnabled(!loading_ && !videoExporting_);
@@ -3742,16 +3759,19 @@ void MainWindow::updateMovieActions() {
     if (!movieMenu_) return;
     const bool game = session_.hasGame() && !loading_ && !videoExporting_;
     const bool protectedMovie = movieMode_ != 0;
-    const bool ready = game && !moviePending_;
-    movieMenu_->setEnabled(game);
+    const bool unsaved = session_.hasUnsavedMovie();
+    const bool filePending = session_.movieFileOperationPending();
+    const bool ready = game && !moviePending_ && !filePending && !unsaved;
+    movieMenu_->setEnabled(game || unsaved);
     movieRecordAction_->setEnabled(ready && movieMode_ == 0);
     movieResumeAction_->setEnabled(ready && movieMode_ == 0 && !achievementsHardcore_);
     moviePlayAction_->setEnabled(ready && movieMode_ == 0 && !achievementsHardcore_);
     movieTakeoverAction_->setEnabled(ready && (movieMode_ == 2 || movieMode_ == 3));
     movieRerecordAction_->setEnabled(ready && !achievementsHardcore_ &&
                                      (movieMode_ == 2 || movieMode_ == 3));
-    movieStopAction_->setEnabled(ready && protectedMovie);
-    const QString stopLabel = movieMode_ == 1
+    movieStopAction_->setEnabled(!moviePending_ && !filePending &&
+                                 ((game && protectedMovie) || unsaved));
+    const QString stopLabel = movieMode_ == 1 || unsaved
         ? Localization::text(QStringLiteral("Сохранить и закончить запись"))
         : Localization::text(QStringLiteral("Остановить воспроизведение"));
     if (movieStopAction_->text() != stopLabel) movieStopAction_->setText(stopLabel);
@@ -4336,14 +4356,19 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         stopVideoCapture();
         return;
     }
-    if (movieMode_ == 1 || (moviePending_ && moviePendingMode_ == 1)) {
+    if (movieMode_ == 1 || (moviePending_ && moviePendingMode_ == 1) ||
+        session_.hasActiveMovieRecording() || session_.hasUnsavedMovie() || session_.movieFileOperationPending()) {
         event->ignore();
         if (!closeAfterMovie_) {
             closeAfterMovie_ = true;
             moviePending_ = true;
             moviePendingMode_ = 0;
             updateMovieActions();
-            session_.closeGame(); // Save and unload while movie battery writes are still guarded.
+            // Detached file writes must finish (or report an error) before the
+            // close handshake succeeds. The session remains responsive meanwhile.
+            if (session_.hasUnsavedMovie() || session_.movieFileOperationPending())
+                session_.stopMovie();
+            else session_.closeGame(); // Save/unload with the battery guard retained.
         }
         return;
     }

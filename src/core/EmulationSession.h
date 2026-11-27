@@ -28,6 +28,9 @@ class EmulationSession final : public QThread {
 public:
     explicit EmulationSession(QString corePath, QString dataPath, QObject* parent = nullptr);
     ~EmulationSession() override;
+    bool hasActiveMovieRecording() const { return activeMovieRecording_.load(); }
+    bool hasUnsavedMovie() const { return unsavedMovie_.load(); }
+    bool movieFileOperationPending() const { return movieFilePending_.load(); }
     quint64 scriptMachineRevision() const { return scriptMachineRevision_.load(); }
     bool scriptCommand(const ScriptCommand& command);
     QVector<ScriptUpdate> takeScriptUpdates();
@@ -180,6 +183,7 @@ signals:
     void videoRecordingChanged(bool active, bool exporting, const QString& path);
     void videoExportProgress(quint64 done, quint64 total);
     void videoRecordingFinished(const QString& path, const QString& error);
+    void movieFileOperationChanged();
     void movieCompatibilityWarning(const QString& message);
     void movieStatusChanged(int mode, const QString& path, quint64 frame, quint64 length, double fps);
     void controllerTopologyChanged(int adapter, unsigned playerCount);
@@ -249,6 +253,7 @@ private:
     ScriptDebugAnnotations scriptAnnotations_;
     bool scriptAnnotationsPending_ = false;
     std::atomic<quint64> scriptMachineRevision_{1};
+    std::atomic_bool activeMovieRecording_{false}, unsavedMovie_{false}, movieFilePending_{false};
     ScriptOverlayPtr latestScriptOverlay_;
     std::mutex mutex_, videoMutex_, inspectionMutex_;
     std::mutex coverageMutex_;

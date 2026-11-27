@@ -7,7 +7,17 @@
 class LibretroHost;
 struct MovieInput;
 
-enum class ScriptControlType { Pause, Reset, LoadState, FrameAdvance, MemoryWrite, RegisterWrite };
+enum class ScriptControlType { Pause, Reset, LoadState, FrameAdvance, MemoryWrite, RegisterWrite, Movie };
+enum class ScriptMovieAction { Record, Play, Resume, Rerecord, Stop, TakeOver };
+
+struct ScriptMovieStatus {
+    const char* mode = "off";
+    quint64 frame = 0, length = 0;
+    double fps = 0;
+    QString path, error;
+    QByteArray id;
+    bool pending = false;
+};
 struct ScriptControl {
     ScriptControlType type;
     quint64 owner;
@@ -18,6 +28,7 @@ struct ScriptControl {
     quint32 offset = 0, valueBits = 0;
     QByteArray bytes, registerName;
     quint64 saveRevision = 0;
+    ScriptMovieAction movieAction = ScriptMovieAction::Stop;
 };
 
 struct ScriptHostServices {
@@ -27,6 +38,8 @@ struct ScriptHostServices {
     std::function<QByteArray(qsizetype remaining, QString& error)> captureSave;
     bool mutationAllowed = false;
     bool accessAllowed = false;
+    std::function<ScriptMovieStatus()> movieStatus;
+    std::function<const char*(ScriptMovieAction)> movieRejection;
 };
 
 // Owned, called and destroyed on the emulation worker. No file or Qt widget access.
@@ -45,6 +58,8 @@ public:
     QVector<ScriptControl> takeControls();
     bool ownsControl(const ScriptControl& control) const;
     void controlFailed(const ScriptControl& control, const QString& error);
+    void movieFailed(const ScriptControl& control, const QString& error);
+    void waitForMovie(quint64 run) { movieWaitingRun_ = run; }
     void invalidateTimeline(bool discardSaves, quint64 preserveRun = 0);
     void discardSavedStates();
     quint64 accessRevision() const { return accessRevision_; }
@@ -68,7 +83,7 @@ private:
     ScriptHostServices services_;
     QVector<ScriptControl> controls_;
     QVector<ScriptUpdate> updates_;
-    quint64 nextRun_ = 0;
+    quint64 nextRun_ = 0, movieWaitingRun_ = 0;
     quint64 saveRevision_ = 0, accessRevision_ = 0, annotationRevision_ = 0;
     qsizetype accessCount_ = 0, labelCount_ = 0, watchCount_ = 0;
     quint32 nextLabel_ = 0, nextWatch_ = 0x7fffffff;

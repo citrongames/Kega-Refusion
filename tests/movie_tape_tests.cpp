@@ -188,7 +188,9 @@ int main() {
     const QByteArray checkpoint = tape.checkpoint(101, error);
     const QByteArray laterCheckpoint = tape.checkpoint(102, error);
     check(!checkpoint.isEmpty(), "checkpoint within run");
-    check(tape.save(path, error), "initial save");
+    check(tape.save(path, error, true), "exclusive initial save");
+    check(!tape.save(path, error, true) && !QFile::exists(path + QStringLiteral(".bak")),
+          "exclusive save rejects an existing file even when its movie ID matches");
     const QFileInfo initialFile(path);
     check(initialFile.size() < 1000, "RLE serialized file size");
     check(tape.save(path, error) && !QFile::exists(path + QStringLiteral(".bak")),

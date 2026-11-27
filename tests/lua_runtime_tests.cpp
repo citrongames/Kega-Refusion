@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtEndian>
 #include <cstdio>
 #include <stdexcept>
@@ -807,6 +808,201 @@ end)
     runtime.stopAll();
     runtime.takeUpdates();
 }
+
+QVector<ScriptUpdate> runStorage(ScriptRuntime& runtime, const LibretroHost& host,
+                                 const QString& root, const QByteArray& source,
+                                 const QString& identity = QStringLiteral("scripts/capture.lua")) {
+    ScriptCommand command{};
+    command.id = 8;
+    command.path = QDir(root).filePath(QStringLiteral("capture.lua"));
+    command.source = source;
+    command.storageRoot = root;
+    command.storageIdentity = identity;
+    runtime.command(command, host);
+    return runtime.takeUpdates();
+}
+
+void awaitStorage(ScriptRuntime& runtime, const LibretroHost& host, const QString& log) {
+    for (int i = 0; i < 1500; ++i) {
+        frame(runtime, host);
+        for (const auto& update : runtime.takeUpdates()) {
+            require(update.status != ScriptStatus::Error, update.text);
+            if (update.status == ScriptStatus::Log && update.text == log) return;
+        }
+        QThread::msleep(1);
+    }
+    require(false, "Timeout waiting for " + log);
+}
+
+void checkStorage(ScriptRuntime& runtime, LibretroHost& host, const QTemporaryDir& temp,
+                  const QString& examples) {
+    const auto root = temp.filePath("scripts-data");
+    const auto start = [&](const QByteArray& source) {
+        expectStatus(runStorage(runtime, host, root, source), 8, ScriptStatus::Running);
+    };
+    start(R"(
+local bytes = string.rep("x", 4096)
+for _ = 1, 5 do bytes = bytes .. bytes end
+bytes = bytes .. "K\0ega"
+local write = assert(storage.write("capture.csv", bytes))
+local second, busy = storage.write("never.csv", "ignored")
+assert(not second and busy == "Script storage transfer limit reached")
+local read = assert(storage.read("capture.csv", #bytes - 5, 5))
+emu.on("reset", function()
+    local unavailable = storage.read("capture.csv")
+    assert(not unavailable)
+end)
+emu.on("frame", function()
+    if write then
+        local done, err = storage.result(write)
+        if not done then assert(err == "pending", err); return end
+        assert(done == true)
+        local unknown, reason = storage.result(write)
+        assert(not unknown and reason == "unknown storage request")
+        write = nil
+    end
+    local data, err = storage.result(read)
+    if not data then assert(err == "pending", err); return end
+    assert(data == "K\0ega")
+    print("storage round trip")
+    emu.on("frame", nil)
+end)
+)");
+    runtime.event(ScriptEvent::Reset, host, 45, host.runClock().frames);
+    require(runtime.takeUpdates().isEmpty(), "Storage denied during restore events");
+    awaitStorage(runtime, host, QStringLiteral("storage round trip"));
+    const QDir parent(root);
+    const auto scopes = parent.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    require(scopes.size() == 1, "One per-script storage directory");
+    const QDir scope(parent.filePath(scopes.front()));
+    QFile data(scope.filePath("capture.csv"));
+    require(data.open(QIODevice::ReadOnly), "Stored CSV is readable on disk");
+    auto bytes = data.readAll();
+    require(bytes.size() == 128 * 1024 + 5 && bytes.endsWith(QByteArray("K\0ega", 5)),
+            "Store all bytes including an embedded zero");
+    data.close();
+    require(!scope.exists("never.csv"), "Rejected write has no disk side effects");
+
+    start(R"(
+local read = assert(storage.read("capture.csv"))
+local eof = assert(storage.read("capture.csv", 1048576, 16))
+emu.on("frame", function()
+    if read then
+        local data, err = storage.result(read)
+        if not data then assert(err == "pending", err); return end
+        assert(#data == 131077)
+        assert(string.sub(data, 131073, 131077) == "K\0ega")
+        assert(string.byte(data, -1) == 97)
+        assert(string.sub(data, math.maxinteger) == "")
+        assert(string.sub(data, -3, -1) == "ega")
+        assert(string.sub(data, -1, math.mininteger) == "")
+        read = nil
+        return
+    end
+    local empty, err = storage.result(eof)
+    if not empty then assert(err == "pending", err); return end
+    assert(empty == "")
+    print("storage persisted across restart")
+    emu.on("frame", nil)
+end)
+)");
+    awaitStorage(runtime, host, QStringLiteral("storage persisted across restart"));
+    expectStatus(runStorage(runtime, host, root, R"(
+string.sub(string.rep("x", 4096) .. "x", 1, 4097)
+)"), 8, ScriptStatus::Error);
+
+    expectStatus(runStorage(runtime, host, root, R"(
+local read = assert(storage.read("capture.csv"))
+emu.on("frame", function()
+    local value, err = storage.result(read)
+    assert(not value)
+    if err == "pending" then return end
+    assert(err == "file not found", err)
+    print("storage isolated")
+    emu.on("frame", nil)
+end)
+)", QStringLiteral("scripts/another/capture.lua")), 8, ScriptStatus::Running);
+    awaitStorage(runtime, host, QStringLiteral("storage isolated"));
+
+    for (const QByteArray& name : {QByteArray("../outside.txt"), QByteArray("sub/file.txt"),
+                                   QByteArray("C:\\foo"), QByteArray("file.txt:stream"),
+                                   QByteArray("nUl.csv"), QByteArray("a.")}) {
+        const auto updates = runStorage(runtime, host, root, "storage.read('" + name + "')");
+        expectStatus(updates, 8, ScriptStatus::Error);
+        require(updates.last().text.contains("portable storage filename"), "Reject unsafe basename");
+    }
+
+    start(R"(
+for i = 1, 8 do assert(storage.read("missing.csv", 0, 1)) end
+local request, err = storage.read("missing.csv", 0, 1)
+assert(not request and err == "script storage queue is full", err)
+)");
+    runtime.stopAll();
+    runtime.takeUpdates();
+
+    QFile large(scope.filePath("large.csv"));
+    require(large.open(QIODevice::WriteOnly) && large.resize(1024 * 1024 + 1), "Oversized file");
+    large.close();
+    start(R"(
+local read = assert(storage.read("large.csv", 0, 32))
+emu.on("frame", function()
+    local value, err = storage.result(read)
+    assert(not value)
+    if err == "pending" then return end
+    assert(err == "script storage file exceeds 1 MiB", err)
+    print("storage refused oversized file")
+    emu.on("frame", nil)
+end)
+)");
+    awaitStorage(runtime, host, QStringLiteral("storage refused oversized file"));
+
+#ifdef Q_OS_UNIX
+    const auto outside = writeFixture(temp, "outside.csv", "outside");
+    require(QFile::link(outside, scope.filePath("link.csv")), "Create scoped symlink");
+    start(R"(
+local read = assert(storage.read("link.csv"))
+local write = assert(storage.write("link.csv", "overwrite"))
+emu.on("frame", function()
+    local value, reason = storage.result(read or write)
+    assert(not value)
+    if reason == "pending" then return end
+    assert(reason == "unsafe script storage file", reason)
+    if read then read = nil; return end
+    print("storage refused file symlink")
+    emu.on("frame", nil)
+end)
+)");
+    awaitStorage(runtime, host, QStringLiteral("storage refused file symlink"));
+    QFile untouched(outside);
+    require(untouched.open(QIODevice::ReadOnly) && untouched.readAll() == "outside", "Outside file untouched");
+
+    const auto redirected = temp.filePath("redirected-data");
+    require(QFile::link(root, redirected), "Create storage root symlink");
+    expectStatus(runStorage(runtime, host, redirected, R"(
+local id = assert(storage.read("capture.csv"))
+emu.on("frame", function()
+    local value, reason = storage.result(id)
+    assert(not value)
+    if reason == "pending" then return end
+    assert(reason == "script storage directory is unavailable or unsafe", reason)
+    print("storage refused directory symlink")
+    emu.on("frame", nil)
+end)
+)"), 8, ScriptStatus::Running);
+    awaitStorage(runtime, host, QStringLiteral("storage refused directory symlink"));
+#endif
+
+    if (!examples.isEmpty()) {
+        QFile example(QDir(examples).filePath("file-roundtrip.lua"));
+        require(example.open(QIODevice::ReadOnly), "Open packaged storage example");
+        expectStatus(runStorage(runtime, host, root, example.readAll(),
+                                QStringLiteral("scripts/file-roundtrip.lua")), 8, ScriptStatus::Running);
+        awaitStorage(runtime, host, QStringLiteral("File saved and read successfully"));
+    }
+
+    runtime.stopAll();
+    runtime.takeUpdates();
+}
 }
 
 int main(int argc, char** argv) {
@@ -832,6 +1028,7 @@ int main(int argc, char** argv) {
         checkLimits(runtime, host);
         checkAutomation(runtime, host);
         checkSaveLimits(runtime, host);
+        checkStorage(runtime, host, data, argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString());
         if (argc == 3) {
             for (const QString& example : {QStringLiteral("memory-hud.lua"), QStringLiteral("fixture-hitbox.lua")}) {
                 QFile source(QString::fromLocal8Bit(argv[2]) + QLatin1Char('/') + example);

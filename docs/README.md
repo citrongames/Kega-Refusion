@@ -9,13 +9,15 @@ Start with the overview for current features and basic use, or the build guide f
 - [Building, packaging and focused checks](building.md)
 - [Release versions, assets and update notes](releasing.md)
 - [Architecture and resource-management rules](architecture.md)
-- [Lua scripting implementation plan (not yet implemented)](lua-scripting-plan.md)
+- [Lua scripting implementation plan and progress](lua-scripting-plan.md)
 - [Verification record](verification.md)
 - [Adding an interface translation](../languages/README.md)
 - [Project licensing and core exception](../LICENSING.md)
 - [Third-party components and licensing](../THIRD_PARTY.md)
 
 ## Features
+
+- Lua scripting API and examples ([English](lua-api.md), [Русский](lua-api.ru.md)).
 
 - [Direct netplay and GGPO](netplay.md)
 - [Mega Drive Link Cable](link-cable.md)
@@ -48,5 +50,3 @@ Additional per-feature validation files remain beside these reports. Consult Git
 - [Road Rash CD32X load audit](roadrash-cd32x-load-audit.md): BIOS queue, ares comparison and scoped loader compatibility.
 
 - [Nuked YM2612 audio investigation](nuked-audio-issue-1.md): issue #1, exact PCM comparisons and VDP timing isolation.
-
-- [Lua scripting API and examples](lua-api.md) — read-only inspection and frame-aligned HUDs.
