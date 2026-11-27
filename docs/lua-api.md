@@ -242,6 +242,8 @@ or netplay. Local pause and stepping can also control playback while frames rema
 | `mouse` | `left`, `right`, `middle`, `wheelDown` | `x`, `y` (relative motion) |
 | `paddle` | `button` | `x` (absolute position) |
 
+On `md6`, `x` and `y` are button booleans; on analog devices they are numbers. Check the device kind or `type(value) == "number"` before treating them as coordinates.
+
 Directional fields on pads are `up`, `down`, `left` and `right`. Gun axes
 are absolute normalized screen coordinates from −32,767 to 32,767, with the
 minimum at the left or top and `offscreen` as a separate boolean. Mouse

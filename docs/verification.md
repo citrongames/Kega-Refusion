@@ -1170,3 +1170,26 @@ and marks additional HP slots rather than silently dropping them. Origin/solid
 draws remain bounded to reserve capacity for health text and collision overlays.
 No emulator/core binary code or timing changed; updated scripts and guides are
 deployed in the existing Windows test build.
+
+## Lua example input and lifecycle fixes — 2026-11-27
+
+Reproduced Controllers interpreting MD6 X/Y button booleans as coordinates:
+X displayed true, and X+Y reached integer formatting with boolean arguments.
+The example now distinguishes numeric axes and boolean buttons. The English
+and Russian API references document the shared x/y names.
+
+Focused runtime checks passed the actual bundled examples 01–04 and controller
+input cases: individual MD6 buttons, X/Y combinations, all buttons, eight MD6
+pads, MD3, mouse, paired Justifiers, Menacer, SMS/GG/SG pads, paddle and Light
+Phaser. Checked displayed text and script errors, including zero and signed
+axis extremes.
+
+Real-core automation/session checks covered examples 03–08: invalid memory
+addresses and watch cleanup; frame/reset/rewind events; cancellation of a
+paused input trial; restored timeline counters; disk-backed graph recording
+and replay; and window controls. Reproduced and fixed FrameLog's stale Stop
+action stopping unrelated playback: it now verifies the active movie path
+and identity. Both focused binaries passed after the fix.
+
+Only example Lua, API documentation and opt-in checks changed. No core,
+audio or emulator executable changes; updated examples deployed to testbuild.

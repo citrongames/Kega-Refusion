@@ -107,6 +107,95 @@ ScriptOverlayPtr frame(ScriptRuntime& runtime, const LibretroHost& host, bool dr
                          host.inspectionPresentedInstance(), draw);
 }
 
+void checkControllerExample(ScriptRuntime& runtime, LibretroHost& host,
+                            const QTemporaryDir& temp, const QString& directory) {
+    QFile file(directory+"/02_Controllers.lua");
+    require(file.open(QIODevice::ReadOnly),"Open controller example");
+    const auto source=file.readAll();
+    const auto start=[&] {
+        runtime.stopAll();runtime.takeUpdates();
+        expectStatus(run(runtime,host,1,source),1,ScriptStatus::Running);
+    };
+    const auto sample=[&](const MovieInput& input) {
+        const auto overlay=runtime.event(ScriptEvent::Frame,host,45,host.runClock().frames,0,true,&input);
+        for(const auto& update:runtime.takeUpdates())
+            require(update.status!=ScriptStatus::Error,"Controller example: "+update.text);
+        require(bool(overlay),"Controller example overlay");
+        QStringList rows;
+        for(const auto& command:overlay->commands)
+            if(command.primitive==ScriptPrimitive::Text)rows<<command.text;
+        const auto result=rows.join(QLatin1Char(10));
+        require(!result.contains("true") && !result.contains("false"),"Buttons interpreted as axis values");
+        return result;
+    };
+    host.setControllerKind(0,ControllerType::Pad);
+    host.setControllerKind(1,ControllerType::Pad);
+    host.setControllerConnected(0,true);
+    host.setControllerConnected(1,false);
+    host.setControllerSixButton(0,true);
+    start();
+    MovieInput input;
+    input.buttons[0]=1<<10;
+    require(sample(input).contains("X"),"Six-button X missing");
+    for(int bit=0;bit<12;++bit) {
+        input.buttons[0]=1<<bit;sample(input);
+        input.buttons[0]=(1<<bit)|(1<<9)|(1<<10);sample(input);
+    }
+    input.buttons[0]=0xfff;sample(input);
+    input.buttons[0]=0;sample(input);
+    runtime.stopAll();runtime.takeUpdates();
+    QString adapterError;
+    require(host.setControllerAdapter(ControllerAdapter::TeamPlayerBoth,adapterError),adapterError);
+    for(unsigned player=0;player<MaxControllerPlayers;++player) {
+        host.setControllerConnected(player,true);
+        host.setControllerSixButton(player,true);
+    }
+    start();input={};input.buttons.fill(0xfff);
+    require(sample(input).split(QLatin1Char(10)).size()==8,"Eight simultaneous controller rows");
+    runtime.stopAll();runtime.takeUpdates();
+    require(host.setControllerAdapter(ControllerAdapter::None,adapterError),adapterError);
+    for(unsigned player=1;player<MaxControllerPlayers;++player)host.setControllerConnected(player,false);
+    host.setControllerSixButton(0,false);start();
+    input.buttons[0]=0xfff;sample(input);
+    runtime.stopAll();runtime.takeUpdates();
+    require(host.setControllerKind(0,ControllerType::Mouse),"Select mouse");
+    require(host.setControllerKind(1,ControllerType::Justifier) &&
+            host.setControllerConnected(1,true) && host.setControllerConnected(2,true),"Select paired guns");
+    start();input={};
+    input.buttons[0]=3;input.buttons[1]=2;input.buttons[2]=2;
+    input.aim[0]=quint64(quint16(-32768))|(quint64(32767)<<16);
+    input.aim[1]=0;input.aim[2]=quint64(1)<<32;
+    auto rows=sample(input);
+    require(rows.contains("-32768,32767") && rows.contains("0,0") && rows.contains("offscreen"),"Mouse/gun analog coordinates");
+    runtime.stopAll();runtime.takeUpdates();
+    host.setControllerConnected(2,false);host.setControllerKind(1,ControllerType::Menacer);
+    start();sample(input);
+    runtime.stopAll();runtime.takeUpdates();
+    host.setControllerKind(0,ControllerType::Pad);host.setControllerKind(1,ControllerType::Pad);
+    host.setControllerConnected(1,false);host.setControllerSixButton(0,true);
+    QString error;
+    for(const auto& extension:{QStringLiteral("sms"),QStringLiteral("gg"),QStringLiteral("sg")}) {
+        host.unload();
+        const auto fixture=writeFixture(temp,"example-input."+extension,z80Fixture(extension=="sg",extension=="gg"));
+        require(host.load(fixture,error),error);host.runFrame();
+        start();input={};input.buttons[0]=0xfff;sample(input);
+        runtime.stopAll();runtime.takeUpdates();
+        if(extension=="sms") {
+            require(host.setControllerKind(0,ControllerType::Paddle),"Select paddle");
+            start();input.aim[0]=quint16(-123);
+            require(sample(input).contains("-123"),"Paddle coordinate");
+            runtime.stopAll();runtime.takeUpdates();
+            require(host.setControllerKind(0,ControllerType::LightPhaser),"Select Light Phaser");
+            start();input.aim[0]=0;sample(input);
+            runtime.stopAll();runtime.takeUpdates();
+            host.setControllerKind(0,ControllerType::Pad);
+        }
+    }
+    host.unload();
+    require(host.load(temp.filePath("hud.md"),error),error);host.runFrame();
+    std::puts("PASS controller example: MD3/MD6 button combinations, mouse, guns, paddle, SMS/GG/SG pads");
+}
+
 void checkMd(ScriptRuntime& runtime, LibretroHost& host) {
     const auto before = host.netplayDigest();
     QImage icon(4, 4, QImage::Format_ARGB32_Premultiplied);
@@ -1163,7 +1252,8 @@ int main(int argc, char** argv) {
                     output.write(rom) == rom.size(), output.fileName());
             return 0;
         }
-        require(argc == 2 || argc == 3, "usage: lua_runtime_tests CORE [EXAMPLE_DIRECTORY]");
+        const bool examplesOnly=argc==4 && QByteArray(argv[3])=="--examples-only";
+        require(argc == 2 || argc == 3 || examplesOnly, "usage: lua_runtime_tests CORE [EXAMPLE_DIRECTORY [--examples-only]]");
         QTemporaryDir data;
         require(data.isValid(), "Temporary data folder");
         LibretroHost host(QString::fromLocal8Bit(argv[1]), data.path());
@@ -1172,13 +1262,15 @@ int main(int argc, char** argv) {
         QString error;
         require(host.load(md, error), "Load MD fixture: " + error);
         host.runFrame();
+        if(!examplesOnly) {
         checkMd(runtime, host);
         checkLimits(runtime, host);
         checkAutomation(runtime, host);
         checkSaveLimits(runtime, host);
         checkPanels(runtime, host);
         checkStorage(runtime, host, data);
-        if (argc == 3) {
+        }
+        if (argc >= 3) {
             for (const QString& example : {QStringLiteral("01_Overlay.lua"), QStringLiteral("02_Controllers.lua"),
                     QStringLiteral("03_MemoryWatch.lua"), QStringLiteral("04_Events.lua")}) {
                 QFile source(QString::fromLocal8Bit(argv[2]) + QLatin1Char('/') + example);
@@ -1207,6 +1299,8 @@ int main(int argc, char** argv) {
                 runtime.takeUpdates();
             }
         }
+        if(argc>=3)checkControllerExample(runtime,host,data,QString::fromLocal8Bit(argv[2]));
+        if(examplesOnly){std::puts("PASS example source checks");return 0;}
         checkAccessAndEdits(runtime, host, data);
         for (const auto& name : {QStringLiteral("watch.sms"), QStringLiteral("watch.sg"), QStringLiteral("watch.gg")}) {
             const bool gg = name.endsWith(".gg"), sg = name.endsWith(".sg");

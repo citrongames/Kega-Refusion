@@ -32,7 +32,7 @@ emu.on("frame", function()
         local active, axes = {}, ""
         if controls then
             for _, button in ipairs(device.buttons) do
-                if controls[button] then
+                if controls[button] == true then
                     local name = names[button]
                     if device.kind == "mouse" and (button == "left" or button == "right") then
                         name = string.upper(string.sub(button, 1, 1))
@@ -40,8 +40,9 @@ emu.on("frame", function()
                     active[#active + 1] = name or string.upper(button)
                 end
             end
-            if controls.x then
-                local positions = controls.y and string.format("%d,%d", controls.x, controls.y)
+            -- MD6 uses x/y for boolean buttons; analog devices use numeric axes.
+            if type(controls.x) == "number" then
+                local positions = type(controls.y) == "number" and string.format("%d,%d", controls.x, controls.y)
                     or tostring(controls.x)
                 axes = " " .. (controls.offscreen and text("offscreen", "вне кадра") or positions)
             end

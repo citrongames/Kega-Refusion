@@ -227,6 +227,88 @@ emu.on('rewind',render)
         check(session.scriptCommand(stop),"stop example");
         waitFor([&]{return panels.windows.isEmpty() && status(9,ScriptStatus::Stopped);},"example cleanup");
 
+        // Exercise the shipped watch in the paused UI and its native annotation lifetime.
+        ScriptDebugAnnotations annotations;
+        QObject::connect(&session,&EmulationSession::scriptAnnotationsReady,&app,[&] {
+            annotations=session.takeScriptAnnotations();
+        });
+        QFile watchExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/03_MemoryWatch.lua"));
+        check(watchExample.open(QIODevice::ReadOnly),"open shipped memory watch");
+        panelCommand.id=10;panelCommand.path=watchExample.fileName();panelCommand.source=watchExample.readAll();
+        check(session.scriptCommand(panelCommand),"run memory watch");
+        waitFor([&]{return panels.windows.size()==1 && status(10,ScriptStatus::Running) && overlay &&
+            overlay->commands.size()==2 && overlay->commands.back().text.startsWith("RAM [0x0]");},"watch shows paused value");
+        quint64 watchSequence=0;
+        auto watchEvent=[&](ScriptUiEventKind kind,const QString& id,const QVariant& value=QVariant{}) {
+            check(panels.windows.size()==1,"memory watch window");
+            const auto& window=panels.windows.front();
+            ScriptUiEvent event;
+            event.owner=window.owner;event.run=window.run;event.window=window.handle;
+            event.epoch=panels.epoch;event.sequence=++watchSequence;
+            event.kind=kind;event.control=id;event.value=value;
+            check(session.postScriptUiEvent(event),"watch event queue");
+            if (kind!=ScriptUiEventKind::Close)
+                waitFor([&]{return panels.windows.size()==1 &&
+                    panels.windows.front().acknowledged==watchSequence;},"watch event dispatched");
+        };
+        watchEvent(ScriptUiEventKind::Change,"offset",QStringLiteral("1.5"));
+        waitFor([&]{return overlay && overlay->commands.back().text=="RAM: no valid address" &&
+            annotations.watches.isEmpty();},"fractional memory address handled");
+        watchEvent(ScriptUiEventKind::Change,"offset",QStringLiteral("0xFFFFFFFF"));
+        waitFor([&]{return overlay && overlay->commands.back().text=="RAM: unavailable";},"large address handled");
+        watchEvent(ScriptUiEventKind::Click,"pin");
+        check(status(10,ScriptStatus::Running) && annotations.watches.isEmpty(),"out-of-range watch rejected");
+        watchEvent(ScriptUiEventKind::Change,"offset",QStringLiteral("0x20"));
+        watchEvent(ScriptUiEventKind::Change,"width",3);
+        const QString wordLabel=QStringLiteral("RAM [0x20] = 0x");
+        waitFor([&]{return overlay && overlay->commands.back().text.startsWith(wordLabel) &&
+            overlay->commands.back().text.size()==wordLabel.size()+8;},"four-byte read shown");
+        watchEvent(ScriptUiEventKind::Click,"pin");
+        waitFor([&]{return annotations.watches.size()==1;},"temporary RAM Watch row published");
+        check(annotations.watches.front().offset==0x20 && annotations.watches.front().width==4,"watch row address and width");
+        watchEvent(ScriptUiEventKind::Change,"offset",QStringLiteral("0x24"));
+        watchEvent(ScriptUiEventKind::Click,"pin");
+        waitFor([&]{return annotations.watches.size()==1 && annotations.watches.front().offset==0x24;},
+                "watch replaces previous row");
+        watchEvent(ScriptUiEventKind::Click,"remove");
+        waitFor([&]{return annotations.watches.isEmpty();},"watch removed");
+        watchEvent(ScriptUiEventKind::Click,"pin");
+        waitFor([&]{return annotations.watches.size()==1;},"watch re-added");
+        watchEvent(ScriptUiEventKind::Close,"");
+        waitFor([&]{return panels.windows.isEmpty() && annotations.watches.isEmpty() && !overlay;},
+                "closing the panel cleans up annotations and overlay");
+        check(session.scriptCommand(stop),"stop closed watch");
+        waitFor([&]{return status(10,ScriptStatus::Stopped);},"watch stops");
+
+        QFile eventsExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/04_Events.lua"));
+        check(eventsExample.open(QIODevice::ReadOnly),"open shipped events");
+        panelCommand.id=15;panelCommand.path=eventsExample.fileName();panelCommand.source=eventsExample.readAll();
+        check(session.scriptCommand(panelCommand),"run events example");
+        auto eventLabel=[&](const QString& event) {
+            return overlay && overlay->commands.size()==4 &&
+                overlay->commands.front().primitive==ScriptPrimitive::Rectangle &&
+                overlay->commands[1].text.contains(event);
+        };
+        waitFor([&]{return status(15,ScriptStatus::Running) && eventLabel("draw @");},"paused draw event");
+        session.advanceFrame();
+        waitFor([&]{return eventLabel("frame @");},"completed-frame event");
+        check(overlay->commands[2].text==QString("Before %1 / Frame %2").arg(overlay->frame-1).arg(overlay->frame),
+            "beforeframe reports previous frame");
+        session.backFrame();
+        waitFor([&]{return eventLabel("rewind @");},"rewind event");
+        bool exampleReset=false;
+        const auto resetEvent=QObject::connect(&session,&EmulationSession::actionCompleted,&app,
+            [&]{exampleReset=true;});
+        session.resetGame();
+        waitFor([&]{return exampleReset;},"example game reset");
+        QObject::disconnect(resetEvent);
+        session.advanceFrame();
+        waitFor([&]{return eventLabel("frame @") && overlay->commands.back().text.endsWith("reset");},
+                "events remembers the reset after the next completed frame");
+        check(status(15,ScriptStatus::Running) && paused,"events example preserves pause");
+        check(session.scriptCommand(stop),"stop events example");
+        waitFor([&]{return status(15,ScriptStatus::Stopped) && !overlay;},"events example stops");
+
         // Explicit Lua data follows native time; locals/VM stacks do not.
         const QString plainState=temp.filePath("plain-before-lua.krs");
         session.saveStateToFile(plainState);
@@ -519,8 +601,26 @@ error('stale movie preparation resumed unexpectedly')
         check(status(27,ScriptStatus::Running) && overlay && overlay->commands.size()==2 &&
             overlay->commands.front().primitive==ScriptPrimitive::Rectangle &&
             overlay->commands.back().text.startsWith("Play "),"playback progress has a backing");
+        // The script's Stop button can still be visible after another movie is
+        // started from the main menu while the emulator cannot complete a frame.
+        session.setBackgroundPaused(true);
         session.stopMovie();
         waitFor([&]{return movieMode==0 && !session.hasUnsavedMovie();},"finish example playback");
+        const auto originalPlaybackEpoch=panels.epoch;
+        session.playMovie(moviePath);
+        session.setPaused(true);
+        waitFor([&]{return movieMode==2 && paused && panels.epoch!=originalPlaybackEpoch;},
+                "unrelated playback starts without a completed frame");
+        exampleClick("stop");
+        waitFor([&]{return !panels.windows.isEmpty() && panels.windows.front().acknowledged==exampleSequence;},
+                "dispatch stale Stop button");
+        bool unrelatedMoviePreserved=false;
+        for (const auto& control:panels.windows.front().controls)
+            if (control.id=="status") unrelatedMoviePreserved=control.value.toString()=="The active recording changed.";
+        check(unrelatedMoviePreserved && movieMode==2,"stale example Stop must preserve unrelated playback");
+        session.stopMovie();
+        waitFor([&]{return movieMode==0;},"finish unrelated playback");
+        session.setBackgroundPaused(false);
         check(session.scriptCommand(stop),"stop playback example");
         waitFor([&]{return status(27,ScriptStatus::Stopped) && panels.windows.isEmpty();},"stop playback example");
 

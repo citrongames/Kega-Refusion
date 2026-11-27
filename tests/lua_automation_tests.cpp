@@ -151,40 +151,65 @@ end)
         QFile sequence(examples.filePath("05_InputSequence.lua"));
         check(sequence.open(QIODevice::ReadOnly),"shipped input sequence");
         run(29,R"(
-local held, origin = 0, emu.framecount()
+local held, completed, origin = 0, 0, emu.framecount()
 emu.on('frame', function(e)
     if input.get(1).right then
         held = held + 1
         assert((memory.read(2,0x20)&8)==0, 'example override did not reach the core')
-    elseif held == 0 then
-        origin = e.frame
-        print('example idle input')
     else
-        assert((memory.read(2,0x20)&8)==8, 'example leaked its override')
-        print('example live input restored')
+        assert(held == 0 and (memory.read(2,0x20)&8)==8, 'example leaked its override')
+        origin = e.frame
+        print('example live input after '..completed..' trials')
     end
 end)
 emu.on('loadstate', function(e)
-    assert(e.frame==origin, 'example restored the wrong checkpoint')
+    assert(e.frame==origin and held > 0, 'example restored the wrong checkpoint')
     print('example checkpoint restored after '..held..' frames')
+    held, completed = 0, completed + 1
 end)
 )");
         run(30,sequence.readAll());
         waitFor([&]{return status(29,ScriptStatus::Running) && status(30,ScriptStatus::Running)
             && panels.windows.size()==1;},"example sequence waits for a click");
         session.advanceFrame();
-        waitFor([&]{return logged(29,"example idle input");},"example has no input override on startup");
-        const auto& window=panels.windows.front();
-        ScriptUiEvent begin;
-        begin.owner=window.owner;begin.run=window.run;begin.window=window.handle;begin.epoch=panels.epoch;
-        begin.sequence=1;begin.kind=ScriptUiEventKind::Click;begin.control="run";
-        check(session.postScriptUiEvent(begin),"start input sequence");
-        waitFor([&]{return !panels.windows.isEmpty() && panels.windows.front().acknowledged==1;},
-                "input sequence click dispatched");
+        waitFor([&]{return logged(29,"example live input after 0 trials");},"example has no input override on startup");
+        quint64 trialSequence=0;
+        auto trialClick=[&](const QString& id) {
+            check(panels.windows.size()==1,"input sequence window");
+            const auto& window=panels.windows.front();
+            ScriptUiEvent event;
+            event.owner=window.owner;event.run=window.run;event.window=window.handle;event.epoch=panels.epoch;
+            event.sequence=++trialSequence;event.kind=ScriptUiEventKind::Click;event.control=id;
+            check(session.postScriptUiEvent(event),"input sequence button queued");
+            waitFor([&]{return !panels.windows.isEmpty() &&
+                panels.windows.front().acknowledged==trialSequence;},"input sequence click dispatched");
+        };
+        auto trialStatus=[&](const QString& expected) {
+            if (panels.windows.size()!=1) return false;
+            for (const auto& control:panels.windows.front().controls)
+                if (control.id=="status") return control.value.toString().startsWith(expected);
+            return false;
+        };
+        trialClick("run");
+        trialClick("cancel");
+        check(trialStatus("Trial cancelled before input"),"cancel before first frame");
+        trialClick("run");
+        session.advanceFrame();
+        waitFor([&]{return trialStatus("P1: Right applied in 1/1");},"first effective trial frame");
+        session.advanceFrame();
+        waitFor([&]{return trialStatus("P1: Right applied in 2/2");},"second effective trial frame");
+        const auto beforeCancel=panels.epoch;
+        trialClick("cancel");
+        waitFor([&]{return logged(29,"example checkpoint restored after 2 frames") && panels.epoch!=beforeCancel;},
+                "cancel on pause restores the trial checkpoint");
+        session.advanceFrame();
+        waitFor([&]{return logged(29,"example live input after 1 trials");},"cancel releases the input override");
+
+        trialClick("run");
         for(int i=0;i<30;++i)session.advanceFrame();
         waitFor([&]{return logged(29,"example checkpoint restored after 30 frames");},"example restores exact checkpoint");
         session.advanceFrame();
-        waitFor([&]{return logged(29,"example live input restored");},"example releases temporary controls");
+        waitFor([&]{return logged(29,"example live input after 2 trials");},"example releases temporary controls");
         check(paused && status(30,ScriptStatus::Running),"input sequence preserves pause");
         stop();waitFor([&]{return status(30,ScriptStatus::Stopped) && panels.windows.isEmpty();},"stop input sequence");
 

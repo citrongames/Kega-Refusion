@@ -26,7 +26,7 @@ if not panel then print(why); return end
 
 local phase = "idle"
 local showHud = true
-local name, identity, request
+local name, identity, activePath, request
 local samples = {}
 local shown = -1
 local lastFrame, seen, polls = 0, 0, 0
@@ -88,6 +88,15 @@ local function fileName()
     return "poll-" .. name .. ".txt"
 end
 
+local function matchesName(path)
+    local suffix = "/" .. name .. ".krm" -- Native movie paths use Qt's separators.
+    return path and string.sub(path, -#suffix) == suffix
+end
+
+local function ownsMovie(status)
+    return status.id == identity and status.path == activePath
+end
+
 local function hexId(value)
     if #value ~= 32 then return false end
     for i = 1, #value do
@@ -145,6 +154,11 @@ local function decode(data)
 end
 
 local function stopMovie()
+    local status = movie.status()
+    if status.mode ~= "off" and not ownsMovie(status) then
+        fail(text("The active recording changed.", "Активная запись изменилась."))
+        return
+    end
     local ok, reason = movie.stop()
     if not ok then
         announce(phase, reason)
@@ -168,7 +182,7 @@ local function start(action)
             "От 1 до 64 латинских букв или цифр. Далее допустимы дефис и подчёркивание."))
         return
     end
-    samples, identity = {}, nil
+    samples, identity, activePath = {}, nil, nil
     shown, lastFrame, seen, polls = -1, 0, 0, 0
     triedAutoStop = false
     graph(0)
@@ -242,16 +256,16 @@ local function poll(completed)
     local status = movie.status()
     if status.pending then return end
     if phase == "starting-record" then
-        if status.mode ~= "recording" or not status.id then
+        if status.mode ~= "recording" or not status.id or not matchesName(status.path) then
             fail(status.error or text("Recording did not start.", "Запись не началась."))
             return
         end
-        identity = status.id
+        identity, activePath = status.id, status.path
         announce("recording", text("Recording input. Samples every 30 frames; auto-stop at 3,600.",
             "Идёт запись ввода. Замеры каждые 30 кадров, автостоп на 3600."))
         if not panel then stopMovie(); return end
     elseif phase == "starting-play" then
-        if status.mode ~= "playback" and status.mode ~= "finished" then
+        if (status.mode ~= "playback" and status.mode ~= "finished") or not matchesName(status.path) then
             fail(status.error or text("Playback did not start.", "Воспроизведение не началось."))
             return
         end
@@ -260,12 +274,13 @@ local function poll(completed)
             fail(text("Measurements belong to a different recording.", "Замеры относятся к другой записи."))
             return
         end
+        activePath = status.path
         announce("replay", text("Recorded input-activity graph", "График опроса из записи"))
         if not panel then stopMovie(); return end
     end
 
     if phase == "recording" then
-        if status.mode == "recording" and status.id == identity then
+        if status.mode == "recording" and ownsMovie(status) then
             graph(#samples)
             if completed and status.frame > 0 and status.frame <= maxFrames then measure(status.frame) end
             if status.frame >= maxFrames and not triedAutoStop then
@@ -286,7 +301,7 @@ local function poll(completed)
             writeSidecar()
         end
     elseif phase == "replay" then
-        if status.id == identity then
+        if ownsMovie(status) then
             graph(cursor(status.frame))
         else
             announce("idle", text("Playback stopped.", "Воспроизведение остановлено."))
@@ -297,7 +312,7 @@ end
 local function render()
     if not panel or not showHud or (phase ~= "recording" and phase ~= "replay") then return end
     local status = movie.status()
-    if status.id ~= identity then return end
+    if not ownsMovie(status) then return end
     local label = phase == "replay" and string.format(text("Play %d/%d", "Кадр %d/%d"), status.frame, status.length)
         or string.format(text("REC %d/%d", "Запись %d/%d"), status.frame, maxFrames)
     draw.rect(10, 10, utf8.len(label) * 14 + 14, 23, 0x51bcafdf, 0x09121ddd, "hud")
@@ -338,7 +353,7 @@ for _, event in ipairs({"reset", "loadstate", "rewind"}) do
     emu.on(event, function()
         if phase == "recording" then
             local status = movie.status()
-            if status.id == identity then
+            if ownsMovie(status) then
                 trim(status.frame)
                 shown = -1
                 triedAutoStop = false
