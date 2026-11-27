@@ -39,6 +39,8 @@ int main(int argc,char** argv) {
         QObject::connect(&session,&EmulationSession::movieStatusChanged,&app,
             [&](int mode,const QString&,quint64 frame,quint64,double){movieMode=mode;moviePosition=frame;});
         QObject::connect(&session,&EmulationSession::errorOccurred,&app,[&](const QString& error){errors+=error;});
+        ScriptUiSnapshot panels;
+        QObject::connect(&session,&EmulationSession::scriptUiReady,&app,[&]{panels=session.takeScriptUiSnapshot();});
         ScriptOverlayPtr graphOverlay;
         QObject::connect(&session,&EmulationSession::videoFrameReady,&app,[&]{QImage image;double aspect;session.takeVideoFrame(image,aspect,nullptr,nullptr,&graphOverlay);});
         QObject::connect(&session,&EmulationSession::scriptsReady,&app,[&]{
@@ -145,15 +147,61 @@ end)
         check(paused && errors.isEmpty(),"playback remains paused without session errors");
         stop();waitFor([&]{return status(21,ScriptStatus::Stopped);},"stop playback observer");
         session.stopMovie();waitFor([&]{return movieMode==0;},"finish playback context");
-        QFile graph(QFileInfo(QString::fromUtf8(__FILE__)).absoluteDir().filePath("../assets/scripts/examples/input-activity.lua"));
+        const QDir examples(QFileInfo(QString::fromUtf8(__FILE__)).absoluteDir().filePath("../assets/scripts/examples"));
+        QFile sequence(examples.filePath("05_InputSequence.lua"));
+        check(sequence.open(QIODevice::ReadOnly),"shipped input sequence");
+        run(29,R"(
+local held, origin = 0, emu.framecount()
+emu.on('frame', function(e)
+    if input.get(1).right then
+        held = held + 1
+        assert((memory.read(2,0x20)&8)==0, 'example override did not reach the core')
+    elseif held == 0 then
+        origin = e.frame
+        print('example idle input')
+    else
+        assert((memory.read(2,0x20)&8)==8, 'example leaked its override')
+        print('example live input restored')
+    end
+end)
+emu.on('loadstate', function(e)
+    assert(e.frame==origin, 'example restored the wrong checkpoint')
+    print('example checkpoint restored after '..held..' frames')
+end)
+)");
+        run(30,sequence.readAll());
+        waitFor([&]{return status(29,ScriptStatus::Running) && status(30,ScriptStatus::Running)
+            && panels.windows.size()==1;},"example sequence waits for a click");
+        session.advanceFrame();
+        waitFor([&]{return logged(29,"example idle input");},"example has no input override on startup");
+        const auto& window=panels.windows.front();
+        ScriptUiEvent begin;
+        begin.owner=window.owner;begin.run=window.run;begin.window=window.handle;begin.epoch=panels.epoch;
+        begin.sequence=1;begin.kind=ScriptUiEventKind::Click;begin.control="run";
+        check(session.postScriptUiEvent(begin),"start input sequence");
+        waitFor([&]{return !panels.windows.isEmpty() && panels.windows.front().acknowledged==1;},
+                "input sequence click dispatched");
+        for(int i=0;i<30;++i)session.advanceFrame();
+        waitFor([&]{return logged(29,"example checkpoint restored after 30 frames");},"example restores exact checkpoint");
+        session.advanceFrame();
+        waitFor([&]{return logged(29,"example live input restored");},"example releases temporary controls");
+        check(paused && status(30,ScriptStatus::Running),"input sequence preserves pause");
+        stop();waitFor([&]{return status(30,ScriptStatus::Stopped) && panels.windows.isEmpty();},"stop input sequence");
+
+        QFile graph(examples.filePath("08_WindowControls.lua"));
         check(graph.open(QIODevice::ReadOnly),"shipped graph example");
-        run(30,graph.readAll());
-        waitFor([&]{return status(30,ScriptStatus::Running);},"live graph starts");
+        run(31,graph.readAll());
+        waitFor([&]{return status(31,ScriptStatus::Running) && panels.windows.size()==1;},"live graph starts");
         for(int i=0;i<120;++i)session.advanceFrame();
-        waitFor([&]{return graphOverlay && graphOverlay->commands.size()>=3 &&
-            graphOverlay->commands.front().text.startsWith("Input-poll FPS ") &&
-            !graphOverlay->commands.front().text.contains("unavailable");},"shipped FPS graph on real core");
-        stop();waitFor([&]{return status(30,ScriptStatus::Stopped);},"stop graph before debugger integration");
+        waitFor([&]{
+            if (!graphOverlay || graphOverlay->commands.size()!=2 ||
+                graphOverlay->commands.front().primitive!=ScriptPrimitive::Rectangle ||
+                graphOverlay->commands.back().text!="Input polls: 100.0%" || panels.windows.isEmpty()) return false;
+            for (const auto& control:panels.windows.front().controls)
+                if (control.id=="activity") return !control.points.isEmpty() && control.points.back()==100.0;
+            return false;
+        },"shipped poll graph on real core");
+        stop();waitFor([&]{return status(31,ScriptStatus::Stopped);},"stop graph before debugger integration");
         ScriptDebugAnnotations annotations;
         QObject::connect(&session,&EmulationSession::scriptAnnotationsReady,&app,[&]{annotations=session.takeScriptAnnotations();});
         run(40,R"(

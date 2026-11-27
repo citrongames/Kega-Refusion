@@ -2105,6 +2105,9 @@ struct ScriptRuntime::Script {
         };
         luaL_newlib(L, emu);
         integerField(L, "apiVersion", 1);
+        const auto language = Localization::currentLanguage().toUtf8();
+        lua_pushlstring(L, language.constData(), size_t(language.size()));
+        lua_setfield(L, -2, "language");
         lua_setglobal(L, "emu");
         const luaL_Reg movie[] = {
             {"status", movieStatus}, {"record", movieControl<ScriptMovieAction::Record>},

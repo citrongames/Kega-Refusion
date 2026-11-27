@@ -155,10 +155,12 @@ def main() -> None:
     shutil.copytree(root / "languages", stage / "languages")
     shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
     shutil.copytree(root / "assets/scripts/examples", stage / "scripts")
+    shutil.copytree(root / "assets/scripts/games", stage / "scripts/games")
     docs = stage / "docs"
     docs.mkdir()
-    for name in ("lua-api.md", "lua-api.ru.md"):
+    for name in ("lua-api.md", "lua-api.ru.md", "lua-examples.md", "lua-examples.ru.md"):
         shutil.copy2(root / "docs" / name, docs / name)
+    shutil.copytree(root / "docs/games", docs / "games")
     qt_ru = Path("/usr/share/qt6/translations/qtbase_ru.qm")
     if qt_ru.is_file():
         copy(qt_ru, stage / "languages/qtbase_ru.qm")

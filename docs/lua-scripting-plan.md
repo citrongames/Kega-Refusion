@@ -116,8 +116,8 @@ for readable text. Use the existing video geometry transformations for aspect,
 scaling, crop, DPI, fullscreen and changing resolutions. Include linked display
 selection and MegaLD's composed picture in the coordinate contract.
 
-Default to drawing after shaders. The global OSD switch hides script overlays
-without stopping script logic. Keep built-in crosshair behavior unchanged.
+Default to drawing after shaders. The global OSD switch affects only emulator indicators, not script overlays.
+Stopping a script removes its output. Keep built-in crosshair behavior unchanged.
 Normal screenshots and video remain clean; including script drawings is a separate
 explicit capture feature. Cache fonts/images and release script-owned resources
 on stop. Do not decode images or read their files on every frame.
@@ -460,3 +460,28 @@ The `timeline-counter.lua` example uses declared data for the frame and
 input-poll counters and reads the restored value when redrawing. See
 [verification.md](verification.md) for focused integration and performance
 evidence.
+
+
+## Example pack delivered — 2026-11-27
+
+The current package replaces the initial standalone samples with eight numbered,
+bilingual examples and two game tools. [English guide](lua-examples.md) /
+[Russian guide](lua-examples.ru.md) cover drawing, controllers, memory watches,
+events, a reversible input sequence, declared timeline counters, input recording
+with measurements, and native tool windows.
+
+Sonic 1 Lab targets the verified original REV00 cartridge: movement, collision
+probes and profiles, touch boxes, an object inspector, boss fields, bounded trails
+and comparison attempts. Contra Combat Lab verifies the original USA/Korea code
+layout: live collision tests, players and projectile lists, verified actor health,
+damage history and one temporary practice checkpoint. Unsupported revisions get
+an explicit message; the tools do not pretend to decode arbitrary hacks.
+
+Lua overlays are independent of the emulator OSD switch. Stopping the script
+removes its output. All bundled in-game text has a dark background. Scripts read
+emu.language once for English/Russian captions. No compatibility layer for
+another emulator was added.
+
+See the 2026-11-27 example-pack entry in [verification](verification.md) for exact
+native-game coverage, UI checks and costs. Game-specific routines not exercised
+through gameplay are distinguished from source-derived support in the guides.

@@ -1086,3 +1086,54 @@ their SHA-256 manifest and staging; the sample and references match source.
 EXE SHA-256: 2eb1fd39b40ec399e7e695f2acf1702524c1ff6a9550f6e8a7a8bec44a3adfcd.
 Package staging was removed after verification; user files were retained.
 No GitHub release or updater version was created for this batch.
+
+
+## Lua examples, game tools and independent overlays — 2026-11-27
+
+Replaced ten initial standalone samples with eight numbered educational examples,
+an original marker image, Sonic 1 Lab and Contra: Hard Corps Combat Lab. Both
+portable packagers include the samples and English/Russian API/example guides.
+The Windows test-folder refresh retires obsolete examples only when their content
+still matches the preceding package manifest; modified user files remain intact.
+
+- lua_runtime_tests CORE assets/scripts/examples: PASS, including actual
+  01–04 sources, prepared PNG, backed text, and the existing supported-system
+  runtime checks. lua_session_tests and lua_automation_tests: PASS with the
+  new 05–08 examples, exact 30-frame physical Right input followed by native-state
+  restoration, declared counters, UI graph, recording/sidecar save and fresh-VM
+  replay. Their original generated cartridges remain test fixtures, not packaged
+  game samples.
+- Focused osd_tests --script-overlay-only and GPU
+  shader_tests --script-overlay-only: PASS. Turning built-in OSD off preserves
+  Lua drawing; clean screenshots still omit overlays. Real GameView renders of
+  both game tools were inspected with OSD disabled. Text backing covers the
+  captions, and the drawings remain aligned with the video.
+- Opt-in lua_showcase_tests ran original Sonic REV00 at 59.92274 Hz, GHZ1
+  frames 1200–1560. Native state hashes match with no script, default layers and
+  all layers, both at normal presentation and every 32nd frame. Separate actual
+  grounded frame 1090 gives two zero-distance support probes at the terrain
+  boundary. Boss/wall/ceiling data was cross-checked against the disassembly;
+  this is not a claim that every act or boss was played through.
+- Contra USA/Korea, 59.92274 Hz, first-stage frames 1570–1970: the same native-state
+  comparisons passed. Shared rectangle-call observations and registered shot
+  lists were checked against live CPU registers/RAM. A focused real-core UI
+  probe passed practice capture, byte-identical restore after 20 divergent
+  frames, stale-handle failure, recapture and cleanup on window close.
+  Boss-specific collision routines outside the shared rectangle test are
+  explicitly outside the overlay's coverage.
+- One local timing sample, core plus Lua callbacks excluding Qt painting:
+  Sonic normal baseline/default/all 567/608/701 microseconds per emulated frame;
+  every-32nd-frame presentation 371/408/510. Contra normal 614/997/996;
+  every-32nd-frame presentation 425/846/781. These short samples show the
+  optional tools' cost, not a universal FPS prediction or a statistically
+  significant difference between default and all layers. No extra work runs
+  for these tools when they are stopped. No core timing or audio code changed.
+
+Histories and draw counts are capped. The Sonic CRC check is split across frames;
+ROM collision data is cached with bounds. Contra caps delivered collision probes
+and reports truncation, batches RAM reads and skips disabled/closed sections.
+Neither game tool writes a per-frame log to disk. One Contra practice state is
+released on panel close/stop. Obsolete large research traces and duplicate dumps
+were removed; compact reproducibility probes/logs stay under ignored build paths.
+Windows Release compiled; runtime checks above were performed on Linux without
+taking control of the user's Windows session. No release or version bump.

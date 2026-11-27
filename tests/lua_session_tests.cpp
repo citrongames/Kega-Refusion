@@ -202,7 +202,7 @@ emu.on('rewind',render)
         check(session.scriptCommand(stop),"stop panel");
         waitFor([&]{return panels.windows.isEmpty() && status(8,ScriptStatus::Stopped);},"stop destroys panels");
 
-        QFile panelExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/tool-panel.lua"));
+        QFile panelExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/08_WindowControls.lua"));
         check(panelExample.open(QIODevice::ReadOnly),"open shipped panel example");
         panelCommand.id=9;panelCommand.path=panelExample.fileName();panelCommand.source=panelExample.readAll();
         check(session.scriptCommand(panelCommand),"run shipped panel example");
@@ -308,18 +308,18 @@ print('temporary timeline restored')
         check(session.scriptCommand(stop),"stop temporary data");
         waitFor([&]{return status(13,ScriptStatus::Stopped);},"temporary stop");
 
-        QFile timelineExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/timeline-counter.lua"));
+        QFile timelineExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/06_Timeline.lua"));
         check(timelineExample.open(QIODevice::ReadOnly),"open shipped timeline example");
         tracked.id=14;tracked.path=timelineExample.fileName();tracked.source=timelineExample.readAll();
         check(session.scriptCommand(tracked),"run timeline example");
         waitFor([&]{return status(14,ScriptStatus::Running) && overlay &&
-            overlay->commands[0].text.startsWith("Frames: 0");},"timeline example starts");
+            overlay->commands[1].text.startsWith("Frames: 0");},"timeline example starts");
         session.advanceFrame();
-        waitFor([&]{return overlay && overlay->commands[0].text.startsWith("Frames: 1");},"timeline example advances");
+        waitFor([&]{return overlay && overlay->commands[1].text.startsWith("Frames: 1");},"timeline example advances");
         session.advanceFrame();
-        waitFor([&]{return overlay && overlay->commands[0].text.startsWith("Frames: 2");},"timeline example second frame");
+        waitFor([&]{return overlay && overlay->commands[1].text.startsWith("Frames: 2");},"timeline example second frame");
         session.backFrame();
-        waitFor([&]{return overlay && overlay->commands[0].text.startsWith("Frames: 1");},"timeline example rewind");
+        waitFor([&]{return overlay && overlay->commands[1].text.startsWith("Frames: 1");},"timeline example rewind");
         check(session.scriptCommand(stop),"stop example timeline");
         waitFor([&]{return status(14,ScriptStatus::Stopped);},"timeline example cleanup");
 
@@ -459,38 +459,70 @@ error('stale movie preparation resumed unexpectedly')
                 "stale prepared playback cancelled");
         check(movieMode==0,"stale candidate was not committed");
 
-        // Exercise the shipped recording/graph script, not a reimplementation.
+        // Exercise the shipped window, native recording, and its persisted measurements.
         qunsetenv("KEGA_TEST_MOVIE_FILE_DELAY_MS");
-        QFile example(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/recording-activity.lua"));
-        check(example.open(QIODevice::ReadOnly), "open recording activity example");
-        QByteArray exampleSource=example.readAll();
-        exampleSource.replace("local seconds = 30", "local seconds = 1.1");
-        runMovieScript(26,exampleSource);
-        waitFor([&]{return logged(26,"Recording and measurements saved") || status(26,ScriptStatus::Error);},
-                "recording example finished");
-        if (status(26,ScriptStatus::Error)) {
-            for (const auto& update:updates) if (update.id==26 && update.status==ScriptStatus::Error)
-                std::fprintf(stderr,"example: %s\n",qPrintable(update.text));
-        }
-        check(!status(26,ScriptStatus::Error), "recording example ran without errors");
-        check(QFile::exists(temp.filePath("movies/lua-activity.krm")), "example movie saved");
-        check(session.scriptCommand(stop), "stop example before replay");
-        waitFor([&]{return status(26,ScriptStatus::Stopped);}, "recording example stopped");
-        exampleSource.replace("local mode = \"record\"", "local mode = \"replay\"");
-        runMovieScript(27,exampleSource);
-        waitFor([&]{return movieMode==3 || status(27,ScriptStatus::Error);},"example playback finished");
-        if (status(27,ScriptStatus::Error)) {
-            for (const auto& update:updates) if (update.id==27 && update.status==ScriptStatus::Error)
-                std::fprintf(stderr,"example replay: %s\n",qPrintable(update.text));
-        }
-        check(!status(27,ScriptStatus::Error) && overlay &&
-              overlay->commands.size()>=2 &&
-              overlay->commands[0].text==QLatin1String("Recorded input-activity graph"),
-              "saved graph displayed during native playback");
+        QFile example(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/07_FrameLog.lua"));
+        check(example.open(QIODevice::ReadOnly),"open recording example");
+        ScriptCommand recordExample;
+        recordExample.path=example.fileName();
+        recordExample.source=example.readAll();
+        auto exampleRun=[&](quint64 id) {
+            recordExample.id=id;
+            check(session.scriptCommand(recordExample),"run recording example");
+            waitFor([&]{return panels.windows.size()==1 && status(id,ScriptStatus::Running);},
+                    "recording example window");
+        };
+        quint64 exampleSequence=0;
+        auto exampleClick=[&](const QString& control) {
+            check(panels.windows.size()==1,"recording example window missing");
+            const auto& window=panels.windows.front();
+            ScriptUiEvent event;
+            event.owner=window.owner;event.run=window.run;event.window=window.handle;
+            event.epoch=panels.epoch;event.sequence=++exampleSequence;
+            event.kind=ScriptUiEventKind::Click;event.control=control;
+            check(session.postScriptUiEvent(event),"recording example button queue");
+        };
+        auto exampleGraph=[&] {
+            if (!panels.windows.isEmpty())
+                for (const auto& control:panels.windows.front().controls)
+                    if (control.id=="activity") return control.points;
+            return QVector<double>{};
+        };
+        session.setPaused(true);
+        waitFor([&]{return paused;},"pause before recording example");
+        exampleRun(26);
+        check(movieMode==0 && !session.movieFileOperationPending(),"example must wait for Record");
+        const auto beforeRecordEpoch=panels.epoch;
+        exampleClick("record");
+        waitFor([&]{return movieMode==1 && !session.movieFileOperationPending()
+            && panels.epoch!=beforeRecordEpoch;},"example recording started");
+        check(paused,"record button preserves pause");
+        exampleClick("check");
+        waitFor([&]{return panels.windows.size()==1
+            && panels.windows.front().acknowledged==exampleSequence;},"example status while paused");
+        session.setPaused(false);
+        waitFor([&]{return !exampleGraph().isEmpty();},"recorded input-poll sample");
+        exampleClick("stop");
+        waitFor([&]{return logged(26,"Recording and measurements saved");},"save movie and sidecar");
+        const auto recordedPoints=exampleGraph();
+        MovieTape measured;
+        check(measured.load(temp.filePath("movies/lua-frame-log.krm"),movieError) &&
+            measured.size()>=30 && recordedPoints.size()==qsizetype(measured.size()/30),
+            "sample per completed recording window");
+        check(session.scriptCommand(stop),"stop example before replay");
+        waitFor([&]{return status(26,ScriptStatus::Stopped) && panels.windows.isEmpty();},"recording example stopped");
+
+        exampleRun(27);
+        check(exampleGraph().isEmpty(),"restarted script has no retained samples");
+        exampleClick("play");
+        waitFor([&]{return movieMode==3 && exampleGraph()==recordedPoints;},"native playback restores sidecar graph");
+        check(status(27,ScriptStatus::Running) && overlay && overlay->commands.size()==2 &&
+            overlay->commands.front().primitive==ScriptPrimitive::Rectangle &&
+            overlay->commands.back().text.startsWith("Play "),"playback progress has a backing");
         session.stopMovie();
-        waitFor([&]{return movieMode==0 && !session.hasUnsavedMovie();}, "finish example playback");
-        check(session.scriptCommand(stop), "stop playback example");
-        waitFor([&]{return status(27,ScriptStatus::Stopped);}, "playback example stopped");
+        waitFor([&]{return movieMode==0 && !session.hasUnsavedMovie();},"finish example playback");
+        check(session.scriptCommand(stop),"stop playback example");
+        waitFor([&]{return status(27,ScriptStatus::Stopped) && panels.windows.isEmpty();},"stop playback example");
 
         // A start already queued for the old game cannot attach to its successor.
         loaded=false;

@@ -18,6 +18,7 @@
 - Use a thin turquoise border while a status is active, such as pause, fast-forward, rewind, mute, recording, playback, loading or waiting for a peer. The FPS counters and game timer use this border while displayed.
 - Use a thicker turquoise border for achievement cards, including game recognition, unlocks and mastery. An error fetching achievements uses the ordinary gray message.
 - Keep controller diagrams and crosshairs free of an enclosing OSD panel.
+- The global OSD switch controls emulator indicators, not Lua drawing or script windows. Running scripts own their output; stopping a script removes it. Give bundled script text a readable background.
 
 ## Resource discipline
 

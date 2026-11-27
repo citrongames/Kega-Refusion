@@ -16,6 +16,9 @@ the emulator's `docs` folder.
 
 ## Events and lifecycle
 
+`emu.language` is the effective application language code (for example `"en"` or
+`"ru"`) captured when the script starts. Use it for script captions.
+
 `emu.apiVersion` is the integer `1`. Use `emu.on(event, function)` to register
 one callback per event in the current script. A new callback replaces the old
 one. Pass `nil` to remove a callback. Each callback receives a table with
@@ -425,7 +428,8 @@ core supplies an active viewport, and from the full raster otherwise.
 HUD space uses device-independent pixels from the top-left of the video view,
 including any letterbox bars. The default space is `"game"`. Use `"hud"`
 for window-sized labels. Appearance follows video scaling, aspect and crop
-after shader processing. The OSD switch hides the drawings. Screenshots and
+after shader processing. Script drawings stay visible when built-in OSD is
+disabled; stopping the script removes them. Screenshots and
 recordings use clean video. The preview generated when loading a state from
 a file has no script drawings until the next completed frame. In netplay, a
 corrected video frame clears the drawings that belonged to the prior image.
@@ -498,7 +502,8 @@ The `ui` library creates separate, nonmodal Qt windows. These are ordinary
 desktop controls, not drawings over the game. Qt handles layout, fonts, theme
 and display scale. Opening or focusing a tool does not automatically pause
 gameplay. Typing in its fields does not also send keyboard controls to the game.
-The OSD switch affects `draw` overlays, not these windows.
+The OSD switch affects neither script drawings nor these windows. Stop the
+script to remove its output.
 
 ```lua
 local panel = assert(ui.window("Tools", {
@@ -609,64 +614,10 @@ unavailable. Use the asynchronous storage API for script-owned files.
 
 ## Included examples
 
-`timeline-counter.lua` counts observed frames and frames with a controller
-poll in any loaded game. Run it, save a state, advance a few frames and load
-the state or rewind. The HUD shows the restored counts and last timeline
-change. After loading from a file, the HUD returns on the next completed
-frame and the counters continue from the saved values. To try a saved file
-across script runs, stop the script, start the same source again and then
-load the file.
+The eight numbered files in `scripts` cover drawing, controller input,
+memory watches, emulation events, temporary saves and input overrides, timeline
+data, input recording with measurements, and tool windows.
+[Guide to the included examples](lua-examples.md)
 
-`tool-panel.lua` demonstrates a separate window with pause/resume buttons,
-a HUD checkbox and color selector, a numeric sample period, a note field and
-a live input-poll graph. It works with any loaded game and no fixed RAM addresses.
-It changes no memory; control requests retain the normal session restrictions.
-Close the window or stop its script to remove it.
-
-file-roundtrip.lua writes one small text file, reads it back asynchronously,
-and checks the contents. It does not change game memory or record input.
-
-recording-activity.lua demonstrates native input recording with a separate saved
-graph. Set mode to "record" or "replay" and choose recordingName near the top.
-By default it records 30 seconds, measured using the recording's actual refresh
-rate. Set seconds to 0 to stop through the Input menu instead. A new recording
-requires a fresh name. Run the same script file for replay so its storage identity
-stays the same. The graph is loaded before native input playback starts and is
-matched to that recording's identity.
-
-Each graph point estimates activity over 60 emulated frames from controller
-polls; this is not a universal measure of game-update FPS. The example keeps at
-most 4,096 points and writes its data once when recording finishes. On rewind
-or load during recording, it discards future points and starts a new sample window.
-Stopping the script itself before it saves does not save its observations.
-File preparation/parsing uses explicit frame stepping; scripts needing different
-interaction should use frame callbacks or their own controls.
-
-
-`input-automation.lua` finds a pad with a right direction, captures a
-temporary checkpoint and holds Right for 30 emulated frames. It restores
-the checkpoint and steps once with live input before freeing the handle.
-Run it in local play. Pause the game first to inspect the result of the
-step without advancing subsequent frames.
-
-`input-activity.lua` charts a live estimate over windows of 60 emulated
-frames. Each sample is the nominal refresh rate multiplied by the fraction
-of frames with a controller poll. The graph starts over on reset, load or
-rewind. Its history is held in RAM during execution. Start and stop native
-input recordings through the emulator menu.
-
-`memory-hud.lua` reads the available work RAM on any supported console.
-`fixture-hitbox.lua` draws a hitbox and position/speed HUD using the original
-Kega Lua Overlay test cartridge, revision `KR-LUA1`. Generate this cartridge
-with `lua_runtime_tests --write-fixture /path/to/overlay.md`; the command
-creates a new file. The test source defines the ROM and the known RAM layout.
-`fixture-debugger.lua` uses the same cartridge. It edits a spare RAM word,
-adds a RAM Watch row and a label at the loop address, and counts delivered
-execution callbacks in a HUD. Run it in local play with input recording
-and playback stopped.
-
-For a real-game example, sonic1-hud.lua supports Sonic the Hedgehog REV00
-(serial GM 00001009-00, 512 KiB, header checksum 0x264A). It shows player/camera
-position, velocity and the player's current collision radii. The example
-checks the ROM metadata before interpreting RAM; other revisions/translations
-need their own verified addresses. Source references are in the script.
+The `scripts/games` folder contains tools for specific cartridge revisions.
+[Sonic 1 Lab](games/sonic1-lab.md) · [Contra: Hard Corps Combat Lab](games/contra-hard-corps-lab.md)

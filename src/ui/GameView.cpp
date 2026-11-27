@@ -762,9 +762,10 @@ qreal GameView::osdScale() const {
 }
 
 void GameView::paintOverlays(QPainter& painter, const QRectF& presentedVideo) {
+    // Script output belongs to the running script, independently of built-in OSD.
+    if (scriptOverlay_ && !scriptOverlay_->commands.isEmpty() && !loading_ && !capturingImage_)
+        paintScriptOverlay(painter, presentedVideo.isEmpty() ? gameRect() : presentedVideo);
     if (osdEnabled_) {
-        if (scriptOverlay_ && !scriptOverlay_->commands.isEmpty() && !loading_ && !capturingImage_)
-            paintScriptOverlay(painter, presentedVideo.isEmpty() ? gameRect() : presentedVideo);
         const bool status = !notices_.isEmpty() || stateSlots_.expiresAt ||
             paused_ || connectionWaiting_ || readinessWaiting_ || fastForward_ || rewinding_ || muted_ ||
             movieMode_ == 1 || movieMode_ == 2 || videoRecording_ ||

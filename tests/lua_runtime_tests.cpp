@@ -112,7 +112,7 @@ void checkMd(ScriptRuntime& runtime, LibretroHost& host) {
     QImage icon(4, 4, QImage::Format_ARGB32_Premultiplied);
     icon.fill(Qt::yellow);
     const auto setup = run(runtime, host, 1, R"(
-assert(emu.apiVersion == 1 and emu.instances() == 1)
+assert(emu.apiVersion == 1 and emu.instances() == 1 and emu.language == "en")
 assert(not io and not os and not debug and not package and not coroutine)
 assert(not require and not load and not loadfile and not dofile and not pcall and not xpcall)
 assert(not setmetatable and not string.dump and not string.match and not table.unpack)
@@ -638,37 +638,6 @@ bool connectAccess(ScriptRuntime& runtime, LibretroHost& host) {
         }, &runtime);
 }
 
-void checkDebuggerExample(ScriptRuntime& runtime, LibretroHost& host, const QString& directory) {
-    QFile source(directory + QStringLiteral("/fixture-debugger.lua"));
-    require(source.open(QIODevice::ReadOnly), "Open the debugger fixture example");
-    runtime.setHostPolicy(false, false, false, true, true);
-    expectStatus(run(runtime, host, 1, source.readAll()), 1, ScriptStatus::Running);
-    const auto controls = runtime.takeControls();
-    require(controls.size() == 1 && controls[0].type == ScriptControlType::MemoryWrite &&
-            host.inspectionWrite(controls[0].instance, controls[0].target, controls[0].offset,
-                                 controls[0].bytes.constData(), size_t(controls[0].bytes.size())),
-            "Apply the debugger fixture's memory edit");
-    const auto annotations = runtime.annotations();
-    require(annotations.labels.size() == 1 && annotations.watches.size() == 1 && connectAccess(runtime, host),
-            "Install example label, RAM watch and execute hook");
-    for (int step = 0; step < 2; ++step) {
-        runtime.beginAccessFrame(host, host.runClock().frames + 1);
-        host.runFrame();
-        runtime.endAccessFrame();
-        const auto overlay = frame(runtime, host);
-        require(overlay && overlay->commands.first().text == "Loop callbacks: 32 (budget reached)",
-                "Show limited execute hooks on the example HUD");
-        const auto updates = runtime.takeUpdates();
-        require(updates.size() == (step == 0 ? 1 : 0),
-                "Example reports truncation only once per run");
-        if (!updates.isEmpty()) expectStatus(updates, 1, ScriptStatus::Log);
-    }
-    runtime.stopAll();
-    runtime.takeUpdates();
-    require(host.setDebugAccessObserver({}), "Clear the debugger example observer");
-    runtime.setHostPolicy(false, false, false);
-}
-
 void checkAccessAndEdits(ScriptRuntime& runtime, LibretroHost& host, const QTemporaryDir& temp) {
     host.unload();
     auto rom = mdFixture();
@@ -1022,8 +991,7 @@ void awaitStorage(ScriptRuntime& runtime, const LibretroHost& host, const QStrin
     require(false, "Timeout waiting for " + log);
 }
 
-void checkStorage(ScriptRuntime& runtime, LibretroHost& host, const QTemporaryDir& temp,
-                  const QString& examples) {
+void checkStorage(ScriptRuntime& runtime, LibretroHost& host, const QTemporaryDir& temp) {
     const auto root = temp.filePath("scripts-data");
     const auto start = [&](const QByteArray& source) {
         expectStatus(runStorage(runtime, host, root, source), 8, ScriptStatus::Running);
@@ -1180,14 +1148,6 @@ end)
     awaitStorage(runtime, host, QStringLiteral("storage refused directory symlink"));
 #endif
 
-    if (!examples.isEmpty()) {
-        QFile example(QDir(examples).filePath("file-roundtrip.lua"));
-        require(example.open(QIODevice::ReadOnly), "Open packaged storage example");
-        expectStatus(runStorage(runtime, host, root, example.readAll(),
-                                QStringLiteral("scripts/file-roundtrip.lua")), 8, ScriptStatus::Running);
-        awaitStorage(runtime, host, QStringLiteral("File saved and read successfully"));
-    }
-
     runtime.stopAll();
     runtime.takeUpdates();
 }
@@ -1217,17 +1177,35 @@ int main(int argc, char** argv) {
         checkAutomation(runtime, host);
         checkSaveLimits(runtime, host);
         checkPanels(runtime, host);
-        checkStorage(runtime, host, data, argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString());
+        checkStorage(runtime, host, data);
         if (argc == 3) {
-            for (const QString& example : {QStringLiteral("memory-hud.lua"), QStringLiteral("fixture-hitbox.lua")}) {
+            for (const QString& example : {QStringLiteral("01_Overlay.lua"), QStringLiteral("02_Controllers.lua"),
+                    QStringLiteral("03_MemoryWatch.lua"), QStringLiteral("04_Events.lua")}) {
                 QFile source(QString::fromLocal8Bit(argv[2]) + QLatin1Char('/') + example);
                 require(source.open(QIODevice::ReadOnly), "Open " + example);
-                expectStatus(run(runtime, host, 1, source.readAll()), 1, ScriptStatus::Running);
-                require(bool(frame(runtime, host)), "Run " + example);
+                QHash<QString,QImage> images;
+                if (example == QLatin1String("01_Overlay.lua")) {
+                    QImage marker(QString::fromLocal8Bit(argv[2]) + "/overlay-marker.png");
+                    require(!marker.isNull(),"Original example marker");
+                    images.insert("overlay-marker.png",marker);
+                }
+                expectStatus(run(runtime, host, 1, source.readAll(),images), 1, ScriptStatus::Running);
+                const auto overlay=frame(runtime,host);
+                require(bool(overlay),"Run "+example);
+                for(const auto& update:runtime.takeUpdates())
+                    require(update.status!=ScriptStatus::Error,example+": "+update.text);
+                bool backing=false,text=false;
+                for(const auto& command:overlay->commands) {
+                    if(command.primitive==ScriptPrimitive::Rectangle && command.fill.alpha()>0)backing=true;
+                    if(command.primitive==ScriptPrimitive::Text) {
+                        require(backing,"Example text needs a background: "+example);
+                        text=true;
+                    }
+                }
+                require(text,"Example displays a readable label: "+example);
                 runtime.stopAll();
                 runtime.takeUpdates();
             }
-            checkDebuggerExample(runtime, host, QString::fromLocal8Bit(argv[2]));
         }
         checkAccessAndEdits(runtime, host, data);
         for (const auto& name : {QStringLiteral("watch.sms"), QStringLiteral("watch.sg"), QStringLiteral("watch.gg")}) {

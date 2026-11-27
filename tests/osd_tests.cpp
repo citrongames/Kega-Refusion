@@ -203,10 +203,10 @@ void testScriptOverlay() {
             "script overlay used device pixels as logical coordinates");
 
     view.setOsdEnabled(false);
-    require(render(view) == baseline, "script overlay ignored the global OSD setting");
+    require(render(view) == displayed, "global OSD setting hid independent script output");
     view.setLightgunEnabled(0, true);
     view.setLightgunAim(0, QPointF(0.5, 0.5));
-    require(render(view) != baseline, "global OSD setting also hid the lightgun crosshair");
+    require(render(view) != displayed, "global OSD setting also hid the lightgun crosshair");
     view.setLightgunEnabled(0, false);
     view.setOsdEnabled(true);
     require(render(view) == displayed, "script overlay was lost after unhiding OSD");

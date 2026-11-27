@@ -556,7 +556,7 @@ void scriptOverlayWidgetTests() {
     require(view.captureGameImage() == clean && view.captureImage() == stock,
             "script overlay leaked into a shader screenshot");
     view.setOsdEnabled(false);
-    require(gpu->grabFramebuffer() == stock, "GPU script overlay ignored the global OSD setting");
+    require(gpu->grabFramebuffer() == painted, "global OSD setting hid independent GPU script output");
 }
 
 void widgetTests(const QString& directory) {
