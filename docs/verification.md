@@ -703,3 +703,29 @@ the same future video and PCM. This covers the race-start scene, not a complete
 game playthrough. Short 600-frame before/after comparisons on Doom (Japan, USA),
 59.922743 Hz, and Sonic CD (Europe), 49.701459 Hz, retain identical final video
 and complete PCM. Evidence: `build/verification/roadrash-scoped/` (ignored).
+
+### Release 0.31.0 — 2026-11-27
+
+Published stable tag `v0.31.0` at `16c695132ad1d623b2d7fb8d36741dc38d79c8d0`.
+Windows and Debian 12 Linux Release packages report 0.31.0. Linux retains the
+glibc 2.36 ceiling; its packaged runtime inventory matches the corresponding
+source bundle. Both prepared native core trees match reconstruction from the
+pinned upstream revision and all 95 managed patches. The source archive
+includes 704 project files, 801 prepared core files and 30 dependency artifacts.
+
+Both final archives passed manifest/hash checks and isolated 0.30.1 -> 0.31.0
+installation using the unchanged 0.30.1 updater archive code. All twelve user-
+data sentinels remained byte-identical for each platform. The Linux package
+reported the old/new version before/after replacement. Debian 12 also passed
+its native updater checks and the focused MMPX GPU suite under software GL.
+Windows GUI and native Windows helper restart were left to the user.
+
+All five assets, their GitHub digests, authored English notes and update.json
+were verified before publication. The public latest-release redirect points to
+v0.31.0; public metadata and both binary downloads match their final hashes.
+An initial WSL upload timed out; the same unchanged archives uploaded through
+Windows HTTP/1.1 and were validated before the draft was published.
+
+Evidence and final archives are retained under `build/release-0.31.0/` (ignored).
+Temporary package trees, isolated installations and scratch probe executables
+were removed. Useful incremental builds remain.
