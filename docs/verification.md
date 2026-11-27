@@ -789,3 +789,21 @@ NTSC-U 59.92274 Hz, 2,400 unattended frames, first complete HUD at frame 1,168,
 camera/mode addresses were checked against the SonicRetro disassembly and
 the original Hivebrain RAM documentation; it displays object collision radii,
 not inferred universal hitboxes. Sonic 2 was rejected by the revision guard.
+
+### Lua follow-up: attached hardware and Russian UI
+
+The user's original Sonic the Hedgehog (USA, Europe), 512 KiB REV00
+(checksum 264A), reproduced the example's rejection when Sega CD was attached.
+CD Program RAM and cartridge ROM both advertise base zero and 512 KiB; the
+example selected the last matching domain. It now uses the stable inspection
+domain IDs for cartridge ROM and main RAM, retaining its revision guard.
+The same ROM starts the example with automatic hardware, 32X, Sega CD, and
+CD+32X; Sonic 2 is still rejected in all four configurations. A 2,400-frame
+CD+32X run at 59.92274 Hz produced 1,233 complete HUD overlays with moving
+collision rectangles. No native emulation changes were needed.
+
+Added the missing Russian Lua-window catalog entries and moved the command
+to File → Scripts. The existing offscreen window checks now initialize the
+shipped English and Russian catalogs and verify translated controls; they pass.
+The Windows testbuild executable, example and language files match the staged
+package byte for byte. Windows GUI testing remains with the user.

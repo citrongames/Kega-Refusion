@@ -1011,6 +1011,10 @@ void MainWindow::buildMenus() {
     screenshotAction_->setToolTip(Localization::text(QStringLiteral("Чистое изображение игры без OSD")));
     connect(screenshotAction_, &QAction::triggered, this, &MainWindow::saveScreenshot);
     fileMenu->addSeparator();
+    auto* luaAction = fileMenu->addAction(Localization::text(QStringLiteral("Скрипты…")));
+    luaAction->setObjectName(QStringLiteral("luaScriptsAction"));
+    connect(luaAction, &QAction::triggered, this, &MainWindow::showLuaScripts);
+    fileMenu->addSeparator();
     QAction* quitAction = fileMenu->addAction(Localization::text(QStringLiteral("Выход")));
     quitAction->setShortcut(QKeySequence::Quit);
     shortcut(quitAction);
@@ -1466,9 +1470,6 @@ void MainWindow::buildMenus() {
     cheatsMenu->addAction(debugWatchAction_);
     debugWatchAction_->setObjectName(QStringLiteral("debugWatchAction"));
     connect(debugWatchAction_, &QAction::triggered, this, &MainWindow::showDebugWatch);
-    auto* luaAction=debugMenu_->addAction(Localization::text(QStringLiteral("Lua-скрипты…")));
-    luaAction->setObjectName(QStringLiteral("luaScriptsAction"));
-    connect(luaAction,&QAction::triggered,this,&MainWindow::showLuaScripts);
     debugMenu_->addSeparator();
     auto* projectMenu = debugMenu_->addMenu(Localization::text(QStringLiteral("Проект отладки")));
     projectMenu->setObjectName(QStringLiteral("debugProjectMenu"));

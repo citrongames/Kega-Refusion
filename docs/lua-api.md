@@ -1,6 +1,6 @@
 # Kega Refusion Lua API 1
 
-Open **Lua scripts** in the debugging tools while a game is loaded. Open a
+Open **File → Scripts…** while a game is loaded. Open a
 UTF-8 `.lua` source file and choose **Run**. You can edit the code in the
 script window or in an external editor, then restart it. The console shows
 `print(...)` output and Lua errors for each script. Both packages include

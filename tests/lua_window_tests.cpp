@@ -1,6 +1,9 @@
 #include "ui/LuaScriptsDialog.h"
+#include "i18n/Localization.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QSettings>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
@@ -61,6 +64,22 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QTemporaryDir fixtures;
     check(fixtures.isValid(), "Temporary fixture directory");
+    // Use the shipped catalogs: an uninitialized translator hides missing RU entries.
+    check(argc == 2, "Repository path for shipped translations");
+    QSettings settings(fixtures.filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
+    for (const QString& language : {QStringLiteral("en"), QStringLiteral("ru")}) {
+        settings.setValue(QStringLiteral("ui/language"), language);
+        settings.sync();
+        Localization::initialize(QString::fromLocal8Bit(argv[1]), fixtures.path());
+        LuaScriptsDialog localized;
+        const bool russian = language == QLatin1String("ru");
+        check(localized.windowTitle() == (russian ? QStringLiteral("Lua-скрипты") : QStringLiteral("Lua scripts")),
+              "Localized Lua window title");
+        check(find<QPushButton>(localized, "luaRun")->text() ==
+              (russian ? QStringLiteral("Запустить скрипт") : QStringLiteral("Run")), "Localized Run button");
+        check(Localization::text(QStringLiteral("Скрипты…")) ==
+              (russian ? QStringLiteral("Скрипты…") : QStringLiteral("Scripts…")), "Localized File menu entry");
+    }
     const auto sourcePath = fixtures.filePath(QStringLiteral("draw.lua"));
     const auto secondPath = fixtures.filePath(QStringLiteral("other.lua"));
     const auto imagePath = fixtures.filePath(QStringLiteral("sprite.png"));

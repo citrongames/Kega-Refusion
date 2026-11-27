@@ -4,11 +4,13 @@
 -- https://github.com/sonicretro/s1disasm/blob/AS/_Constants.asm
 -- Work RAM map: https://github.com/cvghivebrain/s1disasm/blob/main/RAM%20Addresses.asm
 
+-- Cartridge ROM and CD Program RAM can share base and size.
+local cartridgeRom, mainRam = 1, 2
 local rom, ram
 for _, domain in ipairs(memory.domains()) do
-    if domain.base == 0 and domain.size == 0x80000 then
+    if domain.id == cartridgeRom and domain.size == 0x80000 then
         rom = domain.id
-    elseif domain.base == 0xff0000 and domain.size == 0x10000 then
+    elseif domain.id == mainRam and domain.size == 0x10000 then
         ram = domain.id
     end
 end
