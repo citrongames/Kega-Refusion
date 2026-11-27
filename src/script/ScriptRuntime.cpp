@@ -276,6 +276,131 @@ ScriptSpace space(lua_State* L, int arg) {
     luaL_argerror(L, arg, "expected 'game' or 'hud'");
     return ScriptSpace::Game;
 }
+
+constexpr qsizetype MaxUiWindowsPerScript = 2;
+constexpr qsizetype MaxUiWindows = 8;
+constexpr qsizetype MaxUiControlsPerWindow = 64;
+constexpr qsizetype MaxUiControls = 256;
+constexpr int MaxUiDepth = 4;
+constexpr int MaxUiTitleBytes = 128;
+constexpr int MaxUiIdBytes = 64;
+constexpr int MaxUiChoices = 32;
+constexpr int MaxUiChoiceBytes = 128;
+constexpr int MaxUiPoints = 128;
+constexpr std::array UiKinds{
+    std::pair{"row", ScriptUiKind::Row}, std::pair{"group", ScriptUiKind::Group},
+    std::pair{"label", ScriptUiKind::Label}, std::pair{"button", ScriptUiKind::Button},
+    std::pair{"checkbox", ScriptUiKind::Checkbox}, std::pair{"text", ScriptUiKind::Text},
+    std::pair{"number", ScriptUiKind::Number}, std::pair{"select", ScriptUiKind::Select},
+    std::pair{"graph", ScriptUiKind::Graph}
+};
+
+bool uiContainer(ScriptUiKind kind) {
+    return kind == ScriptUiKind::Row || kind == ScriptUiKind::Group;
+}
+
+bool uiCaptionValue(ScriptUiKind kind) {
+    return kind == ScriptUiKind::Label || kind == ScriptUiKind::Button;
+}
+
+QByteArrayView uiString(lua_State* L, int index, int limit) {
+    if (lua_type(L, index) != LUA_TSTRING) luaL_error(L, "expected a panel string");
+    size_t length = 0;
+    const char* bytes = lua_tolstring(L, index, &length);
+    if (length > size_t(limit)) luaL_error(L, "panel string exceeds %d bytes", limit);
+    return {bytes, qsizetype(length)};
+}
+
+QByteArrayView uiId(lua_State* L, int index) {
+    const auto id = uiString(L, index, MaxUiIdBytes);
+    if (id.isEmpty() || std::any_of(id.begin(), id.end(), [](unsigned char c) {
+            return c < 32 || c > 126;
+        }))
+        luaL_error(L, "panel control IDs must contain printable ASCII");
+    return id;
+}
+
+void uiField(lua_State* L, int index, const char* key) {
+    lua_pushstring(L, key);
+    lua_rawget(L, index);
+}
+
+int uiArrayLength(lua_State* L, int index, int limit) {
+    luaL_checktype(L, index, LUA_TTABLE);
+    const auto length = lua_rawlen(L, index);
+    if (length > size_t(limit)) luaL_error(L, "panel array exceeds %d entries", limit);
+    lua_pushnil(L);
+    while (lua_next(L, index)) {
+        if (!lua_isinteger(L, -2) || lua_tointeger(L, -2) < 1 ||
+            size_t(lua_tointeger(L, -2)) > length)
+            luaL_error(L, "expected a dense panel array");
+        lua_pop(L, 1);
+    }
+    return int(length);
+}
+
+double uiNumber(lua_State* L, int index) {
+    luaL_checktype(L, index, LUA_TNUMBER);
+    const auto value = lua_tonumber(L, index);
+    if (!std::isfinite(value)) luaL_error(L, "panel number must be finite");
+    return value;
+}
+
+double uiNumberField(lua_State* L, int index, const char* name, double fallback) {
+    uiField(L, index, name);
+    const auto value = lua_isnil(L, -1) ? fallback : uiNumber(L, -1);
+    lua_pop(L, 1);
+    return value;
+}
+
+lua_Integer uiInteger(lua_State* L, int index) {
+    int valid = 0;
+    const auto value = lua_tointegerx(L, index, &valid);
+    if (!valid || lua_type(L, index) != LUA_TNUMBER) luaL_error(L, "expected a panel integer");
+    return value;
+}
+
+template<class StringView>
+int uiControlIndex(const ScriptUiWindow& window, StringView id) {
+    if (id.isEmpty()) return -1;
+    const auto found = std::find_if(window.controls.cbegin(), window.controls.cend(),
+                                    [id](const auto& control) { return control.id == id; });
+    return found == window.controls.cend() ? -1 : int(found - window.controls.cbegin());
+}
+
+bool uiControlEnabled(const ScriptUiWindow& window, int index) {
+    for (; index >= 0; index = window.controls.at(index).parent) {
+        if (!window.controls.at(index).enabled) return false;
+    }
+    return true;
+}
+
+bool validUiChange(const ScriptUiControl& control, const QVariant& value) {
+    switch (control.kind) {
+    case ScriptUiKind::Checkbox:
+        return value.typeId() == QMetaType::Bool;
+    case ScriptUiKind::Text:
+        return value.typeId() == QMetaType::QString && value.toString().toUtf8().size() <= ScriptUiLimits::MaxTextBytes;
+    case ScriptUiKind::Number: {
+        const auto number = value.toDouble();
+        return value.typeId() == QMetaType::Double && std::isfinite(number) &&
+               number >= control.minimum && number <= control.maximum;
+    }
+    case ScriptUiKind::Select:
+        return value.typeId() == QMetaType::Int && value.toInt() >= 1 && value.toInt() <= control.items.size();
+    default:
+        return false;
+    }
+}
+
+void pushUiScalar(lua_State* L, const QVariant& value) {
+    switch (value.typeId()) {
+    case QMetaType::Bool: lua_pushboolean(L, value.toBool()); break;
+    case QMetaType::Int: lua_pushinteger(L, value.toInt()); break;
+    case QMetaType::Double: lua_pushnumber(L, value.toDouble()); break;
+    default: lua_pushnil(L); break;
+    }
+}
 }
 
 struct ScriptRuntime::Script {
@@ -290,6 +415,18 @@ struct ScriptRuntime::Script {
     lua_State* topLevel = nullptr;
     int topLevelRef = LUA_NOREF;
     std::array<int, EventNames.size()> callbacks;
+    struct UiPanel {
+        ScriptUiWindow model;
+        int callback = LUA_NOREF;
+    };
+    QVector<UiPanel> panels;
+    struct UiCallback {
+        const ScriptUiEvent& event;
+        QVariant value;
+        QByteArray control, utf8;
+        int reference = LUA_NOREF;
+    };
+    const UiCallback* uiCallback = nullptr;
     std::array<InputOverride, MaxControllerPlayers> overrides{};
     struct Save {
         lua_Integer handle = 0;
@@ -344,6 +481,11 @@ struct ScriptRuntime::Script {
         if (L) *static_cast<Script**>(lua_getextraspace(L)) = this;
     }
     ~Script() {
+        if (!panels.isEmpty()) {
+            owner.uiWindows_ -= panels.size();
+            for (const auto& panel : std::as_const(panels)) owner.uiControls_ -= panel.model.controls.size();
+            ++owner.uiRevision_;
+        }
         if (!accessHooks.isEmpty()) {
             owner.accessCount_ -= accessHooks.size();
             ++owner.accessRevision_;
@@ -409,6 +551,11 @@ struct ScriptRuntime::Script {
         if (Clock::now() > active.deadline) luaL_error(runner, "callback time budget exceeded");
     }
 
+    void chargeUiBytes(lua_State* runner, int bytes) {
+        if ((budget().nativeBytes -= bytes) < 0) luaL_error(runner, "native work budget exceeded");
+        if (Clock::now() > budget().deadline) luaL_error(runner, "callback time budget exceeded");
+    }
+
     void report(ScriptStatus status, const QString& message = {}, int line = 0) {
         owner.update({id, path, status, message, line});
     }
@@ -431,7 +578,7 @@ struct ScriptRuntime::Script {
     static int print(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        if (!script.starting && !script.accessEvent &&
+        if (!script.starting && !script.accessEvent && !script.uiCallback &&
             (script.currentEvent == ScriptEvent::Rewind || script.currentEvent == ScriptEvent::Draw))
             return 0;
         const auto now = Clock::now();
@@ -505,7 +652,7 @@ struct ScriptRuntime::Script {
     }
 
     bool atControlBoundary() const {
-        return !accessEvent && (starting || currentEvent == ScriptEvent::Frame);
+        return !accessEvent && (uiCallback || starting || currentEvent == ScriptEvent::Frame);
     }
 
     ScriptControl* queueControl(ScriptControlType type, bool value = false,
@@ -625,7 +772,7 @@ struct ScriptRuntime::Script {
     static int lagged(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        if (script.starting || script.accessEvent || script.currentEvent != ScriptEvent::Frame ||
+        if (script.starting || script.accessEvent || script.uiCallback || script.currentEvent != ScriptEvent::Frame ||
             !script.host->supportsInputPollMetrics())
             return unavailable(L, "Input-poll metrics require a supported completed frame");
         lua_pushboolean(L, !script.host->frameInputPolled());
@@ -866,7 +1013,7 @@ struct ScriptRuntime::Script {
         // VDP mode changes can alter video domain layout/order. Common RAM and
         // ROM reads reuse their metadata and validate the byte count natively.
         const bool video = id >= KR_MEM_VRAM && id <= KR_MEM_VDP_REGS;
-        const bool restore = !starting && (currentEvent == ScriptEvent::Reset ||
+        const bool restore = !starting && !uiCallback && (currentEvent == ScriptEvent::Reset ||
                                            currentEvent == ScriptEvent::LoadState);
         if (video || restore || !cached || quint64(offset) + length > cached->size)
             return find(*hardware->memoryCatalog(*host, side));
@@ -1135,7 +1282,7 @@ struct ScriptRuntime::Script {
     static int hookStats(lua_State* L) {
         auto& script = self(L);
         script.charge(L);
-        if (script.starting || script.accessEvent || script.currentEvent != ScriptEvent::Frame ||
+        if (script.starting || script.accessEvent || script.uiCallback || script.currentEvent != ScriptEvent::Frame ||
             script.accessStatsFrame != script.frame)
             return unavailable(L, "Access hook statistics require an observed completed frame");
         lua_createtable(L, 0, 2);
@@ -1466,6 +1613,348 @@ struct ScriptRuntime::Script {
         return 1;
     }
 
+    int uiPanelIndex(quint64 handle) const {
+        const auto found = std::find_if(panels.cbegin(), panels.cend(),
+                                        [handle](const auto& panel) { return panel.model.handle == handle; });
+        return found == panels.cend() ? -1 : int(found - panels.cbegin());
+    }
+
+    int uiPanelIndex(lua_State* L) const {
+        const auto handle = uiInteger(L, 1);
+        return handle > 0 ? uiPanelIndex(quint64(handle)) : -1;
+    }
+
+    int detachUiPanel(int index) {
+        const auto& panel = panels.at(index);
+        const auto callback = panel.callback;
+        --owner.uiWindows_;
+        owner.uiControls_ -= panel.model.controls.size();
+        panels.removeAt(index);
+        ++owner.uiRevision_;
+        return callback;
+    }
+
+    void parseUiValue(lua_State* L, int index, const ScriptUiControl& control,
+                      ScriptUiControl& result, bool optional = false) {
+        const bool missing = optional && lua_isnil(L, index);
+        switch (control.kind) {
+        case ScriptUiKind::Label: case ScriptUiKind::Button: case ScriptUiKind::Text:
+            if (missing) {
+                result.value = uiCaptionValue(control.kind) ? control.text : QString{};
+            } else {
+                const auto bytes = uiString(L, index, ScriptUiLimits::MaxTextBytes);
+                chargeUiBytes(L, int(bytes.size()));
+                result.value = QString::fromUtf8(bytes);
+            }
+            break;
+        case ScriptUiKind::Checkbox:
+            if (!missing) luaL_checktype(L, index, LUA_TBOOLEAN);
+            result.value = !missing && lua_toboolean(L, index);
+            break;
+        case ScriptUiKind::Number: {
+            const auto value = missing ? control.minimum : uiNumber(L, index);
+            if (value < control.minimum || value > control.maximum)
+                luaL_error(L, "panel number is outside its range");
+            result.value = value;
+            break;
+        }
+        case ScriptUiKind::Select: {
+            const auto value = missing ? 1 : uiInteger(L, index);
+            if (value < 1 || value > control.items.size())
+                luaL_error(L, "panel selection is outside its item list");
+            result.value = int(value);
+            break;
+        }
+        case ScriptUiKind::Graph: {
+            if (missing) break;
+            const auto size = uiArrayLength(L, index, MaxUiPoints);
+            chargeUiBytes(L, size * int(sizeof(double)));
+            result.points.reserve(size);
+            for (int i = 1; i <= size; ++i) {
+                lua_rawgeti(L, index, i);
+                result.points.append(uiNumber(L, -1));
+                lua_pop(L, 1);
+            }
+            break;
+        }
+        default:
+            luaL_error(L, "panel container has no value");
+        }
+        if (uiCaptionValue(control.kind)) result.text = result.value.toString();
+    }
+
+    void parseUiControls(lua_State* L, int table, ScriptUiWindow& window, int parent, int depth) {
+        const auto size = uiArrayLength(L, table, MaxUiControlsPerWindow);
+        if (size && depth > MaxUiDepth) luaL_error(L, "panel nesting exceeds its depth limit");
+        for (int i = 1; i <= size; ++i) {
+            charge(L);
+            if (window.controls.size() == MaxUiControlsPerWindow)
+                luaL_error(L, "too many controls in a panel");
+            lua_rawgeti(L, table, i);
+            const auto index = lua_gettop(L);
+            luaL_checktype(L, index, LUA_TTABLE);
+            uiField(L, index, "type");
+            const auto name = uiString(L, -1, 8);
+            const auto kind = std::find_if(UiKinds.cbegin(), UiKinds.cend(),
+                                           [name](const auto& p) { return p.first == name; });
+            if (kind == UiKinds.cend()) luaL_error(L, "unknown panel control type");
+            lua_pop(L, 1);
+            const bool container = uiContainer(kind->second);
+            const auto position = int(window.controls.size());
+            auto& control = window.controls.emplaceBack();
+            control.parent = parent;
+            control.kind = kind->second;
+            uiField(L, index, "id");
+            if (!container || !lua_isnil(L, -1)) {
+                control.id = QString::fromLatin1(uiId(L, -1));
+                const auto first = uiControlIndex(window, control.id);
+                if (first != position) luaL_error(L, "duplicate panel control ID");
+            }
+            lua_pop(L, 1);
+            uiField(L, index, "text");
+            if (!lua_isnil(L, -1)) {
+                const auto text = uiString(L, -1, ScriptUiLimits::MaxTextBytes);
+                chargeUiBytes(L, int(text.size()));
+                control.text = QString::fromUtf8(text);
+            }
+            lua_pop(L, 1);
+
+            if (container) {
+                uiField(L, index, "children");
+                if (!lua_isnil(L, -1)) parseUiControls(L, lua_gettop(L), window, position, depth + 1);
+                lua_pop(L, 2);
+                continue;
+            }
+            if (control.kind == ScriptUiKind::Number) {
+                control.minimum = uiNumberField(L, index, "min", 0);
+                control.maximum = uiNumberField(L, index, "max", 100);
+                control.step = uiNumberField(L, index, "step", 1);
+                if (control.minimum > control.maximum || control.step <= 0)
+                    luaL_error(L, "invalid panel number range or step");
+            } else if (control.kind == ScriptUiKind::Select) {
+                uiField(L, index, "items");
+                const auto items = lua_gettop(L);
+                const auto count = uiArrayLength(L, items, MaxUiChoices);
+                if (!count) luaL_error(L, "panel selection needs at least one item");
+                int bytes = 0;
+                for (int item = 1; item <= count; ++item) {
+                    lua_rawgeti(L, items, item);
+                    const auto text = uiString(L, -1, MaxUiChoiceBytes);
+                    bytes += int(text.size());
+                    control.items.append(QString::fromUtf8(text));
+                    lua_pop(L, 1);
+                }
+                chargeUiBytes(L, bytes);
+                lua_pop(L, 1);
+            }
+            uiField(L, index, "value");
+            parseUiValue(L, lua_gettop(L), control, control, true);
+            lua_pop(L, 2);
+        }
+    }
+
+    static int readUiWindow(lua_State* L) {
+        if (!lua_checkstack(L, MaxUiDepth * 2 + 8)) return luaL_error(L, "panel stack limit reached");
+        auto& window = *static_cast<ScriptUiWindow*>(lua_touserdata(L, 3));
+        window.title = QString::fromUtf8(uiString(L, 1, MaxUiTitleBytes));
+        self(L).parseUiControls(L, 2, window, -1, 1);
+        return 0;
+    }
+
+    static int uiWindow(lua_State* L) {
+        auto& script = self(L);
+        auto& owner = script.owner;
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Panel creation unavailable here");
+        if (script.panels.size() >= MaxUiWindowsPerScript || owner.uiWindows_ >= MaxUiWindows ||
+            owner.nextUiHandle_ == quint64(std::numeric_limits<lua_Integer>::max()))
+            return unavailable(L, "Panel window limit reached");
+        luaL_checktype(L, 1, LUA_TSTRING);
+        luaL_checktype(L, 2, LUA_TTABLE);
+        lua_pushcfunction(L, readUiWindow);
+        lua_pushvalue(L, 1);
+        lua_pushvalue(L, 2);
+        int status = LUA_OK;
+        {
+            // Keep C++ data under the protected Lua call, including when validation or allocation fails.
+            UiPanel panel;
+            panel.model.controls.reserve(MaxUiControlsPerWindow);
+            lua_pushlightuserdata(L, &panel.model);
+            status = lua_pcall(L, 3, 0, 0);
+            if (status == LUA_OK && panel.model.controls.size() <= MaxUiControls - owner.uiControls_) {
+                panel.model.owner = script.id;
+                panel.model.run = script.run;
+                panel.model.handle = ++owner.nextUiHandle_;
+                owner.uiControls_ += panel.model.controls.size();
+                ++owner.uiWindows_;
+                script.panels.append(std::move(panel));
+                ++owner.uiRevision_;
+                lua_pushinteger(L, lua_Integer(owner.nextUiHandle_));
+                return 1;
+            }
+        }
+        if (status == LUA_OK) return unavailable(L, "Panel control limit reached");
+        return lua_error(L);
+    }
+
+    static int uiOn(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Panel callback registration unavailable here");
+        const auto panel = script.uiPanelIndex(L);
+        if (panel < 0) return unavailable(L, "Unknown panel window");
+        if (!lua_isnil(L, 2)) luaL_checktype(L, 2, LUA_TFUNCTION);
+        lua_pushvalue(L, 2);
+        const auto replacement = luaL_ref(L, LUA_REGISTRYINDEX);
+        auto& callback = script.panels[panel].callback;
+        luaL_unref(L, LUA_REGISTRYINDEX, callback);
+        callback = replacement;
+        return accepted(L);
+    }
+
+    static int readUiValue(lua_State* L) {
+        const auto& control = *static_cast<const ScriptUiControl*>(lua_touserdata(L, 2));
+        auto& replacement = *static_cast<ScriptUiControl*>(lua_touserdata(L, 3));
+        self(L).parseUiValue(L, 1, control, replacement);
+        return 0;
+    }
+
+    static int uiSet(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Panel update unavailable here");
+        const auto panel = script.uiPanelIndex(L);
+        if (panel < 0) return unavailable(L, "Unknown panel window");
+        const auto id = uiId(L, 2);
+        auto& model = script.panels[panel].model;
+        const auto index = uiControlIndex(model, QLatin1StringView(id.data(), id.size()));
+        if (index < 0) return unavailable(L, "Unknown panel control");
+        if (lua_isnone(L, 3)) return luaL_argerror(L, 3, "panel value required");
+
+        const auto& old = model.controls.at(index);
+        lua_pushcfunction(L, readUiValue);
+        lua_pushvalue(L, 3);
+        lua_pushlightuserdata(L, const_cast<ScriptUiControl*>(&old));
+        {
+            ScriptUiControl replacement;
+            lua_pushlightuserdata(L, &replacement);
+            if (lua_pcall(L, 3, 0, 0) == LUA_OK) {
+                if (old.value != replacement.value || old.points != replacement.points) {
+                    auto& control = model.controls[index];
+                    control.value = std::move(replacement.value);
+                    control.points = std::move(replacement.points);
+                    if (uiCaptionValue(control.kind)) control.text = std::move(replacement.text);
+                    ++script.owner.uiRevision_;
+                }
+                return accepted(L);
+            }
+        }
+        return lua_error(L);
+    }
+
+    static int pushUiText(lua_State* L) {
+        const auto& bytes = *static_cast<const QByteArray*>(lua_touserdata(L, 1));
+        lua_pushlstring(L, bytes.constData(), size_t(bytes.size()));
+        return 1;
+    }
+
+    static int uiGet(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        const auto panel = script.uiPanelIndex(L);
+        if (panel < 0) return unavailable(L, "Unknown panel window");
+        const auto id = uiId(L, 2);
+        const auto& model = script.panels.at(panel).model;
+        const auto index = uiControlIndex(model, QLatin1StringView(id.data(), id.size()));
+        if (index < 0) return unavailable(L, "Unknown panel control");
+        const auto& control = model.controls.at(index);
+        if (control.kind == ScriptUiKind::Graph) {
+            script.charge(L, int(control.points.size() * sizeof(double)));
+            lua_createtable(L, int(control.points.size()), 0);
+            for (int i = 0; i < control.points.size(); ++i) {
+                lua_pushnumber(L, control.points.at(i));
+                lua_rawseti(L, -2, i + 1);
+            }
+        } else if (control.value.typeId() == QMetaType::QString) {
+            lua_pushcfunction(L, pushUiText);
+            {
+                auto bytes = control.value.toString().toUtf8();
+                lua_pushlightuserdata(L, &bytes);
+                if (lua_pcall(L, 1, 1, 0) == LUA_OK) return 1;
+            }
+            return lua_error(L);
+        } else {
+            pushUiScalar(L, control.value);
+        }
+        return 1;
+    }
+
+    static int uiEnable(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Panel update unavailable here");
+        const auto panel = script.uiPanelIndex(L);
+        if (panel < 0) return unavailable(L, "Unknown panel window");
+        const auto id = uiId(L, 2);
+        luaL_checktype(L, 3, LUA_TBOOLEAN);
+        auto& model = script.panels[panel].model;
+        const auto index = uiControlIndex(model, QLatin1StringView(id.data(), id.size()));
+        if (index < 0) return unavailable(L, "Unknown panel control");
+        const bool enabled = lua_toboolean(L, 3);
+        if (model.controls.at(index).enabled != enabled) {
+            model.controls[index].enabled = enabled;
+            ++script.owner.uiRevision_;
+        }
+        return accepted(L);
+    }
+
+    static int uiClose(lua_State* L) {
+        auto& script = self(L);
+        script.charge(L);
+        if (!script.atControlBoundary()) return unavailable(L, "Panel close unavailable here");
+        const auto panel = script.uiPanelIndex(L);
+        if (panel < 0) return unavailable(L, "Unknown panel window");
+        luaL_unref(L, LUA_REGISTRYINDEX, script.detachUiPanel(panel));
+        return accepted(L);
+    }
+
+    static int dispatchUiCallback(lua_State* L) {
+        const auto& call = *self(L).uiCallback;
+        const auto kind = call.event.kind;
+        lua_rawgeti(L, LUA_REGISTRYINDEX, call.reference);
+        lua_createtable(L, 0, 4);
+        integerField(L, "window", lua_Integer(call.event.window));
+        stringField(L, "event", kind == ScriptUiEventKind::Click ? "click" :
+                                kind == ScriptUiEventKind::Change ? "change" : "close");
+        if (kind != ScriptUiEventKind::Close) {
+            lua_pushlstring(L, call.control.constData(), size_t(call.control.size()));
+            lua_setfield(L, -2, "control");
+            if (call.value.typeId() == QMetaType::QString)
+                lua_pushlstring(L, call.utf8.constData(), size_t(call.utf8.size()));
+            else
+                pushUiScalar(L, call.value);
+            lua_setfield(L, -2, "value");
+        }
+        lua_call(L, 1, 0);
+        return 0;
+    }
+
+    bool handleUi(const UiCallback& callback, const LibretroHost& core, Hardware& catalog,
+                  quint64 number, unsigned side) {
+        if (callback.reference == LUA_NOREF || callback.reference == LUA_REFNIL) return true;
+        uiCallback = &callback;
+        frame = number;
+        instance = side;
+        capturedSave = false;
+        begin(L, core, catalog, false);
+        lua_pushcfunction(L, dispatchUiCallback);
+        const bool ok = lua_pcall(L, 0, 0, 0) == LUA_OK;
+        end(L);
+        uiCallback = nullptr;
+        if (!ok) reportLuaError(L);
+        return ok;
+    }
+
     static int initialize(lua_State* L) {
         // No Lua finalizers, nested protected calls, coroutine hooks, binary
         // chunks, module lookup, environment loading or OS/file access.
@@ -1569,6 +2058,12 @@ struct ScriptRuntime::Script {
         };
         luaL_newlib(L, draw);
         lua_setglobal(L, "draw");
+        const luaL_Reg ui[] = {
+            {"window", uiWindow}, {"on", uiOn}, {"get", uiGet}, {"set", uiSet},
+            {"enable", uiEnable}, {"close", uiClose}, {nullptr, nullptr}
+        };
+        luaL_newlib(L, ui);
+        lua_setglobal(L, "ui");
         const luaL_Reg storage[] = {
             {"read", storageRead}, {"write", storageWrite}, {"result", storageResult},
             {nullptr, nullptr}
@@ -1824,6 +2319,8 @@ void ScriptRuntime::discardSavedStates() {
 void ScriptRuntime::invalidateTimeline(bool discardSaves, quint64 preserveRun) {
     controls_.clear();
     if (discardSaves) discardSavedStates();
+    ++uiEpoch_;
+    if (uiWindows_) ++uiRevision_;
     if (!hasScripts()) return;
     auto& scripts = state_->scripts;
     scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [&](const auto& script) {
@@ -2007,6 +2504,66 @@ void ScriptRuntime::command(const ScriptCommand& command, const LibretroHost& ho
     if (script->launch(host, state_->hardware, command.source))
         scripts.insert(scripts.begin() + position, std::move(script));
     if (scripts.empty()) state_.reset();
+}
+
+ScriptUiSnapshot ScriptRuntime::uiSnapshot() const {
+    ScriptUiSnapshot snapshot{uiRevision_, uiEpoch_, {}};
+    if (!uiWindows_) return snapshot;
+    snapshot.windows.reserve(uiWindows_);
+    for (const auto& script : state_->scripts)
+        for (const auto& panel : script->panels) snapshot.windows.append(panel.model);
+    return snapshot;
+}
+
+bool ScriptRuntime::dispatchUi(const ScriptUiEvent& event, const LibretroHost& host,
+                               quint64, quint64 frame, int instance) {
+    if (!uiWindows_ || accessHost_ || host.debuggerFramePending() ||
+        event.epoch != uiEpoch_ || !event.sequence) return false;
+    auto& scripts = state_->scripts;
+    const auto found = std::find_if(scripts.begin(), scripts.end(), [&](const auto& script) {
+        return script->id == event.owner && script->run == event.run;
+    });
+    if (found == scripts.end()) return false;
+    auto& script = **found;
+    const auto index = script.uiPanelIndex(event.window);
+    if (index < 0) return false;
+    auto& panel = script.panels[index];
+    if (event.sequence <= panel.model.acknowledged) return false;
+
+    Script::UiCallback callback{event, {}, {}, {}, panel.callback};
+    const bool closing = event.kind == ScriptUiEventKind::Close;
+    if (closing) {
+        script.detachUiPanel(index);
+    } else {
+        // Acknowledge current-window events even when script changes made the
+        // proposed value obsolete, so the GUI can reconcile its editor.
+        panel.model.acknowledged = event.sequence;
+        ++uiRevision_;
+        const auto controlIndex = uiControlIndex(panel.model, QStringView(event.control));
+        if (controlIndex < 0 || !uiControlEnabled(panel.model, controlIndex)) return false;
+        const auto& control = panel.model.controls.at(controlIndex);
+        if (event.kind == ScriptUiEventKind::Click && control.kind == ScriptUiKind::Button) {
+            callback.value = control.value;
+        } else if (event.kind == ScriptUiEventKind::Change && validUiChange(control, event.value)) {
+            if (control.value == event.value) return false;
+            panel.model.controls[controlIndex].value = event.value;
+            callback.value = event.value;
+        } else {
+            return false;
+        }
+        callback.control = event.control.toLatin1();
+        if (callback.value.typeId() == QMetaType::QString) callback.utf8 = callback.value.toString().toUtf8();
+    }
+
+    auto& hardware = state_->hardware;
+    hardware.beginEvent();
+    const bool ok = script.handleUi(callback, host, hardware, frame, unsigned(instance));
+    if (closing) luaL_unref(script.L, LUA_REGISTRYINDEX, callback.reference);
+    if (!ok) {
+        scripts.erase(found);
+        if (scripts.empty()) state_.reset();
+    }
+    return true;
 }
 
 ScriptOverlayPtr ScriptRuntime::event(ScriptEvent event, const LibretroHost& host,

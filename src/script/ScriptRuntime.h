@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ScriptTypes.h"
+#include "ScriptUiTypes.h"
 #include "core/DebugAccess.h"
 #include <functional>
 
@@ -74,6 +75,10 @@ public:
     ScriptOverlayPtr event(ScriptEvent event, const LibretroHost& host,
                            quint64 generation, quint64 frame, int instance = 0,
                            bool draw = true, const MovieInput* input = nullptr);
+    quint64 uiRevision() const { return uiRevision_; }
+    ScriptUiSnapshot uiSnapshot() const;
+    bool dispatchUi(const ScriptUiEvent& event, const LibretroHost& host,
+                    quint64 generation, quint64 frame, int instance = 0);
     void stopAll(const QString& reason = {});
     QVector<ScriptUpdate> takeUpdates();
 
@@ -86,6 +91,8 @@ private:
     quint64 nextRun_ = 0, movieWaitingRun_ = 0;
     quint64 saveRevision_ = 0, accessRevision_ = 0, annotationRevision_ = 0;
     qsizetype accessCount_ = 0, labelCount_ = 0, watchCount_ = 0;
+    quint64 nextUiHandle_ = 0, uiRevision_ = 0, uiEpoch_ = 0;
+    qsizetype uiWindows_ = 0, uiControls_ = 0;
     quint32 nextLabel_ = 0, nextWatch_ = 0x7fffffff;
     const LibretroHost* accessHost_ = nullptr;
     quint64 accessFrame_ = 0;

@@ -39,6 +39,7 @@ class DebugGraphicsDialog;
 class DebugMemoryDialog;
 class DebugWatchDialog;
 class LuaScriptsDialog;
+class ScriptPanelManager;
 struct DebugProjectOperation;
 class CheatSearchDialog;
 class DebugAudioDialog;
@@ -208,6 +209,7 @@ private:
     QAction* debugMemoryAction_ = nullptr;
     DebugWatchDialog* debugWatchDialog_ = nullptr;
     LuaScriptsDialog* luaScriptsDialog_ = nullptr;
+    ScriptPanelManager* scriptPanels_ = nullptr;
     ScriptDebugAnnotations scriptAnnotations_;
     QAction* debugWatchAction_ = nullptr;
     QAction* debugProjectOpenAction_ = nullptr;

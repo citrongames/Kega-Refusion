@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
         EmulationSession session(QString::fromLocal8Bit(argv[1]),temp.path());
         QVector<ScriptUpdate> updates;
         ScriptOverlayPtr overlay;
+        ScriptUiSnapshot panels;
         QImage image;
         double aspect=0;
         bool loaded=false,paused=false,closed=false;
@@ -47,6 +48,9 @@ int main(int argc, char** argv) {
         QObject::connect(&session,&EmulationSession::scriptsReady,&app,[&]{updates+=session.takeScriptUpdates();});
         QObject::connect(&session,&EmulationSession::videoFrameReady,&app,[&]{
             session.takeVideoFrame(image,aspect,nullptr,nullptr,&overlay);
+        });
+        QObject::connect(&session,&EmulationSession::scriptUiReady,&app,[&] {
+            panels=session.takeScriptUiSnapshot();
         });
         auto status=[&](quint64 id,ScriptStatus wanted) {
             for (auto i=updates.crbegin();i!=updates.crend();++i)
@@ -107,6 +111,122 @@ emu.on('reset',render)
                 if (update.id==id && update.status==ScriptStatus::Log && update.text.contains(message)) return true;
             return false;
         };
+        ScriptCommand panelCommand;
+        panelCommand.id=8; panelCommand.path="paused-panel.lua";
+        panelCommand.source=R"(
+local count = 0
+local firstFrame = emu.framecount()
+local w = assert(ui.window("Tools", {
+    {type="button",id="click",text="Write"},
+    {type="button",id="reset",text="Reset"},
+    {type="checkbox",id="enabled",text="Enabled",value=true},
+    {type="label",id="status",text="Ready"}
+}))
+assert(ui.on(w,function(e)
+    if e.event == 'close' then
+        assert(not ui.get(w,'status'))
+        print('panel closed')
+    elseif e.control == 'reset' then
+        assert(emu.reset())
+        print('panel reset queued')
+    elseif e.event == 'click' then
+        count = count + 1
+        if count == 1 then assert(emu.framecount() == firstFrame) end
+        assert(memory.write(2,0x20,0x6b))
+        assert(ui.set(w,'status','Clicked '..count))
+        print('panel click '..count)
+    else
+        print('panel change '..tostring(e.value))
+    end
+end))
+local function render()
+    draw.text(2,2,tostring(memory.read(2,0x20)),0xffffffff)
+end
+emu.on('draw',render)
+emu.on('frame',render)
+emu.on('rewind',render)
+)";
+        check(session.scriptCommand(panelCommand),"panel start");
+        waitFor([&]{return panels.windows.size()==1 && status(8,ScriptStatus::Running);},"panel published");
+        const auto firstPanel=panels.windows[0];
+        ScriptUiEvent click;
+        click.owner=firstPanel.owner; click.run=firstPanel.run;
+        click.window=firstPanel.handle;click.epoch=panels.epoch;
+        click.sequence=1;click.kind=ScriptUiEventKind::Click;click.control="click";
+        check(session.postScriptUiEvent(click),"paused click queue");
+        waitFor([&]{return logged(8,"panel click 1") && overlay &&
+            overlay->commands.size()==1 && overlay->commands[0].text=="107" &&
+            !panels.windows.isEmpty() && panels.windows[0].acknowledged==1;},"paused callback/write/redraw");
+        check(paused,"panel unexpectedly resumed game");
+        check(panels.windows[0].controls.back().value.toString()=="Clicked 1","panel model update");
+
+        const auto oldEpoch=panels.epoch;
+        const auto panelFrame=overlay->frame;
+        session.advanceFrame();
+        waitFor([&]{return overlay && overlay->frame>panelFrame;},"panel frame step");
+        session.backFrame();
+        waitFor([&]{return panels.epoch!=oldEpoch;},"panel timeline epoch");
+        click.sequence=2;
+        check(session.postScriptUiEvent(click),"stale timeline event queue");
+        ScriptUiEvent change=click;
+        change.epoch=panels.epoch;change.sequence=3;
+        change.kind=ScriptUiEventKind::Change;change.control="enabled";change.value=false;
+        check(session.postScriptUiEvent(change),"current timeline event queue");
+        waitFor([&]{return logged(8,"panel change false");},"paused event after rewind");
+        check(!logged(8,"panel click 2"),"old timeline click leaked");
+        const auto beforeResetEpoch=panels.epoch;
+        ScriptUiEvent resetClick=click;
+        resetClick.epoch=panels.epoch;resetClick.sequence=4;resetClick.control="reset";
+        check(session.postScriptUiEvent(resetClick),"UI reset queue");
+        click.epoch=beforeResetEpoch;click.sequence=5;
+        check(session.postScriptUiEvent(click),"click after reset queue");
+        waitFor([&]{return panels.epoch!=beforeResetEpoch && logged(8,"panel reset queued");},"UI reset applied");
+        change.epoch=panels.epoch;change.sequence=6;change.value=true;
+        check(session.postScriptUiEvent(change),"reset barrier event");
+        waitFor([&]{return !panels.windows.isEmpty() && panels.windows[0].acknowledged==6;},"post-reset event");
+        check(!logged(8,"panel click 2"),"same-batch click crossed reset");
+        ScriptUiEvent close=change;close.sequence=7;close.kind=ScriptUiEventKind::Close;
+        close.control.clear();close.value.clear();
+        check(session.postScriptUiEvent(close),"close event queue");
+        waitFor([&]{return panels.windows.isEmpty() && logged(8,"panel closed");},"close lifecycle");
+
+        check(session.scriptCommand(panelCommand),"panel restart");
+        waitFor([&]{return panels.windows.size()==1 && panels.windows[0].run!=firstPanel.run;},"new run panel");
+        const auto newPanel=panels.windows[0];
+        close.sequence=8;
+        check(session.postScriptUiEvent(close),"old run close queue");
+        change.owner=newPanel.owner;change.run=newPanel.run;change.window=newPanel.handle;
+        change.epoch=panels.epoch;change.sequence=9;change.value=false;
+        check(session.postScriptUiEvent(change),"new run change");
+        waitFor([&]{return !panels.windows.isEmpty() && panels.windows[0].acknowledged==9;},"new run survives old close");
+        check(session.scriptCommand(stop),"stop panel");
+        waitFor([&]{return panels.windows.isEmpty() && status(8,ScriptStatus::Stopped);},"stop destroys panels");
+
+        QFile panelExample(QStringLiteral(KEGA_SOURCE_ROOT "/assets/scripts/examples/tool-panel.lua"));
+        check(panelExample.open(QIODevice::ReadOnly),"open shipped panel example");
+        panelCommand.id=9;panelCommand.path=panelExample.fileName();panelCommand.source=panelExample.readAll();
+        check(session.scriptCommand(panelCommand),"run shipped panel example");
+        waitFor([&]{return panels.windows.size()==1 && status(9,ScriptStatus::Running) &&
+            overlay && overlay->commands.size()==2;},"example window/HUD");
+        const auto exampleWindow=panels.windows[0];
+        change.owner=exampleWindow.owner;change.run=exampleWindow.run;
+        change.window=exampleWindow.handle;change.epoch=panels.epoch;
+        change.sequence=10;change.control="period";change.value=1.0;
+        check(session.postScriptUiEvent(change),"example sample period");
+        waitFor([&]{return panels.windows[0].acknowledged==10;},"example period callback");
+        session.advanceFrame();
+        waitFor([&]{
+            for (const auto& control:panels.windows[0].controls)
+                if (control.id=="activity") return !control.points.isEmpty();
+            return false;
+        },"example graph after frame");
+        change.sequence=11;change.control="hud";change.value=false;
+        check(session.postScriptUiEvent(change),"example HUD checkbox");
+        waitFor([&]{return !overlay && panels.windows[0].acknowledged==11;},"example paused HUD toggled");
+        check(status(9,ScriptStatus::Running),"example faulted");
+        check(session.scriptCommand(stop),"stop example");
+        waitFor([&]{return panels.windows.isEmpty() && status(9,ScriptStatus::Stopped);},"example cleanup");
+
         auto runMovieScript=[&](quint64 id, QByteArray source) {
             ScriptCommand command;
             command.id=id;
@@ -301,7 +421,7 @@ error('stale movie preparation resumed unexpectedly')
         session.closeGame();
         waitFor([&]{return closed && status(6,ScriptStatus::Stopped);},"close frees scripts");
         session.shutdown();
-        std::puts("PASS Lua session: frame lifecycle, deterministic movie controls, asynchronous save/retry and stale request cancellation");
+        std::puts("PASS Lua session: paused panels, shipped tool window, frame lifecycle, deterministic movie controls, asynchronous save/retry and stale request cancellation");
         return 0;
     } catch(const std::exception& error) {
         std::fprintf(stderr,"FAIL: %s\n",error.what()); return 1;

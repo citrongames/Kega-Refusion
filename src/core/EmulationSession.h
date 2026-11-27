@@ -5,6 +5,7 @@
 #include "DebugTrace.h"
 #include "DebugCoverage.h"
 #include "script/ScriptTypes.h"
+#include "script/ScriptUiTypes.h"
 #include "RomArchive.h"
 #include "InputDisplay.h"
 #include "Cheats.h"
@@ -35,6 +36,8 @@ public:
     bool scriptCommand(const ScriptCommand& command);
     QVector<ScriptUpdate> takeScriptUpdates();
     ScriptDebugAnnotations takeScriptAnnotations();
+    bool postScriptUiEvent(const ScriptUiEvent& event);
+    ScriptUiSnapshot takeScriptUiSnapshot();
     void loadGame(const QString& path, int archiveIndex = -1, bool allowPatches = true);
     void loadGame(const QString& path, const RomArchive::Entry& archiveEntry, bool allowPatches = true);
     void closeGame();
@@ -156,6 +159,7 @@ public:
 signals:
     void scriptsReady();
     void scriptAnnotationsReady();
+    void scriptUiReady();
     void scriptsContextChanged();
     void debuggerReady();
     void debugMemoryWriteFinished(const QString& error);
@@ -252,6 +256,10 @@ private:
     bool scriptUpdatePending_ = false;
     ScriptDebugAnnotations scriptAnnotations_;
     bool scriptAnnotationsPending_ = false;
+    ScriptUiSnapshot scriptUiSnapshot_;
+    bool scriptUiSnapshotPending_ = false;
+    std::deque<ScriptUiEvent> scriptUiEvents_;
+    std::atomic_bool scriptUiEventsPending_{false};
     std::atomic<quint64> scriptMachineRevision_{1};
     std::atomic_bool activeMovieRecording_{false}, unsavedMovie_{false}, movieFilePending_{false};
     ScriptOverlayPtr latestScriptOverlay_;

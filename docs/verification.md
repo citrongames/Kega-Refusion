@@ -967,3 +967,44 @@ manifest and staging byte-for-byte. EXE SHA-256:
 Build/packaging logs and hash verification remain under ignored
 build/verification/lua-phase4; package staging was removed. User files were
 retained. No GitHub release or updater version was created for this batch.
+
+## Lua Phase 4B — native script tool windows (2026-11-27)
+
+Implemented separate Qt panels over a bounded worker-owned model. No emulation
+core or deterministic state layout changed in this batch.
+
+- lua_runtime_tests passed: typed descriptors and values; nested layouts;
+  click/change/close callbacks; accepted-value reads and same-value acknowledgments;
+  queued input/core controls; callback context restrictions; stale run/epoch;
+  duplicate IDs, invalid/dense arrays, depth, finite values and global resource
+  limits; stop/error cleanup. Existing real-core runtime checks pass across MD,
+  SMS, SG-1000, GG, GG Link A/B, 32X, Firecore, Sega CD and CD+32X.
+- lua_panel_view_tests passed offscreen and under virtual X11: widget creation,
+  stable updates, event delivery, edits awaiting acknowledgment, epoch changes,
+  queue rejection, close/restart/stop cleanup, combo popup ownership and graph
+  extremes. An isolated X11 check confirmed the nonactivating window preserves
+  main-window focus. No Windows UI interaction was performed.
+- lua_session_tests passed on the generated original MD cartridge: a UI handler
+  executes while paused without advancing the emulated frame; memory changes
+  are applied before the paused HUD redraw; stale events after rewind, restart
+  and a same-batch reset are ignored; close/stop release panels. The actual
+  shipped tool-panel.lua ran, produced a graph after a frame, and toggled its
+  HUD while paused. Existing native movie/save/retry/cancellation checks passed.
+
+Review found and fixed same-batch control ordering, structural window-update
+churn bypassing the publication limit, and script compatibility cleanup after a
+failed power reset. Value/structural updates are capped together at 20 Hz; stopping
+all scripts clears immediately. A full queue returns to the accepted value.
+No scripts means no panel manager allocation, snapshot copies or polling timer.
+Existing Lua execution budgets remain in force.
+
+Both Linux and Windows Release applications compiled. English/Russian references
+and tool-panel.lua are included by the existing package rules. No new release
+or updater version is created for this batch.
+
+Windows testbuild: all 86 files match the package SHA-256 manifest and
+verified staging bytes. EXE SHA-256:
+04749c824ccd486963223e703b3e91433948a462275c879baceac6e2179efb3f.
+Packaged example matches the source. Logs and package verification are retained
+under ignored build/verification/lua-phase4b; staging and duplicate standalone
+widget-test compilation artifacts were removed. User files were retained.

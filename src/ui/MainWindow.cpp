@@ -7,6 +7,7 @@
 #include "DebugInspectorWidgets.h"
 #include "DebugWatchDialog.h"
 #include "LuaScriptsDialog.h"
+#include "ScriptPanelManager.h"
 #include "AudioOutput.h"
 #include "ControlsPage.h"
 #include "CheatsDialog.h"
@@ -733,6 +734,17 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     const QByteArray geometry = settings_.value(QStringLiteral("window/geometry")).toByteArray();
     if (!geometry.isEmpty()) restoreGeometry(geometry);
 
+    connect(&session_, &EmulationSession::scriptUiReady, this, [this] {
+        const auto snapshot=session_.takeScriptUiSnapshot();
+        if (!scriptPanels_ && !snapshot.windows.isEmpty()) {
+            scriptPanels_=new ScriptPanelManager(this);
+            connect(scriptPanels_, &ScriptPanelManager::eventRequested, this,
+                    [this](const ScriptUiEvent& event) {
+                if (!session_.postScriptUiEvent(event)) scriptPanels_->rejectEvent(event);
+            });
+        }
+        if (scriptPanels_) scriptPanels_->applySnapshot(snapshot);
+    });
     connect(&session_, &EmulationSession::scriptsReady, this, [this] {
         auto updates=session_.takeScriptUpdates();
         if (luaScriptsDialog_) luaScriptsDialog_->applyUpdates(updates);
@@ -3864,12 +3876,15 @@ void MainWindow::updateInputEnabled() {
     if (luaScriptsDialog_) luaScriptsDialog_->setExecutionAvailable(session_.hasGame() && !loading_ && !achievementsHardcore_ && !videoExporting_);
     if (screenshotAction_) screenshotAction_->setEnabled(session_.hasGame() && !loading_);
     const bool modalActive = QApplication::activeModalWidget();
-    const bool popupActive = menuPauseActive_ || QApplication::activePopupWidget();
+    auto* popup=QApplication::activePopupWidget();
+    const bool scriptPopup=popup && scriptPanels_ && scriptPanels_->ownsWindow(popup);
+    const bool popupActive = menuPauseActive_ || (popup && !scriptPopup);
     bool debugWindowActive = false;
     for (QWidget* active = QApplication::activeWindow(); active; active = active->parentWidget()) {
         if (active == debugGraphicsDialog_ || active == debugAudioDialog_ ||
             active == debugMemoryDialog_ || active == cpuDebuggerDialog_ || active == traceDialog_ ||
-            active == coverageDialog_ || active == debugWatchDialog_ || active == luaScriptsDialog_) {
+            active == coverageDialog_ || active == debugWatchDialog_ || active == luaScriptsDialog_ ||
+            (scriptPanels_ && scriptPanels_->ownsWindow(active))) {
             debugWindowActive = true;
             break;
         }

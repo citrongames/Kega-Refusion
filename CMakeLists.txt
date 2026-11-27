@@ -144,6 +144,7 @@ add_executable(KegaRefusion WIN32
     src/main.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/LuaScriptsDialog.cpp src/ui/LuaScriptsDialog.h
+    src/ui/ScriptPanelManager.cpp src/ui/ScriptPanelManager.h
     src/ui/DebugDialogs.cpp src/ui/DebugDialogs.h
     src/ui/CpuDebuggerDialog.cpp src/ui/CpuDebuggerDialog.h
     src/ui/MainWindowDebugProject.cpp
@@ -183,6 +184,12 @@ if(BUILD_TESTING)
     target_link_libraries(lua_window_tests PRIVATE localization Qt6::Widgets)
     add_test(NAME lua_window_tests COMMAND lua_window_tests "${CMAKE_SOURCE_DIR}")
     set_tests_properties(lua_window_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_executable(lua_panel_view_tests tests/lua_panel_view_tests.cpp
+        src/ui/ScriptPanelManager.cpp src/ui/ScriptPanelManager.h)
+    target_include_directories(lua_panel_view_tests PRIVATE src)
+    target_link_libraries(lua_panel_view_tests PRIVATE Qt6::Widgets)
+    add_test(NAME lua_panel_view_tests COMMAND lua_panel_view_tests)
+    set_tests_properties(lua_panel_view_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(lua_runtime_tests tests/lua_runtime_tests.cpp)
     target_link_libraries(lua_runtime_tests PRIVATE core_host)
     add_executable(lua_benchmark EXCLUDE_FROM_ALL tests/lua_benchmark.cpp)

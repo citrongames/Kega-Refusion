@@ -414,6 +414,101 @@ the selected range (at most 4,096 bytes per call). The other guarded string
 helpers still accept at most 4,096 bytes per argument. Use #data for the length
 of a large string. Parsing incrementally keeps a script within its frame budget.
 
+
+## Script tool windows
+
+The `ui` library creates separate, nonmodal Qt windows. These are ordinary
+desktop controls, not drawings over the game. Qt handles layout, fonts, theme
+and display scale. Opening or focusing a tool does not automatically pause
+gameplay. Typing in its fields does not also send keyboard controls to the game.
+The OSD switch affects `draw` overlays, not these windows.
+
+```lua
+local panel = assert(ui.window("Tools", {
+    {type="row", children={
+        {type="button", id="pause", text="Pause"},
+        {type="button", id="resume", text="Resume"}
+    }},
+    {type="checkbox", id="hud", text="Show HUD", value=true},
+    {type="label", id="status", text="Ready"}
+}))
+ui.on(panel, function(e)
+    if e.event == "close" then panel = nil; return end
+    if e.control == "pause" then emu.pause(true)
+    elseif e.control == "resume" then emu.pause(false)
+    elseif e.control == "hud" then
+        ui.set(panel, "status", e.value and "HUD enabled" or "HUD disabled")
+    end
+end)
+```
+
+- `ui.window(title, controls)` returns a window handle. The controls are a dense
+  array of descriptor tables. The root is vertical; use `row` for a horizontal
+  group or `group` for a titled vertical group. Both take a `children` array.
+- Each leaf needs a unique `id` within its window. Containers may optionally
+  have an ID, for example to enable or disable an entire group.
+- `ui.on(window, callback)` installs one handler, replacing the previous one.
+  Pass `nil` to remove it. Events contain `window`, `event`, `control` and
+  `value`. The event is `"click"`, `"change"` or `"close"`.
+  On click, value is the button caption; on change it is the accepted value.
+  Close has no control/value and the window is already detached.
+- `ui.get(window, id)` reads the accepted model value. A graph returns a fresh
+  array of points; a container has no value.
+- `ui.set(window, id, value)` changes a value; it does not call the handler.
+  For labels and buttons it changes their text. The descriptor/layout stays fixed.
+- `ui.enable(window, id, boolean)` enables/disables a control or a group.
+- `ui.close(window)` closes a script-owned window without calling its handler.
+
+| Type | Descriptor fields and value |
+| --- | --- |
+| `label` | `text`; read/set a string |
+| `button` | `text`; read/set its caption, click event |
+| `checkbox` | `text`, boolean `value` (default false) |
+| `text` | `text` label, string `value` (default empty); edits commit on Enter or focus loss |
+| `number` | `text` label, finite `min`/`max`/`step`/`value`; defaults 0/100/1/min |
+| `select` | `text` label, nonempty `items` string array, one-based integer `value` (default 1) |
+| `graph` | `text` label, dense finite-number `value` array (default empty); vertical range follows current points |
+| `row` / `group` | `children`, optional `id`; `group` also uses `text` for its title |
+
+A number must stay within its range and step must be positive. The number editor
+uses Qt decimal precision; extreme subnormal doubles may round in the field.
+For exact hexadecimal addresses or binary/decimal strings, use a text field and
+validate in Lua. Graphs are read-only: use `ui.set` with your bounded point list.
+
+Create/change/close windows from startup, a `frame` callback or a UI handler.
+Read accepted values elsewhere with `ui.get`. UI callbacks run at a completed
+emulation-frame boundary, including when normal gameplay is paused. They cannot
+yield, call `emu.frameadvance`, draw directly or claim a completed-frame lag
+observation. A CPU debugger stopped inside a frame defers UI callbacks until that
+frame finishes. Automatic local rewind also defers them until it is released or paused; remote
+rewind defers them until live memory is available.
+Control and memory/input requests keep their usual netplay/recording restrictions;
+a window does not bypass these policies. Handle unsuccessful requests normally.
+
+After a UI handler, the current frame can receive a `draw` event without advancing
+emulation. Register a `draw` callback as well as `frame` when your overlay must
+reflect UI edits while paused. Do not sample game activity from `draw` or a UI
+callback. The GUI never executes Lua or reads the core directly.
+
+Values and window changes coalesce into snapshots at most 20 times per second;
+stopping all scripts clears their windows immediately. There is one pending GUI
+notification, not a per-frame update backlog. The input queue holds 64 events,
+coalesces adjacent edits to the same field, and processes at most four events per
+worker iteration within a shared 2 ms dispatch budget (an individual callback
+still has the standard 8 ms runtime limit). A full queue rejects the edit and
+restores the last accepted value. New/reset/restored timelines reject stale events;
+restart, stop, fault and incompatible game/hardware changes destroy owned windows.
+
+Limits: two windows per script, eight total; 64 descriptor nodes per window,
+256 total; four nesting levels. IDs use 1–64 printable ASCII characters; titles
+use up to 128 UTF-8 bytes, captions/text up to 1,024 bytes, selectors up to
+32 items of 128 bytes each, and graphs up to 128 points. The usual native-call,
+byte and Lua allocation budgets also apply. Invalid descriptors or typed values
+raise errors. A closed/unknown target, unavailable event context or full global
+resource pool returns `nil, reason`; successful mutations return `true`.
+Window positions and Lua variables are not automatically persisted or rewound.
+
+
 ## Runtime limits
 
 Eight scripts can run at once. Each uses up to 4 MiB of Lua allocations,
@@ -434,6 +529,12 @@ protected call functions, string patterns and binary string packing are
 unavailable. Use the asynchronous storage API for script-owned files.
 
 ## Included examples
+
+`tool-panel.lua` demonstrates a separate window with pause/resume buttons,
+a HUD checkbox and color selector, a numeric sample period, a note field and
+a live input-poll graph. It works with any loaded game and no fixed RAM addresses.
+It changes no memory; control requests retain the normal session restrictions.
+Close the window or stop its script to remove it.
 
 file-roundtrip.lua writes one small text file, reads it back asynchronously,
 and checks the contents. It does not change game memory or record input.

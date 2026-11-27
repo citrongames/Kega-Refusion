@@ -459,6 +459,43 @@ ScriptDebugAnnotations EmulationSession::takeScriptAnnotations() {
     scriptAnnotationsPending_=false;
     return scriptAnnotations_;
 }
+bool EmulationSession::postScriptUiEvent(const ScriptUiEvent& event) {
+    if (!event.owner || !event.run || !event.window || !event.sequence ||
+        event.control.size()>64) return false;
+    if (event.kind==ScriptUiEventKind::Change) {
+        const auto type=event.value.metaType().id();
+        if (type!=QMetaType::Bool && type!=QMetaType::Int &&
+            type!=QMetaType::Double && type!=QMetaType::QString) return false;
+        if (type==QMetaType::QString &&
+            (event.value.toString().size()>1024 ||
+             event.value.toString().toUtf8().size()>1024)) return false;
+    } else if (event.kind!=ScriptUiEventKind::Click && event.kind!=ScriptUiEventKind::Close) {
+        return false;
+    } else if (event.value.isValid()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(scriptMutex_);
+    // Coalesce only adjacent changes; never move a change across a button click.
+    if (event.kind==ScriptUiEventKind::Change && !scriptUiEvents_.empty()) {
+        auto& previous=scriptUiEvents_.back();
+        if (previous.kind==event.kind && previous.owner==event.owner &&
+            previous.run==event.run && previous.window==event.window &&
+            previous.epoch==event.epoch && previous.control==event.control &&
+            event.sequence>previous.sequence) {
+            previous=event;
+            return true;
+        }
+    }
+    if (scriptUiEvents_.size()>=64) return false;
+    scriptUiEvents_.push_back(event);
+    scriptUiEventsPending_.store(true);
+    return true;
+}
+ScriptUiSnapshot EmulationSession::takeScriptUiSnapshot() {
+    std::lock_guard<std::mutex> lock(scriptMutex_);
+    scriptUiSnapshotPending_=false;
+    return scriptUiSnapshot_;
+}
 void EmulationSession::publishVideo(const QImage& frame, double aspectRatio, const QImage& spriteOwnership,
                                     const QRectF& inputViewport, ScriptOverlayPtr scriptOverlay) {
     bool notify = false;
@@ -699,7 +736,31 @@ void EmulationSession::run() {
     ScriptOverlayPtr scriptOverlay;
     quint64 scriptGeneration=1, scriptAccessRevision=0, scriptAnnotationRevision=0;
     QHash<quint32,ScriptDebugLabel> scriptLabelLocations;
+    quint64 publishedUiRevision=0;
+    Clock::time_point nextUiPublication{};
+    const auto publishScriptUi = [&] {
+        const auto revision=scripts.uiRevision();
+        if (revision==publishedUiRevision) return;
+        const auto now=Clock::now();
+        if (scripts.hasScripts() && now<nextUiPublication) return;
+        auto snapshot=scripts.uiSnapshot();
+        publishedUiRevision=revision;
+        nextUiPublication=now+std::chrono::milliseconds(50);
+        bool notify;
+        {
+            std::lock_guard<std::mutex> lock(scriptMutex_);
+            scriptUiSnapshot_=std::move(snapshot);
+            notify=!scriptUiSnapshotPending_;scriptUiSnapshotPending_=true;
+        }
+        if (notify) emit scriptUiReady();
+    };
     auto publishScriptUpdates = [&] {
+        publishScriptUi();
+        if (!scripts.hasScripts() && scriptUiEventsPending_.load()) {
+            std::lock_guard<std::mutex> lock(scriptMutex_);
+            scriptUiEvents_.clear();
+            scriptUiEventsPending_.store(false);
+        }
         const auto annotationRevision=scripts.annotationRevision();
         if (annotationRevision!=scriptAnnotationRevision) {
             auto annotations=scripts.annotations();
@@ -3027,6 +3088,7 @@ void EmulationSession::run() {
             if (scripts.hasScripts()) {
                 switch (command.type) {
                 case Type::NetMode: case Type::NetLinkCable: case Type::NetReceiveState:
+                case Type::HardReset:
                 case Type::MovieRecord: case Type::MoviePlay: case Type::MovieResume:
                 case Type::MovieFork: case Type::MovieStop: case Type::Region:
                 case Type::Disc: case Type::DiscIndex: case Type::Eject:
@@ -3090,6 +3152,32 @@ void EmulationSession::run() {
         }
         processMovieFile();
         processScriptControls();
+        bool scriptUiChanged=false;
+        if (scriptUiEventsPending_.load() && !networkRemoteRewinding &&
+            !(rewind_.load() && !paused) && !host.debuggerFramePending()) {
+            const auto deadline=Clock::now()+std::chrono::milliseconds(2);
+            scriptPolicy();
+            for (int count=0;count<4;++count) {
+                ScriptUiEvent event;
+                {
+                    std::lock_guard<std::mutex> lock(scriptMutex_);
+                    if (scriptUiEvents_.empty()) {scriptUiEventsPending_.store(false);break;}
+                    event=std::move(scriptUiEvents_.front());scriptUiEvents_.pop_front();
+                    scriptUiEventsPending_.store(!scriptUiEvents_.empty());
+                }
+                if (host.loaded() && scripts.hasScripts() && !achievementHardcore && !videoExport)
+                    scriptUiChanged=scripts.dispatchUi(event,host,scriptGeneration,
+                        host.runClock().frames,int(host.inspectionPresentedInstance())) || scriptUiChanged;
+                // Apply this handler's controls before accepting another click: a reset
+                // or load invalidates events queued against the previous timeline.
+                processScriptControls();
+                if (Clock::now()>=deadline) break;
+            }
+        }
+        if (scriptUiChanged && host.loaded() && !networkRemoteRewinding) {
+            scriptEvent(ScriptEvent::Draw);
+            if (!host.frame().isNull()) presentHostFrame();
+        }
         processInspection();
         processTrace();
         processCoverage();

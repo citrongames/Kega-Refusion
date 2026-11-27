@@ -16,7 +16,7 @@ planned work and are not advertised as shipped functionality.
 - [x] Phase 3: memory/register editing and debugger integration.
 - [ ] Phase 4: general script files, recording control, custom panels and declared timeline data.
   - [x] General asynchronous file access and native input-recording control.
-  - [ ] Custom panels with controls and graphs.
+  - [x] Custom panels with controls and graphs.
   - [ ] Explicit script-data restoration with save/load and rewind.
   - [x] Bilingual native API reference and practical examples; keep these current with each batch.
 
@@ -392,3 +392,40 @@ Remaining Phase 4 work: custom script panels/controls/graphs, followed by bounde
 declared script-data restoration with saves and rewind. Arbitrary Lua locals,
 closures and coroutine stacks are not restored. No new Gens compatibility work
 is planned.
+
+## Phase 4B delivered — 2026-11-27
+
+The native ui library creates separate, nonmodal Qt windows: vertical groups,
+horizontal rows, labels, buttons, checkboxes, text/numeric inputs, selectors and
+small graphs. Descriptors use layout rather than fixed pixel coordinates. Qt
+supplies platform theme, fonts and DPI scaling. Opening/focusing a panel or its
+selector does not engage background pause; typed keys stay out of game input.
+The existing auxiliary-window policy disables minimize/maximize.
+
+Lua owns a bounded value model on the emulation thread. The GUI only consumes
+coalesced snapshots (at most 20 Hz) and sends bounded typed events. There are no
+per-panel timers or native controls in the game's OpenGL overlay. Limits cover
+windows, controls, nesting, strings, graph points and pending events. Unchanged
+values do not publish snapshots; widget trees remain intact across value updates.
+
+UI callbacks run between completed core frames, including on ordinary pause.
+They cannot yield, draw directly or obtain invented frame-poll statistics. The
+existing Draw event can refresh a HUD after a callback. Pending debugger frames
+and automatic rewind defer callbacks. Script control/memory permissions still
+apply. Each handler's queued core controls are applied before the next event, so
+a reset/load cannot carry subsequent queued clicks into a different timeline.
+
+Owner/run/window/epoch identities reject stale events. Stop, restart, error or
+incompatible hardware changes free owned windows and handlers. Closing detaches
+the model before invoking the handler once; programmatic close sends no callback.
+The GUI keeps edits pending until acknowledged and reconciles rejected requests.
+
+Bundled tool-panel.lua works with any loaded game and demonstrates all leaf
+controls, pause/resume, HUD options and a bounded input-poll graph. This estimate
+is explicitly not universal game FPS. Both packaged API references document
+the schema, callbacks, policy, lifecycle, limits and precision caveat.
+
+Focused runtime, Qt widget and real-core session evidence is recorded in
+verification.md. The remaining Phase 4 item is explicit bounded script-data
+restoration with native saves/rewind. Arbitrary Lua locals, closures and coroutine
+stacks still are not serialized; compatibility adapters remain out of scope.

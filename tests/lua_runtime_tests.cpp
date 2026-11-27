@@ -98,7 +98,8 @@ QVector<ScriptUpdate> run(ScriptRuntime& runtime, const LibretroHost& host,
 void expectStatus(const QVector<ScriptUpdate>& updates, quint64 id, ScriptStatus status) {
     require(!updates.isEmpty(), "Missing script status");
     const auto& last = updates.constLast();
-    require(last.id == id && last.status == status, "Unexpected status: " + last.text);
+    require(last.id == id && last.status == status,
+            QStringLiteral("Unexpected script %1 status: ").arg(id) + last.text);
 }
 
 ScriptOverlayPtr frame(ScriptRuntime& runtime, const LibretroHost& host, bool draw = true) {
@@ -446,6 +447,190 @@ end)
     runtime.setHostServices({});
 }
 
+void checkPanels(ScriptRuntime& runtime, const LibretroHost& host) {
+    runtime.setHostPolicy(true, true, false, true, false);
+    const auto source = R"(
+local w = assert(ui.window("Tool panel", {
+    {type = "group", id = "group", text = "Test", children = {
+        {type = "row", children = {
+            {type = "label", id = "status", text = "idle"},
+            {type = "button", id = "fire", text = "Fire"},
+            {type = "checkbox", id = "toggle"},
+            {type = "text", id = "note"},
+            {type = "number", id = "gain", min = -2, max = 2, step = 0.25},
+            {type = "select", id = "mode", items = {"Low", "High"}},
+            {type = "graph", id = "trace", value = {1, -2, 3}},
+        }},
+    }},
+}))
+local other = assert(ui.window("Other", {}))
+assert(not ui.window("Overflow", {}))
+assert(ui.get(w, "status") == "idle" and ui.get(w, "toggle") == false)
+assert(ui.get(w, "gain") == -2 and ui.get(w, "mode") == 1 and ui.get(w, "note") == "")
+assert(ui.get(w, "missing") == nil and ui.get(0, "status") == nil)
+assert(ui.on(other, function() error("script close fired callback") end))
+assert(ui.on(w, function(e)
+    assert(e.window == w and not emu.frameadvance() and emu.lagged() == nil)
+    if e.event == "click" then
+        assert(e.control == "fire" and e.value == "Fire")
+        assert(ui.close(other))
+        assert(emu.pause(true) and input.set(1, {a = true}))
+        assert(memory.write(2, 0x40, 0x42))
+        assert(ui.set(w, "trace", {3, 7}) and ui.set(w, "status", "clicked"))
+        assert(ui.enable(w, "group", false))
+    elseif e.event == "change" then
+        assert(e.value == ui.get(w, e.control))
+        assert(ui.set(w, "status", e.control))
+    else
+        assert(e.event == "close" and e.control == nil and e.value == nil)
+        assert(ui.get(w, "status") == nil)
+        print("closed panel")
+    end
+end))
+local function readonly()
+    assert(ui.get(w, "fire") == "Fire")
+    assert(not ui.set(w, "status", "bad") and not ui.enable(w, "fire", false))
+    assert(not ui.window("Denied", {}) and not ui.on(w, nil) and not ui.close(w))
+end
+for _, name in ipairs({"beforeframe", "draw", "reset", "loadstate", "rewind"}) do emu.on(name, readonly) end
+emu.on("frame", function()
+    assert(ui.set(w, "fire", ui.get(w, "fire")) and ui.enable(w, "group", true))
+    local points = ui.get(w, "trace")
+    assert(ui.set(w, "trace", points))
+end)
+)";
+    expectStatus(run(runtime, host, 41, source), 41, ScriptStatus::Running);
+    const auto initial = runtime.uiSnapshot();
+    require(initial.windows.size() == 2, "Two Lua panel models");
+    const auto window = initial.windows.constFirst();
+    require(window.controls.size() == 9, "Complete Lua panel layout");
+    require(window.controls.at(1).parent == 0 && window.controls.at(2).parent == 1 &&
+            window.controls.at(6).step == 0.25 && window.controls.at(8).points.size() == 3,
+            "Nested, numeric and graph panel data");
+    frame(runtime, host);
+    require(runtime.uiRevision() == initial.revision, "Equal panel updates leave revision alone");
+
+    auto dispatch = [&](ScriptUiEvent event) {
+        return runtime.dispatchUi(event, host, 45, host.runClock().frames);
+    };
+    ScriptUiEvent event{window.owner, window.run, window.handle, 1, initial.epoch,
+                        QStringLiteral("fire"), ScriptUiEventKind::Click, {}};
+    require(dispatch(event) && !dispatch(event), "Panel click runs once without a core frame");
+    const auto requests = runtime.takeControls();
+    require(requests.size() == 2 && requests.at(0).type == ScriptControlType::Pause &&
+            requests.at(1).type == ScriptControlType::MemoryWrite, "Safe controls queued from panel");
+    MovieInput input;
+    runtime.beforeFrame(host, 45, host.runClock().frames, input);
+    require(input.buttons[0] & (1u << 1), "Panel input override applied at next frame");
+    for (const auto phase : {ScriptEvent::Draw, ScriptEvent::Reset, ScriptEvent::LoadState, ScriptEvent::Rewind})
+        runtime.event(phase, host, 45, host.runClock().frames);
+    require(runtime.takeUpdates().isEmpty(), "Read-only panel access at other Lua boundaries");
+
+    auto changed = runtime.uiSnapshot();
+    require(changed.windows.size() == 1 && changed.windows[0].acknowledged == 1 &&
+            changed.windows[0].controls[2].value.toString() == "clicked" &&
+            changed.windows[0].controls[8].points == QVector<double>({3, 7}) &&
+            window.controls[8].points == QVector<double>({1, -2, 3}), "Panel mutation and immutable snapshots");
+    event.sequence = 2;
+    event.control = QStringLiteral("gain");
+    event.kind = ScriptUiEventKind::Change;
+    event.value = 1.25;
+    require(!dispatch(event) && runtime.uiSnapshot().windows[0].acknowledged == 2,
+            "Disabled container suppresses descendant events");
+    frame(runtime, host);
+    event.sequence = 3;
+    event.value = 5.0;
+    require(!dispatch(event) && runtime.uiSnapshot().windows[0].acknowledged == 3,
+            "Out-of-range panel event acknowledged without applying");
+    event.sequence = 4;
+    event.value = 1.25;
+    require(dispatch(event), "Typed panel change");
+    changed = runtime.uiSnapshot();
+    require(changed.windows[0].controls[2].value.toString() == "gain" &&
+            changed.windows[0].controls[6].value.toDouble() == 1.25, "Change is visible inside its callback");
+    ++event.sequence;
+    require(!dispatch(event) && runtime.uiSnapshot().windows[0].acknowledged == event.sequence,
+            "Equal panel event acknowledged without applying");
+    for (const auto& [id, value] : {
+             std::pair{QStringLiteral("toggle"), QVariant(true)},
+             std::pair{QStringLiteral("mode"), QVariant(2)},
+             std::pair{QStringLiteral("note"), QVariant(QStringLiteral("Тест"))}
+         }) {
+        ++event.sequence;
+        event.control = id;
+        event.value = value;
+        require(dispatch(event), "Checkbox, select and UTF-8 input events");
+    }
+    changed = runtime.uiSnapshot();
+    require(changed.windows[0].controls[4].value.toBool() &&
+            changed.windows[0].controls[7].value.toInt() == 2 &&
+            changed.windows[0].controls[5].value.toString() == QStringLiteral("Тест"),
+            "User input persisted with the right Qt types");
+    runtime.invalidateTimeline(false);
+    ++event.sequence;
+    event.kind = ScriptUiEventKind::Close;
+    require(!dispatch(event), "Old-epoch panel event ignored");
+    event.epoch = runtime.uiSnapshot().epoch;
+    require(dispatch(event) && !dispatch(event) && runtime.uiSnapshot().windows.isEmpty(),
+            "User window close removes panel and dispatches once");
+    const auto close = runtime.takeUpdates();
+    require(close.size() == 1 && close[0].status == ScriptStatus::Log && close[0].text == "closed panel",
+            "Close callback receives a detached handle");
+
+    expectStatus(run(runtime, host, 41, R"(
+local w = assert(ui.window("Replacement", {{type = "button", id = "fire"}}))
+assert(ui.window("Sibling", {}))
+assert(ui.on(w, function()
+    assert(emu.pause())
+    error("panel callback failed")
+end))
+)"), 41, ScriptStatus::Running);
+    const auto replacement = runtime.uiSnapshot().windows.constFirst();
+    event.kind = ScriptUiEventKind::Click;
+    require(!dispatch(event), "Events cannot cross script runs");
+    event.window = replacement.handle;
+    event.run = replacement.run;
+    event.control = QStringLiteral("fire");
+    require(dispatch(event), "Fresh run receives its event");
+    expectStatus(runtime.takeUpdates(), 41, ScriptStatus::Error);
+    require(runtime.uiSnapshot().windows.isEmpty() && runtime.takeControls().isEmpty(),
+            "Callback errors remove windows and queued controls");
+
+    for (const auto* invalid : {
+             "ui.window('x', {{type='label', id='a'}, {type='graph', id='a'}})",
+             "ui.window('x', {{type='label', id='a\\n'}})",
+             "ui.window('x', {{type='select', id='a', items={'A'}, value=2}})",
+             "ui.window('x', {{type='graph', id='a', value={1, nil, 2}}})",
+             "ui.window('x', {{type='number', id='a', value=math.huge}})",
+             "local a = {}; a[1] = {type='row', children=a}; ui.window('x', a)",
+             "local w = assert(ui.window('x', {{type='checkbox', id='a'}})); ui.set(w, 'a', 1)"
+         }) {
+        expectStatus(run(runtime, host, 42, invalid), 42, ScriptStatus::Error);
+        require(runtime.uiSnapshot().windows.isEmpty(), "Invalid panel schema releases its state");
+    }
+
+    const auto full = R"(
+local controls = {}
+for i = 1, 64 do controls[i] = {type = "label", id = "control-" .. i} end
+assert(ui.window("First", controls))
+assert(ui.window("Second", controls))
+)";
+    expectStatus(run(runtime, host, 43, full), 43, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 44, full), 44, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 45, R"(
+assert(not ui.window("Full", {{type = "label", id = "a"}}))
+assert(ui.window("Empty", {}) and ui.window("Empty", {}))
+)"), 45, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 46, "assert(ui.window('Empty', {}) and ui.window('Empty', {}))"),
+                 46, ScriptStatus::Running);
+    expectStatus(run(runtime, host, 47, "assert(not ui.window('Full', {}))"), 47, ScriptStatus::Running);
+    require(runtime.uiSnapshot().windows.size() == 8, "Shared panel limits");
+    runtime.stopAll();
+    runtime.takeUpdates();
+    runtime.setHostServices({});
+    require(runtime.uiSnapshot().windows.isEmpty(), "Stopping scripts clears all panels");
+}
+
 bool connectAccess(ScriptRuntime& runtime, LibretroHost& host) {
     return host.setDebugAccessObserver(runtime.accessSubscriptions(),
         [](void* opaque, const DebugAccessEvent& e) {
@@ -522,10 +707,13 @@ assert(memory.write(2, 0x54, -2, 2))
 assert(memory.setregister(1, "D1", 0x76543210))
 assert(memory.read(2, 0x50, 2) == 0)
 assert(savestate.load(save))
+local panel = assert(ui.window("Access test", {{type = "label", id = "status", text = "read-only"}}))
 local count, types = 0, {}
 local function access(e)
     assert(e.instance == 0 and e.cpu == 1 and e.frame == emu.framecount() + 1)
     if count == 0 then
+        assert(ui.get(panel, "status") == "read-only")
+        assert(not ui.set(panel, "status", "forbidden"))
         assert(not memory.write(2, 0x50, 0))
         assert(not memory.setregister(1, "D1", 0))
         assert(not emu.pause() and not emu.reset() and not emu.frameadvance())
@@ -1028,6 +1216,7 @@ int main(int argc, char** argv) {
         checkLimits(runtime, host);
         checkAutomation(runtime, host);
         checkSaveLimits(runtime, host);
+        checkPanels(runtime, host);
         checkStorage(runtime, host, data, argc == 3 ? QString::fromLocal8Bit(argv[2]) : QString());
         if (argc == 3) {
             for (const QString& example : {QStringLiteral("memory-hud.lua"), QStringLiteral("fixture-hitbox.lua")}) {
