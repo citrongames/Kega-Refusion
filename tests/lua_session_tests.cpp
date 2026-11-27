@@ -525,7 +525,7 @@ print('resumed and took over completed playback')
         MovieTape resumed;
         check(resumed.load(moviePath,movieError) && resumed.id()==source.id() &&
               resumed.size()==3 && resumed.resumeFrame()==3,"resumed file preserved identity and appended frames");
-        check(QFile::exists(moviePath+".bak"),"native movie backup retained");
+        check(!QFile::exists(moviePath+".bak"),"explicit movie save has no adjacent backup");
         check(session.scriptCommand(stop),"stop movie test scripts");
         waitFor([&]{return status(24,ScriptStatus::Stopped);},"stop movie test scripts");
         session.setPaused(true);

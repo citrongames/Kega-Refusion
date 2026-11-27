@@ -91,10 +91,8 @@ void checkLegacyCompatibility(const QTemporaryDir& directory) {
     const QByteArray promotedBytes = promoted.readAll(); promoted.close();
     check(qFromLittleEndian<quint32>(promotedBytes.constData()+8) == 2,
           "promoted recording uses v2");
-    QFile backup(path + QStringLiteral(".bak"));
-    check(backup.open(QIODevice::ReadOnly) && backup.readAll() == original,
-          "promotion preserves original v1 backup");
-    backup.close();
+    check(!QFile::exists(path + QStringLiteral(".bak")),
+          "explicit recording promotion does not create a backup");
     MovieTape promotedTape;
     check(promotedTape.load(path, error) &&
           promotedTape.restoreCheckpoint(checkpoint, cursor, false, error) && cursor == 2 &&
@@ -165,6 +163,20 @@ int main() {
     MovieTape tape;
     check(tape.create(QJsonObject{{QStringLiteral("game"), QStringLiteral("fixture")}}, snapshot, error),
           "create");
+    {
+        MovieTape first;
+        const QString firstPath = path + QStringLiteral(".first.krm");
+        check(first.create(QJsonObject{{QStringLiteral("game"), QStringLiteral("fixture")}}, snapshot, error) &&
+              first.setResumeState(snapshot, 0, error) && first.save(firstPath, error),
+              "persist initial recording reservation");
+        check(first.append(input(1), error) && first.save(firstPath, error) &&
+              !QFile::exists(firstPath + QStringLiteral(".bak")),
+              "first finished recording does not back up its empty reservation");
+        check(first.append(input(2), error) && first.save(firstPath, error),
+              "replace a real recorded take");
+        check(!QFile::exists(firstPath + QStringLiteral(".bak")),
+              "later explicit recording saves do not create backups");
+    }
     const QByteArray originalId = tape.id();
     const MovieInput a = input(1), b = input(2), c = input(4, MovieTape::SoftReset);
     for (int i = 0; i < 100; ++i) check(tape.append(a, error), "append repeat");
@@ -217,10 +229,8 @@ int main() {
     check(!loaded.restoreCheckpoint(laterCheckpoint, cursor, true, error),
           "diverged prefix rejected in playback");
     check(loaded.save(path, error), "branch save");
-    MovieTape backup;
-    check(backup.load(path + QStringLiteral(".bak"), error) && backup.size() == 105 &&
-          backup.resumeState() == resumeSnapshot,
-          "previous version backup");
+    check(!QFile::exists(path + QStringLiteral(".bak")),
+          "explicit branch save does not create a backup");
     MovieTape branch;
     check(branch.load(path, error) && branch.size() == 102, "new branch round trip");
     check(branch.resumeState().isEmpty(), "branch without resume remains empty on disk");

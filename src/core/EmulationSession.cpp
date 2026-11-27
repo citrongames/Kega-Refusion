@@ -77,7 +77,7 @@ MovieFileResult prepareScriptMovie(const QString& dataPath, const QByteArray& na
     const QFileInfo file(result.path);
     if (file.isSymLink() || (load && !file.isFile())) {
         result.error = QStringLiteral("Expected a regular movie file in the Movies folder");
-    } else if (!load && (file.exists() || QFileInfo(result.path + QLatin1String(".bak")).isSymLink())) {
+    } else if (!load && file.exists()) {
         result.error = QStringLiteral("Choose a new movie filename");
     } else if (load) {
         result.tape.emplace();
@@ -1830,7 +1830,7 @@ void EmulationSession::run() {
                 const QFileInfo target(recording.path);
                 if ((target.exists() && !target.isFile()) ||
                     (recording.scriptPath &&
-                     (target.isSymLink() || QFileInfo(recording.path + QLatin1String(".bak")).isSymLink() ||
+                     (target.isSymLink() ||
                       target.absolutePath() != QDir(target.absolutePath()).canonicalPath()))) {
                     result.error = QStringLiteral("Movie output path is unavailable or no longer a regular path");
                 } else {

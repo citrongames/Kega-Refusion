@@ -333,7 +333,8 @@ bool MovieTape::save(const QString& path, QString& error, bool newFile) const {
             return false;
         }
         if (previous == bytes) return true;
-        if (!writeAtomic(path + QStringLiteral(".bak"), previous, error)) return false;
+        // Movies use an explicitly selected file. Replace it atomically without
+        // an adjacent backup; automatic quick slots and battery saves keep theirs.
     }
     return writeAtomic(path, bytes, error);
 }

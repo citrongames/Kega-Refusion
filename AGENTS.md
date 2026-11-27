@@ -24,6 +24,7 @@
 
 - Loading must acknowledge user actions immediately and keep the UI responsive. Never delay game start, frames or controls for optional network services such as achievements; report readiness/failure asynchronously, once, without a modal interruption.
 - Avoid unnecessary disk I/O: compare save data in memory, write only changes, coalesce bursts, and bound write frequency. Keep one previous battery-save backup beside the primary file.
+- Keep adjacent backups for automatic quick-slot and battery saves. Explicitly selected output files (including input recordings and named save files) use atomic replacement without creating .bak files.
 - Keep queues, caches, decoded media and rewind history bounded. Prefer streaming and reuse existing buffers; do not decode or retain entire media unnecessarily.
 - Do not add heavy work, file reads/writes, or avoidable allocations to per-frame/input/audio paths. Poll or recompute only when needed; measure concrete regressions.
 - Apply these requirements to existing features as well as new ones. Clean task scratch outputs while preserving useful incremental builds and user data.
