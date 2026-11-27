@@ -128,7 +128,6 @@ def main() -> None:
     docs.mkdir()
     for name in ("lua-api.md", "lua-api.ru.md", "lua-examples.md", "lua-examples.ru.md"):
         shutil.copy2(root / "docs" / name, docs / name)
-    shutil.copytree(root / "docs/games", docs / "games")
     qtbase_ru = qt_root / "translations/qtbase_ru.qm"
     if not qtbase_ru.is_file():
         raise SystemExit(f"Missing Qt Russian translation: {qtbase_ru}")
@@ -171,7 +170,7 @@ def main() -> None:
         if source.is_file():
             shutil.copy2(source, notices / name)
 
-    # Retire only unchanged examples owned by the previous package. Personal
+    # Retire only unchanged examples and retired game notes owned by the previous package. Personal
     # edits and files absent from the ownership manifest are left alone.
     manifest = destination / "kega-package.json"
     try:
@@ -181,7 +180,7 @@ def main() -> None:
     if isinstance(previous, dict):
         for name, digest in previous.items():
             relative = Path(name)
-            if (not relative.parts or relative.parts[0] != "scripts" or
+            if (not relative.parts or (relative.parts[0] != "scripts" and relative.parts[:2] != ("docs", "games")) or
                     relative.is_absolute() or ".." in relative.parts or
                     (stage / relative).exists()):
                 continue
@@ -190,6 +189,12 @@ def main() -> None:
                 continue
             if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
                 target.unlink()
+
+    retired_game_docs = destination / "docs/games"
+    if (retired_game_docs.is_dir() and not retired_game_docs.is_symlink()
+            and retired_game_docs.resolve().is_relative_to(destination)
+            and not any(retired_game_docs.iterdir())):
+        retired_game_docs.rmdir()
 
     write_manifest(stage)
     destination.mkdir(parents=True, exist_ok=True)

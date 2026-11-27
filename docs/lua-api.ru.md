@@ -677,4 +677,4 @@ math, string, table и UTF-8. Доступны обычные таблицы, ф
 и отдельные окна. [Руководство по примерам](lua-examples.ru.md)
 
 В папке `scripts/games` находятся инструменты для конкретных ревизий картриджей.
-[Лаборатория Sonic 1](games/sonic1-lab.md) · [Боевой инспектор Contra: Hard Corps](games/contra-hard-corps-lab.md)
+Лаборатория Sonic 1 · Боевой инспектор Contra: Hard Corps

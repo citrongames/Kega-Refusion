@@ -1143,7 +1143,7 @@ taking control of the user's Windows session. No release or version bump.
 
 Expanded the original US/Korea Combat Lab from eight hardcoded health types to
 134 numeric-health types across the cartridge's actor families. The complete
-dispatcher ledger and bilingual health notes live under docs/games; they separate
+dispatcher ledger and research notes are retained in ignored build/verification/lua-game-notes; they separate
 demonstrated health, hit forwarding, one-hit targets, script counters and remaining
 uncertainty. In particular $00FC has no verified initial health value and is not
 given a fabricated meter. Static coverage is not a full-game completion claim.

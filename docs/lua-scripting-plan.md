@@ -484,4 +484,4 @@ another emulator was added.
 
 See the 2026-11-27 example-pack entry in [verification](verification.md) for exact
 native-game coverage, UI checks and costs. Game-specific routines not exercised
-through gameplay are distinguished from source-derived support in the guides.
+through gameplay are distinguished from source-derived support in verification notes.

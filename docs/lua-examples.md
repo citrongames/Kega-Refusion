@@ -46,6 +46,6 @@ Try **Pause** and **Resume**, change the HUD color, adjust the frames per sample
 
 ## Game-specific tools
 
-The packaged `scripts/games` folder contains tools for specific cartridge revisions. [Sonic 1 Lab](games/sonic1-lab.md) · [Contra: Hard Corps Combat Lab](games/contra-hard-corps-lab.md)
+The packaged `scripts/games` folder contains tools for specific cartridge revisions. Sonic 1 Lab · Contra: Hard Corps Combat Lab
 
 Use the API reference to adapt an example or build your own tool. [Lua API](lua-api.md)

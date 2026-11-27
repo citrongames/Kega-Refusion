@@ -160,7 +160,6 @@ def main() -> None:
     docs.mkdir()
     for name in ("lua-api.md", "lua-api.ru.md", "lua-examples.md", "lua-examples.ru.md"):
         shutil.copy2(root / "docs" / name, docs / name)
-    shutil.copytree(root / "docs/games", docs / "games")
     qt_ru = Path("/usr/share/qt6/translations/qtbase_ru.qm")
     if qt_ru.is_file():
         copy(qt_ru, stage / "languages/qtbase_ru.qm")

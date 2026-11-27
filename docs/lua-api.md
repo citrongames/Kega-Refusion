@@ -620,4 +620,4 @@ data, input recording with measurements, and tool windows.
 [Guide to the included examples](lua-examples.md)
 
 The `scripts/games` folder contains tools for specific cartridge revisions.
-[Sonic 1 Lab](games/sonic1-lab.md) · [Contra: Hard Corps Combat Lab](games/contra-hard-corps-lab.md)
+Sonic 1 Lab · Contra: Hard Corps Combat Lab
