@@ -465,6 +465,59 @@ void testControlsSystem(const QString& corePath, const QString& dataPath) {
             if (command == FastForwardCommand)
                 require(!view->fastForwardActive(), "gamepad release left menu acceleration active");
         }
+        auto* fast = child<QAction>(window, "fastForwardAction");
+        auto* rewind = child<QAction>(window, "rewindAction");
+        bool rewinding = false;
+        const auto rewindConnection = QObject::connect(&session, &EmulationSession::rewindingChanged,
+            &window, [&](bool active) { rewinding = active; });
+        for (int latest : {FastForwardCommand, RewindCommand}) {
+            auto* oldAction = latest == FastForwardCommand ? rewind : fast;
+            auto* newAction = latest == FastForwardCommand ? fast : rewind;
+            oldAction->trigger();
+            newAction->trigger();
+            require(newAction->isChecked() && !oldAction->isChecked(),
+                    "latest menu mode did not uncheck the opposite mode");
+            require(view->fastForwardActive() == (latest == FastForwardCommand),
+                    "menu modes disagreed with acceleration status");
+            newAction->trigger();
+
+            oldAction->trigger();
+            const int key = latest == FastForwardCommand ? alternate : Qt::Key_F11;
+            press(*view, key);
+            require(!oldAction->isChecked(), "keyboard did not cancel opposite menu latch");
+            release(key, Qt::NoModifier);
+            require(!view->fastForwardActive(), "cancelled menu acceleration revived on release");
+
+            oldAction->trigger();
+            input->commandChanged(latest, true);
+            require(!oldAction->isChecked(), "gamepad did not cancel opposite menu latch");
+            input->commandChanged(latest, false);
+            require(!view->fastForwardActive(), "cancelled menu acceleration revived after gamepad release");
+        }
+        // Cross-source holds: the last activation wins in either direction.
+        press(*view, alternate);
+        input->commandChanged(RewindCommand, true);
+        require(!view->fastForwardActive(), "gamepad rewind left keyboard acceleration active");
+        waitFor([&] { return rewinding; }, "gamepad rewind did not reach the running core");
+        input->commandChanged(RewindCommand, false);
+        waitFor([&] { return !rewinding; }, "released rewind did not stop");
+        require(!view->fastForwardActive(), "preempted keyboard hold revived");
+        // Its second binding must work even while the cancelled key is still down.
+        press(*view, Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+        require(view->fastForwardActive(), "cancelled hold blocked a fresh alternate binding");
+        release(alternate, Qt::ControlModifier | Qt::ShiftModifier);
+        require(view->fastForwardActive(), "cancelled key release stopped the fresh binding");
+        release(Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier);
+
+        press(*view, Qt::Key_F11);
+        waitFor([&] { return rewinding; }, "keyboard rewind did not reach the running core");
+        input->commandChanged(FastForwardCommand, true);
+        require(view->fastForwardActive(), "gamepad acceleration did not supersede keyboard rewind");
+        waitFor([&] { return !rewinding; }, "superseded rewind stayed active in the core");
+        input->commandChanged(FastForwardCommand, false);
+        require(!view->fastForwardActive(), "released gamepad acceleration stayed active");
+        release(Qt::Key_F11, Qt::NoModifier);
+        QObject::disconnect(rewindConnection);
     }
     for (int key : {Qt::Key_F5, Qt::Key_F8}) {
         bool correctPicker = false;

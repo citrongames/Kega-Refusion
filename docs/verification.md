@@ -570,3 +570,19 @@ directions, three held repeats each way while both modes are requested, pause
 of active rewind, resume, and the oldest-history boundary. Windows Release
 was packaged to testbuild and its stripped EXE matched the build; Windows UI
 and a two-peer network scenario were not run for this change.
+
+### Mutually exclusive fast-forward and rewind — 2026-11-27
+
+The latest activation from the menu, keyboard or gamepad cancels the opposite
+mode, including its menu latch and held-input sources. A cancelled hold cannot
+revive on release or block a fresh alternate keyboard binding. Pause priority
+and manual frame-step behavior are unchanged; no core or state format changed.
+
+The focused Linux `debug_menu_tests --controls-system` check passed with a real
+core and generated SMS ROM: menu switching in both directions, keyboard/gamepad
+takeover of opposite menu latches, cross-device held commands reaching the core,
+and fresh alternate binding while a cancelled key remains down. Existing menu
+open/close, held-input takeover and dual-binding checks passed in the same run.
+Windows Release was packaged to testbuild and the deployed EXE matched the
+stripped build. Windows GUI testing is left to the user; no Windows application
+was launched. Evidence: `build/verification/exclusive-speed-modes/` (ignored).

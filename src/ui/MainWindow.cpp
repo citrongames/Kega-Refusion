@@ -1079,12 +1079,18 @@ void MainWindow::buildMenus() {
     fastForwardAction_->setCheckable(true);
     fastForwardAction_->setAutoRepeat(false);
     fastForwardAction_->setEnabled(false);
-    connect(fastForwardAction_, &QAction::toggled, this, &MainWindow::updateFastForward);
+    connect(fastForwardAction_, &QAction::toggled, this, [this](bool enabled) {
+        if (enabled) cancelOppositeSpeedMode(FastForwardCommand);
+        updateFastForward();
+    });
     rewindAction_ = emulationMenu->addAction(Localization::text(QStringLiteral("Перемотка назад")));
     rewindAction_->setObjectName(QStringLiteral("rewindAction"));
     rewindAction_->setAutoRepeat(false);
     rewindAction_->setCheckable(true); rewindAction_->setEnabled(false);
-    connect(rewindAction_, &QAction::toggled, this, &MainWindow::updateRewind);
+    connect(rewindAction_, &QAction::toggled, this, [this](bool enabled) {
+        if (enabled) cancelOppositeSpeedMode(RewindCommand);
+        updateRewind();
+    });
     QAction* focusPause = emulationMenu->addAction(Localization::text(QStringLiteral("Пауза при потере фокуса")));
     focusPause->setCheckable(true); focusPause->setChecked(pauseOnFocusLoss_);
     connect(focusPause, &QAction::toggled, this, [this](bool enabled) {
@@ -3801,11 +3807,29 @@ void MainWindow::updateInputEnabled() {
     input_->poll();
 }
 
+void MainWindow::cancelOppositeSpeedMode(int command) {
+    const bool cancelRewind = command == FastForwardCommand;
+    const int cancelledCommand = cancelRewind ? RewindCommand : FastForwardCommand;
+    (cancelRewind ? rewindHeld_ : fastForwardHeld_) = false;
+    (cancelRewind ? rewindPadHeld_ : fastForwardPadHeld_) = false;
+    if (auto* action = cancelRewind ? rewindAction_ : fastForwardAction_) {
+        const QSignalBlocker blocker(action);
+        action->setChecked(false);
+    }
+    // A cancelled physical hold must not revive on release or block a fresh
+    // press of the command's other binding. Auto-repeat is ignored separately.
+    for (auto it = heldCommandChords_.begin(); it != heldCommandChords_.end();) {
+        if (it.value() == cancelledCommand) it = heldCommandChords_.erase(it);
+        else ++it;
+    }
+    if (cancelRewind) updateRewind();
+    else updateFastForward();
+}
+
 void MainWindow::updateFastForward() {
     const bool enabled = !videoExporting_ && (fastForwardHeld_ || fastForwardPadHeld_ ||
                          (fastForwardAction_ && fastForwardAction_->isChecked()));
-    view_->setFastForwardStatus(enabled && !(rewindEnabled_ && (rewindHeld_ || rewindPadHeld_ ||
-        (rewindAction_ && rewindAction_->isChecked()))));
+    view_->setFastForwardStatus(enabled);
     if (fastForwardActive_ == enabled) return;
     fastForwardActive_ = enabled;
     if (enabled) audio_->clear();
@@ -4006,6 +4030,7 @@ int MainWindow::keyboardCommand(int chord, int key, Qt::KeyboardModifiers modifi
 void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
     if (!keyboard && videoExporting_ && pressed) return;
     if (command == RewindCommand) {
+        if (pressed) cancelOppositeSpeedMode(command);
         (keyboard ? rewindHeld_ : rewindPadHeld_) = pressed;
         if (pressed && rewindAction_) {
             const QSignalBlocker blocker(rewindAction_);
@@ -4015,6 +4040,7 @@ void MainWindow::handleInputCommand(int command, bool pressed, bool keyboard) {
         return;
     }
     if (command == FastForwardCommand) {
+        if (pressed) cancelOppositeSpeedMode(command);
         (keyboard ? fastForwardHeld_ : fastForwardPadHeld_) = pressed;
         if (pressed && fastForwardAction_) {
             const QSignalBlocker blocker(fastForwardAction_);

@@ -150,6 +150,7 @@ private:
     void setFrameBackSource(bool keyboard, bool pressed);
     QString chooseMovieSavePath(bool branch);
     void updateInputEnabled();
+    void cancelOppositeSpeedMode(int command);
     void updateFastForward();
     void updateRewind();
     void setPausedUi(bool paused);
