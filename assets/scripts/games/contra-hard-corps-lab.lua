@@ -58,7 +58,7 @@ local healthTypes = {
     [0x000f] = {limit = 0x14}, -- $16C90 / $16CE6
     [0x002a] = {limit = 0x14}, -- $16B52 / $16BA8
     [0x002d] = {limit = 0x118, name = T("Boss", "Босс")}, -- $19BB4 / $19C3A
-    [0x002e] = {limit = 0x14, cooldown = 0x48, name = T("Breakable", "Разрушаемый объект")},
+    [0x002e] = {limit = 0x14, name = T("Breakable", "Разрушаемый объект")},
     [0x005b] = {limit = 0x14}, -- $1C216 / $1C274
     [0x0101] = {limit = 0x5dc}, -- $47298 / $47938
     [0x0107] = {limit = 0x320}, -- $48716 / $48938
@@ -168,7 +168,7 @@ end} -- $32FC0/$32FE6/$331DC
 
 -- Counts the remaining successful mechanism strikes. The field starts at
 -- five and the fight ends on underflow, so six events are needed initially.
-healthTypes[0x01d9] = {field = 0x70, limit = 6, bias = 1, counter = true,
+healthTypes[0x01d9] = {field = 0x70, limit = 6, bias = 1,
     name = T("Mechanism", "Механизм")} -- $65CEC/$6612A/$662D6
 
 -- These handlers add registered shot damage to the actor's counter. Strict
@@ -242,13 +242,21 @@ healthTypes[0x0440] = {accumulated = true, current = function(_, _, state)
     if state == 2 then return 0x70, 0x1f4 end
     if state >= 4 and state <= 9 then return 0x70, 0xb55 end
 end} -- $7902A/$792A6/$792CA/$792EE/$79944
+-- Collision proxies and parts whose callers forward the registered hits.
+local proxyFields = {[0x097] = 0x7c, [0x09c] = 0x48}
+local damageLinks = {
+    [0x08d] = {0x54, 0x08c}, [0x090] = {0x54, 0x08f},
+    [0x092] = {0x54, 0x091}, [0x096] = {0x54, 0x095},
+    [0x0b4] = {0x54, 0x0b3}, [0x0197] = {0x6a, 0x018e},
+    [0x033c] = {0x78, 0x033e}, [0x033d] = {0x78, 0x033e},
+}
 local enemyShots = {[0x0127] = true, [0x0128] = true, [0x0187] = true}
 local character = {[0] = "Ray", "Sheena", "Fang", "Browny"}
 local color = {
     text = 0xf1f6ffff, player = 0x64e6f5ff, protected = 0xd6e7ffa8,
     actor = 0xe6edf0c0, selected = 0xffffffff, solid = 0x85ecb6ed,
     shot = 0x62b9ffff, hurt = 0xffd16aff, attack = 0xff686dff,
-    both = 0xff8fcfff, background = 0x09121de4,
+    both = 0xff8fcfff, background = 0x09121de4, healthBackground = 0x09121dbf,
 }
 local layers = {hud = true, players = true, actors = false, contacts = true, shots = true, solids = false}
 local panel, hook, hookReason, hookFrame, contacts, truncated
@@ -270,7 +278,7 @@ local function catchContact(event)
     local right, left = s16(r.D4), s16(r.D5)
     local bottom, top = s16(r.D6), s16(r.D7)
     if right < left or bottom < top then return end
-    contacts[#contacts + 1] = {address = address, flags = flags,
+    contacts[#contacts + 1] = {address = address, a0 = r.A0 & 0xffffff, flags = flags,
         right = right, left = left, bottom = bottom, top = top}
 end
 
@@ -329,8 +337,7 @@ local function readHealth(data, start, object, shared)
     value = value + (kind.bias or 0)
     if kind.unsigned and limit and value > limit then return end
     object.hp = value >= 0 and value or 0
-    object.limit, object.accumulated, object.counter = limit, kind.accumulated, kind.counter
-    if kind.cooldown then object.cooldown = word(data, start + kind.cooldown) end
+    object.limit = limit
 end
 
 local function readSlot(data, start, address, group, sharedHealth)
@@ -350,7 +357,18 @@ local function readSlot(data, start, address, group, sharedHealth)
         object.invulnerability = s16(word(data, start + 0x58))
         object.rect = storedRect(data, start)
     elseif group == 1 then
-        readHealth(data, start, object, sharedHealth)
+        if sharedHealth then readHealth(data, start, object, sharedHealth) end
+        if layers.contacts then
+            local proxy = proxyFields[id]
+            if proxy and object.hp ~= nil then
+                object.proxy = (word(data, start + proxy) & 0xff) * 65536 + word(data, start + proxy + 2)
+            end
+            local link = damageLinks[id]
+            if link and (id ~= 0x0b4 or data[start + 0x6d] ~= 0)
+                and (id ~= 0x0197 or data[start + 0x51] & 8 == 0) then
+                object.damageOwner = (word(data, start + link[1]) & 0xff) * 65536 + word(data, start + link[1] + 2)
+            end
+        end
         if id == 0x0128 then object.lifetime = object.state end
         if object.flags & 0x80 ~= 0 then object.rect = storedRect(data, start) end
     else
@@ -360,13 +378,14 @@ local function readSlot(data, start, address, group, sharedHealth)
     return object
 end
 
-local function readPool(group, destination)
+local function readPool(group, destination, actorAt)
     local pool = pools[group]
-    local sharedHealth = group == 1 and {} or nil
+    local sharedHealth = group == 1 and (layers.contacts or layers.solids) and {} or nil
     local blockSlots = 4096 // pool.stride
     for first = 0, pool.count - 1, blockSlots do
         local base = pool.base + first * pool.stride
-        local count = math.min(blockSlots, pool.count - first)
+        local count = pool.count - first
+        if count > blockSlots then count = blockSlots end
         local data = bytesAt(base, count * pool.stride)
         if not data then return end
         for i = 0, count - 1 do
@@ -375,6 +394,7 @@ local function readPool(group, destination)
             if object then
                 object.slot = first + i
                 destination[#destination + 1] = object
+                if actorAt then actorAt[0xff0000 + object.address] = object end
             end
         end
     end
@@ -410,8 +430,9 @@ local function readView(frame)
         cameraX = fixed(scroll, 0), cameraY = fixed(scroll, 4)}
     local screen = emu.screen()
     v.width, v.height = screen.width, screen.height
-    if panel or layers.hud or layers.actors or layers.solids then
-        readPool(1, v.pools[1])
+    if panel or layers.actors or layers.contacts or layers.solids then
+        if layers.contacts then v.actorAt = {} end
+        readPool(1, v.pools[1], v.actorAt)
     end
     if panel or layers.shots then
         readPool(2, v.pools[2])
@@ -438,7 +459,7 @@ local function paintBox(v, box, stroke)
     if bottom >= v.height then bottom = v.height - 1 end
     if right < left or bottom < top then return false end
     draw.rect(left, top, right - left + 1, bottom - top + 1, stroke, (stroke & 0xffffff00) | 0x18)
-    return true
+    return left, right, top
 end
 
 local function marker(v, object, stroke)
@@ -462,38 +483,65 @@ local function caption(v, x, y, label, ink)
     draw.text(x + 3, y + 2, label, ink)
 end
 
+local function targetHealth(actorAt, box)
+    local actor = actorAt[box.address]
+    if actor then
+        if actor.hp ~= nil then return actor end
+        if actor.damageOwner then
+            local owner = actorAt[actor.damageOwner]
+            if owner and owner.id == damageLinks[actor.id][2] then return owner end
+        end
+    end
+    local owner = actorAt[box.a0]
+    if owner and owner.proxy == box.address then return owner end
+end
+
 local function overlay(v)
     if not v then return end
     local actors, players = v.pools[1], v.pools[4]
     local selected = panel and namedSlot(v.pools[selectedPool], selectedSlot)
-    if layers.actors then
-        local shown = 0
-        for _, object in ipairs(actors) do
-            if object ~= selected and shown < 10 and marker(v, object, color.actor) then
-                shown = shown + 1
-            end
-        end
+    -- Reserve commands for HUD and selection. Under load the observed combat
+    -- rectangles and their health take priority over solids and origin marks.
+    local remaining = 128 - (selected and 2 or 0)
+    local hudRows = layers.hud and (#players + (truncated and 1 or 0)) or 0
+    remaining = remaining - 2 * hudRows
+    if layers.players then remaining = remaining - #players end
+    local labels, seen = {}, {}
+    local function queueHealth(actor, left, right, top)
+        if not actor or actor.hp == nil or seen[actor.healthKey] then return end
+        seen[actor.healthKey] = true
+        local label = actor.limit and (actor.hp .. "/" .. actor.limit) or ("" .. actor.hp)
+        local width = #label * 8 + 4
+        local x, y = (left + right - width + 1) // 2, top - 11
+        if x > v.width - width then x = v.width - width end
+        if x < 0 then x = 0 end
+        if y < 0 then y = 0 end
+        labels[#labels + 1] = {text = label, x = x, y = y, width = width}
+        remaining = remaining - 2
     end
-    if layers.solids and v.solidPointers then
-        local shown = 0
-        for _, object in ipairs(actors) do
-            if shown < 14 and object.rect and v.solidPointers[object.address]
-                and paintBox(v, object.rect, color.solid) then
-                shown = shown + 1
-            end
-        end
-    end
+
     if layers.contacts and hookFrame == v.frame and contacts then
         for _, box in ipairs(contacts) do
+            if remaining < 3 then break end
             local stroke = box.flags == 0x30 and color.both or (box.flags == 0x20 and color.attack or color.hurt)
-            paintBox(v, box, stroke)
+            local left, right, top = paintBox(v, box, stroke)
+            if left then
+                remaining = remaining - 1
+                if box.flags & 0x10 ~= 0 then queueHealth(targetHealth(v.actorAt, box), left, right, top) end
+            end
         end
     end
+    -- Text uses a second native call. Keep space for RAM sampling and panel
+    -- updates within the host's 192-call budget even with all layers enabled.
+    local nativeSpare = 141 - (128 - remaining) - #labels - hudRows
+    if nativeSpare < remaining then remaining = nativeSpare end
     if layers.shots and v.shotPointers then
         for group = 2, 3 do
-            local shots = v.pools[group]
-            for _, object in ipairs(shots) do
-                if object.rect and v.shotPointers[object.address] then paintBox(v, object.rect, color.shot) end
+            for _, object in ipairs(v.pools[group]) do
+                if remaining < 1 then break end
+                if object.rect and v.shotPointers[object.address] and paintBox(v, object.rect, color.shot) then
+                    remaining = remaining - 1
+                end
             end
         end
     end
@@ -502,7 +550,39 @@ local function overlay(v)
             paintBox(v, player.rect, player.invulnerable and color.protected or color.player)
         end
     end
+    if layers.solids and v.solidPointers then
+        local shown = 0
+        for _, object in ipairs(actors) do
+            if remaining < 1 or shown == 14 then break end
+            if object.rect and v.solidPointers[object.address] then
+                local needsLabel = object.hp ~= nil and not seen[object.healthKey]
+                if not needsLabel or remaining >= 4 then
+                    local left, right, top = paintBox(v, object.rect, color.solid)
+                    if left then
+                        remaining, shown = remaining - 1, shown + 1
+                        if needsLabel then
+                            queueHealth(object, left, right, top)
+                            remaining = remaining - 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if layers.actors then
+        local shown = 0
+        for _, object in ipairs(actors) do
+            if remaining < 2 or shown == 10 then break end
+            if object ~= selected and marker(v, object, color.actor) then
+                remaining, shown = remaining - 2, shown + 1
+            end
+        end
+    end
     if selected then marker(v, selected, color.selected) end
+    for _, label in ipairs(labels) do
+        draw.rect(label.x, label.y, label.width, 10, 0, color.healthBackground)
+        draw.text(label.x + 2, label.y + 1, label.text, color.text)
+    end
     if layers.hud then
         local y = 30
         for _, player in ipairs(players) do
@@ -511,40 +591,6 @@ local function overlay(v)
                 label = label .. format(T("  I %d", "  Н %d"), player.invulnerability)
             end
             caption(v, 5, y, label, color.player)
-            y = y + 11
-        end
-        -- List HP owners, including controllers outside the visible picture.
-        -- Several visible pieces can refer to the same underlying health field.
-        local health, seen = {}, {}
-        if selected and selected.hp ~= nil then
-            health[1] = selected
-            seen[selected.healthKey or selected.address] = true
-        end
-        local other = {}
-        for _, actor in ipairs(actors) do
-            local key = actor.healthKey or actor.address
-            if actor.hp ~= nil and not seen[key] then
-                other[#other + 1] = actor
-                seen[key] = true
-            end
-        end
-        table.sort(other, function(a, b)
-            if a.hp == b.hp then return a.slot < b.slot end
-            return a.hp > b.hp
-        end)
-        for _, actor in ipairs(other) do health[#health + 1] = actor end
-        local count = #health < 8 and #health or 8
-        for i = 1, count do
-            local actor = health[i]
-            local hp = actor.hp > 0 and actor.hp or 0
-            local label = format("#%02d %04X %s %d%s", actor.slot, actor.id,
-                actor.counter and T("hits", "удары") or (actor.accumulated and T("left", "ост.") or "HP"), hp,
-                actor.limit and ("/" .. actor.limit) or "")
-            caption(v, 5, y, label, actor == selected and color.selected or color.hurt)
-            y = y + 11
-        end
-        if #health > count then
-            caption(v, 5, y, format(T("+%d HP slots in inspector", "+%d HP слотов в инспекторе"), #health - count), color.hurt)
             y = y + 11
         end
         if truncated then
@@ -573,14 +619,7 @@ local function slotDetails(v)
     local output = format(T("%s  ID %04X · $FF%04X · State %d", "%s  ID %04X · $FF%04X · Состояние %d"),
         name, object.id, object.address, object.state)
         .. format("\nX %.3f  Y %.3f   ΔX %+.3f  ΔY %+.3f", object.x - 128, object.y - v.dy, (object.vx or 0), (object.vy or 0))
-    if object.hp then
-        local hpLabel = object.counter and T("Hits remaining", "Осталось ударов") or (object.accumulated and T("To damage threshold", "До порога урона") or "HP")
-        output = output .. format("\n%s %d", hpLabel, object.hp)
-        if object.limit then output = output .. format(" / %d", object.limit) end
-        if object.cooldown then
-            output = output .. format(T("  Hit cooldown %d", "  Пауза между попаданиями %d"), object.cooldown)
-        end
-    elseif selectedPool == 2 or selectedPool == 3 then
+    if selectedPool == 2 or selectedPool == 3 then
         local active = v.shotPointers and v.shotPointers[object.address]
         output = output .. format(T("\nDamage %d · %s", "\nУрон %d · %s"), object.power,
             active and T("In collision list", "В списке коллизий") or T("Outside collision list", "Вне списка коллизий"))

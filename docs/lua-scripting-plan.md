@@ -473,8 +473,8 @@ with measurements, and native tool windows.
 Sonic 1 Lab targets the verified original REV00 cartridge: movement, collision
 probes and profiles, touch boxes, an object inspector, boss fields, bounded trails
 and comparison attempts. Contra Combat Lab verifies the original USA/Korea code
-layout: live collision tests, players and projectile lists, verified actor health,
-damage history and one temporary practice checkpoint. Unsupported revisions get
+layout: live collision tests, players and projectile lists, verified HP above the
+corresponding hitboxes, and one temporary practice checkpoint. Unsupported revisions get
 an explicit message; the tools do not pretend to decode arbitrary hacks.
 
 Lua overlays are independent of the emulator OSD switch. Stopping the script

@@ -73,34 +73,90 @@ static void healthCases(LibretroHost& host, const QByteArray& source, const QStr
     ScriptRuntime lua;lua.setHostPolicy(false,false,false,false,true);
     ScriptCommand command;command.id=1;command.source=source;command.path=path;
     lua.command(command,host);errors(lua);
-    const auto lines=[&] {
-        const auto overlay=lua.event(ScriptEvent::Draw,host,1,host.runClock().frames);
+    quint64 frame=host.runClock().frames, sequence=0;
+    const auto contact=[&](quint32 address, quint32 flags=0x10, quint32 top=150, quint32 a0=0) {
+        for(const auto& [name,value]:std::array<std::pair<const char*,quint32>,7>{{
+            {"D2",flags},{"D4",200},{"D5",150},{"D6",200},{"D7",top},{"A1",0xff0000+address},{"A0",a0}}})
+            check(host.inspectionWriteRegister(0,1,name,value),"seed collision register");
+        lua.dispatchMemoryAccess({0,1,1,0x7ec0,0,2});
+    };
+    const auto draw=[&] {
+        const auto overlay=lua.event(ScriptEvent::Draw,host,1,frame);
         errors(lua);check(bool(overlay),"health overlay");
-        QStringList text;
+        return overlay;
+    };
+    const auto sample=[&](quint32 address) {
+        lua.beginAccessFrame(host,++frame);
+        contact(address);
+        lua.endAccessFrame();
+        return draw();
+    };
+    const auto countText=[](const ScriptOverlayPtr& overlay,const QString& label) {
+        int copies=0;
         for(const auto& c:overlay->commands)
-            if(c.primitive==ScriptPrimitive::Text)text<<c.text;
-        return text;
+            if(c.primitive==ScriptPrimitive::Text && c.text==label)++copies;
+        return copies;
     };
     clear();const auto a=actor(0,0x295,11);word(a+0x36,990);
-    check(lines().join("\n").contains("HP 990/1000"),"direct late-enemy HP");
+    lua.beginAccessFrame(host,++frame);
+    contact(a,0x20,140);
+    contact(a);
+    lua.endAccessFrame();
+    const auto overlay=draw();
+    const ScriptDraw *target=nullptr, *backdrop=nullptr, *label=nullptr;
+    for(const auto& c:overlay->commands) {
+        if(c.primitive==ScriptPrimitive::Rectangle && c.color.rgba()==0xffffd16a)target=&c;
+        if(c.primitive==ScriptPrimitive::Text && c.text=="990/1000")label=&c;
+    }
+    check(target && label,"direct late-enemy HP attached to target");
+    for(const auto& c:overlay->commands)
+        if(c.primitive==ScriptPrimitive::Rectangle && c.bounds.contains(label->bounds.topLeft())
+            && c.bounds.bottom()==target->bounds.top()-1 && c.fill.alpha()>0 && c.fill.alpha()<255)
+            backdrop=&c;
+    check(backdrop,"semi-transparent label background above target");
+
+    word(a+0x24,0x80);
+    word(a+0x2e,200);word(a+0x30,150);word(a+0x32,220);word(a+0x34,170);
+    word(0xaea2,a);word(0xa3a2,0xaea4);
+    uiEvent(lua,host,"solids",true,ScriptUiEventKind::Change,sequence);
+    check(countText(draw(),"990/1000")==1,"one label for combat and solid rectangles");
+    uiEvent(lua,host,"contacts",false,ScriptUiEventKind::Change,sequence);
+    check(countText(draw(),"990/1000")==1,"solid layer owns its health label");
+    uiEvent(lua,host,"solids",false,ScriptUiEventKind::Change,sequence);
+    check(countText(draw(),"990/1000")==0,"health hidden with hitbox layers even with HUD on");
+    const auto details=lua.uiSnapshot().windows[0].controls;
+    for(const auto& control:details)
+        if(control.id=="details")check(!control.value.toString().contains("990"),"health removed from slot panel");
+    uiEvent(lua,host,"contacts",true,ScriptUiEventKind::Change,sequence);
+
     clear();const auto b=actor(0,0x33b,2);word(b+0x70,10);
-    check(lines().join("\n").contains("left 841/851"),"strict damage threshold");
-    clear();actor(0,0x28f,1);actor(1,0x290,1);word(0xa240,300);
-    int copies=0;for(const auto& line:lines())if(line.contains("HP 300"))++copies;
-    check(copies==1,"shared health duplicated");
+    check(countText(sample(b),"841/851")==1,"strict damage threshold");
+    clear();const auto sharedA=actor(0,0x28f,1), sharedB=actor(1,0x290,1);word(0xa240,300);
+    lua.beginAccessFrame(host,++frame);
+    contact(sharedA);contact(sharedB);
+    lua.endAccessFrame();
+    check(countText(draw(),"300/4000")==1 && countText(draw(),"300")==0,"shared health duplicated");
     clear();const auto c=actor(0,0x198,4);word(c+0x70,100);
-    check(lines().join("\n").contains("left 2400/2500"),"phase one threshold");
-    word(c+2,10);check(lines().join("\n").contains("left 901/1001"),"phase two threshold");
-    word(c+2,12);check(lines().join("\n").contains("left 1700/1800"),"phase three threshold");
+    check(countText(sample(c),"2400/2500")==1,"phase one threshold");
+    word(c+2,10);check(countText(sample(c),"901/1001")==1,"phase two threshold");
+    word(c+2,12);check(countText(sample(c),"1700/1800")==1,"phase three threshold");
+
+    clear();const auto controller=actor(0,0x018e,1), part=actor(1,0x0197,1);
+    word(controller+0x70,10);word(part+0x6a,0xff);word(part+0x6c,controller);
+    check(countText(sample(part),"1390/1400")==1,"forwarded boss part health");
+    clear();const auto owner=actor(0,0x097,1), proxy=actor(1,2,1);
+    word(owner+0x40,0x0800);word(owner+0x36,40);word(owner+0x7c,0xff);word(owner+0x7e,proxy);
+    lua.beginAccessFrame(host,++frame);
+    contact(proxy,0x10,150,0xff0000+owner);
+    lua.endAccessFrame();
+    check(countText(draw(),"40/1050")==1,"variant hitbox proxy health");
+
     clear();
     for(int i=0;i<78;++i){const auto base=actor(i,0x124,1);word(base+0x36,40);}
-    quint64 sequence=0;
     const auto controls=lua.uiSnapshot().windows[0].controls;
     for(const auto& control:controls)
         if(control.kind==ScriptUiKind::Checkbox && control.enabled && !control.value.toBool())
             uiEvent(lua,host,control.id,true,ScriptUiEventKind::Change,sequence);
-    int hpRows=0;for(const auto& line:lines())if(line.contains("HP 40/40"))++hpRows;
-    check(hpRows==8,"bounded health rows");
     // Populate the optional layers together; the script must fit its draw/native budgets.
     for(int i=0;i<78;++i) {
         const auto base=0xb000+i*128;
@@ -121,15 +177,15 @@ static void healthCases(LibretroHost& host, const QByteArray& source, const QStr
         word(base,1);word(base+6,200);word(base+10,200);
         word(base+0x2e,200);word(base+0x30,150);word(base+0x32,200);word(base+0x34,150);
     }
-    for(const auto& [name,value]:std::array<std::pair<const char*,quint32>,6>{{
-        {"D2",0x30},{"D4",200},{"D5",150},{"D6",200},{"D7",150},{"A1",0xffb000}}})
-        check(host.inspectionWriteRegister(0,1,name,value),"seed collision register");
-    lua.beginAccessFrame(host,host.runClock().frames);
-    for(int i=0;i<33;++i)lua.dispatchMemoryAccess({0,1,1,0x7ec0,0,2});
+    lua.beginAccessFrame(host,++frame);
+    for(int i=0;i<33;++i)contact(0xb000+i*128,0x30);
     lua.endAccessFrame();
-    lua.event(ScriptEvent::Frame,host,1,host.runClock().frames);errors(lua);
+    const auto full=lua.event(ScriptEvent::Frame,host,1,frame);
+    errors(lua);
+    check(full && full->commands.size()<=128 && countText(full,"40/40")>=32,"all-layer drawing budget");
     lua.stopAll();check(host.unserialize(saved),"restore after synthetic health cases");
-    std::puts("PASS health decoding: direct, accumulated, phase transitions, shared owners, 78-slot/all-layer budget bound");
+    std::puts("PASS health overlay: placement, background, layer toggles, shared owners, boss phases and 78-slot draw budget");
+
 }
 int main(int argc,char** argv) {
     QApplication app(argc,argv);

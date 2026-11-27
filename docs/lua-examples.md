@@ -48,4 +48,6 @@ Try **Pause** and **Resume**, change the HUD color, adjust the frames per sample
 
 The packaged `scripts/games` folder contains tools for specific cartridge revisions. Sonic 1 Lab · Contra: Hard Corps Combat Lab
 
+Contra’s combat and solid-object layers show verified HP above the corresponding hitboxes on a translucent background.
+
 Use the API reference to adapt an example or build your own tool. [Lua API](lua-api.md)
