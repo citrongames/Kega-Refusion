@@ -1193,3 +1193,17 @@ and identity. Both focused binaries passed after the fix.
 
 Only example Lua, API documentation and opt-in checks changed. No core,
 audio or emulator executable changes; updated examples deployed to testbuild.
+
+## Native script file picker — 2026-11-27
+
+The Lua picker used NonModal/show; Qt 6.10.2's Windows file helper rejects that
+mode and falls back to widgets. Switched to asynchronous window-modal open(),
+preserving selected-file handling, current scripts directory, cancel cleanup
+and the duplicate-picker guard. Audited all QFileDialog call sites: ROM/disc,
+shader, BIOS/directory settings, recordings/video, states, cheats, netplay and
+debugger imports/exports already permit native dialogs. No application-wide
+DontUseNativeDialogs flag exists in production.
+
+The focused Lua window check covers native-compatible modality, existing-file
+mode, directory selection, cancel/reopen and script loading. Native Windows
+appearance is left for the user's manual check; no Windows UI automation.

@@ -635,7 +635,6 @@ void LuaScriptsDialog::openScript() {
                                   QFileInfo(directory).isDir() ? directory : QString{},
                                   text("Скрипты Lua (*.lua);;Все файлы (*)"));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowModality(Qt::NonModal);
     dialog->setFileMode(QFileDialog::ExistingFile);
     dialog->setSupportedSchemes({QStringLiteral("file")});
     choosingFile_ = true;
@@ -645,7 +644,10 @@ void LuaScriptsDialog::openScript() {
         choosingFile_ = false;
         updateControls();
     });
-    dialog->show();
+    // Windows' native file picker does not support NonModal widget dialogs.
+    // open() is asynchronous and window-modal: retain our completion/cleanup
+    // callbacks without a nested exec() loop or a widget-dialog fallback.
+    dialog->open();
 }
 
 void LuaScriptsDialog::addScript(const QString& path) {

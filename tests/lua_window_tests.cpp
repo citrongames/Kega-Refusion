@@ -52,7 +52,10 @@ void writeSource(const QString& path, const QByteArray& source) {
 void openSource(LuaScriptsDialog& dialog, const QString& path, const QString& initialDirectory) {
     find<QPushButton>(dialog, "luaOpen")->click();
     auto* picker = dialog.findChild<QFileDialog*>();
-    check(picker && picker->isVisible(), "Modeless script picker");
+    check(picker && picker->isVisible(), "Asynchronous script picker");
+    check(picker->windowModality() == Qt::WindowModal, "Native-compatible script picker modality");
+    check(!picker->testOption(QFileDialog::DontUseNativeDialog), "Native script picker allowed");
+    check(picker->fileMode() == QFileDialog::ExistingFile, "Script picker opens existing files");
     check(picker->directory().absolutePath() == initialDirectory, "Picker uses current scripts folder");
     picker->fileSelected(path);
     picker->reject();
