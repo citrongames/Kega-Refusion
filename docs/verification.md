@@ -1207,3 +1207,24 @@ DontUseNativeDialogs flag exists in production.
 The focused Lua window check covers native-compatible modality, existing-file
 mode, directory selection, cancel/reopen and script loading. Native Windows
 appearance is left for the user's manual check; no Windows UI automation.
+
+## Input recording completion thread lifetime — 2026-11-28
+
+The user's Windows stop trace finished the final snapshot at 14 ms and the
+recording write at 75 ms, but consumed completion at 2381 ms; the GUI heartbeat
+had a 1974 ms gap. This locates the delay after file writing, not in encoding
+or disk throughput. No Windows UI automation was used.
+
+Replaced per-operation std::async workers with one lazy, session-owned Qt pool
+worker and packaged-task results for saving and Lua recording file preparation.
+A ready result no longer joins an OS thread in get(), and worker teardown is
+deferred to session shutdown. Only one file request is outstanding; captures
+own their data and never access the emulation host.
+
+A deterministic isolated probe confirmed that the former async result can be
+ready while get() still blocks on thread-local teardown. The focused native
+lua_session_tests passed: reused worker identity, no per-result TLS teardown,
+exception propagation, draining discarded work at shutdown, real-core recording
+save/retry, resume/playback and cancellation of stale file requests. The actual
+Windows stall still needs comparison on the user's system; a bounded temporary
+stop trace is retained in testbuild for that check, outside tracked sources.

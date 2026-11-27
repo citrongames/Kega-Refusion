@@ -1,5 +1,7 @@
 #include "core/EmulationSession.h"
 #include "core/MovieTape.h"
+#include "core/MovieFileTask.h"
+#include <atomic>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -17,10 +19,40 @@ static void waitFor(const std::function<bool()>& predicate, const char* text) {
     while (!predicate() && timer.elapsed()<10000) { QCoreApplication::processEvents(); QThread::msleep(2); }
     check(predicate(),text);
 }
+// A ready recording result must not wait for per-thread DLL/TLS teardown.
+static void checkMovieFileWorker() {
+    std::atomic_int exits{0};
+    QThreadPool pool;
+    pool.setMaxThreadCount(1);
+    pool.setExpiryTimeout(-1);
+    const auto work = [&] {
+        struct OnExit {
+            std::atomic_int* exits;
+            ~OnExit() { ++*exits; }
+        };
+        thread_local OnExit cleanup{&exits};
+        return QThread::currentThreadId();
+    };
+    auto first = submitMovieFileTask(pool,work);
+    const auto worker = first.get();
+    auto second = submitMovieFileTask(pool,work);
+    check(second.get()==worker && exits.load()==0,
+          "movie result joined or replaced the file worker");
+    auto failed = submitMovieFileTask(pool,[]() -> int { throw std::runtime_error("file failure"); });
+    bool exception = false;
+    try { (void)failed.get(); } catch (const std::runtime_error&) { exception = true; }
+    check(exception,"movie worker lost exception");
+    std::atomic_bool cancelledDone{false};
+    { auto discarded = submitMovieFileTask(pool,[&] { cancelledDone.store(true); }); }
+    pool.waitForDone();
+    check(exits.load()==1 && cancelledDone.load(),"movie worker did not drain and release at shutdown");
+}
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc,argv);
     try {
         check(argc==2,"usage: lua_session_tests CORE");
+        checkMovieFileWorker();
         qputenv("KEGA_TEST_MOVIE_FILE_DELAY_MS","200");
         QTemporaryDir temp;
         check(temp.isValid(),"temp folder");

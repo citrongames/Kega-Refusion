@@ -11,6 +11,7 @@
 #include <QBuffer>
 #include <QImageReader>
 #include "MovieSession.h"
+#include "MovieFileTask.h"
 #include "VideoRecorder.h"
 #include "AchievementsClient.h"
 #include <QtEndian>
@@ -868,6 +869,9 @@ void EmulationSession::run() {
     };
     host.message = [this](const QString& message) { emit notification(message); };
     MovieSession movie(host, dataPath_);
+    QThreadPool movieFilePool;
+    movieFilePool.setMaxThreadCount(1);
+    movieFilePool.setExpiryTimeout(-1); // Reuse the lazy worker; no per-save thread teardown.
     struct MovieFileRequest {
         ScriptControl control{};
         quint64 revision = 0, generation = 0;
@@ -1820,7 +1824,7 @@ void EmulationSession::run() {
         }
         scriptMovieError.clear();
         try {
-            auto future = std::async(std::launch::async,[recording = detachedMovie] {
+            auto future = submitMovieFileTask(movieFilePool,[recording = detachedMovie] {
 #ifdef KEGA_LUA_MOVIE_TESTS
                 delayMovieFileOperationForTest();
 #endif
@@ -2008,7 +2012,7 @@ void EmulationSession::run() {
                     scriptMovieError.clear();
                     const bool load = action == ScriptMovieAction::Play || action == ScriptMovieAction::Resume;
                     try {
-                        auto future = std::async(std::launch::async,[root = dataPath_,name = control.bytes,load] {
+                        auto future = submitMovieFileTask(movieFilePool,[root = dataPath_,name = control.bytes,load] {
 #ifdef KEGA_LUA_MOVIE_TESTS
                             delayMovieFileOperationForTest();
 #endif
@@ -3494,7 +3498,7 @@ void EmulationSession::run() {
     }
     host.finishDebugFrame();finishFramePipeline();host.debuggerDetach();
     finishVideo();
-    // Join the single movie worker before releasing its detached tape. A
+    // Finish the pending file result before releasing its detached tape. A
     // prepared load is discarded during shutdown, even if it passed validation.
     if (movieFile) {
         movieFile->future.wait();
