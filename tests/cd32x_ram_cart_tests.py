@@ -208,6 +208,28 @@ class CdCore(Core):
         assert self.read(ADAPTER) & 1, "32X adapter inactive"
 
 
+def check_backup_cart_time_writes(core):
+    core.write(PAGE + 1, 0, byte=True)
+    core.write(PAGE, 1)
+
+    # The 68000 also exposes !TIME through the Z80 banked window.
+    z80_ram, busreq, reset = 0xA00000, 0xA11100, 0xA11200
+    bank = PAGE >> 15
+    program = bytearray.fromhex("F3 21 00 60 06 00 0E 01")  # DI; LD HL,$6000; LD B,0; LD C,1
+    for bit in range(9):
+        program.append(0x71 if (bank >> bit) & 1 else 0x70)  # LD (HL),C/B
+    program.extend(bytes.fromhex("AF 32 F1 B0 3E A5 32 80 00 76"))
+    # XOR A; LD ($B0F1),A; LD A,$A5; LD ($0080),A; HALT
+    core.write(busreq, 0x100)
+    core.write(reset, 0x100)
+    for offset, opcode in enumerate(program):
+        core.write(z80_ram + offset, opcode, byte=True)
+    core.write(busreq, 0)
+    core.frame()
+    core.write(busreq, 0x100)
+    core.expect(z80_ram + 0x80, 0xA5, "Z80 continued after !TIME write", byte=True)
+
+
 def check_cart(core, capacity, states):
     low, high = WINDOW
     pages = capacity // 2
@@ -385,6 +407,10 @@ def check_sub_cpu_addressing(core):
         ("odd word write", (0x33FC, 0xABCD, 0, 0x1005), True),
         ("odd long write", (0x23FC, 0xEFFE, 0x8001, 0, 0x1009), True),
         ("odd byte read/write", (0x13F9, 0, 0x1001, 0, 0x1007), False),
+        # Identical instructions/addresses must still trap on another disc.
+        ("Pinball BUP name write on unrelated disc", (0x227C, 0, 0x7611, 0x22C2), True),
+        ("Pinball BUP name compare on unrelated disc", (0x207C, 0, 0x7611, 0x247C, 0, 0x1000, 0xB588), True),
+        ("Pinball BUP info write on unrelated disc", (0x227C, 0, 0x1000, 0x247C, 0, 0x7045, 0x24D9), True),
     )
     for name, instruction, traps in accesses:
         core.write(reset_busreq, 0, byte=True)
@@ -487,6 +513,12 @@ def main():
     states = {}
     with tempfile.TemporaryDirectory(prefix="cd32x-ram-cart-") as temporary:
         iso = make_disc(Path(temporary))
+        core = CdCore(core_path, iso, 0, connect_32x=False)
+        try:
+            check_backup_cart_time_writes(core)
+            print("PASS CD backup RAM cart ignores main 68000 and banked Z80 !TIME writes")
+        finally:
+            core.close()
         for capacity in CAPACITIES:
             core = CdCore(core_path, iso, capacity)
             try:

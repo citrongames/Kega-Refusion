@@ -1,0 +1,118 @@
+--- a/core/cd_hw/cdd.c
++++ b/core/cd_hw/cdd.c
+@@ -458,6 +458,40 @@
+ }
+ 
+ 
++/* Mega Pinball Fantasies CD 1.09B passes odd buffers to the BIOS BUP API.
++ * Identify the exact boot programs, independently of container/name. Cache
++ * once per mount; ordinary discs are rejected using the existing header. */
++static int legacy_pinball = -1;
++int cdd_legacy_pinball(void)
++{
++  uint8 sector[2048];
++  unsigned long crc = 0;
++  int saved_lba, saved_index;
++  int64_t saved_position;
++  if (legacy_pinball >= 0) return legacy_pinball;
++  legacy_pinball = 0;
++  if (!cdd.loaded || !achievement_header_valid || kr_megald_active ||
++      !cdd.toc.tracks[0].type || cdd.toc.tracks[0].end < 60 ||
++      crc32(0, achievement_header, sizeof(achievement_header)) != 0x06b0d1efUL)
++    return 0;
++  saved_position = cdd.toc.tracks[0].fd ? cdStreamTell(cdd.toc.tracks[0].fd) : -1;
++  saved_lba = cdd.lba;
++  saved_index = cdd.index;
++  cdd.index = 0;
++  for (int i = 0; i < 60; ++i)
++  {
++    cdd.lba = i;
++    memset(sector, 0, sizeof(sector));
++    cdd_read_data(sector, NULL);
++    crc = crc32(crc, sector, sizeof(sector));
++  }
++  if (saved_position >= 0) cdStreamSeek(cdd.toc.tracks[0].fd, saved_position, SEEK_SET);
++  cdd.lba = saved_lba;
++  cdd.index = saved_index;
++  legacy_pinball = (crc == 0xc0c737fdUL);
++  return legacy_pinball;
++}
++
+ int cdd_get_achievement_header(uint8 *out, unsigned size)
+ {
+   if (!out || size != sizeof(achievement_header) || !achievement_header_valid) return 0;
+@@ -1399,6 +1433,7 @@
+   if (kr_megald_active) kr_megald_close();
+   achievement_header_valid = 0;
+   legacy_roadrash = -1;
++  legacy_pinball = -1;
+   if (cdd.loaded)
+   {
+     int i;
+--- a/core/cd_hw/cdd.h
++++ b/core/cd_hw/cdd.h
+@@ -135,6 +135,7 @@
+ extern int cdd_get_achievement_header(uint8 *out, unsigned size);
+ extern void cdd_unload(void);
+ extern int cdd_legacy_roadrash(void);
++extern int cdd_legacy_pinball(void);
+ extern void cdd_read_data(uint8 *dst, uint8 *subheader);
+ extern void cdd_seek_audio(int index, int lba);
+ extern void cdd_read_audio(unsigned int samples);
+--- a/core/m68k/s68kconf.h
++++ b/core/m68k/s68kconf.h
+@@ -75,6 +75,12 @@
+ #define M68K_COMPAT_ALIGN_ODD(ADDR, WRITE_MODE, FC) \
+   ((WRITE_MODE) == MODE_READ && ((FC) & 3) == FUNCTION_CODE_USER_DATA && \
+    kegarefusion_32x_legacy_roadrash_read((ADDR), REG_PC, REG_IR))
++/* This exact CD release misaligns two BIOS backup-memory buffers. Keep the
++ * legacy unaligned access semantics only for its verified data operations. */
++extern int kegarefusion_scd_legacy_pinball_access(unsigned, unsigned, unsigned, unsigned);
++#define M68K_COMPAT_ALLOW_ODD(ADDR, WRITE_MODE, FC) \
++  ((FC) == FUNCTION_CODE_SUPERVISOR_DATA && \
++   kegarefusion_scd_legacy_pinball_access((ADDR), REG_PC, REG_IR, (WRITE_MODE)))
+ #endif
+ 
+ /* If ON and previous option is also ON, address error exceptions will
+--- a/core/m68k/m68kcpu.h
++++ b/core/m68k/m68kcpu.h
+@@ -315,6 +315,10 @@
+ #define M68K_COMPAT_ALIGN_ODD(ADDR, WRITE_MODE, FC) 0
+ #endif
+ 
++#ifndef M68K_COMPAT_ALLOW_ODD
++#define M68K_COMPAT_ALLOW_ODD(ADDR, WRITE_MODE, FC) 0
++#endif
++
+ /* Enable or disable Address error emulation */
+ #if M68K_EMULATE_ADDRESS_ERROR
+   #define m68ki_set_address_error_trap() \
+@@ -327,7 +331,7 @@
+     if(UNLIKELY((ADDR)&1)) \
+     { \
+       if (M68K_COMPAT_ALIGN_ODD(ADDR, WRITE_MODE, FC)) { (ADDR) &= ~1u; } \
+-      else if (m68ki_cpu.aerr_enabled) \
++      else if (m68ki_cpu.aerr_enabled && !M68K_COMPAT_ALLOW_ODD(ADDR, WRITE_MODE, FC)) \
+       { \
+         m68ki_cpu.aerr_address = ADDR; \
+         m68ki_cpu.aerr_write_mode = WRITE_MODE; \
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -3926,6 +3926,8 @@
+ 
+ RETRO_API const char *retro_kegarefusion_recording_abi(void)
+ {
++   if (system_hw == SYSTEM_MCD && cdd_legacy_pinball())
++      return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-pinball-bup-v1");
+    if (kegarefusion_32x_legacy_roadrash_active())
+       return MD_FIFO_ABI("kegarefusion-recording-v3-peripherals-v1-roadrash-loader-v1");
+    if (sms_cart_m2_collection_active())
+@@ -3965,6 +3967,8 @@
+        sizeof(opll_t) != 392 || offsetof(opll_t, patchrom) != 16 ||
+        sizeof(chan_t) != 16 || sizeof(reg16_t) != 2 ||
+        !YM2612NetworkLayout() || !YM2413NetworkLayout()) return NULL;
++   if (system_hw == SYSTEM_MCD && cdd_legacy_pinball())
++      return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-pinball-bup-v1");
+    if (kegarefusion_32x_legacy_roadrash_active())
+       return MD_FIFO_ABI("kegarefusion-network-state-v3-peripherals-v1-gpx-f27655b-x64le-32x-wire-v1-roadrash-loader-v1");
+    if (sms_cart_m2_collection_active())

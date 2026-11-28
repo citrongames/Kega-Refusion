@@ -96,6 +96,25 @@ int kegarefusion_32x_legacy_roadrash_read(unsigned address, unsigned pc, unsigne
         if (*(uint16_t *)(scd.prg_ram + 0xd612 + i*2) != code[i]) return 0;
     return 1;
 }
+/* CD 1.09B compatibility, not hardware behavior. The disc check includes
+ * both boot programs; the ranges and opcodes below describe its two malformed
+ * BIOS BUP buffers. Main CPU, instruction fetches and other accesses stay strict.
+ * write_mode follows Musashi MODE_WRITE=0 / MODE_READ=0x10. */
+int kegarefusion_scd_legacy_pinball_access(unsigned address, unsigned pc,
+                                         unsigned ir, unsigned write_mode)
+{
+    if (system_hw != SYSTEM_MCD || pc < 2 || pc > 0x6000 || (pc & 1) || !(address & 1)) return 0;
+    if (write_mode == 0) {
+        if (!((ir == 0x22c2 && address >= 0x7611 && address <= 0x761d &&
+               ((address - 0x7611) & 3) == 0) ||
+              (ir == 0x24d9 && address >= 0x7045 && address <= 0x704d &&
+               ((address - 0x7045) & 3) == 0))) return 0;
+    } else if (write_mode == 0x10) {
+        if (ir != 0xb588 || address < 0x7611 || address > 0x7619 ||
+            ((address - 0x7611) & 3) != 0) return 0;
+    } else return 0;
+    return *(uint16_t *)(scd.prg_ram + pc - 2) == ir && cdd_legacy_pinball();
+}
 static void video_sync(uint64_t);
 static void video_reset(void) {
     unsigned i;

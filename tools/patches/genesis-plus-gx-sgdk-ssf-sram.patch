@@ -1,0 +1,24 @@
+diff --git a/core/cart_hw/md_cart.c b/core/cart_hw/md_cart.c
+--- a/core/cart_hw/md_cart.c
++++ b/core/cart_hw/md_cart.c
+@@ -1289,8 +1289,18 @@
+   }
+   else if (strstr(rominfo.consoletype,"SEGA SSF"))
+   {
+-    /* Everdrive extended SSF mapper */
+-    cart.hw.time_w = md_cart_32x_ssf ? mapper_32x_ssf_w : mapper_512k_w;
++    /* SGDK's SEGA SSF header uses fixed bank 0 and SRAM at $A130F1.
++       Distinguish it from the Everdrive variant without game-name rules.
++       Keep the dedicated 32X paging path for actual 32X SSF cartridges. */
++    if (!md_cart_32x_ssf && strstr(rominfo.copyright, "SGDK") &&
++        sram.detected && (sram.type == DEFAULT_SRAM))
++    {
++      cart.hw.time_w = default_time_w;
++    }
++    else
++    {
++      cart.hw.time_w = md_cart_32x_ssf ? mapper_32x_ssf_w : mapper_512k_w;
++    }
+ 
+     /* cartridge ROM mapping is reinitialized on /VRES */
+     cart.hw.bankshift = 1;

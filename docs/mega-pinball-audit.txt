@@ -1,0 +1,66 @@
+Mega Pinball Fantasies compatibility audit — 2026-11-28
+
+Scope
+- Mega_Pinball_Fantasies_0.99B.md, 5 MiB (cartridge).
+- Mega_Pinball_Fantasies_MegaCd_1.09B.cue + original BIN (CD).
+- Images and BIOS read in place, not modified.
+
+Confirmed emulator defects
+1. SGDK SEGA SSF + declared standard SRAM was interpreted as extended SSF.
+   Its write of 1 to A130F1 enabled SRAM but incorrectly replaced boot bank 0.
+   Select the existing official fixed-bank-0/SRAM mapper for this header family;
+   keep the extended mapper for non-SGDK and undeclared-SRAM images, and the
+   separate 32X SSF mapper for actual 32X cartridges. No title/hash exception.
+2. A CD program writing A130F1 could call a null cartridge !TIME handler.
+   Ignore unmapped writes using the existing bus handlers for 68000 byte/word
+   and banked Z80 writes. Clear stale mapper hooks when selecting backup RAM.
+
+Separate CD program defect and explicitly approved compatibility
+The CD game passes odd buffers to BIOS BUP routines. On US BIOS 1.10:
+- PC 0053AC, MOVE.L D2,(A1)+, first destination 007611 (RAM_CARTRIDGE name).
+- CMPM.L subsequently reads that odd buffer.
+- MOVE.L (A1)+,(A2)+ writes the BUP result at 007045.
+A strict 68000 raises vector 3; BIOS restarts, clears the CDC transfer target,
+and later table loading sees stale INTRO data (checksum 577D93A5).
+This is not a CDC transfer/timer defect and does not justify relaxing all CD.
+
+Approved exception is limited to the original CD 1.09B boot programs:
+- CRC32 of existing decoded 512-byte header: 06B0D1EF.
+- CRC32 of decoded Mode 1 LBA 0..59: C0C737FD (120 KiB, once per mount).
+- Only Sub CPU supervisor-data accesses while executing verified current BIOS
+  opcodes below 006000. No filename checks and no per-frame image hashing.
+- Write 22C2: 7611/7615/7619/761D; read B588: 7611/7615/7619;
+  write 24D9: 7045/7049/704D. Other addresses/opcodes remain strict.
+- Preserve legacy unaligned access semantics. Rounding down the address is
+  incorrect here: it breaks the BIOS search-key comparison and file handling.
+- Content cache resets on disc unload. Restore data/audio stream position after
+  fingerprinting; no media copied. Recording/netplay ABI has pinball-bup-v1
+  only for this profile, not all CD games. State layout is unchanged.
+- US BIOS 1.10, 2.00w and 2.11x showed the same ten accesses, at different PCs.
+
+Focused verification
+- Generated original cartridge fixture: SRAM enable/write-protect/disable,
+  fixed bank 0, upper banks 8/9, native save/restore; negative extended-mapper
+  cases retain original behavior (tests/sgdk_mapper_tests.py).
+- Generated CD guest exercises unmapped !TIME byte/word/Z80 writes and strict
+  odd-address exceptions, including identical Pinball opcodes on unrelated CD
+  (tests/cd32x_ram_cart_tests.py).
+- Real cartridge: Party Land and moving ball; automatic and forced attachments.
+- Real CD: Party Land live gameplay, normal CD and forced CD+32X + 16 MiB RAM
+  cartridge. Production core, no diagnostic register overrides. Identical video
+  between configurations through frame 4200; ball launched at 3779..3850 and
+  DMD score/event animation by 4100.
+- CD+32X native state at 4200, replay 120 frames: identical rendered video and PCM.
+  Video SHA256 fd592d27a92949c3bd4d8c80774e27c79ef5e116f59ae805e3367974ca6e453e
+  PCM SHA256   bcf65f2b1ee2703efa1dede15612458844ee6457e2684ca2d239e39b9726b465
+- Previous-core comparison: Terminator (US CHD, 59.922743 Hz) and Sonic CD
+  (Europe CUE, 49.701459 Hz): frames 600/1200 and all 1200 frames of PCM match.
+- User performs Windows gameplay/UI testing; no desktop control used.
+
+References
+https://davidsgame.itch.io/pinball-fantasies-megacd
+https://raw.githubusercontent.com/Stephane-D/SGDK/master/inc/mapper.h
+https://raw.githubusercontent.com/Stephane-D/SGDK/master/inc/sram.h
+
+No claim of testing every table or completing either game. The exception is
+compatibility for this known malformed program, not an accuracy improvement.

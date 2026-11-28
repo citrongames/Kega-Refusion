@@ -1,0 +1,69 @@
+diff --git a/core/mem68k.c b/core/mem68k.c
+--- a/core/mem68k.c
++++ b/core/mem68k.c
+@@ -1006,7 +1006,14 @@
+ 
+     case 0x30:  /* TIME */
+     {
+-      cart.hw.time_w(address, data);
++      if (cart.hw.time_w)
++      {
++        cart.hw.time_w(address, data);
++      }
++      else
++      {
++        m68k_unused_8_w(address, data);
++      }
+       return;
+     }
+ 
+@@ -1362,7 +1369,14 @@
+ 
+     case 0x30:  /* TIME */
+     {
+-      cart.hw.time_w(address, data);
++      if (cart.hw.time_w)
++      {
++        cart.hw.time_w(address, data);
++      }
++      else
++      {
++        m68k_unused_16_w(address, data);
++      }
+       return;
+     }
+ 
+diff --git a/core/membnk.c b/core/membnk.c
+--- a/core/membnk.c
++++ b/core/membnk.c
+@@ -190,7 +190,14 @@
+ 
+     case 0x30:  /* TIME */
+     {
+-      cart.hw.time_w(address, data);
++      if (cart.hw.time_w)
++      {
++        cart.hw.time_w(address, data);
++      }
++      else
++      {
++        zbank_unused_w(address, data);
++      }
+       return;
+     }
+ 
+diff --git a/core/cd_hw/cd_cart.c b/core/cd_hw/cd_cart.c
+--- a/core/cd_hw/cd_cart.c
++++ b/core/cd_hw/cd_cart.c
+@@ -195,6 +195,11 @@
+   /* RAM cartridge enabled ? */
+   if (scd.cartridge.id)
+   {
++    /* Backup RAM has its own address decoder and no cartridge !TIME handler.
++     * Drop any mapper hooks left by an earlier ROM cartridge.
++     */
++    memset(&cart.hw, 0, sizeof(cart.hw));
++
+     /* disable cartridge backup memory */
+     memset(&sram, 0, sizeof (T_SRAM));
+ 
