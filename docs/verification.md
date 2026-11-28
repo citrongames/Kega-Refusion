@@ -1231,3 +1231,35 @@ result at 105 ms (GUI acknowledgement at 109 ms), with get() returning in the
 same millisecond. The user confirmed the freeze was gone. The temporary
 diagnostic build is replaced with the normal build; before/after traces remain
 under ignored build/verification/movie-stop-latency, not in the shipped package.
+
+
+## Release 0.40.0 — 2026-11-28
+
+Published stable tag `v0.40.0` at `da483dd0e17f271ed4c814b68fc1293ef414d9d0`.
+Windows and Debian 12 Linux Release packages include the completed Lua runtime,
+examples/documentation and post-0.31.0 fixes. Both packaged application versions
+were verified; Windows by embedded version without executing a Windows program,
+Linux by the portable launcher. Linux passes the glibc 2.36 symbol ceiling.
+The Windows manifest has 75 managed files; Linux has 178.
+
+An isolated update using the actual 0.31.0 installer source initially rejected
+new scripts/docs paths. Lua release files are now embedded and materialized on
+first launch. A small receipt updates only unchanged bundled files and preserves
+personal edits; unchanged launches perform no script/document writes. Focused
+checks covered first install, real embedded resources, repeat launch, updating
+unchanged documentation, preserving edited/unrecognized scripts and a custom
+Scripts folder. No broad updater path whitelist was introduced.
+
+Both final archives passed isolated 0.31.0 -> 0.40.0 extraction/staging/apply checks;
+all package hashes matched, and twelve settings/save/BIOS/game/user-file markers
+per platform survived byte-for-byte. The Linux application reported 0.31.0 before
+and 0.40.0 after replacement. User installations were not used by the checks.
+
+All five uploaded assets have verified GitHub SHA-256 digests. The public latest
+redirect selects v0.40.0; public update.json matches the English release body and
+both package sizes/digests. Public Windows and Linux downloads were streamed and
+hashed against the final archives. The corresponding-source archive verifies
+2,069 files, 801 integrated-core files and 98 managed patches against both builds.
+See [Mega Pinball Fantasies audit](mega-pinball-audit.txt) for the game fixes and
+explicitly scoped CD compatibility exception in this release. Final archives and
+compact evidence remain under ignored `build/release-0.40.0/`.
