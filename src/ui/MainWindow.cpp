@@ -358,8 +358,7 @@ MainWindow::MainWindow(EmulationSession& session, const QString& dataPath,
     session_.setRewindMemoryMiB(settings_.value(QStringLiteral("emulation/rewindMemoryMiB"), 128).toInt());
     view_->setFastForwardFactor(fastForwardFactor_);
     netplay_ = new NetplayController(session_, dataPath_, settings_, this);
-    connect(netplay_, &NetplayController::openRomRequested, this,
-        [this](const QString& path, bool allowPatches) { openRom(path, allowPatches, false); });
+    connect(netplay_, &NetplayController::openRomRequested, this, &MainWindow::openRom);
     connect(netplay_, &NetplayController::notice, this, [this](const QString& text) {
         view_->showOsd(Localization::text(text), 3000, QStringLiteral("netplay"));
     });
@@ -2244,23 +2243,7 @@ void MainWindow::openGameDialog() {
     else view_->setFocus();
 }
 
-void MainWindow::activateForFileOpen() {
-    if (smokeTest_) return;
-    if (isMinimized()) setWindowState(windowState() & ~Qt::WindowMinimized);
-    raise();
-#ifdef Q_OS_WIN
-    // A local file-open/drop is an explicit user action. QWidget activation
-    // alone can merely flash the taskbar when Explorer owns the foreground.
-    // Request the foreground through Windows; do not synthesize input, attach
-    // thread queues, or retry later after the user has switched applications.
-    if (const auto hwnd = reinterpret_cast<HWND>(internalWinId()))
-        SetForegroundWindow(hwnd);
-#endif
-    activateWindow();
-    view_->setFocus(Qt::OtherFocusReason);
-}
-
-void MainWindow::openRom(const QString& path, bool allowPatches, bool activate) {
+void MainWindow::openRom(const QString& path, bool allowPatches) {
     if (loading_ || videoExporting_) return;
     const QFileInfo file(path);
     if (!file.exists() || !file.isFile()) {
@@ -2268,7 +2251,6 @@ void MainWindow::openRom(const QString& path, bool allowPatches, bool activate) 
         if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Kega Refusion"), text);
         return;
     }
-    if (activate) activateForFileOpen();
     releaseInput();
     setLoadingUi(true, file.fileName());
     std::optional<RomArchive::Entry> archiveEntry;
@@ -4337,11 +4319,10 @@ void MainWindow::dropEvent(QDropEvent* event) {
     if (loading_ || videoExporting_) { event->ignore(); return; }
     for (const QUrl& url : event->mimeData()->urls()) {
         if (url.isLocalFile() && isSupportedDropFile(url.toLocalFile())) {
-            const QString path = url.toLocalFile();
+            raise();
+            activateWindow();
+            openRom(url.toLocalFile());
             event->acceptProposedAction();
-            // Finish the native drag/drop before opening dialogs or requesting
-            // activation: the drag source still owns its modal input loop here.
-            QTimer::singleShot(0, this, [this, path] { openRom(path); });
             return;
         }
     }

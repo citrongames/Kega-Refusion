@@ -59,7 +59,7 @@ public:
     explicit MainWindow(EmulationSession& session, const QString& dataPath,
                         bool smokeTest = false, QWidget* parent = nullptr);
     ~MainWindow() override;
-    void openRom(const QString& path, bool allowPatches = true, bool activate = true);
+    void openRom(const QString& path, bool allowPatches = true);
     void setFullscreenMode(bool enabled);
     bool isMainMenuVisible() const;
     void showOsdDemo();
@@ -120,7 +120,6 @@ private:
     void scheduleInspection();
     void refreshInspection();
     void openGameDialog();
-    void activateForFileOpen();
     void setLoadingUi(bool loading, const QString& fileName = {});
     void saveScreenshot();
     void updateRecentMenu();
