@@ -20,12 +20,17 @@ Build the binary archives from Release configurations using the [build guide](bu
 
 The updater discovers the latest stable tag through GitHub's public `/releases/latest` redirect, then reads `update.json` from that tag's release assets. Runtime checks do not need a GitHub API token or anonymous REST quota. The snapshot contains the two binary assets' `digest` fields from the authenticated GitHub API. Each must contain `sha256:` followed by 64 hexadecimal digits and match the final archive and `SHA256SUMS.txt`; a checksum file alone does not satisfy this requirement.
 
-Bundled Lua examples and documentation are embedded in the executable and
-materialized into `scripts/` (or the configured Scripts folder) and `docs/` on
-first launch. Unchanged bundled files can be refreshed; personal edits and
-unrecognized files are preserved. Keep these directories out of binary archives:
-the published 0.31.0 updater deliberately protects them as user-owned paths.
-Verify upgrades using the old published installer code, not only the new helper.
+Lua examples and documentation are ordinary files in `scripts/` and `docs/`
+inside both binary archives, covered by `kega-package.json`. Never embed or
+materialize them from the executable. The updater manages these folders from
+0.40.1 onward: unchanged bundled files are updated/retired; personal files and
+edited examples/docs are preserved. Custom script folders are not update targets.
+
+**One-time upgrade:** installers through 0.40.0 reject these archive paths before
+launching their helper. Upgrading from those versions requires manual extraction
+of 0.40.1 or newer (keep personal data and script edits). Do not claim an automatic
+upgrade from an older installer passed. Subsequent automatic upgrades accept the
+folders; check both platforms and preservation of user files before publishing.
 
 ## Generate update metadata
 

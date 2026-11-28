@@ -114,6 +114,7 @@ bool packagePath(const std::string& value, Platform platform) {
         const std::string directory = name.substr(0, slash);
         return directory == "cores" || directory == "plugins" || directory == "languages" ||
                directory == "shaders" || directory == "licenses" ||
+               directory == "scripts" || directory == "docs" ||
                (platform == Platform::Linux && directory == "lib");
     }
     if (name == "kega-package.json" || name == "readme.md" || name == "license" ||
@@ -123,6 +124,11 @@ bool packagePath(const std::string& value, Platform platform) {
                name == "qt.conf" || (name.size() > 4 && name.substr(name.size() - 4) == ".dll");
     return name == "kegarefusion" || name == "kegarefusionupdater" || name == "run.sh" ||
            name == u8"запуск-linux.txt" || name == u8"ЗАПУСК-linux.txt" || name == u8"ЗАПУСК-LINUX.txt";
+}
+
+bool editablePackagePath(const std::string& value) {
+    const auto name = lower(value);
+    return name.compare(0, 8, "scripts/") == 0 || name.compare(0, 5, "docs/") == 0;
 }
 
 bool safeTreePath(const fs::path& root, const fs::path& relative, std::string& error) {
@@ -371,7 +377,18 @@ bool apply(const Plan& plan, std::string& error, bool& rollbackComplete) {
             }
         };
         // Manifest commits last so interrupted transactions remain recognizable.
-        for (const auto& name : plan.files) if (name != "kega-package.json") replace(name, true);
+        for (const auto& name : plan.files) {
+            if (name == "kega-package.json") continue;
+            // Examples/docs are editable. Replace an existing file only while
+            // it still matches the owned version snapshotted by the installer.
+            if (editablePackagePath(name) && fs::exists(plan.root / fs::u8path(name))) {
+                const auto reference = plan.work / "editable-reference" / fs::u8path(name);
+                if (!safeTreePath(plan.work / "editable-reference", fs::u8path(name), error))
+                    throw std::runtime_error(error);
+                if (!sameFileContents(plan.root / fs::u8path(name), reference)) continue;
+            }
+            replace(name, true);
+        }
         for (const auto& name : plan.retire) {
             if (!packagePath(name, plan.platform)) throw std::runtime_error("Unsafe retirement path.");
             if (std::find(plan.files.begin(), plan.files.end(), name) != plan.files.end()) continue;

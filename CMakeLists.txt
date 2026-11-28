@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(KegaRefusion VERSION 0.40.0 LANGUAGES C CXX)
+project(KegaRefusion VERSION 0.40.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -122,7 +122,6 @@ if(MINGW)
     target_link_libraries(KegaRefusionUpdater PRIVATE user32 shell32)
 endif()
 add_executable(KegaRefusion WIN32
-    src/ui/BundledLuaFiles.cpp src/ui/BundledLuaFiles.h assets/lua.qrc
     src/update/UpdateService.cpp src/update/UpdateService.h
     src/update/UpdateInstaller.cpp src/update/UpdateInstaller.h
     src/ui/UpdateDialog.cpp src/ui/UpdateDialog.h
@@ -207,12 +206,6 @@ if(BUILD_TESTING)
     add_executable(lua_session_tests tests/lua_session_tests.cpp src/core/EmulationSession.cpp src/core/EmulationSession.h)
     target_link_libraries(lua_session_tests PRIVATE core_host)
     target_compile_definitions(lua_session_tests PRIVATE KEGA_LUA_MOVIE_TESTS KEGA_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
-    add_executable(bundled_lua_files_tests tests/bundled_lua_files_tests.cpp
-        src/ui/BundledLuaFiles.cpp assets/lua.qrc)
-    target_include_directories(bundled_lua_files_tests PRIVATE src)
-    target_link_libraries(bundled_lua_files_tests PRIVATE Qt6::Core)
-    target_compile_options(bundled_lua_files_tests PRIVATE -UNDEBUG)
-    add_test(NAME bundled_lua_files_tests COMMAND bundled_lua_files_tests)
     add_executable(update_installer_tests tests/update_installer_tests.cpp)
     target_link_libraries(update_installer_tests PRIVATE update_archive kega_archive)
     if(MSVC)

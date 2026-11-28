@@ -16,6 +16,7 @@ constexpr std::size_t MaxEntries = 4096;
 
 bool validRelativePath(const std::string& relative);
 bool packagePath(const std::string& relative, Platform platform);
+bool editablePackagePath(const std::string& relative);
 bool safeTreePath(const fs::path& root, const fs::path& relative, std::string& error);
 bool extractPackage(const fs::path& archive, const fs::path& stage, Platform platform,
                     std::vector<std::string>& files, std::string& error);

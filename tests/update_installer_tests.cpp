@@ -47,7 +47,10 @@ std::vector<Item> package() {
     return {{"release/KegaRefusion", "application", AE_IFREG, {}, 0755},
             {"release/run.sh", "#!/bin/sh\n", AE_IFREG, {}, 0755},
             {"release/cores/genesis_plus_gx_libretro.so", "core"},
-            {"release/languages/ru.json", "{}"}};
+            {"release/languages/ru.json", "{}"},
+            {"release/scripts/01_Overlay.lua", "emu.frameadvance()"},
+            {"release/scripts/games/sonic1-lab.lua", "-- example"},
+            {"release/docs/lua-api.ru.md", "# Lua"}};
 }
 }
 int main() {
@@ -62,6 +65,11 @@ int main() {
     assert(!packagePath("saves/game.srm", Platform::Linux));
     assert(!packagePath("games/game.md", Platform::Windows));
     assert(!packagePath("bios/boot.bin", Platform::Windows));
+    for (const auto platform : {Platform::Windows, Platform::Linux}) {
+        assert(packagePath("scripts/games/example.lua", platform));
+        assert(packagePath("docs/lua-api.ru.md", platform));
+        assert(!packagePath("scripts/../data/settings.ini", platform));
+    }
     std::string error;
     {
         auto items = package();
@@ -69,7 +77,7 @@ int main() {
         fs::create_directory(sandbox / "good");
         std::vector<std::string> files;
         assert(extractPackage(sandbox / "good.tar", sandbox / "good", Platform::Linux, files, error));
-        assert(files.size() == 4 && get(sandbox / "good/KegaRefusion") == "application");
+        assert(files.size() == 7 && get(sandbox / "good/KegaRefusion") == "application");
         assert((fs::status(sandbox / "good/run.sh").permissions() & fs::perms::owner_exec) != fs::perms::none);
     }
     int index = 0;
@@ -103,6 +111,42 @@ int main() {
         assert(get(plan.root / "cores/customized.so") == "user changed");
         assert(get(plan.root / "data/settings.ini") == "settings");
         assert(get(plan.root / "games/user.md") == "rom" && get(plan.root / "bios/user.bin") == "bios");
+    }
+    for (const auto platform : {Platform::Windows, Platform::Linux}) {
+        Plan plan; plan.platform = platform; plan.parentPid = 1;
+        plan.root = sandbox / (platform == Platform::Windows ? "editable-windows" : "editable-linux");
+        plan.work = plan.root / ".kega-update-0123456789abcdef0123456789abcdef";
+        plan.files = {"scripts/example.lua", "scripts/edited.lua", "scripts/new.lua",
+                      "scripts/untracked.lua", "scripts/raced.lua", "docs/lua-api.md", "kega-package.json"};
+        plan.retire = {"scripts/obsolete.lua", "docs/edited-old.md"};
+        put(plan.root / "scripts/example.lua", "old example");
+        put(plan.work / "editable-reference/scripts/example.lua", "old example");
+        put(plan.root / "scripts/edited.lua", "my edits");
+        put(plan.root / "scripts/untracked.lua", "my own script");
+        put(plan.root / "scripts/personal.lua", "personal script");
+        put(plan.root / "scripts/raced.lua", "changed after staging");
+        put(plan.work / "editable-reference/scripts/raced.lua", "old example");
+        put(plan.root / "docs/lua-api.md", "old manual");
+        put(plan.work / "editable-reference/docs/lua-api.md", "old manual");
+        put(plan.root / "scripts/obsolete.lua", "obsolete");
+        put(plan.work / "retired-reference/scripts/obsolete.lua", "obsolete");
+        put(plan.root / "docs/edited-old.md", "my notes");
+        put(plan.work / "retired-reference/docs/edited-old.md", "old manual");
+        put(plan.root / "data/settings.ini", "settings");
+        for (const auto& name : plan.files) put(plan.work / "package" / name, "new release");
+        error.clear(); assert(writePlan(plan, error));
+        Plan loaded; assert(readPlan(plan.work, loaded, error));
+        bool restored = false; assert(apply(loaded, error, restored));
+        assert(restored && get(plan.root / "scripts/example.lua") == "new release");
+        assert(get(plan.root / "docs/lua-api.md") == "new release");
+        assert(get(plan.root / "scripts/new.lua") == "new release");
+        assert(get(plan.root / "scripts/edited.lua") == "my edits");
+        assert(get(plan.root / "scripts/untracked.lua") == "my own script");
+        assert(get(plan.root / "scripts/personal.lua") == "personal script");
+        assert(get(plan.root / "scripts/raced.lua") == "changed after staging");
+        assert(get(plan.root / "docs/edited-old.md") == "my notes");
+        assert(get(plan.root / "data/settings.ini") == "settings");
+        assert(!fs::exists(plan.root / "scripts/obsolete.lua"));
     }
 #ifndef _WIN32
     {

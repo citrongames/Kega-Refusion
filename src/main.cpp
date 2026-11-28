@@ -1,8 +1,6 @@
 #include "i18n/Localization.h"
 #include "core/EmulationSession.h"
 #include "ui/MainWindow.h"
-#include "ui/BundledLuaFiles.h"
-#include "core/DataFolders.h"
 #ifdef Q_OS_LINUX
 #include "ui/LinuxDesktopEntry.h"
 #endif
@@ -184,8 +182,6 @@ int main(int argc, char* argv[]) {
     bool frameSeen = false;
     bool screenshotError = false;
 
-    if (!installBundledLuaFiles(appDirectory, DataFolders::configuredPath(dataPath, QStringLiteral("scripts")), dataPath))
-        qWarning("Could not install bundled Lua examples/documentation; will retry next launch.");
 
     EmulationSession session(corePath, dataPath);
     std::atomic<int> produced{0};

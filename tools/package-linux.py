@@ -154,8 +154,13 @@ def main() -> None:
     copy(build / "core/genesis_plus_gx_libretro_linkpeer.so", stage / "cores/genesis_plus_gx_libretro_linkpeer.so")
     shutil.copytree(root / "languages", stage / "languages")
     shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
-    # Lua examples/docs are embedded and installed on first launch. This keeps
-    # the archive compatible with published updaters that protect scripts/docs.
+    # Ordinary, editable files; ownership is recorded in kega-package.json.
+    shutil.copytree(root / "assets/scripts/examples", stage / "scripts")
+    shutil.copytree(root / "assets/scripts/games", stage / "scripts/games")
+    docs = stage / "docs"
+    docs.mkdir()
+    for name in ("lua-api.md", "lua-api.ru.md", "lua-examples.md", "lua-examples.ru.md"):
+        shutil.copy2(root / "docs" / name, docs / name)
     qt_ru = Path("/usr/share/qt6/translations/qtbase_ru.qm")
     if qt_ru.is_file():
         copy(qt_ru, stage / "languages/qtbase_ru.qm")

@@ -196,6 +196,21 @@ bool UpdateInstaller::prepareAndLaunch(const QString& archivePath, QString& erro
                 else fs::remove(snapshot);
             }
         }
+        // Keep personal scripts and edits, including untracked files produced
+        // by 0.40.0. An identical incoming file establishes ownership too.
+        for (const auto& name : plan.files) {
+            if (!editablePackagePath(name)) continue;
+            const auto installed = plan.root / fs::u8path(name);
+            if (!fs::is_regular_file(installed)) continue;
+            const auto digest = digestFile(qtPath(installed));
+            const auto key = QString::fromUtf8(name.c_str());
+            if (digest.isEmpty() || (digest != previous.value(key).toString() &&
+                                     digest != nextManifest.value(key).toString())) continue;
+            const auto snapshot = plan.work / "editable-reference" / fs::u8path(name);
+            fs::create_directories(snapshot.parent_path());
+            fs::copy_file(installed, snapshot);
+            if (digestFile(qtPath(snapshot)) != digest) fs::remove(snapshot);
+        }
         fs::create_directory(plan.work / "helper");
         const auto isolatedHelper = plan.work / "helper" / nativePath(helperName);
         fs::copy_file(helper, isolatedHelper);
