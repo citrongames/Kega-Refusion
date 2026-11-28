@@ -1263,3 +1263,30 @@ hashed against the final archives. The corresponding-source archive verifies
 See [Mega Pinball Fantasies audit](mega-pinball-audit.txt) for the game fixes and
 explicitly scoped CD compatibility exception in this release. Final archives and
 compact evidence remain under ignored `build/release-0.40.0/`.
+
+## 2026-11-28 — 0.40.1: ordinary Lua files and updater folder support
+
+- Removed executable-embedded examples/manuals and first-launch materialization.
+  Both release archives contain 10 Lua scripts, the overlay example PNG and
+  four English/Russian guides under scripts/ and docs/. Their 15 file contents
+  were compared directly against the checkout in both final archives.
+- The application and detached updater now accept both directories. Missing
+  directories/files are created; unchanged owned files can be replaced or
+  retired. Personal files and edited examples/manuals are retained, including
+  changes made after staging. The package manifest still commits last.
+- Native update_installer_tests passed: extraction/path rejection, both Windows
+  and Linux installation layouts, editable content, safe retirement, plan
+  round-trip, rollback and locks. Isolated real-archive installs using the NEW
+  updater preserved all 14 user-data sentinels for each platform. This does
+  not claim compatibility with the old installed updater: through 0.40.0 it
+  rejects the new directories; the release notes describe the manual upgrade.
+- Windows Release package: 90 manifest entries; version 0.40.1 verified in the
+  executable, main/peer core hashes identical and unchanged. No Windows UI or
+  executable was launched. Debian 12 package: 193 entries, glibc ceiling 2.36;
+  isolated launcher reported 0.40.1. Emulation core unchanged.
+- Published v0.40.1 at commit 783c784a4e3b4fc2c930528ecf3138954199f7ad.
+  All five assets, GitHub digests, public binary downloads, latest-tag redirect
+  and update.json verified. Corresponding source archive included.
+  Local evidence: build/release-0.40.1/{lua-archive-content.json,
+  updater-check/offline-*.json,windows-version-verification.json,
+  public-verification.json}.
