@@ -1290,3 +1290,19 @@ compact evidence remain under ignored `build/release-0.40.0/`.
   Local evidence: build/release-0.40.1/{lua-archive-content.json,
   updater-check/offline-*.json,windows-version-verification.json,
   public-verification.json}.
+
+## 2026-11-28 — local file-open activation
+
+- The old drop handler's raise/activateWindow calls were still present; the
+  0.40.1 packaging change did not remove them. The exact environmental trigger
+  of the reported loss of activation has not been reproduced.
+- Accepted drops now queue the local open after the native drag/drop callback
+  returns. Local open paths (dialog, recent file, launch argument and drop)
+  share a foreground request and game-view focus. Windows uses the ordinary
+  SetForegroundWindow API, without input injection, thread attachment or
+  delayed focus-stealing retries. Network-triggered loads explicitly opt out.
+- Windows Release KegaRefusion target compiled successfully. Stripped EXE
+  installed in testbuild and source/destination SHA-256 matched:
+  cc49f409c5606e26f366161129c6ff3acda8a72b8b38142c9fdab7b8478dcaa0.
+  Windows interaction is left to the user; do not claim focus behavior was
+  validated on Windows. No core changes or gameplay tests were required.
