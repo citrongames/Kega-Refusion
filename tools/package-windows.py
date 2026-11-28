@@ -122,12 +122,8 @@ def main() -> None:
 
     shutil.copytree(root / "languages", stage / "languages")
     shutil.copytree(root / "assets/shaders/examples", stage / "shaders")
-    shutil.copytree(root / "assets/scripts/examples", stage / "scripts")
-    shutil.copytree(root / "assets/scripts/games", stage / "scripts/games")
-    docs = stage / "docs"
-    docs.mkdir()
-    for name in ("lua-api.md", "lua-api.ru.md", "lua-examples.md", "lua-examples.ru.md"):
-        shutil.copy2(root / "docs" / name, docs / name)
+    # Lua examples/docs are embedded and installed on first launch. This keeps
+    # the archive compatible with published updaters that protect scripts/docs.
     qtbase_ru = qt_root / "translations/qtbase_ru.qm"
     if not qtbase_ru.is_file():
         raise SystemExit(f"Missing Qt Russian translation: {qtbase_ru}")

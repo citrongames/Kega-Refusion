@@ -1,0 +1,18 @@
+<RCC>
+  <qresource prefix="/bundled-lua">
+    <file alias="scripts/01_Overlay.lua">scripts/examples/01_Overlay.lua</file>
+    <file alias="scripts/02_Controllers.lua">scripts/examples/02_Controllers.lua</file>
+    <file alias="scripts/03_MemoryWatch.lua">scripts/examples/03_MemoryWatch.lua</file>
+    <file alias="scripts/04_Events.lua">scripts/examples/04_Events.lua</file>
+    <file alias="scripts/05_InputSequence.lua">scripts/examples/05_InputSequence.lua</file>
+    <file alias="scripts/06_Timeline.lua">scripts/examples/06_Timeline.lua</file>
+    <file alias="scripts/07_FrameLog.lua">scripts/examples/07_FrameLog.lua</file>
+    <file alias="scripts/08_WindowControls.lua">scripts/examples/08_WindowControls.lua</file>
+    <file alias="scripts/games/contra-hard-corps-lab.lua">scripts/games/contra-hard-corps-lab.lua</file>
+    <file alias="scripts/games/sonic1-lab.lua">scripts/games/sonic1-lab.lua</file>
+    <file alias="docs/lua-api.md">../docs/lua-api.md</file>
+    <file alias="docs/lua-api.ru.md">../docs/lua-api.ru.md</file>
+    <file alias="docs/lua-examples.md">../docs/lua-examples.md</file>
+    <file alias="docs/lua-examples.ru.md">../docs/lua-examples.ru.md</file>
+  </qresource>
+</RCC>
